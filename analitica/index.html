@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Arcano 33 · Analítica</title>
+  <meta name="description" content="Analítica interna de ventas por evento y presentación para Arcano 33, solo lectura desde el POS." />
+  <meta name="theme-color" content="#7b1818" />
+
+  <link rel="icon" type="image/png" sizes="192x192" href="../inventario/images/logo.png" />
+  <link rel="apple-touch-icon" href="../inventario/images/logo.png" />
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <img src="../inventario/images/logo.png" alt="Logo Arcano 33" class="logo" />
+      <div class="brand-text">
+        <h1>Arcano 33</h1>
+        <p>Analítica · Sangría Artesanal Premium</p>
+      </div>
+    </div>
+  </header>
+
+  <div style="text-align:right; margin: 0.25rem 1rem 0;">
+    <a href="../index.html" class="btn-secondary" style="display:inline-block; text-decoration:none;">← Menú principal</a>
+  </div>
+
+  <main class="app-main analytics-main">
+    <section class="card analytics-panel">
+      <h2>Analítica de Ventas</h2>
+      <p class="hint">Visualiza el comportamiento de tus ventas por periodo, evento y presentación. Esta vista es solo de lectura y utiliza los datos registrados en A33 POS en este mismo navegador.</p>
+
+      <p id="analytics-error" class="hint" style="display:none; color:#ffb3b3;">
+        No se pudo leer la base de datos de ventas. Asegúrate de haber utilizado antes el módulo A33 POS en este navegador.
+      </p>
+
+      <section class="analytics-filters">
+        <div class="field">
+          <label for="period-select">Periodo</label>
+          <select id="period-select">
+            <option value="30d">Últimos 30 días</option>
+            <option value="90d">Últimos 3 meses</option>
+            <option value="ytd">Año actual</option>
+            <option value="all">Todo el histórico</option>
+            <option value="custom">Rango personalizado</option>
+          </select>
+        </div>
+        <div class="field field-inline" id="custom-range" style="display:none;">
+          <label>Rango personalizado</label>
+          <div class="range-inputs">
+            <input type="date" id="date-from" />
+            <span>→</span>
+            <input type="date" id="date-to" />
+          </div>
+        </div>
+      </section>
+
+      <section class="analytics-tabs">
+        <button class="tab-btn active" data-tab="resumen">Resumen</button>
+        <button class="tab-btn" data-tab="eventos">Eventos</button>
+        <button class="tab-btn" data-tab="presentaciones">Presentaciones</button>
+      </section>
+
+      <!-- TAB RESUMEN -->
+      <section class="tab-content active" id="tab-resumen">
+        <div class="kpi-grid">
+          <article class="kpi-card">
+            <p class="kpi-label">Ventas totales</p>
+            <p class="kpi-value" id="kpi-total-ventas">C$ 0.00</p>
+          </article>
+          <article class="kpi-card">
+            <p class="kpi-label">Botellas vendidas</p>
+            <p class="kpi-value" id="kpi-total-botellas">0</p>
+            <p class="kpi-sub" id="kpi-detalle-botellas">Pulso 0 · Media 0 · Djeba 0 · Litro 0 · Galón 0</p>
+          </article>
+          <article class="kpi-card">
+            <p class="kpi-label">Eventos con ventas</p>
+            <p class="kpi-value" id="kpi-eventos">0</p>
+          </article>
+          <article class="kpi-card">
+            <p class="kpi-label">Ticket promedio</p>
+            <p class="kpi-value" id="kpi-ticket-promedio">C$ 0.00</p>
+          </article>
+        </div>
+
+        <div class="analytics-layout">
+          <section class="card chart-card">
+            <h3>Ventas por mes</h3>
+            <canvas id="chart-mensual-ventas" height="220"></canvas>
+            <p class="hint small">Importe total de ventas netas por mes, considerando devoluciones y cortesías.</p>
+          </section>
+
+          <div class="card table-card">
+            <h3>Detalle mensual</h3>
+            <div class="table-wrapper">
+              <table class="inv-table analytics-table">
+                <thead>
+                  <tr>
+                    <th>Mes</th>
+                    <th>Ventas (C$)</th>
+                    <th>Pulso</th>
+                    <th>Media</th>
+                    <th>Djeba</th>
+                    <th>Litro</th>
+                    <th>Galón</th>
+                    <th># Eventos</th>
+                    <th>Ticket prom.</th>
+                  </tr>
+                </thead>
+                <tbody id="tbody-resumen-mensual">
+                  <!-- Filas dinámicas -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB EVENTOS -->
+      <section class="tab-content" id="tab-eventos">
+        <div class="hint small" style="margin-bottom:0.5rem;">
+          Ranking de eventos según las ventas registradas en el periodo seleccionado.
+        </div>
+        <div class="field" style="max-width:220px; margin-bottom:0.5rem;">
+          <label for="orden-eventos">Ordenar por</label>
+          <select id="orden-eventos">
+            <option value="ventas">Ventas (C$)</option>
+            <option value="botellas">Botellas</option>
+            <option value="ticket">Ticket promedio</option>
+          </select>
+        </div>
+
+        <div class="analytics-layout">
+          <section class="card chart-card">
+            <h3>Top eventos por ventas</h3>
+            <canvas id="chart-eventos-ventas" height="220"></canvas>
+            <p class="hint small">Solo se muestran los eventos con ventas dentro del periodo.</p>
+          </section>
+
+          <div class="card table-card">
+            <h3>Detalle por evento</h3>
+            <div class="table-wrapper">
+              <table class="inv-table analytics-table">
+                <thead>
+                  <tr>
+                    <th>Evento</th>
+                    <th>Estado</th>
+                    <th>Ventas (C$)</th>
+                    <th>Botellas</th>
+                    <th>Ticket prom.</th>
+                    <th>% del total</th>
+                  </tr>
+                </thead>
+                <tbody id="tbody-eventos">
+                  <!-- Filas dinámicas -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB PRESENTACIONES -->
+      <section class="tab-content" id="tab-presentaciones">
+        <div class="hint small" style="margin-bottom:0.5rem;">
+          Comparativo de rendimiento entre presentaciones de botella.
+        </div>
+
+        <div class="analytics-layout">
+          <section class="card chart-card">
+            <h3>Ventas por presentación</h3>
+            <canvas id="chart-pres-ventas" height="220"></canvas>
+            <p class="hint small">Incluye unidades vendidas y cortesías; devoluciones restan del total.</p>
+          </section>
+
+          <div class="card table-card">
+            <h3>Detalle por presentación</h3>
+            <div class="table-wrapper">
+              <table class="inv-table analytics-table">
+                <thead>
+                  <tr>
+                    <th>Presentación</th>
+                    <th>Unidades netas</th>
+                    <th>Ventas (C$)</th>
+                    <th>% de ventas</th>
+                  </tr>
+                </thead>
+                <tbody id="tbody-presentaciones">
+                  <!-- Filas dinámicas -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
