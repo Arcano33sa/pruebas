@@ -40,6 +40,8 @@
         <div class="field">
           <label for="period-select">Periodo</label>
           <select id="period-select">
+            <option value="today">Hoy</option>
+            <option value="7d">Últimos 7 días</option>
             <option value="30d">Últimos 30 días</option>
             <option value="90d">Últimos 3 meses</option>
             <option value="ytd">Año actual</option>
@@ -61,6 +63,7 @@
         <button class="tab-btn active" data-tab="resumen">Resumen</button>
         <button class="tab-btn" data-tab="eventos">Eventos</button>
         <button class="tab-btn" data-tab="presentaciones">Presentaciones</button>
+        <button class="tab-btn" data-tab="avanzado">Avanzado</button>
       </section>
 
       <!-- TAB RESUMEN -->
@@ -83,6 +86,24 @@
             <p class="kpi-label">Ticket promedio</p>
             <p class="kpi-value" id="kpi-ticket-promedio">C$ 0.00</p>
           </article>
+          <article class="kpi-card">
+            <p class="kpi-label">Costo total</p>
+            <p class="kpi-value" id="kpi-total-costo">C$ 0.00</p>
+          </article>
+          <article class="kpi-card">
+            <p class="kpi-label">Utilidad total</p>
+            <p class="kpi-value" id="kpi-total-utilidad">C$ 0.00</p>
+          </article>
+          <article class="kpi-card">
+            <p class="kpi-label">Margen global</p>
+            <p class="kpi-value" id="kpi-margen-global">0.0%</p>
+          </article>
+          <article class="kpi-card">
+            <p class="kpi-label">Cortesías del periodo</p>
+            <p class="kpi-value" id="kpi-cortesias-total">C$ 0.00</p>
+            <p class="kpi-sub" id="kpi-cortesias-sub">Unidades: 0 · Costo: C$ 0.00</p>
+            <p class="kpi-sub" id="kpi-cortesias-nivel">🟢 Bajo (0.0%)</p>
+          </article>
         </div>
 
         <div class="analytics-layout">
@@ -100,6 +121,9 @@
                   <tr>
                     <th>Mes</th>
                     <th>Ventas (C$)</th>
+                    <th>Costo (C$)</th>
+                    <th>Utilidad (C$)</th>
+                    <th>Margen %</th>
                     <th>Pulso</th>
                     <th>Media</th>
                     <th>Djeba</th>
@@ -107,6 +131,10 @@
                     <th>Galón</th>
                     <th># Eventos</th>
                     <th>Ticket prom.</th>
+                    <th>Unid. cortesía</th>
+                    <th>Valor cortesías (C$)</th>
+                    <th>Costo cortesías (C$)</th>
+                    <th>% cortesías</th>
                   </tr>
                 </thead>
                 <tbody id="tbody-resumen-mensual">
@@ -116,6 +144,16 @@
             </div>
           </div>
         </div>
+
+        <section class="card recs-card">
+          <h3>Rentabilidad del periodo</h3>
+          <p class="hint small" id="kpi-top-contribucion">Mayor contribución: —</p>
+          <p class="hint small" id="kpi-top-margen">Mejor margen: —</p>
+          <h4 class="recs-title">Recomendaciones rápidas</h4>
+          <ul id="recs-rentabilidad" class="recs-list">
+            <!-- Recomendaciones dinámicas -->
+          </ul>
+        </section>
       </section>
 
       <!-- TAB EVENTOS -->
@@ -129,6 +167,8 @@
             <option value="ventas">Ventas (C$)</option>
             <option value="botellas">Botellas</option>
             <option value="ticket">Ticket promedio</option>
+            <option value="utilidad">Utilidad (C$)</option>
+            <option value="margen">Margen %</option>
           </select>
         </div>
 
@@ -137,6 +177,10 @@
             <h3>Top eventos por ventas</h3>
             <canvas id="chart-eventos-ventas" height="220"></canvas>
             <p class="hint small">Solo se muestran los eventos con ventas dentro del periodo.</p>
+            <hr class="chart-separator" />
+            <h3>Top eventos por utilidad</h3>
+            <canvas id="chart-eventos-utilidad" height="220"></canvas>
+            <p class="hint small">Comparativo de utilidad total por evento en el periodo.</p>
           </section>
 
           <div class="card table-card">
@@ -148,9 +192,17 @@
                     <th>Evento</th>
                     <th>Estado</th>
                     <th>Ventas (C$)</th>
+                    <th>Costo (C$)</th>
+                    <th>Utilidad (C$)</th>
+                    <th>Margen %</th>
                     <th>Botellas</th>
                     <th>Ticket prom.</th>
                     <th>% del total</th>
+                    <th>Unid. cortesía</th>
+                    <th>Valor cortesías (C$)</th>
+                    <th>Costo cortesías (C$)</th>
+                    <th>% cortesías</th>
+                    <th>Semáforo</th>
                   </tr>
                 </thead>
                 <tbody id="tbody-eventos">
@@ -173,6 +225,10 @@
             <h3>Ventas por presentación</h3>
             <canvas id="chart-pres-ventas" height="220"></canvas>
             <p class="hint small">Incluye unidades vendidas y cortesías; devoluciones restan del total.</p>
+            <hr class="chart-separator" />
+            <h3>Margen unitario por presentación</h3>
+            <canvas id="chart-pres-margen" height="220"></canvas>
+            <p class="hint small">Muestra el margen porcentual promedio por unidad en cada presentación.</p>
           </section>
 
           <div class="card table-card">
@@ -183,8 +239,16 @@
                   <tr>
                     <th>Presentación</th>
                     <th>Unidades netas</th>
-                    <th>Ventas (C$)</th>
+                    <th>Precio unitario prom. (C$)</th>
+                    <th>Costo unitario estimado (C$)</th>
+                    <th>Utilidad unitaria (C$)</th>
+                    <th>Margen unitario %</th>
+                    <th>Ventas totales (C$)</th>
                     <th>% de ventas</th>
+                    <th>Unid. cortesía</th>
+                    <th>Valor cortesías (C$)</th>
+                    <th>Costo cortesías (C$)</th>
+                    <th>% cortesías</th>
                   </tr>
                 </thead>
                 <tbody id="tbody-presentaciones">
@@ -194,6 +258,103 @@
             </div>
           </div>
         </div>
+
+      <!-- TAB AVANZADO -->
+      <section class="tab-content" id="tab-avanzado">
+        <section class="card advanced-block">
+          <h3>Horarios de venta (horas pico)</h3>
+          <p class="hint small">Identifica en qué horas se concentra la mayor parte de tus ventas en el rango seleccionado.</p>
+          <div class="advanced-filters-row">
+            <div class="field small">
+              <label for="horas-event-select">Evento</label>
+              <select id="horas-event-select">
+                <option value="all">Todos los eventos</option>
+              </select>
+            </div>
+          </div>
+          <canvas id="chart-horas-ventas" height="220"></canvas>
+          <p class="hint small" id="resumen-horas-pico">Aún no hay datos suficientes para este rango.</p>
+          <div class="table-wrapper">
+            <table class="analytics-table">
+              <thead>
+                <tr>
+                  <th>Hora</th>
+                  <th>Ventas (C$)</th>
+                  <th>Unidades netas</th>
+                  <th>% de ventas</th>
+                </tr>
+              </thead>
+              <tbody id="tbody-horas">
+                <!-- Filas dinámicas -->
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card advanced-block">
+          <h3>Riesgo de agotamiento (producto terminado)</h3>
+          <p class="hint small">Estimación basada en ventas recientes y stock actual de botellas terminadas.</p>
+          <div class="advanced-filters-row">
+            <div class="field small">
+              <label for="agotamiento-ventana">Ventana de análisis</label>
+              <select id="agotamiento-ventana">
+                <option value="7">Últimos 7 días</option>
+                <option value="30" selected>Últimos 30 días</option>
+              </select>
+            </div>
+          </div>
+          <div class="table-wrapper">
+            <table class="analytics-table">
+              <thead>
+                <tr>
+                  <th>Presentación</th>
+                  <th>Stock actual (botellas)</th>
+                  <th>Promedio u/día</th>
+                  <th>Días estimados</th>
+                  <th>Estado</th>
+                </tr>
+              </thead>
+              <tbody id="tbody-agotamiento">
+                <!-- Filas dinámicas -->
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card advanced-block">
+          <h3>Alertas y avisos del periodo</h3>
+          <p class="hint small">Semáforo basado en márgenes, volumen y riesgo de agotamiento en el rango seleccionado.</p>
+          <ul id="panel-alertas" class="alert-list">
+            <!-- Alertas dinámicas -->
+          </ul>
+        </section>
+
+        <section class="card advanced-block">
+          <h3>Proyecciones y reportes</h3>
+          <p class="hint small">Proyecciones simples basadas en el comportamiento del rango actual (no son estimaciones científicas).</p>
+          <p id="proy-resumen" class="hint"></p>
+          <div class="table-wrapper">
+            <table class="analytics-table">
+              <thead>
+                <tr>
+                  <th>Presentación</th>
+                  <th>Unidades/día (prom.)</th>
+                  <th>Unidades proyectadas (30 días)</th>
+                  <th>Ventas proyectadas (30 días)</th>
+                </tr>
+              </thead>
+              <tbody id="tbody-proyecciones-pres">
+                <!-- Filas dinámicas -->
+              </tbody>
+            </table>
+          </div>
+          <div class="export-buttons">
+            <button type="button" id="btn-export-resumen" class="btn-secondary">Exportar CSV · Resumen</button>
+            <button type="button" id="btn-export-eventos" class="btn-secondary">Exportar CSV · Eventos</button>
+            <button type="button" id="btn-export-presentaciones" class="btn-secondary">Exportar CSV · Presentaciones</button>
+          </div>
+        </section>
+      </section>
       </section>
     </section>
   </main>
