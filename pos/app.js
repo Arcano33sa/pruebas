@@ -1124,8 +1124,6 @@ async function addSale(){
   const lineProfit = total - lineCost;
 
 
-  const courtesyValue = courtesy ? (finalQty * price) : 0;
-
   const eventName = event ? event.name : 'General';
   const now = new Date(); const time = now.toTimeString().slice(0,5);
   // Ajustar inventario central de producto terminado
@@ -1150,7 +1148,6 @@ async function addSale(){
     customer,
     courtesyTo,
     total,
-    courtesyValue,
     notes,
     costPerUnit:unitCost,
     lineCost,
