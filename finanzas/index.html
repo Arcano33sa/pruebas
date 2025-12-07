@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Arcano 33 · Finanzas</title>
+  <meta name="description" content="Módulo de Finanzas · Fase 1 de la Suite A33: mini contabilidad manual para Arcano 33." />
+  <meta name="theme-color" content="#7b1818" />
+
+  <link rel="icon" type="image/png" sizes="192x192" href="../inventario/images/logo.png" />
+  <link rel="apple-touch-icon" href="../inventario/images/logo.png" />
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <button class="back-btn" type="button" onclick="window.location.href='../index.html'">← Suite A33</button>
+    <div class="app-header-main">
+      <h1>Finanzas · Fase 1</h1>
+      <p class="app-subtitle">Mini contabilidad interna basada en movimientos manuales.</p>
+    </div>
+  </header>
+
+  <main class="app-main">
+    <p id="finanzas-error" class="hint small" style="display:none;color:#ffb3b3;">
+      Ocurrió un problema al inicializar el módulo de Finanzas. Revisa la consola para más detalle.
+    </p>
+
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="tablero">Tablero Finanzas</button>
+      <button class="tab-btn" data-tab="diario">Diario y Ajustes</button>
+      <button class="tab-btn" data-tab="estados">Estados Financieros</button>
+    </nav>
+
+    <section id="tablero" class="tab-panel active">
+      <section class="card">
+        <h2>Resumen del mes</h2>
+        <div class="form-grid">
+          <div class="field">
+            <label for="dashboard-month">Mes / Año</label>
+            <input type="month" id="dashboard-month" />
+          </div>
+        </div>
+
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-label">Ingresos del mes</div>
+            <div class="kpi-value" id="dash-ingresos">C$ 0.00</div>
+            <div class="kpi-sub">Suma de cuentas de ingresos (4xxx).</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Egresos del mes</div>
+            <div class="kpi-value" id="dash-egresos">C$ 0.00</div>
+            <div class="kpi-sub">Gastos y costos de operación (5xxx y 6xxx).</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Resultado del mes</div>
+            <div class="kpi-value" id="dash-resultado">C$ 0.00</div>
+            <div class="kpi-sub">Ingresos − Egresos.</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Saldo de Caja</div>
+            <div class="kpi-value" id="dash-caja">C$ 0.00</div>
+            <div class="kpi-sub">1100 Caja general + 1110 Caja eventos.</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Saldo de Banco</div>
+            <div class="kpi-value" id="dash-banco">C$ 0.00</div>
+            <div class="kpi-sub">1200 Banco.</div>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <section id="diario" class="tab-panel">
+      <section class="card">
+        <h2>Nuevo movimiento</h2>
+        <form id="journal-form" autocomplete="off">
+          <div class="form-grid">
+            <div class="field">
+              <label for="movement-date">Fecha</label>
+              <input type="date" id="movement-date" required />
+            </div>
+            <div class="field">
+              <label for="movement-type">Tipo de movimiento</label>
+              <select id="movement-type" required>
+                <option value="ingreso">Ingreso</option>
+                <option value="egreso">Egreso</option>
+                <option value="ajuste">Ajuste</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="movement-medium">Medio</label>
+              <select id="movement-medium" required>
+                <option value="caja">Caja</option>
+                <option value="banco">Banco</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <div class="field">
+              <label for="movement-account">Cuenta principal</label>
+              <select id="movement-account" required>
+                <!-- Opciones dinámicas según tipo -->
+              </select>
+            </div>
+            <div class="field">
+              <label for="movement-amount">Monto</label>
+              <input type="number" id="movement-amount" min="0" step="0.01" required />
+            </div>
+            <div class="field">
+              <label for="movement-event">Evento (opcional)</label>
+              <input type="text" id="movement-event" placeholder="Nombre del evento o referencia" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="movement-description">Descripción</label>
+            <textarea id="movement-description" rows="2" placeholder="Describe brevemente el movimiento" required></textarea>
+          </div>
+
+          <div class="btn-row">
+            <button type="submit" class="btn btn-primary">Guardar movimiento</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Diario contable</h2>
+        <p class="hint small">
+          Cada registro genera automáticamente un asiento de doble partida (DEBE / HABER).
+        </p>
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Descripción</th>
+                <th>Tipo</th>
+                <th>Evento</th>
+                <th>Total Debe</th>
+                <th>Total Haber</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="journal-table-body">
+              <tr>
+                <td colspan="7" class="empty-row">Aún no hay movimientos registrados.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div id="journal-detail" class="detail-card" style="display:none;"></div>
+      </section>
+    </section>
+
+    <section id="estados" class="tab-panel">
+      <section class="card">
+        <h2>Estados Financieros</h2>
+
+        <nav class="subtabs">
+          <button class="subtab-btn active" data-subtab="resultados">Estado de Resultados</button>
+          <button class="subtab-btn" data-subtab="balance">Balance General</button>
+        </nav>
+
+        <section id="subtab-resultados" class="subtab-panel active">
+          <div class="form-grid">
+            <div class="field">
+              <label for="er-month">Mes / Año</label>
+              <input type="month" id="er-month" />
+            </div>
+          </div>
+
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Cuenta</th>
+                  <th>Nombre</th>
+                  <th>Tipo</th>
+                  <th>Importe</th>
+                </tr>
+              </thead>
+              <tbody id="er-body">
+                <tr>
+                  <td colspan="4" class="empty-row">Aún no hay movimientos para este periodo.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="er-summary">
+            <p><strong>Total ingresos:</strong> <span id="er-total-ingresos">C$ 0.00</span></p>
+            <p><strong>Total costos de venta:</strong> <span id="er-total-costos">C$ 0.00</span></p>
+            <p><strong>Total gastos de operación:</strong> <span id="er-total-gastos">C$ 0.00</span></p>
+            <p><strong>Resultado del periodo:</strong> <span id="er-resultado">C$ 0.00</span></p>
+          </div>
+        </section>
+
+        <section id="subtab-balance" class="subtab-panel">
+          <div class="form-grid">
+            <div class="field">
+              <label for="bg-date">Fecha de corte</label>
+              <input type="date" id="bg-date" />
+            </div>
+          </div>
+
+          <div class="bg-layout">
+            <div class="bg-column">
+              <h3>Activos (1xxx)</h3>
+              <div class="table-wrapper">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Cuenta</th>
+                      <th>Nombre</th>
+                      <th>Saldo</th>
+                    </tr>
+                  </thead>
+                  <tbody id="bg-body-activos">
+                    <tr><td colspan="3" class="empty-row">Sin movimientos aún.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <p class="bg-total"><strong>Total Activos:</strong> <span id="bg-total-activos">C$ 0.00</span></p>
+            </div>
+
+            <div class="bg-column">
+              <h3>Pasivos (2xxx)</h3>
+              <div class="table-wrapper">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Cuenta</th>
+                      <th>Nombre</th>
+                      <th>Saldo</th>
+                    </tr>
+                  </thead>
+                  <tbody id="bg-body-pasivos">
+                    <tr><td colspan="3" class="empty-row">Sin movimientos aún.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <p class="bg-total"><strong>Total Pasivos:</strong> <span id="bg-total-pasivos">C$ 0.00</span></p>
+            </div>
+
+            <div class="bg-column">
+              <h3>Patrimonio (3xxx)</h3>
+              <div class="table-wrapper">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Cuenta</th>
+                      <th>Nombre</th>
+                      <th>Saldo</th>
+                    </tr>
+                  </thead>
+                  <tbody id="bg-body-patrimonio">
+                    <tr><td colspan="3" class="empty-row">Sin movimientos aún.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <p class="bg-total"><strong>Total Patrimonio:</strong> <span id="bg-total-patrimonio">C$ 0.00</span></p>
+            </div>
+          </div>
+        </section>
+      </section>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>

@@ -249,7 +249,18 @@
       header img{width:52px;height:52px;}
       .grid{grid-template-columns:1fr;}
     }
-  </style>
+  
+    .menu-section{
+      margin-top:1.25rem;
+    }
+    .menu-title{
+      font-size:0.85rem;
+      letter-spacing:0.12em;
+      text-transform:uppercase;
+      color:var(--muted);
+      margin:0 0 0.4rem;
+    }
+</style>
 </head>
 <body>
   <div class="lock-overlay" id="lock-overlay">
@@ -306,7 +317,9 @@
         Selecciona un módulo para trabajar. Puedes fijar esta Suite en la pantalla de inicio de tu teléfono para acceder más rápido.
       </p>
 
-      <div class="grid">
+      <section class="menu-section">
+        <h2 class="menu-title">Suite A33</h2>
+        <div class="grid">
         <article class="card" data-link="calculadora/index.html">
           <div class="pill"><span>🧪</span><span>Producción</span></div>
           <h2>Calculadora de Producción</h2>
@@ -365,6 +378,42 @@
         </article>
 
       </div>
+      </section>
+
+      <section class="menu-section">
+        <h2 class="menu-title">Finanzas</h2>
+        <div class="grid">
+          <article class="card" data-link="finanzas/index.html#tab=tablero">
+            <div class="pill"><span>💰</span><span>Finanzas</span></div>
+            <h2>Tablero Finanzas</h2>
+            <p>Resumen mensual de ingresos, egresos, resultado y saldos de Caja y Banco.</p>
+            <div class="footer-row">
+              <span>Visión rápida del mes.</span>
+              <button class="link-btn"><span>Ir</span> →</button>
+            </div>
+          </article>
+
+          <article class="card" data-link="finanzas/index.html#tab=diario">
+            <div class="pill"><span>📓</span><span>Diario</span></div>
+            <h2>Diario y Ajustes</h2>
+            <p>Registra ingresos, egresos y ajustes manuales con doble partida.</p>
+            <div class="footer-row">
+              <span>Mini contabilidad manual.</span>
+              <button class="link-btn"><span>Ir</span> →</button>
+            </div>
+          </article>
+
+          <article class="card" data-link="finanzas/index.html#tab=estados">
+            <div class="pill"><span>📑</span><span>Estados</span></div>
+            <h2>Estados Financieros</h2>
+            <p>Estado de Resultados y Balance General globales de Arcano 33.</p>
+            <div class="footer-row">
+              <span>Solo lectura desde Finanzas.</span>
+              <button class="link-btn"><span>Ir</span> →</button>
+            </div>
+          </article>
+        </div>
+      </section>
     </main>
   </div>
 
