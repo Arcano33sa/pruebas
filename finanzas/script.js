@@ -214,28 +214,40 @@
     });
   }
 
-  function reloadData(){
+  
+    if (!db) return Promise.resolve();
+    return Promise.all([
+        function reloadData(){
     if (!db) return Promise.resolve();
     return Promise.all([
       loadEntries(),
       loadLines()
     ]).then(() => {
+      refreshJournalFilters();
       renderAll();
     });
   }
 
-  function loadEntries(){
+
+    function loadEntries(){
     return new Promise((resolve, reject) => {
       const tx = db.transaction('journalEntries', 'readonly');
       const store = tx.objectStore('journalEntries');
       const req = store.getAll();
       req.onsuccess = (ev) => {
         entries = (ev.target.result || []).sort((a,b) => (a.date || '').localeCompare(b.date || ''));
+        // Normalizar origen/origenId para asientos antiguos
+        entries.forEach(e => {
+          if (!e.origen) e.origen = 'Manual';
+          if (typeof e.origenId === 'undefined') e.origenId = null;
+        });
         resolve();
       };
       req.onerror = (e) => reject(e.target.error);
     });
   }
+
+
 
   function loadLines(){
     return new Promise((resolve, reject) => {
@@ -343,14 +355,17 @@
     const entriesStore = tx.objectStore('journalEntries');
     const linesStore = tx.objectStore('journalLines');
 
-    const entry = {
+        const entry = {
       date,
       descripcion,
       tipoMovimiento: tipo,
       evento,
+      origen: 'Manual',
+      origenId: null,
       totalDebe: round2(amount),
       totalHaber: round2(amount)
     };
+
 
     const addReq = entriesStore.add(entry);
     addReq.onsuccess = (ev) => {
@@ -426,14 +441,90 @@
   }
 
   // --- Filtros y render ---
+  function getSelectedValue(id){
+    const el = document.getElementById(id);
+    return el ? el.value : null;
+  }
 
-  function initFilters(){
+  function collectJournalEvents(){
+    const set = new Set();
+    (entries || []).forEach(e => {
+      if (!e) return;
+      const ev = (e.evento || '').trim();
+      if (ev) set.add(ev);
+    });
+    return Array.from(set).sort((a,b) => a.localeCompare(b));
+  }
+
+  function refreshJournalFilters(){
+    const eventSelect = document.getElementById('journal-filter-event');
+    if (!eventSelect) return;
+
+    const previous = eventSelect.value;
+    eventSelect.innerHTML = '';
+
+    const optAll = document.createElement('option');
+    optAll.value = '__all__';
+    optAll.textContent = 'Todos los eventos';
+    eventSelect.appendChild(optAll);
+
+    const optNone = document.createElement('option');
+    optNone.value = '__none__';
+    optNone.textContent = 'Sin evento';
+    eventSelect.appendChild(optNone);
+
+    collectJournalEvents().forEach(ev => {
+      const opt = document.createElement('option');
+      opt.value = ev;
+      opt.textContent = ev;
+      eventSelect.appendChild(opt);
+    });
+
+    if (previous && Array.from(eventSelect.options).some(o => o.value === previous)){
+      eventSelect.value = previous;
+    } else {
+      eventSelect.value = '__all__';
+    }
+  }
+
+  function applyJournalFilters(allEntries){
+    let result = (allEntries || []).slice();
+
+    const typeFilter = getSelectedValue('journal-filter-type') || 'todos';
+    const eventFilter = getSelectedValue('journal-filter-event') || '__all__';
+    const originFilter = getSelectedValue('journal-filter-origin') || '__all__';
+
+    if (typeFilter !== 'todos'){
+      result = result.filter(e => (e.tipoMovimiento || '') === typeFilter);
+    }
+
+    if (eventFilter === '__none__'){
+      result = result.filter(e => !e.evento || !String(e.evento).trim());
+    } else if (eventFilter !== '__all__'){
+      result = result.filter(e => (e.evento || '').trim() === eventFilter);
+    }
+
+    if (originFilter !== '__all__'){
+      result = result.filter(e => {
+        const origen = e.origen || 'Manual';
+        return origen === originFilter;
+      });
+    }
+
+    return result;
+  }
+
+    function initFilters(){
     const today = new Date();
     const monthKey = formatMonthKeyFromDate(today);
 
     const dashMonth = document.getElementById('dashboard-month');
     const erMonth = document.getElementById('er-month');
     const bgDate = document.getElementById('bg-date');
+
+    const journalType = document.getElementById('journal-filter-type');
+    const journalEvent = document.getElementById('journal-filter-event');
+    const journalOrigin = document.getElementById('journal-filter-origin');
 
     if (dashMonth) dashMonth.value = monthKey;
     if (erMonth) erMonth.value = monthKey;
@@ -443,10 +534,15 @@
     if (erMonth) erMonth.addEventListener('change', renderEstadoResultados);
     if (bgDate) bgDate.addEventListener('change', renderBalanceGeneral);
 
+    if (journalType) journalType.addEventListener('change', renderJournalTable);
+    if (journalEvent) journalEvent.addEventListener('change', renderJournalTable);
+    if (journalOrigin) journalOrigin.addEventListener('change', renderJournalTable);
+
     renderDashboard();
     renderEstadoResultados();
     renderBalanceGeneral();
   }
+
 
   function renderAll(){
     renderDashboard();
@@ -500,7 +596,7 @@
     if (!entries.length){
       const tr = document.createElement('tr');
       const td = document.createElement('td');
-      td.colSpan = 7;
+      td.colSpan = 8;
       td.className = 'empty-row';
       td.textContent = 'Aún no hay movimientos registrados.';
       tr.appendChild(td);
@@ -509,7 +605,22 @@
       return;
     }
 
-    entries.slice().reverse().forEach(entry => {
+    const ordered = entries.slice().reverse();
+    const filtered = applyJournalFilters(ordered);
+
+    if (!filtered.length){
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 8;
+      td.className = 'empty-row';
+      td.textContent = 'No hay movimientos que coincidan con los filtros seleccionados.';
+      tr.appendChild(td);
+      body.appendChild(tr);
+      if (detail) detail.style.display = 'none';
+      return;
+    }
+
+    filtered.forEach(entry => {
       const tr = document.createElement('tr');
 
       const tdFecha = document.createElement('td');
@@ -527,6 +638,10 @@
       const tdEvento = document.createElement('td');
       tdEvento.textContent = entry.evento || '—';
       tr.appendChild(tdEvento);
+
+      const tdOrigen = document.createElement('td');
+      tdOrigen.textContent = entry.origen || 'Manual';
+      tr.appendChild(tdOrigen);
 
       const tdDebe = document.createElement('td');
       tdDebe.textContent = formatCurrency(entry.totalDebe || 0);
@@ -570,13 +685,15 @@
     const meta = document.createElement('div');
     meta.className = 'detail-grid';
 
-    const fields = [
+        const fields = [
       ['Fecha', entry.date || ''],
       ['Tipo', capitalize(entry.tipoMovimiento || '')],
       ['Evento', entry.evento || '—'],
+      ['Origen', entry.origen || 'Manual'],
       ['Total Debe', formatCurrency(entry.totalDebe || 0)],
       ['Total Haber', formatCurrency(entry.totalHaber || 0)]
     ];
+
 
     fields.forEach(([label, value]) => {
       const wrap = document.createElement('div');

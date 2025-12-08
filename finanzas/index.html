@@ -127,10 +127,38 @@
       </section>
 
       <section class="card">
-        <h2>Diario contable</h2>
+         <h2>Diario contable</h2>
         <p class="hint small">
           Cada registro genera automáticamente un asiento de doble partida (DEBE / HABER).
         </p>
+
+        <div class="filters-row">
+          <div class="field small">
+            <label for="journal-filter-type">Tipo de movimiento</label>
+            <select id="journal-filter-type">
+              <option value="todos">Todos</option>
+              <option value="ingreso">Ingreso</option>
+              <option value="egreso">Egreso</option>
+              <option value="ajuste">Ajuste</option>
+            </select>
+          </div>
+          <div class="field small">
+            <label for="journal-filter-event">Evento</label>
+            <select id="journal-filter-event">
+              <option value="__all__">Todos los eventos</option>
+              <option value="__none__">Sin evento</option>
+            </select>
+          </div>
+          <div class="field small">
+            <label for="journal-filter-origin">Origen</label>
+            <select id="journal-filter-origin">
+              <option value="__all__">Todos</option>
+              <option value="Manual">Manual</option>
+              <option value="POS">POS</option>
+            </select>
+          </div>
+        </div>
+
         <div class="table-wrapper">
           <table class="data-table">
             <thead>
@@ -139,6 +167,7 @@
                 <th>Descripción</th>
                 <th>Tipo</th>
                 <th>Evento</th>
+                <th>Origen</th>
                 <th>Total Debe</th>
                 <th>Total Haber</th>
                 <th></th>
@@ -146,13 +175,14 @@
             </thead>
             <tbody id="journal-table-body">
               <tr>
-                <td colspan="7" class="empty-row">Aún no hay movimientos registrados.</td>
+                <td colspan="8" class="empty-row">Aún no hay movimientos registrados.</td>
               </tr>
             </tbody>
           </table>
         </div>
 
         <div id="journal-detail" class="detail-card" style="display:none;"></div>
+
       </section>
     </section>
 
