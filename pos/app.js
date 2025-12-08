@@ -1,8 +1,12 @@
-
-// --- IndexedDB helpers
+// --- IndexedDB helpers POS
 const DB_NAME = 'a33-pos';
 const DB_VER = 19; // schema estable
 let db;
+
+// --- Finanzas: conexión a finanzasDB para asientos automáticos
+const FIN_DB_NAME = 'finanzasDB';
+const FIN_DB_VER = 1;
+let finDb;
 
 function openDB() {
   return new Promise((resolve, reject) => {
@@ -39,6 +43,196 @@ function openDB() {
     req.onerror = () => reject(req.error);
   });
 }
+
+// --- Finanzas: helpers para abrir finanzasDB y crear/borrar asientos
+function openFinanzasDB() {
+  return new Promise((resolve, reject) => {
+    if (finDb) return resolve(finDb);
+    const req = indexedDB.open(FIN_DB_NAME, FIN_DB_VER);
+    req.onupgradeneeded = (e) => {
+      const d = e.target.result;
+      if (!d.objectStoreNames.contains('accounts')) {
+        const accStore = d.createObjectStore('accounts', { keyPath: 'code' });
+        accStore.createIndex('type', 'type', { unique: false });
+      }
+      if (!d.objectStoreNames.contains('journalEntries')) {
+        const entriesStore = d.createObjectStore('journalEntries', { keyPath: 'id', autoIncrement: true });
+        entriesStore.createIndex('date', 'date', { unique: false });
+        entriesStore.createIndex('tipoMovimiento', 'tipoMovimiento', { unique: false });
+        entriesStore.createIndex('evento', 'evento', { unique: false });
+        entriesStore.createIndex('origen', 'origen', { unique: false });
+        entriesStore.createIndex('origenId', 'origenId', { unique: false });
+      }
+      if (!d.objectStoreNames.contains('journalLines')) {
+        const linesStore = d.createObjectStore('journalLines', { keyPath: 'id', autoIncrement: true });
+        linesStore.createIndex('entryId', 'entryId', { unique: false });
+        linesStore.createIndex('accountCode', 'accountCode', { unique: false });
+      }
+    };
+    req.onsuccess = (e) => {
+      finDb = e.target.result;
+      resolve(finDb);
+    };
+    req.onerror = () => {
+      console.error('Error abriendo finanzasDB desde POS', req.error);
+      reject(req.error);
+    };
+  });
+}
+
+async function ensureFinanzasDB() {
+  try {
+    await openFinanzasDB();
+  } catch (e) {
+    console.error('No se pudo abrir finanzasDB para asientos automáticos', e);
+    throw e;
+  }
+}
+
+// Mapea forma de pago del POS a cuenta contable
+function mapSaleToCuentaCobro(sale) {
+  const pay = sale.payment || 'efectivo';
+  if (pay === 'efectivo') {
+    const evName = (sale.eventName || '').toString().trim().toLowerCase();
+    // Evento "General" -> Caja general, otros eventos -> Caja eventos
+    if (evName && evName !== 'general') return '1110'; // Caja eventos
+    return '1100'; // Caja general
+  }
+  if (pay === 'transferencia') return '1200'; // Banco
+  if (pay === 'credito') return '1300';       // Clientes
+  return '1100';
+}
+
+// Crea asiento automático en Finanzas por una venta / devolución del POS
+async function createJournalEntryForSalePOS(sale) {
+  try {
+    if (!sale) return;
+    // Cortesías: por ahora NO se contabilizan ingresos
+    if (sale.courtesy) return;
+
+    const amount = Math.abs(Number(sale.total) || 0);
+    if (!amount) return; // nada que contabilizar
+
+    await ensureFinanzasDB();
+
+    const cashAccount = mapSaleToCuentaCobro(sale);
+    const evento = sale.eventName || '';
+    const descripcionBase = sale.productName || 'Venta POS';
+    const descripcion = sale.isReturn
+      ? `Devolución POS - ${descripcionBase}`
+      : `Venta POS - ${descripcionBase}`;
+
+    // Para devoluciones lo marcamos como "ajuste" para diferenciarlo visualmente
+    const tipoMovimiento = sale.isReturn ? 'ajuste' : 'ingreso';
+
+    const txFin = finDb.transaction(['journalEntries', 'journalLines'], 'readwrite');
+    const entriesStore = txFin.objectStore('journalEntries');
+    const linesStore = txFin.objectStore('journalLines');
+
+    const entry = {
+      date: sale.date,
+      descripcion,
+      tipoMovimiento,
+      evento,
+      origen: 'POS',
+      origenId: sale.id != null ? sale.id : null,
+      totalDebe: amount,
+      totalHaber: amount
+    };
+
+    const addReq = entriesStore.add(entry);
+    addReq.onsuccess = (ev) => {
+      const entryId = ev.target.result;
+      const makeLine = (data) => {
+        try {
+          linesStore.add(Object.assign({ entryId }, data));
+        } catch (err) {
+          console.error('Error guardando línea contable POS', err);
+        }
+      };
+
+      if (!sale.isReturn) {
+        // Venta normal:
+        // DEBE: Caja/Banco/Clientes
+        // HABER: 4100 Ingresos
+        makeLine({ accountCode: cashAccount, debe: amount, haber: 0 });
+        makeLine({ accountCode: '4100', debe: 0, haber: amount });
+      } else {
+        // Devolución: asiento inverso
+        // DEBE: 4100
+        // HABER: Caja/Banco/Clientes
+        makeLine({ accountCode: '4100', debe: amount, haber: 0 });
+        makeLine({ accountCode: cashAccount, debe: 0, haber: amount });
+      }
+    };
+    addReq.onerror = (e) => {
+      console.error('Error creando asiento automático desde POS', e.target.error);
+    };
+  } catch (err) {
+    console.error('Error general creando asiento automático desde POS', err);
+  }
+}
+
+// Elimina asientos de Finanzas vinculados a una venta del POS (para Undo / eliminar)
+async function deleteFinanzasEntriesForSalePOS(saleId) {
+  try {
+    if (!saleId) return;
+    await ensureFinanzasDB();
+  } catch (e) {
+    // Si no se puede abrir finanzasDB, no bloqueamos el borrado de la venta
+    return;
+  }
+
+  return new Promise((resolve, reject) => {
+    try {
+      const txFin = finDb.transaction(['journalEntries', 'journalLines'], 'readwrite');
+      const entriesStore = txFin.objectStore('journalEntries');
+      const linesStore = txFin.objectStore('journalLines');
+
+      const entriesReq = entriesStore.getAll();
+      entriesReq.onsuccess = () => {
+        const allEntries = entriesReq.result || [];
+        const targets = allEntries.filter(e => e && e.origen === 'POS' && e.origenId === saleId);
+        if (!targets.length) {
+          // No hay nada que borrar, dejamos que la tx se complete sola
+          return;
+        }
+
+        const linesReq = linesStore.getAll();
+        linesReq.onsuccess = () => {
+          const allLines = linesReq.result || [];
+          targets.forEach(entry => {
+            const relatedLines = allLines.filter(l => String(l.entryId) === String(entry.id));
+            relatedLines.forEach(l => {
+              try { linesStore.delete(l.id); } catch (err) {
+                console.error('Error borrando línea contable POS', err);
+              }
+            });
+            try { entriesStore.delete(entry.id); } catch (err) {
+              console.error('Error borrando asiento automático POS', err);
+            }
+          });
+        };
+        linesReq.onerror = (e) => {
+          console.error('Error leyendo líneas de diario para borrar asientos POS', e.target.error);
+        };
+      };
+      entriesReq.onerror = (e) => {
+        console.error('Error leyendo asientos para borrar por venta POS', e.target.error);
+      };
+
+      txFin.oncomplete = () => resolve();
+      txFin.onerror = (e) => {
+        console.error('Error en transacción de borrado de asientos POS', e.target.error);
+        reject(e.target.error);
+      };
+    } catch (err) {
+      console.error('Error general al eliminar asientos POS', err);
+      resolve();
+    }
+  });
+}
+
 function tx(name, mode='readonly'){ return db.transaction(name, mode).objectStore(name); }
 function getAll(name){ return new Promise((res,rej)=>{ const r=tx(name).getAll(); r.onsuccess=()=>res(r.result||[]); r.onerror=()=>rej(r.error); }); }
 function put(name, val){ return new Promise((res,rej)=>{ const r=tx(name,'readwrite').put(val); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
@@ -50,16 +244,26 @@ function del(name, key){
         const getReq = store.get(key);
         getReq.onsuccess = ()=>{
           const sale = getReq.result;
+          let finPromise = Promise.resolve();
+
           if (sale){
             try{
-              applyFinishedFromSalePOS(sale, -1); // revertir efecto de la venta
+              applyFinishedFromSalePOS(sale, -1); // revertir efecto de la venta en inventario central
             }catch(e){
               console.error('Error revertiendo inventario central al eliminar venta', e);
             }
+
+            const saleId = (sale.id != null) ? sale.id : key;
+            finPromise = deleteFinanzasEntriesForSalePOS(saleId).catch(err=>{
+              console.error('Error eliminando asientos contables vinculados a la venta', err);
+            });
           }
-          const delReq = store.delete(key);
-          delReq.onsuccess = ()=>resolve();
-          delReq.onerror = ()=>reject(delReq.error);
+
+          finPromise.then(()=>{
+            const delReq = store.delete(key);
+            delReq.onsuccess = ()=>resolve();
+            delReq.onerror = ()=>reject(delReq.error);
+          });
         };
         getReq.onerror = ()=>{
           const delReq = store.delete(key);
@@ -1133,16 +1337,17 @@ async function addSale(){
   const lineCost = unitCost * finalQty;
   const lineProfit = total - lineCost;
 
-
   const eventName = event ? event.name : 'General';
   const now = new Date(); const time = now.toTimeString().slice(0,5);
+
   // Ajustar inventario central de producto terminado
   try{
     applyFinishedFromSalePOS({ productName, qty: finalQty }, +1);
   }catch(e){
     console.error('No se pudo actualizar inventario central desde venta', e);
   }
-  await put('sales', {
+
+  const saleRecord = {
     date,
     time,
     eventId:curId,
@@ -1162,7 +1367,17 @@ async function addSale(){
     costPerUnit:unitCost,
     lineCost,
     lineProfit
-  });
+  };
+
+  const saleId = await put('sales', saleRecord);
+  saleRecord.id = saleId;
+
+  // Crear asiento contable automático en Finanzas
+  try {
+    await createJournalEntryForSalePOS(saleRecord);
+  } catch (err) {
+    console.error('No se pudo generar el asiento automático de esta venta', err);
+  }
 
   // limpiar campos para el siguiente registro (incluye NOTAS)
   $('#sale-qty').value=1; 
