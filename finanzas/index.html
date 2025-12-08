@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Arcano 33 · Finanzas</title>
-  <meta name="description" content="Módulo de Finanzas · Fase 1 de la Suite A33: mini contabilidad manual para Arcano 33." />
+  <meta name="description" content="Módulo de Finanzas de la Suite A33: mini contabilidad manual para Arcano 33." />
   <meta name="theme-color" content="#7b1818" />
 
   <link rel="icon" type="image/png" sizes="192x192" href="../icon-a33-192.png" />
@@ -20,7 +20,7 @@
       </div>
       <div class="brand-text">
         <h1>Suite A33</h1>
-        <p>Módulo de Finanzas · Fase 1</p>
+        <p>Módulo de Finanzas</p>
       </div>
     </div>
 
@@ -54,6 +54,12 @@
             <div class="field small">
               <label for="dashboard-month">Mes</label>
               <input type="month" id="dashboard-month" />
+            </div>
+            <div class="field small">
+              <label for="dashboard-event">Evento</label>
+              <select id="dashboard-event">
+                <option value="__all__">Todos los eventos</option>
+              </select>
             </div>
           </div>
         </div>
@@ -222,11 +228,38 @@
           <button class="subtab-btn" data-subtab="balance">Balance General</button>
         </nav>
 
+        <!-- ESTADO DE RESULTADOS -->
         <section id="subtab-resultados" class="subtab-panel active">
           <div class="filters-row">
             <div class="field small">
+              <label for="er-mode">Periodo</label>
+              <select id="er-mode">
+                <option value="mes">Por mes</option>
+                <option value="rango">Por rango de fechas</option>
+              </select>
+            </div>
+
+            <div class="field small" id="er-month-wrapper">
               <label for="er-month">Mes</label>
               <input type="month" id="er-month" />
+            </div>
+
+            <div class="field small" id="er-start-wrapper">
+              <label for="er-start">Desde</label>
+              <input type="date" id="er-start" />
+            </div>
+
+            <div class="field small" id="er-end-wrapper">
+              <label for="er-end">Hasta</label>
+              <input type="date" id="er-end" />
+            </div>
+
+            <div class="field small">
+              <label for="er-event">Evento</label>
+              <select id="er-event">
+                <option value="__all__">Todos los eventos</option>
+                <option value="__none__">Sin evento</option>
+              </select>
             </div>
           </div>
 
@@ -255,6 +288,7 @@
           </div>
         </section>
 
+        <!-- BALANCE GENERAL -->
         <section id="subtab-balance" class="subtab-panel">
           <div class="filters-row">
             <div class="field small">

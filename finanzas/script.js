@@ -1,10 +1,11 @@
-// Finanzas A33 · Fase 2A
-// Mini contabilidad manual usando IndexedDB.
+// Finanzas A33 · Fase 2B (reportes)
+// Mini contabilidad manual con:
+// - Diario con origen (Manual/POS) y filtros.
+// - Tablero filtrable por mes y evento.
+// - Estado de Resultados filtrable por mes / rango y por evento.
 // NO toca POS, Inventario, Lotes ni Pedidos.
-// Solo mejora Diario (origen + filtros) y mantiene Tablero y Estados globales.
 
 (function(){
-  // Usa el mismo nombre de BD que ya tenías en Fase 1
   const DB_NAME = 'finanzasDB';
   const DB_VERSION = 1;
 
@@ -172,7 +173,7 @@
       loadEntries(),
       loadLines()
     ]).then(() => {
-      refreshJournalFilters();
+      refreshEventFilters();
       renderAll();
     });
   }
@@ -213,10 +214,9 @@
     return str.charAt(0).toUpperCase() + str.slice(1);
   }
 
-  // Caja vs Banco manual (Fase 2A sin POS)
+  // Caja vs Banco manual (Fase 2: todavía sin POS)
   function resolveCashAccount(medium, evento){
     if (medium === 'caja'){
-      // En futuras fases podemos diferenciar Caja general vs Caja eventos.
       return '1100';
     }
     if (medium === 'banco'){
@@ -225,14 +225,14 @@
     return null;
   }
 
-  /* ===========================
-   *   Filtros Diario
-   * =========================== */
-
   function getSelectedValue(id){
     const el = document.getElementById(id);
     return el ? el.value : null;
   }
+
+  /* ===========================
+   *   Eventos / filtros por evento
+   * =========================== */
 
   function collectJournalEvents(){
     const set = new Set();
@@ -244,35 +244,67 @@
     return Array.from(set).sort((a,b) => a.localeCompare(b));
   }
 
-  function refreshJournalFilters(){
-    const eventSelect = document.getElementById('journal-filter-event');
-    if (!eventSelect) return;
+  function populateEventSelect(selectId, events, options){
+    const select = document.getElementById(selectId);
+    if (!select) return;
 
-    const previous = eventSelect.value;
-    eventSelect.innerHTML = '';
+    const previous = select.value;
+    select.innerHTML = '';
 
+    // Opción "Todos"
     const optAll = document.createElement('option');
     optAll.value = '__all__';
-    optAll.textContent = 'Todos los eventos';
-    eventSelect.appendChild(optAll);
+    optAll.textContent = options.allLabel || 'Todos los eventos';
+    select.appendChild(optAll);
 
-    const optNone = document.createElement('option');
-    optNone.value = '__none__';
-    optNone.textContent = 'Sin evento';
-    eventSelect.appendChild(optNone);
+    if (options.includeNone){
+      const optNone = document.createElement('option');
+      optNone.value = '__none__';
+      optNone.textContent = options.noneLabel || 'Sin evento';
+      select.appendChild(optNone);
+    }
 
-    collectJournalEvents().forEach(ev => {
+    events.forEach(ev => {
       const opt = document.createElement('option');
       opt.value = ev;
       opt.textContent = ev;
-      eventSelect.appendChild(opt);
+      select.appendChild(opt);
     });
 
-    if (previous && Array.from(eventSelect.options).some(o => o.value === previous)){
-      eventSelect.value = previous;
+    if (previous && Array.from(select.options).some(o => o.value === previous)){
+      select.value = previous;
     } else {
-      eventSelect.value = '__all__';
+      select.value = '__all__';
     }
+  }
+
+  function refreshEventFilters(){
+    const events = collectJournalEvents();
+
+    // Diario
+    populateEventSelect('journal-filter-event', events, {
+      allLabel: 'Todos los eventos',
+      includeNone: true,
+      noneLabel: 'Sin evento'
+    });
+
+    // Tablero
+    populateEventSelect('dashboard-event', events, {
+      allLabel: 'Todos los eventos',
+      includeNone: false
+    });
+
+    // Estado de Resultados
+    populateEventSelect('er-event', events, {
+      allLabel: 'Todos los eventos',
+      includeNone: true,
+      noneLabel: 'Sin evento'
+    });
+  }
+
+  // Compatibilidad con nombre anterior usado en Fase 2A
+  function refreshJournalFilters(){
+    refreshEventFilters();
   }
 
   function applyJournalFilters(allEntries){
@@ -434,7 +466,7 @@
       descripcion,
       tipoMovimiento: tipo,
       evento,
-      origen: 'Manual',   // 🔥 Fase 2A: marcar como asiento manual
+      origen: 'Manual',
       origenId: null,
       totalDebe: round2(amount),
       totalHaber: round2(amount)
@@ -505,12 +537,36 @@
     };
   }
 
+  function updateErFiltersVisibility(){
+    const modeSelect = document.getElementById('er-mode');
+    const monthWrapper = document.getElementById('er-month-wrapper');
+    const startWrapper = document.getElementById('er-start-wrapper');
+    const endWrapper = document.getElementById('er-end-wrapper');
+    if (!modeSelect) return;
+
+    const mode = modeSelect.value || 'mes';
+    if (mode === 'mes'){
+      if (monthWrapper) monthWrapper.style.display = '';
+      if (startWrapper) startWrapper.style.display = 'none';
+      if (endWrapper) endWrapper.style.display = 'none';
+    } else {
+      if (monthWrapper) monthWrapper.style.display = 'none';
+      if (startWrapper) startWrapper.style.display = '';
+      if (endWrapper) endWrapper.style.display = '';
+    }
+  }
+
   function initFilters(){
     const today = new Date();
     const monthKey = formatMonthKeyFromDate(today);
 
     const dashMonth = document.getElementById('dashboard-month');
+    const dashEvent = document.getElementById('dashboard-event');
+    const erMode = document.getElementById('er-mode');
     const erMonth = document.getElementById('er-month');
+    const erStart = document.getElementById('er-start');
+    const erEnd = document.getElementById('er-end');
+    const erEvent = document.getElementById('er-event');
     const bgDate = document.getElementById('bg-date');
 
     const journalType = document.getElementById('journal-filter-type');
@@ -519,16 +575,38 @@
 
     if (dashMonth) dashMonth.value = monthKey;
     if (erMonth) erMonth.value = monthKey;
+
+    // Rango inicial = mes actual
+    const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+    const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    if (erStart) erStart.value = formatDateInput(firstDay);
+    if (erEnd) erEnd.value = formatDateInput(lastDay);
+
     if (bgDate) bgDate.value = formatDateInput(today);
 
+    // Listeners
     if (dashMonth) dashMonth.addEventListener('change', renderDashboard);
+    if (dashEvent) dashEvent.addEventListener('change', renderDashboard);
+
+    if (erMode) erMode.addEventListener('change', () => {
+      updateErFiltersVisibility();
+      renderEstadoResultados();
+    });
     if (erMonth) erMonth.addEventListener('change', renderEstadoResultados);
-    if (bgDate) bgDate.addEventListener('change', renderBalanceGeneral);
+    if (erStart) erStart.addEventListener('change', renderEstadoResultados);
+    if (erEnd) erEnd.addEventListener('change', renderEstadoResultados);
+    if (erEvent) erEvent.addEventListener('change', renderEstadoResultados);
+
+    if (bgDate) bgDate.addEventListener('change', () => {
+      renderBalanceGeneral();
+      renderDashboard(); // saldos se calculan hasta esa fecha
+    });
 
     if (journalType) journalType.addEventListener('change', renderJournalTable);
     if (journalEvent) journalEvent.addEventListener('change', renderJournalTable);
     if (journalOrigin) journalOrigin.addEventListener('change', renderJournalTable);
 
+    updateErFiltersVisibility();
     renderDashboard();
     renderEstadoResultados();
     renderBalanceGeneral();
@@ -550,6 +628,9 @@
     if (!dashMonth) return;
     const monthValue = dashMonth.value;
 
+    const dashEvent = document.getElementById('dashboard-event');
+    const eventFilter = dashEvent ? (dashEvent.value || '__all__') : '__all__';
+
     const start = monthValue ? new Date(`${monthValue}-01T00:00:00`) : new Date();
     const end = new Date(start);
     end.setMonth(end.getMonth() + 1);
@@ -561,6 +642,14 @@
       const d = new Date(entry.date || '');
       if (isNaN(d.getTime())) return;
       if (d < start || d >= end) return;
+
+      // Filtro por evento (solo para ingresos/egresos del tablero)
+      const ev = (entry.evento || '').trim();
+      if (eventFilter === '__none__'){
+        if (ev) return;
+      } else if (eventFilter !== '__all__'){
+        if (ev !== eventFilter) return;
+      }
 
       const entryLines = lines.filter(l => String(l.entryId) === String(entry.id));
       entryLines.forEach(l => {
@@ -575,6 +664,7 @@
       });
     });
 
+    // Saldos de Caja y Banco: se mantienen globales
     const saldoCajaCodes = ['1100', '1110'];
     const saldoBancoCodes = ['1200'];
 
@@ -780,14 +870,41 @@
    *   Estado de Resultados
    * =========================== */
 
-  function renderEstadoResultados(){
+  function getErDateRange(){
+    const modeSelect = document.getElementById('er-mode');
     const monthInput = document.getElementById('er-month');
-    if (!monthInput) return;
-    const monthValue = monthInput.value;
+    const startInput = document.getElementById('er-start');
+    const endInput = document.getElementById('er-end');
 
-    const start = monthValue ? new Date(`${monthValue}-01T00:00:00`) : new Date();
-    const end = new Date(start);
-    end.setMonth(end.getMonth() + 1);
+    const mode = modeSelect ? (modeSelect.value || 'mes') : 'mes';
+
+    let start, endExclusive;
+
+    if (mode === 'rango'){
+      const startStr = (startInput && startInput.value) ? startInput.value : formatDateInput(new Date());
+      const endStr = (endInput && endInput.value) ? endInput.value : startStr;
+
+      start = new Date(startStr + 'T00:00:00');
+      const endDate = new Date(endStr + 'T00:00:00');
+      endExclusive = new Date(endDate);
+      endExclusive.setDate(endExclusive.getDate() + 1);
+    } else {
+      const monthValue = monthInput && monthInput.value
+        ? monthInput.value
+        : formatMonthKeyFromDate(new Date());
+      start = new Date(`${monthValue}-01T00:00:00`);
+      endExclusive = new Date(start);
+      endExclusive.setMonth(endExclusive.getMonth() + 1);
+    }
+
+    return { start, endExclusive };
+  }
+
+  function renderEstadoResultados(){
+    const erEventSelect = document.getElementById('er-event');
+    const eventFilter = erEventSelect ? (erEventSelect.value || '__all__') : '__all__';
+
+    const { start, endExclusive } = getErDateRange();
 
     const movimientos = {};
 
@@ -796,7 +913,14 @@
       if (!entry) return;
       const d = new Date(entry.date || '');
       if (isNaN(d.getTime())) return;
-      if (d < start || d >= end) return;
+      if (d < start || d >= endExclusive) return;
+
+      const ev = (entry.evento || '').trim();
+      if (eventFilter === '__none__'){
+        if (ev) return;
+      } else if (eventFilter !== '__all__'){
+        if (ev !== eventFilter) return;
+      }
 
       const acc = accountsByCode[l.accountCode];
       if (!acc) return;
