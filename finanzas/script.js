@@ -1,8 +1,11 @@
-// Finanzas A33 · Fase 1
-// Mini contabilidad manual usando IndexedDB, sin tocar POS / Inventario / Lotes.
+// Finanzas A33 · Fase 2A
+// Mini contabilidad manual usando IndexedDB.
+// NO toca POS, Inventario, Lotes ni Pedidos.
+// Solo mejora Diario (origen + filtros) y mantiene Tablero y Estados globales.
 
 (function(){
-  const DB_NAME = 'a33-finanzas';
+  // Usa el mismo nombre de BD que ya tenías en Fase 1
+  const DB_NAME = 'finanzasDB';
   const DB_VERSION = 1;
 
   let db = null;
@@ -11,6 +14,7 @@
   let entries = [];
   let lines = [];
 
+  // Catálogo base de cuentas
   const DEFAULT_ACCOUNTS = [
     // 1xxx Activos
     { code: '1100', name: 'Caja general', type: 'activo', systemProtected: true },
@@ -51,182 +55,100 @@
     { code: '6120', name: 'Gastos de delivery / envíos', type: 'gasto', systemProtected: true },
     { code: '6130', name: 'Gastos varios A33', type: 'gasto', systemProtected: true },
 
-    // 7xxx Otros ingresos / gastos
+    // 7xxx Otros ingresos/gastos
     { code: '7100', name: 'Otros ingresos varios', type: 'ingreso', systemProtected: false },
     { code: '7200', name: 'Otros gastos varios', type: 'gasto', systemProtected: false }
   ];
 
-  document.addEventListener('DOMContentLoaded', init);
+  /* ===========================
+   *   IndexedDB
+   * =========================== */
 
-  function init(){
-    setupTabs();
-    setupSubtabs();
-    setupHashRouting();
-
-    openDB()
-      .then(database => {
-        db = database;
-        return ensureAccountsSeeded();
-      })
-      .then(() => reloadData())
-      .then(() => {
-        initForm();
-        initFilters();
-        applyInitialTabFromHash();
-      })
-      .catch(err => {
-        console.error('[Finanzas] Error al inicializar', err);
-        const errEl = document.getElementById('finanzas-error');
-        if (errEl) errEl.style.display = 'block';
-      });
-  }
-
-  // --- UI helpers ---
-
-  function setupTabs(){
-    const tabButtons = Array.from(document.querySelectorAll('.tab-btn'));
-    const panels = Array.from(document.querySelectorAll('.tab-panel'));
-
-    tabButtons.forEach(btn => {
-      btn.addEventListener('click', () => {
-        const tab = btn.getAttribute('data-tab');
-        activateTab(tab);
-      });
-    });
-
-    function activateTab(tab){
-      tabButtons.forEach(b => b.classList.toggle('active', b.getAttribute('data-tab') === tab));
-      panels.forEach(p => p.classList.toggle('active', p.id === tab));
-      const hashBase = 'tab=' + tab;
-      if (!location.hash.includes(hashBase)){
-        location.hash = hashBase;
-      }
-    }
-
-    // Exponer para uso interno
-    window.__finanzasActivateTab = activateTab;
-  }
-
-  function setupSubtabs(){
-    const subtabButtons = Array.from(document.querySelectorAll('.subtab-btn'));
-    const subpanels = Array.from(document.querySelectorAll('.subtab-panel'));
-
-    subtabButtons.forEach(btn => {
-      btn.addEventListener('click', () => {
-        const sub = btn.getAttribute('data-subtab');
-        subtabButtons.forEach(b => b.classList.toggle('active', b.getAttribute('data-subtab') === sub));
-        subpanels.forEach(p => {
-          const id = p.id.replace('subtab-', '');
-          p.classList.toggle('active', id === sub);
-        });
-      });
-    });
-  }
-
-  function setupHashRouting(){
-    window.addEventListener('hashchange', applyInitialTabFromHash);
-  }
-
-  function applyInitialTabFromHash(){
-    const hash = location.hash || '';
-    const match = hash.match(/tab=([a-z]+)/i);
-    const target = match ? match[1] : 'tablero';
-    if (window.__finanzasActivateTab){
-      window.__finanzasActivateTab(target);
-    }
-  }
-
-  // --- IndexedDB ---
-
-  function openDB(){
+  function openDatabase(){
     return new Promise((resolve, reject) => {
-      if (!('indexedDB' in window)){
-        return reject(new Error('Este navegador no soporta IndexedDB.'));
-      }
       const request = indexedDB.open(DB_NAME, DB_VERSION);
 
       request.onupgradeneeded = (event) => {
-        const upgradeDb = event.target.result;
+        const db = event.target.result;
 
-        if (!upgradeDb.objectStoreNames.contains('accounts')){
-          const store = upgradeDb.createObjectStore('accounts', { keyPath: 'code' });
-          store.createIndex('type', 'type', { unique: false });
+        if (!db.objectStoreNames.contains('accounts')){
+          const accountsStore = db.createObjectStore('accounts', { keyPath: 'code' });
+          accountsStore.createIndex('type', 'type', { unique: false });
         }
-        if (!upgradeDb.objectStoreNames.contains('journalEntries')){
-          const store = upgradeDb.createObjectStore('journalEntries', { keyPath: 'id', autoIncrement: true });
-          store.createIndex('date', 'date', { unique: false });
-          store.createIndex('tipo', 'tipoMovimiento', { unique: false });
+
+        if (!db.objectStoreNames.contains('journalEntries')){
+          const entriesStore = db.createObjectStore('journalEntries', { keyPath: 'id', autoIncrement: true });
+          entriesStore.createIndex('date', 'date', { unique: false });
+          entriesStore.createIndex('type', 'tipoMovimiento', { unique: false });
+          entriesStore.createIndex('evento', 'evento', { unique: false });
+          entriesStore.createIndex('origen', 'origen', { unique: false });
+          entriesStore.createIndex('origenId', 'origenId', { unique: false });
         }
-        if (!upgradeDb.objectStoreNames.contains('journalLines')){
-          const store = upgradeDb.createObjectStore('journalLines', { keyPath: 'id', autoIncrement: true });
-          store.createIndex('entryId', 'entryId', { unique: false });
-          store.createIndex('accountCode', 'accountCode', { unique: false });
+
+        if (!db.objectStoreNames.contains('journalLines')){
+          const linesStore = db.createObjectStore('journalLines', { keyPath: 'id', autoIncrement: true });
+          linesStore.createIndex('entryId', 'entryId', { unique: false });
+          linesStore.createIndex('accountCode', 'accountCode', { unique: false });
         }
       };
 
       request.onsuccess = (event) => {
-        resolve(event.target.result);
+        db = event.target.result;
+        resolve(db);
       };
+
       request.onerror = (event) => {
-        reject(event.target.error || new Error('No se pudo abrir la base de datos de Finanzas.'));
+        reject(event.target.error);
       };
     });
   }
 
-  function ensureAccountsSeeded(){
+  function seedAccountsIfNeeded(){
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('accounts', 'readwrite');
+      const store = tx.objectStore('accounts');
+      const countReq = store.count();
+      countReq.onsuccess = () => {
+        if (countReq.result === 0){
+          DEFAULT_ACCOUNTS.forEach(acc => store.put(acc));
+        }
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = (e) => reject(e.target.error);
+    });
+  }
+
+  function loadAccounts(){
     return new Promise((resolve, reject) => {
       const tx = db.transaction('accounts', 'readonly');
       const store = tx.objectStore('accounts');
       const req = store.getAll();
       req.onsuccess = (ev) => {
-        const existing = ev.target.result || [];
-        if (existing.length > 0){
-          accounts = existing;
-          buildAccountsByCode();
-          resolve();
-          return;
-        }
-        // Sembrar catálogo base
-        const seedTx = db.transaction('accounts', 'readwrite');
-        const seedStore = seedTx.objectStore('accounts');
-        DEFAULT_ACCOUNTS.forEach(acc => seedStore.put(acc));
-        seedTx.oncomplete = () => {
-          const tx2 = db.transaction('accounts', 'readonly');
-          const store2 = tx2.objectStore('accounts');
-          const req2 = store2.getAll();
-          req2.onsuccess = (ev2) => {
-            accounts = ev2.target.result || [];
-            buildAccountsByCode();
-            resolve();
-          };
-          req2.onerror = (e2) => reject(e2.target.error);
-        };
-        seedTx.onerror = (e) => reject(e.target.error);
+        accounts = ev.target.result || [];
+        accountsByCode = {};
+        accounts.forEach(a => {
+          accountsByCode[a.code] = a;
+        });
+        resolve();
       };
       req.onerror = (e) => reject(e.target.error);
     });
   }
 
-  function buildAccountsByCode(){
-    accountsByCode = {};
-    accounts.forEach(acc => {
-      accountsByCode[acc.code] = acc;
+  function loadLines(){
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('journalLines', 'readonly');
+      const store = tx.objectStore('journalLines');
+      const req = store.getAll();
+      req.onsuccess = (ev) => {
+        lines = ev.target.result || [];
+        resolve();
+      };
+      req.onerror = (e) => reject(e.target.error);
     });
   }
 
-  function reloadData(){
-    if (!db) return Promise.resolve();
-    return Promise.all([
-      loadEntries(),
-      loadLines()
-    ]).then(() => {
-      refreshJournalFilters();
-      renderAll();
-    });
-  }
-
-
-  f  function loadEntries(){
+  function loadEntries(){
     return new Promise((resolve, reject) => {
       const tx = db.transaction('journalEntries', 'readonly');
       const store = tx.objectStore('journalEntries');
@@ -244,200 +166,70 @@
     });
   }
 
-
-  function loadLines(){
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction('journalLines', 'readonly');
-      const store = tx.objectStore('journalLines');
-      const req = store.getAll();
-      req.onsuccess = (ev) => {
-        lines = ev.target.result || [];
-        resolve();
-      };
-      req.onerror = (e) => reject(e.target.error);
+  function reloadData(){
+    if (!db) return Promise.resolve();
+    return Promise.all([
+      loadEntries(),
+      loadLines()
+    ]).then(() => {
+      refreshJournalFilters();
+      renderAll();
     });
   }
 
-  // --- Formulario Diario ---
+  /* ===========================
+   *   Utilidades
+   * =========================== */
 
-  function initForm(){
-    const dateInput = document.getElementById('movement-date');
-    const typeSelect = document.getElementById('movement-type');
-    const accountSelect = document.getElementById('movement-account');
-    const form = document.getElementById('journal-form');
-
-    if (dateInput){
-      const today = new Date();
-      dateInput.value = formatDateInput(today);
-    }
-
-    if (typeSelect && accountSelect){
-      typeSelect.addEventListener('change', () => {
-        populateAccountOptions();
-      });
-      populateAccountOptions();
-    }
-
-    if (form){
-      form.addEventListener('submit', (ev) => {
-        ev.preventDefault();
-        handleJournalSubmit();
-      });
-    }
+  function formatCurrency(value){
+    const n = Number(value) || 0;
+    return `C$ ${n.toLocaleString('es-NI', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    })}`;
   }
 
-  function populateAccountOptions(){
-    const typeSelect = document.getElementById('movement-type');
-    const accountSelect = document.getElementById('movement-account');
-    if (!typeSelect || !accountSelect) return;
-
-    const tipo = typeSelect.value;
-    let allowedTypes = [];
-
-    if (tipo === 'ingreso'){
-      allowedTypes = ['ingreso'];
-    } else if (tipo === 'egreso'){
-      // Gastos de operación y costos de venta
-      allowedTypes = ['gasto', 'costo'];
-    } else {
-      // Ajuste: permitir todas excepto las de caja/banco que se controlan por "Medio"
-      allowedTypes = ['activo', 'pasivo', 'patrimonio', 'ingreso', 'costo', 'gasto'];
-    }
-
-    const options = accounts
-      .filter(acc => allowedTypes.includes(acc.type) && !['1100','1110','1200'].includes(acc.code))
-      .sort((a,b) => a.code.localeCompare(b.code));
-
-    accountSelect.innerHTML = '';
-    options.forEach(acc => {
-      const opt = document.createElement('option');
-      opt.value = acc.code;
-      opt.textContent = acc.code + ' · ' + acc.name;
-      accountSelect.appendChild(opt);
-    });
+  function round2(n){
+    return Math.round((Number(n) || 0) * 100) / 100;
   }
 
-  function handleJournalSubmit(){
-    if (!db) return;
-    const dateInput = document.getElementById('movement-date');
-    const typeSelect = document.getElementById('movement-type');
-    const mediumSelect = document.getElementById('movement-medium');
-    const accountSelect = document.getElementById('movement-account');
-    const amountInput = document.getElementById('movement-amount');
-    const eventInput = document.getElementById('movement-event');
-    const descriptionInput = document.getElementById('movement-description');
-
-    const date = (dateInput && dateInput.value) ? dateInput.value : formatDateInput(new Date());
-    const tipo = typeSelect ? typeSelect.value : 'ingreso';
-    const medio = mediumSelect ? mediumSelect.value : 'caja';
-    const accountCode = accountSelect ? accountSelect.value : null;
-    const amount = Number(amountInput ? amountInput.value : 0);
-
-    const evento = eventInput ? (eventInput.value || '').trim() : '';
-    const descripcion = descriptionInput ? (descriptionInput.value || '').trim() : '';
-
-    if (!accountCode || !amount || amount <= 0){
-      alert('Por favor ingresa un monto y selecciona una cuenta válida.');
-      return;
-    }
-
-    const cashAccount = resolveCashAccount(medio, evento);
-    if (!cashAccount){
-      alert('No se pudo determinar la cuenta de caja/banco.');
-      return;
-    }
-
-    const tx = db.transaction(['journalEntries', 'journalLines'], 'readwrite');
-    const entriesStore = tx.objectStore('journalEntries');
-    const linesStore = tx.objectStore('journalLines');
-
-     const entry = {
-      date,
-      descripcion,
-      tipoMovimiento: tipo,
-      evento,
-      origen: 'Manual',
-      origenId: null,
-      totalDebe: round2(amount),
-      totalHaber: round2(amount)
-    };
-
-
-    const addReq = entriesStore.add(entry);
-    addReq.onsuccess = (ev) => {
-      const entryId = ev.target.result;
-
-      const createLine = (data) => {
-        const lineReq = linesStore.add(Object.assign({ entryId }, data));
-        lineReq.onerror = (e) => console.error('[Finanzas] Error al guardar línea', e.target.error);
-      };
-
-      if (tipo === 'ingreso'){
-        // DEBE: Caja/Banco, HABER: Ingreso
-        createLine({
-          accountCode: cashAccount,
-          debe: round2(amount),
-          haber: 0
-        });
-        createLine({
-          accountCode,
-          debe: 0,
-          haber: round2(amount)
-        });
-      } else if (tipo === 'egreso'){
-        // DEBE: Gasto/Costos, HABER: Caja/Banco
-        createLine({
-          accountCode,
-          debe: round2(amount),
-          haber: 0
-        });
-        createLine({
-          accountCode: cashAccount,
-          debe: 0,
-          haber: round2(amount)
-        });
-      } else {
-        // Ajuste simple: mismo patrón que egreso pero marcado como tipo "ajuste"
-        createLine({
-          accountCode,
-          debe: round2(amount),
-          haber: 0
-        });
-        createLine({
-          accountCode: cashAccount,
-          debe: 0,
-          haber: round2(amount)
-        });
-      }
-    };
-
-    tx.oncomplete = () => {
-      // Reset rápido del formulario
-      if (amountInput) amountInput.value = '';
-      if (descriptionInput) descriptionInput.value = '';
-      // Evento se mantiene para facilitar múltiples movimientos del mismo evento
-      reloadData();
-    };
-
-    tx.onerror = (e) => {
-      console.error('[Finanzas] Error al guardar movimiento', e.target.error);
-      alert('Ocurrió un error al guardar el movimiento.');
-    };
+  function formatDateInput(date){
+    const d = new Date(date);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   }
 
-  function resolveCashAccount(medio, evento){
-    const hasEvent = evento && evento.trim().length > 0;
-    if (medio === 'caja'){
-      return hasEvent ? '1110' : '1100';
+  function formatMonthKeyFromDate(date){
+    const d = new Date(date);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}`;
+  }
+
+  function capitalize(str){
+    if (!str) return '';
+    return str.charAt(0).toUpperCase() + str.slice(1);
+  }
+
+  // Caja vs Banco manual (Fase 2A sin POS)
+  function resolveCashAccount(medium, evento){
+    if (medium === 'caja'){
+      // En futuras fases podemos diferenciar Caja general vs Caja eventos.
+      return '1100';
     }
-    if (medio === 'banco'){
+    if (medium === 'banco'){
       return '1200';
     }
     return null;
   }
 
-  // --- Filtros y render ---
-    function getSelectedValue(id){
+  /* ===========================
+   *   Filtros Diario
+   * =========================== */
+
+  function getSelectedValue(id){
     const el = document.getElementById(id);
     return el ? el.value : null;
   }
@@ -510,7 +302,210 @@
     return result;
   }
 
-    function initFilters(){
+  /* ===========================
+   *   Inicialización
+   * =========================== */
+
+  function initApp(){
+    openDatabase()
+      .then(() => seedAccountsIfNeeded())
+      .then(() => loadAccounts())
+      .then(() => reloadData())
+      .then(() => {
+        initNavigation();
+        initJournalForm();
+        initFilters();
+      })
+      .catch((err) => {
+        console.error('[Finanzas] Error inicializando la base de datos', err);
+        alert('No se pudo inicializar el módulo de Finanzas.');
+      });
+  }
+
+  function initNavigation(){
+    // Tabs principales
+    const links = document.querySelectorAll('.nav-link[data-tab]');
+    const panels = document.querySelectorAll('.tab-panel');
+    links.forEach(link => {
+      link.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        const tabId = link.getAttribute('data-tab');
+        links.forEach(l => l.classList.remove('nav-link-active'));
+        link.classList.add('nav-link-active');
+        panels.forEach(p => {
+          p.classList.toggle('active', p.id === tabId);
+        });
+      });
+    });
+
+    // Subtabs Estados
+    const subtabs = document.querySelectorAll('.subtab-btn');
+    const subpanels = document.querySelectorAll('.subtab-panel');
+    subtabs.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const target = btn.getAttribute('data-subtab');
+        subtabs.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        subpanels.forEach(p => {
+          p.classList.toggle('active', p.id === `subtab-${target}`);
+        });
+      });
+    });
+  }
+
+  function initJournalForm(){
+    const form = document.getElementById('journal-form');
+    if (!form) return;
+
+    const typeSelect = document.getElementById('movement-type');
+    const accountSelect = document.getElementById('movement-account');
+
+    const today = new Date();
+    const dateInput = document.getElementById('movement-date');
+    if (dateInput){
+      dateInput.value = formatDateInput(today);
+    }
+
+    function refreshAccountOptions(){
+      if (!typeSelect || !accountSelect) return;
+      const tipo = typeSelect.value;
+      const allowedTypes = tipo === 'ingreso'
+        ? ['ingreso']
+        : (tipo === 'egreso' ? ['gasto'] : ['activo', 'pasivo', 'patrimonio', 'ingreso', 'gasto', 'costo']);
+
+      accountSelect.innerHTML = '<option value="">Selecciona una cuenta…</option>';
+      accounts
+        .filter(a => allowedTypes.includes(a.type))
+        .forEach(acc => {
+          const opt = document.createElement('option');
+          opt.value = acc.code;
+          opt.textContent = `${acc.code} – ${acc.name}`;
+          accountSelect.appendChild(opt);
+        });
+    }
+
+    refreshAccountOptions();
+    if (typeSelect){
+      typeSelect.addEventListener('change', refreshAccountOptions);
+    }
+
+    form.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      handleJournalSubmit();
+    });
+  }
+
+  function handleJournalSubmit(){
+    if (!db) return;
+    const dateInput = document.getElementById('movement-date');
+    const typeSelect = document.getElementById('movement-type');
+    const mediumSelect = document.getElementById('movement-medium');
+    const accountSelect = document.getElementById('movement-account');
+    const amountInput = document.getElementById('movement-amount');
+    const eventInput = document.getElementById('movement-event');
+    const descriptionInput = document.getElementById('movement-description');
+
+    const date = (dateInput && dateInput.value) ? dateInput.value : formatDateInput(new Date());
+    const tipo = typeSelect ? typeSelect.value : 'ingreso';
+    const medio = mediumSelect ? mediumSelect.value : 'caja';
+    const accountCode = accountSelect ? accountSelect.value : null;
+    const amount = Number(amountInput ? amountInput.value : 0);
+
+    const evento = eventInput ? (eventInput.value || '').trim() : '';
+    const descripcion = descriptionInput ? (descriptionInput.value || '').trim() : '';
+
+    if (!accountCode || !amount || amount <= 0){
+      alert('Por favor ingresa un monto y selecciona una cuenta válida.');
+      return;
+    }
+
+    const cashAccount = resolveCashAccount(medio, evento);
+    if (!cashAccount){
+      alert('No se pudo determinar la cuenta de caja/banco.');
+      return;
+    }
+
+    const tx = db.transaction(['journalEntries', 'journalLines'], 'readwrite');
+    const entriesStore = tx.objectStore('journalEntries');
+    const linesStore = tx.objectStore('journalLines');
+
+    const entry = {
+      date,
+      descripcion,
+      tipoMovimiento: tipo,
+      evento,
+      origen: 'Manual',   // 🔥 Fase 2A: marcar como asiento manual
+      origenId: null,
+      totalDebe: round2(amount),
+      totalHaber: round2(amount)
+    };
+
+    const addReq = entriesStore.add(entry);
+    addReq.onsuccess = (ev) => {
+      const entryId = ev.target.result;
+
+      const createLine = (data) => {
+        const lineReq = linesStore.add(Object.assign({ entryId }, data));
+        lineReq.onerror = (e) => console.error('[Finanzas] Error al guardar línea', e.target.error);
+      };
+
+      if (tipo === 'ingreso'){
+        // DEBE: Caja/Banco, HABER: Ingreso
+        createLine({
+          accountCode: cashAccount,
+          debe: round2(amount),
+          haber: 0
+        });
+        createLine({
+          accountCode,
+          debe: 0,
+          haber: round2(amount)
+        });
+      } else if (tipo === 'egreso'){
+        // DEBE: Gasto, HABER: Caja/Banco
+        createLine({
+          accountCode,
+          debe: round2(amount),
+          haber: 0
+        });
+        createLine({
+          accountCode: cashAccount,
+          debe: 0,
+          haber: round2(amount)
+        });
+      } else {
+        // Ajuste simple: mover entre caja/banco y la cuenta seleccionada
+        createLine({
+          accountCode,
+          debe: round2(amount),
+          haber: 0
+        });
+        createLine({
+          accountCode: cashAccount,
+          debe: 0,
+          haber: round2(amount)
+        });
+      }
+
+      tx.oncomplete = () => {
+        entries.push(Object.assign({ id: entryId }, entry));
+        entries.forEach(e => {
+          if (!e.origen) e.origen = 'Manual';
+          if (typeof e.origenId === 'undefined') e.origenId = null;
+        });
+        reloadData();
+        if (amountInput) amountInput.value = '';
+        if (descriptionInput) descriptionInput.value = '';
+      };
+    };
+
+    addReq.onerror = (e) => {
+      console.error('[Finanzas] Error al guardar movimiento', e.target.error);
+      alert('No se pudo guardar el movimiento.');
+    };
+  }
+
+  function initFilters(){
     const today = new Date();
     const monthKey = formatMonthKeyFromDate(today);
 
@@ -539,7 +534,6 @@
     renderBalanceGeneral();
   }
 
-
   function renderAll(){
     renderDashboard();
     renderJournalTable();
@@ -547,40 +541,83 @@
     renderBalanceGeneral();
   }
 
+  /* ===========================
+   *   Tablero Finanzas
+   * =========================== */
+
   function renderDashboard(){
     const dashMonth = document.getElementById('dashboard-month');
     if (!dashMonth) return;
-    const monthKey = dashMonth.value || formatMonthKeyFromDate(new Date());
+    const monthValue = dashMonth.value;
 
-    const { lines: monthLines, lastDateOfMonth } = getLinesForMonth(monthKey);
+    const start = monthValue ? new Date(`${monthValue}-01T00:00:00`) : new Date();
+    const end = new Date(start);
+    end.setMonth(end.getMonth() + 1);
 
-    let totalIngresos = 0;
-    let totalEgresos = 0;
+    let ingresos = 0;
+    let egresos = 0;
 
-    monthLines.forEach(line => {
-      const acc = accountsByCode[line.accountCode];
+    entries.forEach(entry => {
+      const d = new Date(entry.date || '');
+      if (isNaN(d.getTime())) return;
+      if (d < start || d >= end) return;
+
+      const entryLines = lines.filter(l => String(l.entryId) === String(entry.id));
+      entryLines.forEach(l => {
+        const acc = accountsByCode[l.accountCode];
+        if (!acc) return;
+        const delta = (Number(l.debe) || 0) - (Number(l.haber) || 0);
+        if (acc.type === 'ingreso'){
+          ingresos += delta;
+        } else if (acc.type === 'gasto'){
+          egresos += delta;
+        }
+      });
+    });
+
+    const saldoCajaCodes = ['1100', '1110'];
+    const saldoBancoCodes = ['1200'];
+
+    const bgDateInput = document.getElementById('bg-date');
+    const cutoff = bgDateInput && bgDateInput.value ? new Date(bgDateInput.value + 'T23:59:59') : new Date();
+
+    let saldoCaja = 0;
+    let saldoBanco = 0;
+
+    lines.forEach(l => {
+      const entry = entries.find(e => String(e.id) === String(l.entryId));
+      if (!entry) return;
+      const d = new Date(entry.date || '');
+      if (isNaN(d.getTime()) || d > cutoff) return;
+
+      const acc = accountsByCode[l.accountCode];
       if (!acc) return;
-      const type = acc.type;
-      if (type === 'ingreso'){
-        totalIngresos += (toNumber(line.haber) - toNumber(line.debe));
-      } else if (type === 'gasto' || type === 'costo'){
-        totalEgresos += (toNumber(line.debe) - toNumber(line.haber));
+      const delta = (Number(l.debe) || 0) - (Number(l.haber) || 0);
+
+      if (saldoCajaCodes.includes(l.accountCode)){
+        saldoCaja += delta;
+      }
+      if (saldoBancoCodes.includes(l.accountCode)){
+        saldoBanco += delta;
       }
     });
 
-    const resultado = totalIngresos - totalEgresos;
+    const ingresosEl = document.getElementById('dash-total-ingresos');
+    const egresosEl = document.getElementById('dash-total-egresos');
+    const resultadoEl = document.getElementById('dash-resultado');
+    const saldoCajaEl = document.getElementById('dash-saldo-caja');
+    const saldoBancoEl = document.getElementById('dash-saldo-banco');
 
-    const balances = computeBalancesAt(lastDateOfMonth);
-
-    const saldoCaja = (balances['1100'] || 0) + (balances['1110'] || 0);
-    const saldoBanco = balances['1200'] || 0;
-
-    setText('dash-ingresos', formatCurrency(totalIngresos));
-    setText('dash-egresos', formatCurrency(totalEgresos));
-    setText('dash-resultado', formatCurrency(resultado));
-    setText('dash-caja', formatCurrency(saldoCaja));
-    setText('dash-banco', formatCurrency(saldoBanco));
+    if (ingresosEl) ingresosEl.textContent = formatCurrency(ingresos);
+    if (egresosEl) egresosEl.textContent = formatCurrency(-egresos);
+    if (resultadoEl) resultadoEl.textContent = formatCurrency(ingresos + egresos);
+    if (saldoCajaEl) saldoCajaEl.textContent = formatCurrency(saldoCaja);
+    if (saldoBancoEl) saldoBancoEl.textContent = formatCurrency(saldoBanco);
   }
+
+  /* ===========================
+   *   Diario contable
+   * =========================== */
 
   function renderJournalTable(){
     const body = document.getElementById('journal-table-body');
@@ -660,7 +697,6 @@
     });
   }
 
-
   function showEntryDetail(entryId){
     const detail = document.getElementById('journal-detail');
     if (!detail) return;
@@ -682,7 +718,7 @@
     const meta = document.createElement('div');
     meta.className = 'detail-grid';
 
-     const fields = [
+    const fields = [
       ['Fecha', entry.date || ''],
       ['Tipo', capitalize(entry.tipoMovimiento || '')],
       ['Evento', entry.evento || '—'],
@@ -690,7 +726,6 @@
       ['Total Debe', formatCurrency(entry.totalDebe || 0)],
       ['Total Haber', formatCurrency(entry.totalHaber || 0)]
     ];
-
 
     fields.forEach(([label, value]) => {
       const wrap = document.createElement('div');
@@ -707,346 +742,210 @@
 
     detail.appendChild(meta);
 
-    const tableWrap = document.createElement('div');
-    tableWrap.className = 'table-wrapper';
-
+    const linesTableWrapper = document.createElement('div');
+    linesTableWrapper.className = 'table-wrapper';
     const table = document.createElement('table');
     table.className = 'data-table';
-
     const thead = document.createElement('thead');
     thead.innerHTML = '<tr><th>Cuenta</th><th>Nombre</th><th>Debe</th><th>Haber</th></tr>';
-    table.appendChild(thead);
-
     const tbody = document.createElement('tbody');
 
-    entryLines.forEach(line => {
-      const acc = accountsByCode[line.accountCode] || { code: line.accountCode, name: '(Cuenta desconocida)' };
+    entryLines.forEach(l => {
       const tr = document.createElement('tr');
-
+      const acc = accountsByCode[l.accountCode] || {};
       const tdCode = document.createElement('td');
-      tdCode.textContent = acc.code;
-      tr.appendChild(tdCode);
-
+      tdCode.textContent = l.accountCode || '';
       const tdName = document.createElement('td');
-      tdName.textContent = acc.name;
-      tr.appendChild(tdName);
-
+      tdName.textContent = acc.name || '';
       const tdDebe = document.createElement('td');
-      tdDebe.textContent = formatCurrency(line.debe || 0);
-      tr.appendChild(tdDebe);
-
+      tdDebe.textContent = formatCurrency(l.debe || 0);
       const tdHaber = document.createElement('td');
-      tdHaber.textContent = formatCurrency(line.haber || 0);
+      tdHaber.textContent = formatCurrency(l.haber || 0);
+      tr.appendChild(tdCode);
+      tr.appendChild(tdName);
+      tr.appendChild(tdDebe);
       tr.appendChild(tdHaber);
-
       tbody.appendChild(tr);
     });
 
+    table.appendChild(thead);
     table.appendChild(tbody);
-    tableWrap.appendChild(table);
-    detail.appendChild(tableWrap);
+    linesTableWrapper.appendChild(table);
+    detail.appendChild(linesTableWrapper);
 
     detail.style.display = 'block';
   }
 
+  /* ===========================
+   *   Estado de Resultados
+   * =========================== */
+
   function renderEstadoResultados(){
-    const erMonth = document.getElementById('er-month');
-    const body = document.getElementById('er-body');
-    if (!erMonth || !body) return;
+    const monthInput = document.getElementById('er-month');
+    if (!monthInput) return;
+    const monthValue = monthInput.value;
 
-    const monthKey = erMonth.value || formatMonthKeyFromDate(new Date());
+    const start = monthValue ? new Date(`${monthValue}-01T00:00:00`) : new Date();
+    const end = new Date(start);
+    end.setMonth(end.getMonth() + 1);
 
-    const { lines: monthLines } = getLinesForMonth(monthKey);
+    const movimientos = {};
 
-    const perAccount = {};
+    lines.forEach(l => {
+      const entry = entries.find(e => String(e.id) === String(l.entryId));
+      if (!entry) return;
+      const d = new Date(entry.date || '');
+      if (isNaN(d.getTime())) return;
+      if (d < start || d >= end) return;
 
-    monthLines.forEach(line => {
-      const acc = accountsByCode[line.accountCode];
+      const acc = accountsByCode[l.accountCode];
       if (!acc) return;
 
-      const type = acc.type;
-      if (type !== 'ingreso' && type !== 'gasto' && type !== 'costo') return;
+      if (!['ingreso', 'gasto', 'costo'].includes(acc.type)) return;
 
-      if (!perAccount[acc.code]){
-        perAccount[acc.code] = { account: acc, amount: 0 };
+      if (!movimientos[l.accountCode]){
+        movimientos[l.accountCode] = { code: l.accountCode, name: acc.name, type: acc.type, total: 0 };
       }
 
-      if (type === 'ingreso'){
-        perAccount[acc.code].amount += (toNumber(line.haber) - toNumber(line.debe));
+      const delta = (Number(l.debe) || 0) - (Number(l.haber) || 0);
+
+      if (acc.type === 'ingreso'){
+        movimientos[l.accountCode].total -= delta;
       } else {
-        // gastos y costos
-        perAccount[acc.code].amount += (toNumber(line.debe) - toNumber(line.haber));
+        movimientos[l.accountCode].total += delta;
       }
     });
 
-    const accountsArr = Object.values(perAccount);
+    const ingresosList = document.getElementById('er-ingresos-list');
+    const costosList = document.getElementById('er-costos-list');
+    const gastosList = document.getElementById('er-gastos-list');
+    const totalIngresosEl = document.getElementById('er-total-ingresos');
+    const totalCostosEl = document.getElementById('er-total-costos');
+    const totalGastosEl = document.getElementById('er-total-gastos');
+    const resultadoEl = document.getElementById('er-resultado');
 
-    body.innerHTML = '';
-    if (!accountsArr.length){
-      const tr = document.createElement('tr');
-      const td = document.createElement('td');
-      td.colSpan = 4;
-      td.className = 'empty-row';
-      td.textContent = 'Aún no hay movimientos para este periodo.';
-      tr.appendChild(td);
-      body.appendChild(tr);
-
-      setText('er-total-ingresos', formatCurrency(0));
-      setText('er-total-costos', formatCurrency(0));
-      setText('er-total-gastos', formatCurrency(0));
-      setText('er-resultado', formatCurrency(0));
-      return;
-    }
+    if (ingresosList) ingresosList.innerHTML = '';
+    if (costosList) costosList.innerHTML = '';
+    if (gastosList) gastosList.innerHTML = '';
 
     let totalIngresos = 0;
     let totalCostos = 0;
     let totalGastos = 0;
 
-    // Ordenar por código
-    accountsArr.sort((a,b) => a.account.code.localeCompare(b.account.code));
+    Object.values(movimientos).forEach(mov => {
+      const li = document.createElement('li');
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = `${mov.code} – ${mov.name}`;
+      const valueSpan = document.createElement('span');
+      valueSpan.textContent = formatCurrency(mov.total);
 
-    accountsArr.forEach(item => {
-      const acc = item.account;
-      const amount = item.amount;
+      li.appendChild(nameSpan);
+      li.appendChild(valueSpan);
 
-      const tr = document.createElement('tr');
-
-      const tdCode = document.createElement('td');
-      tdCode.textContent = acc.code;
-      tr.appendChild(tdCode);
-
-      const tdName = document.createElement('td');
-      tdName.textContent = acc.name;
-      tr.appendChild(tdName);
-
-      const tdType = document.createElement('td');
-      tdType.textContent = humanAccountType(acc.type);
-      tr.appendChild(tdType);
-
-      const tdAmount = document.createElement('td');
-      tdAmount.textContent = formatCurrency(amount);
-      tr.appendChild(tdAmount);
-
-      body.appendChild(tr);
-
-      if (acc.type === 'ingreso'){
-        totalIngresos += amount;
-      } else if (acc.type === 'costo'){
-        totalCostos += amount;
-      } else if (acc.type === 'gasto'){
-        totalGastos += amount;
+      if (mov.type === 'ingreso'){
+        totalIngresos += mov.total;
+        if (ingresosList) ingresosList.appendChild(li);
+      } else if (mov.type === 'costo'){
+        totalCostos += mov.total;
+        if (costosList) costosList.appendChild(li);
+      } else if (mov.type === 'gasto'){
+        totalGastos += mov.total;
+        if (gastosList) gastosList.appendChild(li);
       }
     });
 
-    const resultado = totalIngresos - totalCostos - totalGastos;
+    if (totalIngresosEl) totalIngresosEl.textContent = formatCurrency(totalIngresos);
+    if (totalCostosEl) totalCostosEl.textContent = formatCurrency(totalCostos);
+    if (totalGastosEl) totalGastosEl.textContent = formatCurrency(totalGastos);
 
-    setText('er-total-ingresos', formatCurrency(totalIngresos));
-    setText('er-total-costos', formatCurrency(totalCostos));
-    setText('er-total-gastos', formatCurrency(totalGastos));
-    setText('er-resultado', formatCurrency(resultado));
+    const resultado = totalIngresos - totalCostos - totalGastos;
+    if (resultadoEl) resultadoEl.textContent = formatCurrency(resultado);
   }
 
+  /* ===========================
+   *   Balance General
+   * =========================== */
+
   function renderBalanceGeneral(){
-    const bgDate = document.getElementById('bg-date');
-    if (!bgDate) return;
+    const bgDateInput = document.getElementById('bg-date');
+    if (!bgDateInput) return;
 
-    const cutoff = bgDate.value || formatDateInput(new Date());
-    const balances = computeBalancesAt(cutoff);
+    const cutoff = bgDateInput.value ? new Date(bgDateInput.value + 'T23:59:59') : new Date();
 
-    const activosTbody = document.getElementById('bg-body-activos');
-    const pasivosTbody = document.getElementById('bg-body-pasivos');
-    const patrimonioTbody = document.getElementById('bg-body-patrimonio');
+    const saldos = {};
 
-    if (!activosTbody || !pasivosTbody || !patrimonioTbody) return;
+    lines.forEach(l => {
+      const entry = entries.find(e => String(e.id) === String(l.entryId));
+      if (!entry) return;
+      const d = new Date(entry.date || '');
+      if (isNaN(d.getTime()) || d > cutoff) return;
 
-    activosTbody.innerHTML = '';
-    pasivosTbody.innerHTML = '';
-    patrimonioTbody.innerHTML = '';
+      const acc = accountsByCode[l.accountCode];
+      if (!acc) return;
+
+      if (!saldos[l.accountCode]){
+        saldos[l.accountCode] = { code: l.accountCode, name: acc.name, type: acc.type, saldo: 0 };
+      }
+
+      const delta = (Number(l.debe) || 0) - (Number(l.haber) || 0);
+
+      if (acc.type === 'activo'){
+        saldos[l.accountCode].saldo += delta;
+      } else if (['pasivo', 'patrimonio'].includes(acc.type)){
+        saldos[l.accountCode].saldo -= delta;
+      } else {
+        saldos[l.accountCode].saldo += delta;
+      }
+    });
+
+    const activosList = document.getElementById('bg-activos-list');
+    const pasivosList = document.getElementById('bg-pasivos-list');
+    const patrimonioList = document.getElementById('bg-patrimonio-list');
+
+    const totalActivosEl = document.getElementById('bg-total-activos');
+    const totalPasivosEl = document.getElementById('bg-total-pasivos');
+    const totalPatrimonioEl = document.getElementById('bg-total-patrimonio');
+
+    if (activosList) activosList.innerHTML = '';
+    if (pasivosList) pasivosList.innerHTML = '';
+    if (patrimonioList) patrimonioList.innerHTML = '';
 
     let totalActivos = 0;
     let totalPasivos = 0;
     let totalPatrimonio = 0;
 
-    const codes = Object.keys(balances).sort();
+    Object.values(saldos).forEach(s => {
+      const li = document.createElement('li');
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = `${s.code} – ${s.name}`;
+      const valueSpan = document.createElement('span');
+      valueSpan.textContent = formatCurrency(s.saldo);
 
-    const makeRow = (tbody, acc, saldo) => {
-      const tr = document.createElement('tr');
-      const tdCode = document.createElement('td');
-      tdCode.textContent = acc.code;
-      tr.appendChild(tdCode);
-      const tdName = document.createElement('td');
-      tdName.textContent = acc.name;
-      tr.appendChild(tdName);
-      const tdSaldo = document.createElement('td');
-      tdSaldo.textContent = formatCurrency(saldo);
-      tr.appendChild(tdSaldo);
-      tbody.appendChild(tr);
-    };
+      li.appendChild(nameSpan);
+      li.appendChild(valueSpan);
 
-    codes.forEach(code => {
-      const saldo = balances[code];
-      const acc = accountsByCode[code];
-      if (!acc) return;
-      if (Math.abs(saldo) < 0.005) return; // evitar ruido
-
-      if (acc.type === 'activo'){
-        makeRow(activosTbody, acc, saldo);
-        totalActivos += saldo;
-      } else if (acc.type === 'pasivo'){
-        makeRow(pasivosTbody, acc, saldo);
-        totalPasivos += saldo;
-      } else if (acc.type === 'patrimonio'){
-        makeRow(patrimonioTbody, acc, saldo);
-        totalPatrimonio += saldo;
+      if (s.type === 'activo'){
+        totalActivos += s.saldo;
+        if (activosList) activosList.appendChild(li);
+      } else if (s.type === 'pasivo'){
+        totalPasivos += s.saldo;
+        if (pasivosList) pasivosList.appendChild(li);
+      } else if (s.type === 'patrimonio'){
+        totalPatrimonio += s.saldo;
+        if (patrimonioList) patrimonioList.appendChild(li);
       }
     });
 
-    if (!activosTbody.children.length){
-      const tr = document.createElement('tr');
-      const td = document.createElement('td');
-      td.colSpan = 3;
-      td.className = 'empty-row';
-      td.textContent = 'Sin movimientos aún.';
-      tr.appendChild(td);
-      activosTbody.appendChild(tr);
-    }
-    if (!pasivosTbody.children.length){
-      const tr = document.createElement('tr');
-      const td = document.createElement('td');
-      td.colSpan = 3;
-      td.className = 'empty-row';
-      td.textContent = 'Sin movimientos aún.';
-      tr.appendChild(td);
-      pasivosTbody.appendChild(tr);
-    }
-    if (!patrimonioTbody.children.length){
-      const tr = document.createElement('tr');
-      const td = document.createElement('td');
-      td.colSpan = 3;
-      td.className = 'empty-row';
-      td.textContent = 'Sin movimientos aún.';
-      tr.appendChild(td);
-      patrimonioTbody.appendChild(tr);
-    }
-
-    setText('bg-total-activos', formatCurrency(totalActivos));
-    setText('bg-total-pasivos', formatCurrency(totalPasivos));
-    setText('bg-total-patrimonio', formatCurrency(totalPatrimonio));
+    if (totalActivosEl) totalActivosEl.textContent = formatCurrency(totalActivos);
+    if (totalPasivosEl) totalPasivosEl.textContent = formatCurrency(totalPasivos);
+    if (totalPatrimonioEl) totalPatrimonioEl.textContent = formatCurrency(totalPatrimonio);
   }
 
-  // --- Cálculos de líneas / balances ---
+  /* ===========================
+   *   Misc
+   * =========================== */
 
-  function getLinesForMonth(monthKey){
-    const allowedIds = new Set();
-    const safeKey = monthKey || formatMonthKeyFromDate(new Date());
-
-    let year = 0;
-    let month = 0;
-    try {
-      const parts = safeKey.split('-');
-      year = Number(parts[0]) || 0;
-      month = Number(parts[1]) || 0;
-    } catch {
-      const now = new Date();
-      year = now.getFullYear();
-      month = now.getMonth() + 1;
-    }
-
-    const lastDate = new Date(year, month, 0);
-    const lastDateStr = formatDateInput(lastDate);
-
-    entries.forEach(e => {
-      if (!e.date) return;
-      if (e.date.slice(0,7) === safeKey){
-        allowedIds.add(e.id);
-      }
-    });
-
-    const monthLines = lines.filter(l => allowedIds.has(l.entryId));
-
-    return { lines: monthLines, lastDateOfMonth: lastDateStr };
-  }
-
-  function computeBalancesAt(cutoffDateStr){
-    const cutoff = cutoffDateStr || formatDateInput(new Date());
-    const isoCutoff = cutoff;
-
-    const allowedIds = new Set();
-    entries.forEach(e => {
-      if (!e.date) return;
-      if (e.date <= isoCutoff){
-        allowedIds.add(e.id);
-      }
-    });
-
-    const balances = {};
-
-    lines.forEach(line => {
-      if (!allowedIds.has(line.entryId)) return;
-      const acc = accountsByCode[line.accountCode];
-      if (!acc) return;
-
-      const type = acc.type;
-      const debe = toNumber(line.debe);
-      const haber = toNumber(line.haber);
-
-      if (!balances[acc.code]) balances[acc.code] = 0;
-
-      if (type === 'activo' || type === 'gasto' || type === 'costo'){
-        balances[acc.code] += (debe - haber);
-      } else if (type === 'pasivo' || type === 'patrimonio' || type === 'ingreso'){
-        balances[acc.code] += (haber - debe);
-      } else {
-        balances[acc.code] += (debe - haber);
-      }
-    });
-
-    return balances;
-  }
-
-  // --- Utilidades varias ---
-
-  function formatCurrency(value){
-    const n = Number(value) || 0;
-    try {
-      return 'C$ ' + n.toLocaleString('es-NI', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    } catch (e){
-      return 'C$ ' + n.toFixed(2);
-    }
-  }
-
-  function round2(value){
-    return Math.round((Number(value) || 0) * 100) / 100;
-  }
-
-  function toNumber(v){
-    return Number(v) || 0;
-  }
-
-  function setText(id, text){
-    const el = document.getElementById(id);
-    if (el) el.textContent = text;
-  }
-
-  function formatDateInput(date){
-    const d = (date instanceof Date) ? date : new Date(date);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-  }
-
-  function formatMonthKeyFromDate(date){
-    const d = (date instanceof Date) ? date : new Date(date);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    return `${y}-${m}`;
-  }
-
-  function capitalize(str){
-    if (!str) return '';
-    return str.charAt(0).toUpperCase() + str.slice(1);
-  }
+  document.addEventListener('DOMContentLoaded', initApp);
 
   function humanAccountType(type){
     switch(type){

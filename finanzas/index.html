@@ -7,117 +7,144 @@
   <meta name="description" content="Módulo de Finanzas · Fase 1 de la Suite A33: mini contabilidad manual para Arcano 33." />
   <meta name="theme-color" content="#7b1818" />
 
-  <link rel="icon" type="image/png" sizes="192x192" href="../inventario/images/logo.png" />
-  <link rel="apple-touch-icon" href="../inventario/images/logo.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="../icon-a33-192.png" />
+  <link rel="apple-touch-icon" href="../icon-a33-192.png" />
 
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <header class="app-header">
-    <button class="back-btn" type="button" onclick="window.location.href='../index.html'">← Suite A33</button>
-    <div class="app-header-main">
-      <h1>Finanzas · Fase 1</h1>
-      <p class="app-subtitle">Mini contabilidad interna basada en movimientos manuales.</p>
+    <div class="brand">
+      <div class="brand-mark">
+        <span class="brand-logo">A33</span>
+      </div>
+      <div class="brand-text">
+        <h1>Suite A33</h1>
+        <p>Módulo de Finanzas · Fase 1</p>
+      </div>
     </div>
+
+    <nav class="main-nav">
+      <div class="nav-group">
+        <div class="nav-group-label">Suite A33</div>
+        <a href="../index.html" class="nav-link">Calculadora</a>
+        <a href="../inventario/index.html" class="nav-link">Inventario</a>
+        <a href="../pos/index.html" class="nav-link">A33 POS · Eventos</a>
+        <a href="../pedidos/index.html" class="nav-link">Planificación de Pedidos</a>
+        <a href="../analitica/index.html" class="nav-link">Analítica de Ventas</a>
+        <a href="../lotes/index.html" class="nav-link">Control de Lotes</a>
+      </div>
+
+      <div class="nav-group nav-group-highlight">
+        <div class="nav-group-label">Finanzas</div>
+        <a href="#" class="nav-link nav-link-active" data-tab="tablero">Tablero Finanzas</a>
+        <a href="#" class="nav-link" data-tab="diario">Diario y Ajustes</a>
+        <a href="#" class="nav-link" data-tab="estados">Estados Financieros</a>
+      </div>
+    </nav>
   </header>
 
   <main class="app-main">
-    <p id="finanzas-error" class="hint small" style="display:none;color:#ffb3b3;">
-      Ocurrió un problema al inicializar el módulo de Finanzas. Revisa la consola para más detalle.
-    </p>
-
-    <nav class="tabs">
-      <button class="tab-btn active" data-tab="tablero">Tablero Finanzas</button>
-      <button class="tab-btn" data-tab="diario">Diario y Ajustes</button>
-      <button class="tab-btn" data-tab="estados">Estados Financieros</button>
-    </nav>
-
+    <!-- TABLERO -->
     <section id="tablero" class="tab-panel active">
       <section class="card">
-        <h2>Resumen del mes</h2>
-        <div class="form-grid">
-          <div class="field">
-            <label for="dashboard-month">Mes / Año</label>
-            <input type="month" id="dashboard-month" />
+        <div class="card-header-row">
+          <h2>Tablero de Finanzas</h2>
+          <div class="filters-inline">
+            <div class="field small">
+              <label for="dashboard-month">Mes</label>
+              <input type="month" id="dashboard-month" />
+            </div>
           </div>
         </div>
 
-        <div class="kpi-grid">
-          <div class="kpi-card">
-            <div class="kpi-label">Ingresos del mes</div>
-            <div class="kpi-value" id="dash-ingresos">C$ 0.00</div>
-            <div class="kpi-sub">Suma de cuentas de ingresos (4xxx).</div>
-          </div>
-          <div class="kpi-card">
-            <div class="kpi-label">Egresos del mes</div>
-            <div class="kpi-value" id="dash-egresos">C$ 0.00</div>
-            <div class="kpi-sub">Gastos y costos de operación (5xxx y 6xxx).</div>
-          </div>
-          <div class="kpi-card">
-            <div class="kpi-label">Resultado del mes</div>
-            <div class="kpi-value" id="dash-resultado">C$ 0.00</div>
-            <div class="kpi-sub">Ingresos − Egresos.</div>
-          </div>
-          <div class="kpi-card">
-            <div class="kpi-label">Saldo de Caja</div>
-            <div class="kpi-value" id="dash-caja">C$ 0.00</div>
-            <div class="kpi-sub">1100 Caja general + 1110 Caja eventos.</div>
-          </div>
-          <div class="kpi-card">
-            <div class="kpi-label">Saldo de Banco</div>
-            <div class="kpi-value" id="dash-banco">C$ 0.00</div>
-            <div class="kpi-sub">1200 Banco.</div>
-          </div>
+        <div class="dashboard-grid">
+          <article class="stat-card stat-income">
+            <h3>Ingresos del periodo</h3>
+            <p class="stat-value" id="dash-total-ingresos">C$ 0.00</p>
+            <p class="stat-caption">Suma de cuentas de ingresos (4xxx)</p>
+          </article>
+
+          <article class="stat-card stat-expense">
+            <h3>Egresos del periodo</h3>
+            <p class="stat-value" id="dash-total-egresos">C$ 0.00</p>
+            <p class="stat-caption">Suma de gastos de operación (6xxx)</p>
+          </article>
+
+          <article class="stat-card stat-result">
+            <h3>Resultado del periodo</h3>
+            <p class="stat-value" id="dash-resultado">C$ 0.00</p>
+            <p class="stat-caption">Ingresos - Egresos</p>
+          </article>
+        </div>
+
+        <div class="dashboard-grid secondary">
+          <article class="stat-card">
+            <h3>Saldo Caja (1100 + 1110)</h3>
+            <p class="stat-value" id="dash-saldo-caja">C$ 0.00</p>
+          </article>
+
+          <article class="stat-card">
+            <h3>Saldo Banco (1200)</h3>
+            <p class="stat-value" id="dash-saldo-banco">C$ 0.00</p>
+          </article>
         </div>
       </section>
     </section>
 
+    <!-- DIARIO -->
     <section id="diario" class="tab-panel">
       <section class="card">
-        <h2>Nuevo movimiento</h2>
-        <form id="journal-form" autocomplete="off">
-          <div class="form-grid">
-            <div class="field">
-              <label for="movement-date">Fecha</label>
-              <input type="date" id="movement-date" required />
-            </div>
-            <div class="field">
-              <label for="movement-type">Tipo de movimiento</label>
-              <select id="movement-type" required>
-                <option value="ingreso">Ingreso</option>
-                <option value="egreso">Egreso</option>
-                <option value="ajuste">Ajuste</option>
-              </select>
-            </div>
-            <div class="field">
-              <label for="movement-medium">Medio</label>
-              <select id="movement-medium" required>
-                <option value="caja">Caja</option>
-                <option value="banco">Banco</option>
-              </select>
-            </div>
+        <h2>Registrar movimiento manual</h2>
+        <p class="hint">
+          Usa este formulario para registrar ingresos, egresos y ajustes contables de forma manual. Cada registro generará un asiento de doble
+          partida en el diario.
+        </p>
+
+        <form id="journal-form" class="form-grid">
+          <div class="field">
+            <label for="movement-date">Fecha</label>
+            <input type="date" id="movement-date" required />
           </div>
 
-          <div class="form-grid">
-            <div class="field">
-              <label for="movement-account">Cuenta principal</label>
-              <select id="movement-account" required>
-                <!-- Opciones dinámicas según tipo -->
-              </select>
-            </div>
-            <div class="field">
-              <label for="movement-amount">Monto</label>
-              <input type="number" id="movement-amount" min="0" step="0.01" required />
-            </div>
-            <div class="field">
-              <label for="movement-event">Evento (opcional)</label>
-              <input type="text" id="movement-event" placeholder="Nombre del evento o referencia" />
-            </div>
+          <div class="field">
+            <label for="movement-type">Tipo de movimiento</label>
+            <select id="movement-type">
+              <option value="ingreso">Ingreso</option>
+              <option value="egreso">Egreso</option>
+              <option value="ajuste">Ajuste</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="movement-medium">Medio</label>
+            <select id="movement-medium">
+              <option value="caja">Caja</option>
+              <option value="banco">Banco</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="movement-account">Cuenta principal</label>
+            <select id="movement-account" required>
+              <option value="">Selecciona una cuenta…</option>
+            </select>
+            <p class="hint small">Se filtrarán solo las cuentas coherentes con el tipo de movimiento.</p>
+          </div>
+
+          <div class="field">
+            <label for="movement-amount">Monto</label>
+            <input type="number" id="movement-amount" min="0" step="0.01" required />
+          </div>
+
+          <div class="field">
+            <label for="movement-event">Evento (opcional)</label>
+            <input type="text" id="movement-event" placeholder="Ej. NE2025, The View, etc." />
           </div>
 
           <div class="field">
             <label for="movement-description">Descripción</label>
-            <textarea id="movement-description" rows="2" placeholder="Describe brevemente el movimiento" required></textarea>
+            <textarea id="movement-description" rows="2" placeholder="Breve descripción del movimiento"></textarea>
           </div>
 
           <div class="btn-row">
@@ -127,7 +154,7 @@
       </section>
 
       <section class="card">
-        <h2>        <h2>Diario contable</h2>
+        <h2>Diario contable</h2>
         <p class="hint small">
           Cada registro genera automáticamente un asiento de doble partida (DEBE / HABER).
         </p>
@@ -182,11 +209,10 @@
         </div>
 
         <div id="journal-detail" class="detail-card" style="display:none;"></div>
-
-        <div id="journal-detail" class="detail-card" style="display:none;"></div>
       </section>
     </section>
 
+    <!-- ESTADOS FINANCIEROS -->
     <section id="estados" class="tab-panel">
       <section class="card">
         <h2>Estados Financieros</h2>
@@ -197,103 +223,61 @@
         </nav>
 
         <section id="subtab-resultados" class="subtab-panel active">
-          <div class="form-grid">
-            <div class="field">
-              <label for="er-month">Mes / Año</label>
+          <div class="filters-row">
+            <div class="field small">
+              <label for="er-month">Mes</label>
               <input type="month" id="er-month" />
             </div>
           </div>
 
-          <div class="table-wrapper">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>Cuenta</th>
-                  <th>Nombre</th>
-                  <th>Tipo</th>
-                  <th>Importe</th>
-                </tr>
-              </thead>
-              <tbody id="er-body">
-                <tr>
-                  <td colspan="4" class="empty-row">Aún no hay movimientos para este periodo.</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          <div class="results-layout">
+            <div class="results-column">
+              <h3>Ingresos (4xxx)</h3>
+              <ul class="results-list" id="er-ingresos-list"></ul>
+              <p class="results-total">Total ingresos: <span id="er-total-ingresos">C$ 0.00</span></p>
 
-          <div class="er-summary">
-            <p><strong>Total ingresos:</strong> <span id="er-total-ingresos">C$ 0.00</span></p>
-            <p><strong>Total costos de venta:</strong> <span id="er-total-costos">C$ 0.00</span></p>
-            <p><strong>Total gastos de operación:</strong> <span id="er-total-gastos">C$ 0.00</span></p>
-            <p><strong>Resultado del periodo:</strong> <span id="er-resultado">C$ 0.00</span></p>
+              <h3>Costos de venta (5xxx)</h3>
+              <ul class="results-list" id="er-costos-list"></ul>
+              <p class="results-total">Total costos: <span id="er-total-costos">C$ 0.00</span></p>
+            </div>
+
+            <div class="results-column">
+              <h3>Gastos de operación (6xxx)</h3>
+              <ul class="results-list" id="er-gastos-list"></ul>
+              <p class="results-total">Total gastos: <span id="er-total-gastos">C$ 0.00</span></p>
+
+              <div class="results-summary">
+                <h3>Resultado del periodo</h3>
+                <p class="stat-value" id="er-resultado">C$ 0.00</p>
+                <p class="hint small">Ingresos - Costos - Gastos</p>
+              </div>
+            </div>
           </div>
         </section>
 
         <section id="subtab-balance" class="subtab-panel">
-          <div class="form-grid">
-            <div class="field">
+          <div class="filters-row">
+            <div class="field small">
               <label for="bg-date">Fecha de corte</label>
               <input type="date" id="bg-date" />
             </div>
           </div>
 
-          <div class="bg-layout">
-            <div class="bg-column">
+          <div class="balance-layout">
+            <div class="balance-column">
               <h3>Activos (1xxx)</h3>
-              <div class="table-wrapper">
-                <table class="data-table">
-                  <thead>
-                    <tr>
-                      <th>Cuenta</th>
-                      <th>Nombre</th>
-                      <th>Saldo</th>
-                    </tr>
-                  </thead>
-                  <tbody id="bg-body-activos">
-                    <tr><td colspan="3" class="empty-row">Sin movimientos aún.</td></tr>
-                  </tbody>
-                </table>
-              </div>
-              <p class="bg-total"><strong>Total Activos:</strong> <span id="bg-total-activos">C$ 0.00</span></p>
+              <ul class="results-list" id="bg-activos-list"></ul>
+              <p class="results-total">Total activos: <span id="bg-total-activos">C$ 0.00</span></p>
             </div>
 
-            <div class="bg-column">
+            <div class="balance-column">
               <h3>Pasivos (2xxx)</h3>
-              <div class="table-wrapper">
-                <table class="data-table">
-                  <thead>
-                    <tr>
-                      <th>Cuenta</th>
-                      <th>Nombre</th>
-                      <th>Saldo</th>
-                    </tr>
-                  </thead>
-                  <tbody id="bg-body-pasivos">
-                    <tr><td colspan="3" class="empty-row">Sin movimientos aún.</td></tr>
-                  </tbody>
-                </table>
-              </div>
-              <p class="bg-total"><strong>Total Pasivos:</strong> <span id="bg-total-pasivos">C$ 0.00</span></p>
-            </div>
+              <ul class="results-list" id="bg-pasivos-list"></ul>
+              <p class="results-total">Total pasivos: <span id="bg-total-pasivos">C$ 0.00</span></p>
 
-            <div class="bg-column">
               <h3>Patrimonio (3xxx)</h3>
-              <div class="table-wrapper">
-                <table class="data-table">
-                  <thead>
-                    <tr>
-                      <th>Cuenta</th>
-                      <th>Nombre</th>
-                      <th>Saldo</th>
-                    </tr>
-                  </thead>
-                  <tbody id="bg-body-patrimonio">
-                    <tr><td colspan="3" class="empty-row">Sin movimientos aún.</td></tr>
-                  </tbody>
-                </table>
-              </div>
-              <p class="bg-total"><strong>Total Patrimonio:</strong> <span id="bg-total-patrimonio">C$ 0.00</span></p>
+              <ul class="results-list" id="bg-patrimonio-list"></ul>
+              <p class="results-total">Total patrimonio: <span id="bg-total-patrimonio">C$ 0.00</span></p>
             </div>
           </div>
         </section>
