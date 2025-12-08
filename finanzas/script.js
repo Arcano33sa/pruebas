@@ -214,10 +214,7 @@
     });
   }
 
-  
-    if (!db) return Promise.resolve();
-    return Promise.all([
-        function reloadData(){
+  function reloadData(){
     if (!db) return Promise.resolve();
     return Promise.all([
       loadEntries(),
@@ -229,7 +226,7 @@
   }
 
 
-    function loadEntries(){
+  f  function loadEntries(){
     return new Promise((resolve, reject) => {
       const tx = db.transaction('journalEntries', 'readonly');
       const store = tx.objectStore('journalEntries');
@@ -246,7 +243,6 @@
       req.onerror = (e) => reject(e.target.error);
     });
   }
-
 
 
   function loadLines(){
@@ -355,7 +351,7 @@
     const entriesStore = tx.objectStore('journalEntries');
     const linesStore = tx.objectStore('journalLines');
 
-        const entry = {
+     const entry = {
       date,
       descripcion,
       tipoMovimiento: tipo,
@@ -441,7 +437,7 @@
   }
 
   // --- Filtros y render ---
-  function getSelectedValue(id){
+    function getSelectedValue(id){
     const el = document.getElementById(id);
     return el ? el.value : null;
   }
@@ -664,6 +660,7 @@
     });
   }
 
+
   function showEntryDetail(entryId){
     const detail = document.getElementById('journal-detail');
     if (!detail) return;
@@ -685,7 +682,7 @@
     const meta = document.createElement('div');
     meta.className = 'detail-grid';
 
-        const fields = [
+     const fields = [
       ['Fecha', entry.date || ''],
       ['Tipo', capitalize(entry.tipoMovimiento || '')],
       ['Evento', entry.evento || '—'],
