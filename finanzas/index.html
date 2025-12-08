@@ -1,199 +1,204 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Arcano 33 · Finanzas</title>
-  <meta name="description" content="Módulo de Finanzas de la Suite A33: mini contabilidad manual para Arcano 33." />
-  <meta name="theme-color" content="#7b1818" />
-
-  <link rel="icon" type="image/png" sizes="192x192" href="../icon-a33-192.png" />
-  <link rel="apple-touch-icon" href="../icon-a33-192.png" />
-
-  <link rel="stylesheet" href="style.css" />
+  <meta charset="UTF-8">
+  <title>Finanzas – Suite A33</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="style.css">
 </head>
-<body>
-  <header class="app-header">
-    <div class="brand">
-      <div class="brand-mark">
-        <span class="brand-logo">A33</span>
-      </div>
-      <div class="brand-text">
-        <h1>Suite A33</h1>
-        <p>Módulo de Finanzas</p>
-      </div>
-    </div>
+<body class="fin-body">
+  <div class="fin-app">
 
-    <nav class="main-nav">
-      <div class="nav-group">
-        <div class="nav-group-label">Suite A33</div>
-        <a href="../index.html" class="nav-link">Calculadora</a>
-        <a href="../inventario/index.html" class="nav-link">Inventario</a>
-        <a href="../pos/index.html" class="nav-link">A33 POS · Eventos</a>
-        <a href="../pedidos/index.html" class="nav-link">Planificación de Pedidos</a>
-        <a href="../analitica/index.html" class="nav-link">Analítica de Ventas</a>
-        <a href="../lotes/index.html" class="nav-link">Control de Lotes</a>
+    <!-- ENCABEZADO CON LOGO A33 -->
+    <header class="fin-header">
+      <div class="fin-header-left">
+        <div class="fin-logo-wrapper">
+          <!-- Fallback: círculo rojo A33 -->
+          <div class="fin-logo-fallback">A33</div>
+          <!-- Logo real de Arcano 33 -->
+          <!-- ⚠️ Si tu archivo de logo tiene otro nombre o ruta, cambia SOLO el src -->
+          <img src="../logo.png" alt="Arcano 33" class="fin-logo-img">
+        </div>
+        <div class="fin-title-block">
+          <h1>Suite A33</h1>
+          <p>Finanzas · Contabilidad básica de Arcano 33</p>
+        </div>
       </div>
 
-      <div class="nav-group nav-group-highlight">
-        <div class="nav-group-label">Finanzas</div>
-        <a href="#" class="nav-link nav-link-active" data-tab="tablero">Tablero Finanzas</a>
-        <a href="#" class="nav-link" data-tab="diario">Diario y Ajustes</a>
-        <a href="#" class="nav-link" data-tab="estados">Estados Financieros</a>
-      </div>
-    </nav>
-  </header>
-
-  <main class="app-main">
-    <!-- TABLERO -->
-    <section id="tablero" class="tab-panel active">
-      <section class="card">
-        <div class="card-header-row">
-          <h2>Tablero de Finanzas</h2>
-          <div class="filters-inline">
-            <div class="field small">
-              <label for="dashboard-month">Mes</label>
-              <input type="month" id="dashboard-month" />
-            </div>
-            <div class="field small">
-              <label for="dashboard-event">Evento</label>
-              <select id="dashboard-event">
-                <option value="__all__">Todos los eventos</option>
-              </select>
-            </div>
-          </div>
+      <nav class="fin-main-nav">
+        <div class="nav-group">
+          <span class="nav-group-label">Suite A33</span>
+          <a href="../index.html">Calculadora</a>
+          <a href="../inventario/index.html">Inventario</a>
+          <a href="../pos/index.html">A33 POS · Eventos</a>
+          <a href="../pedidos/index.html">Planificación de Pedidos</a>
+          <a href="../analitica/index.html">Analítica de Ventas</a>
+          <a href="../lotes/index.html">Control de Lotes</a>
         </div>
 
-        <div class="dashboard-grid">
-          <article class="stat-card stat-income">
-            <h3>Ingresos del periodo</h3>
-            <p class="stat-value" id="dash-total-ingresos">C$ 0.00</p>
-            <p class="stat-caption">Suma de cuentas de ingresos (4xxx)</p>
+        <div class="nav-group">
+          <span class="nav-group-label">Finanzas</span>
+          <button type="button" class="fin-tab-btn active" data-view="tablero">Tablero Finanzas</button>
+          <button type="button" class="fin-tab-btn" data-view="diario">Diario y Ajustes</button>
+          <button type="button" class="fin-tab-btn" data-view="estados">Estados Financieros</button>
+        </div>
+      </nav>
+    </header>
+
+    <main class="fin-main">
+
+      <!-- TABLERO FINANZAS -->
+      <section id="view-tablero" class="fin-view active">
+        <header class="fin-section-header">
+          <h2>Tablero Finanzas</h2>
+          <p>Resumen mensual de ingresos, costos, gastos y resultado. Puedes filtrar por evento.</p>
+        </header>
+
+        <div class="fin-filters-row">
+          <label>
+            Mes
+            <select id="tab-mes"></select>
+          </label>
+          <label>
+            Año
+            <select id="tab-anio"></select>
+          </label>
+          <label>
+            Evento
+            <select id="tab-evento"></select>
+          </label>
+        </div>
+
+        <div class="fin-cards-grid">
+          <article class="fin-card">
+            <h3>Ingresos (4xxx)</h3>
+            <p id="tab-ingresos" class="fin-card-number">C$ 0.00</p>
           </article>
 
-          <article class="stat-card stat-expense">
-            <h3>Egresos del periodo</h3>
-            <p class="stat-value" id="dash-total-egresos">C$ 0.00</p>
-            <p class="stat-caption">Suma de gastos de operación (6xxx)</p>
+          <article class="fin-card">
+            <h3>Costos de venta (5xxx)</h3>
+            <p id="tab-costos" class="fin-card-number">C$ 0.00</p>
           </article>
 
-          <article class="stat-card stat-result">
+          <article class="fin-card">
+            <h3>Gastos de operación (6xxx)</h3>
+            <p id="tab-gastos" class="fin-card-number">C$ 0.00</p>
+          </article>
+
+          <article class="fin-card fin-card-strong">
             <h3>Resultado del periodo</h3>
-            <p class="stat-value" id="dash-resultado">C$ 0.00</p>
-            <p class="stat-caption">Ingresos - Egresos</p>
+            <p id="tab-resultado" class="fin-card-number">C$ 0.00</p>
           </article>
-        </div>
 
-        <div class="dashboard-grid secondary">
-          <article class="stat-card">
+          <article class="fin-card">
             <h3>Saldo Caja (1100 + 1110)</h3>
-            <p class="stat-value" id="dash-saldo-caja">C$ 0.00</p>
+            <p id="tab-caja" class="fin-card-number">C$ 0.00</p>
           </article>
 
-          <article class="stat-card">
+          <article class="fin-card">
             <h3>Saldo Banco (1200)</h3>
-            <p class="stat-value" id="dash-saldo-banco">C$ 0.00</p>
+            <p id="tab-banco" class="fin-card-number">C$ 0.00</p>
           </article>
         </div>
       </section>
-    </section>
 
-    <!-- DIARIO -->
-    <section id="diario" class="tab-panel">
-      <section class="card">
-        <h2>Registrar movimiento manual</h2>
-        <p class="hint">
-          Usa este formulario para registrar ingresos, egresos y ajustes contables de forma manual. Cada registro generará un asiento de doble
-          partida en el diario.
-        </p>
+      <!-- DIARIO Y AJUSTES -->
+      <section id="view-diario" class="fin-view">
+        <header class="fin-section-header">
+          <h2>Diario y Ajustes</h2>
+          <p>Registra ingresos, egresos y ajustes manuales. Por detrás se generan asientos DEBE/HABER.</p>
+        </header>
 
-        <form id="journal-form" class="form-grid">
-          <div class="field">
-            <label for="movement-date">Fecha</label>
-            <input type="date" id="movement-date" required />
-          </div>
-
-          <div class="field">
-            <label for="movement-type">Tipo de movimiento</label>
-            <select id="movement-type">
-              <option value="ingreso">Ingreso</option>
-              <option value="egreso">Egreso</option>
-              <option value="ajuste">Ajuste</option>
-            </select>
-          </div>
-
-          <div class="field">
-            <label for="movement-medium">Medio</label>
-            <select id="movement-medium">
-              <option value="caja">Caja</option>
-              <option value="banco">Banco</option>
-            </select>
-          </div>
-
-          <div class="field">
-            <label for="movement-account">Cuenta principal</label>
-            <select id="movement-account" required>
-              <option value="">Selecciona una cuenta…</option>
-            </select>
-            <p class="hint small">Se filtrarán solo las cuentas coherentes con el tipo de movimiento.</p>
-          </div>
-
-          <div class="field">
-            <label for="movement-amount">Monto</label>
-            <input type="number" id="movement-amount" min="0" step="0.01" required />
-          </div>
-
-          <div class="field">
-            <label for="movement-event">Evento (opcional)</label>
-            <input type="text" id="movement-event" placeholder="Ej. NE2025, The View, etc." />
-          </div>
-
-          <div class="field">
-            <label for="movement-description">Descripción</label>
-            <textarea id="movement-description" rows="2" placeholder="Breve descripción del movimiento"></textarea>
-          </div>
-
-          <div class="btn-row">
-            <button type="submit" class="btn btn-primary">Guardar movimiento</button>
-          </div>
-        </form>
-      </section>
-
-      <section class="card">
-        <h2>Diario contable</h2>
-        <p class="hint small">
-          Cada registro genera automáticamente un asiento de doble partida (DEBE / HABER).
-        </p>
-
-        <div class="filters-row">
-          <div class="field small">
-            <label for="journal-filter-type">Tipo de movimiento</label>
-            <select id="journal-filter-type">
+        <div class="fin-filters-row fin-filters-row--compact">
+          <label>
+            Tipo
+            <select id="filtro-tipo">
               <option value="todos">Todos</option>
-              <option value="ingreso">Ingreso</option>
-              <option value="egreso">Egreso</option>
-              <option value="ajuste">Ajuste</option>
+              <option value="ingreso">Ingresos</option>
+              <option value="egreso">Egresos</option>
+              <option value="ajuste">Ajustes</option>
             </select>
-          </div>
-          <div class="field small">
-            <label for="journal-filter-event">Evento</label>
-            <select id="journal-filter-event">
-              <option value="__all__">Todos los eventos</option>
-              <option value="__none__">Sin evento</option>
-            </select>
-          </div>
-          <div class="field small">
-            <label for="journal-filter-origin">Origen</label>
-            <select id="journal-filter-origin">
-              <option value="__all__">Todos</option>
+          </label>
+
+          <label>
+            Evento
+            <select id="filtro-evento-diario"></select>
+          </label>
+
+          <label>
+            Origen
+            <select id="filtro-origen">
+              <option value="todos">Todos</option>
               <option value="Manual">Manual</option>
               <option value="POS">POS</option>
             </select>
-          </div>
+          </label>
         </div>
 
-        <div class="table-wrapper">
-          <table class="data-table">
+        <form id="form-movimiento" class="fin-form">
+          <div class="fin-form-row">
+            <label>
+              Fecha
+              <input type="date" id="mov-fecha">
+            </label>
+
+            <label>
+              Tipo de movimiento
+              <select id="mov-tipo">
+                <option value="ingreso">Ingreso</option>
+                <option value="egreso">Egreso</option>
+                <option value="ajuste">Ajuste</option>
+              </select>
+            </label>
+
+            <label>
+              Medio
+              <select id="mov-medio">
+                <option value="caja">Caja</option>
+                <option value="banco">Banco</option>
+              </select>
+            </label>
+
+            <label>
+              Monto
+              <input type="number" id="mov-monto" step="0.01" min="0">
+            </label>
+          </div>
+
+          <div class="fin-form-row">
+            <label class="fin-form-grow">
+              Cuenta principal
+              <select id="mov-cuenta"></select>
+            </label>
+
+            <label class="fin-form-grow">
+              Evento (texto opcional)
+              <input type="text" id="mov-evento" placeholder="Ej: General, NE2025, Boda X, etc.">
+            </label>
+          </div>
+
+          <div class="fin-form-row">
+            <label class="fin-form-grow">
+              Descripción
+              <input type="text" id="mov-descripcion" placeholder="Descripción del movimiento">
+            </label>
+
+            <button type="button" id="mov-guardar" class="btn-primary">
+              Guardar movimiento
+            </button>
+          </div>
+
+          <p class="fin-help">
+            En Fase 3A el asiento sigue siendo de dos líneas automáticas:
+            <br>
+            <strong>Ingreso:</strong> DEBE Caja/Banco · HABER Cuenta de ingreso seleccionada.<br>
+            <strong>Egreso:</strong> DEBE Cuenta de gasto/costo · HABER Caja/Banco.<br>
+            <strong>Ajuste simple:</strong> Caja/Banco contra la cuenta seleccionada.
+          </p>
+        </form>
+
+        <div class="fin-table-wrapper">
+          <table class="fin-table">
             <thead>
               <tr>
                 <th>Fecha</th>
@@ -201,123 +206,176 @@
                 <th>Tipo</th>
                 <th>Evento</th>
                 <th>Origen</th>
-                <th>Total Debe</th>
-                <th>Total Haber</th>
+                <th>Debe</th>
+                <th>Haber</th>
                 <th></th>
               </tr>
             </thead>
-            <tbody id="journal-table-body">
-              <tr>
-                <td colspan="8" class="empty-row">Aún no hay movimientos registrados.</td>
-              </tr>
-            </tbody>
+            <tbody id="diario-tbody"></tbody>
           </table>
         </div>
-
-        <div id="journal-detail" class="detail-card" style="display:none;"></div>
       </section>
-    </section>
 
-    <!-- ESTADOS FINANCIEROS -->
-    <section id="estados" class="tab-panel">
-      <section class="card">
-        <h2>Estados Financieros</h2>
+      <!-- ESTADOS FINANCIEROS -->
+      <section id="view-estados" class="fin-view">
+        <header class="fin-section-header">
+          <h2>Estados Financieros</h2>
+          <p>Estado de Resultados y Balance General usando los asientos de Finanzas.</p>
+        </header>
 
-        <nav class="subtabs">
-          <button class="subtab-btn active" data-subtab="resultados">Estado de Resultados</button>
-          <button class="subtab-btn" data-subtab="balance">Balance General</button>
-        </nav>
+        <div class="fin-subtabs">
+          <button type="button" class="fin-subtab-btn active" data-subview="er">Estado de Resultados</button>
+          <button type="button" class="fin-subtab-btn" data-subview="bg">Balance General</button>
+        </div>
 
-        <!-- ESTADO DE RESULTADOS -->
-        <section id="subtab-resultados" class="subtab-panel active">
-          <div class="filters-row">
-            <div class="field small">
-              <label for="er-mode">Periodo</label>
-              <select id="er-mode">
+        <!-- Estado de Resultados -->
+        <section id="sub-er" class="fin-subview active">
+          <div class="fin-filters-row">
+            <label>
+              Modo de periodo
+              <select id="er-modo">
                 <option value="mes">Por mes</option>
                 <option value="rango">Por rango de fechas</option>
               </select>
+            </label>
+
+            <div id="er-filtros-mes" class="fin-inline-group">
+              <label>
+                Mes
+                <select id="er-mes"></select>
+              </label>
+              <label>
+                Año
+                <select id="er-anio"></select>
+              </label>
             </div>
 
-            <div class="field small" id="er-month-wrapper">
-              <label for="er-month">Mes</label>
-              <input type="month" id="er-month" />
+            <div id="er-filtros-rango" class="fin-inline-group hidden">
+              <label>
+                Desde
+                <input type="date" id="er-desde">
+              </label>
+              <label>
+                Hasta
+                <input type="date" id="er-hasta">
+              </label>
             </div>
 
-            <div class="field small" id="er-start-wrapper">
-              <label for="er-start">Desde</label>
-              <input type="date" id="er-start" />
-            </div>
-
-            <div class="field small" id="er-end-wrapper">
-              <label for="er-end">Hasta</label>
-              <input type="date" id="er-end" />
-            </div>
-
-            <div class="field small">
-              <label for="er-event">Evento</label>
-              <select id="er-event">
-                <option value="__all__">Todos los eventos</option>
-                <option value="__none__">Sin evento</option>
-              </select>
-            </div>
+            <label>
+              Evento
+              <select id="er-evento"></select>
+            </label>
           </div>
 
-          <div class="results-layout">
-            <div class="results-column">
+          <div class="fin-cards-grid fin-cards-grid--er">
+            <article class="fin-card">
               <h3>Ingresos (4xxx)</h3>
-              <ul class="results-list" id="er-ingresos-list"></ul>
-              <p class="results-total">Total ingresos: <span id="er-total-ingresos">C$ 0.00</span></p>
+              <p id="er-ingresos" class="fin-card-number">C$ 0.00</p>
+            </article>
 
+            <article class="fin-card">
               <h3>Costos de venta (5xxx)</h3>
-              <ul class="results-list" id="er-costos-list"></ul>
-              <p class="results-total">Total costos: <span id="er-total-costos">C$ 0.00</span></p>
-            </div>
+              <p id="er-costos" class="fin-card-number">C$ 0.00</p>
+            </article>
 
-            <div class="results-column">
+            <article class="fin-card">
               <h3>Gastos de operación (6xxx)</h3>
-              <ul class="results-list" id="er-gastos-list"></ul>
-              <p class="results-total">Total gastos: <span id="er-total-gastos">C$ 0.00</span></p>
+              <p id="er-gastos" class="fin-card-number">C$ 0.00</p>
+            </article>
 
-              <div class="results-summary">
-                <h3>Resultado del periodo</h3>
-                <p class="stat-value" id="er-resultado">C$ 0.00</p>
-                <p class="hint small">Ingresos - Costos - Gastos</p>
-              </div>
-            </div>
+            <article class="fin-card fin-card-strong">
+              <h3>Utilidad bruta</h3>
+              <p id="er-bruta" class="fin-card-number">C$ 0.00</p>
+            </article>
+
+            <article class="fin-card fin-card-strong">
+              <h3>Utilidad neta</h3>
+              <p id="er-neta" class="fin-card-number">C$ 0.00</p>
+            </article>
           </div>
+
+          <p class="fin-help">
+            Nota: en Fase 3A los costos (5xxx) se pueden registrar manualmente.
+            En Fase 3B los costos de venta se generarán en automático desde el POS según presentaciones de Arcano 33.
+          </p>
         </section>
 
-        <!-- BALANCE GENERAL -->
-        <section id="subtab-balance" class="subtab-panel">
-          <div class="filters-row">
-            <div class="field small">
-              <label for="bg-date">Fecha de corte</label>
-              <input type="date" id="bg-date" />
-            </div>
+        <!-- Balance General -->
+        <section id="sub-bg" class="fin-subview">
+          <div class="fin-filters-row">
+            <label>
+              Fecha de corte
+              <input type="date" id="bg-fecha">
+            </label>
           </div>
 
-          <div class="balance-layout">
-            <div class="balance-column">
-              <h3>Activos (1xxx)</h3>
-              <ul class="results-list" id="bg-activos-list"></ul>
-              <p class="results-total">Total activos: <span id="bg-total-activos">C$ 0.00</span></p>
-            </div>
-
-            <div class="balance-column">
-              <h3>Pasivos (2xxx)</h3>
-              <ul class="results-list" id="bg-pasivos-list"></ul>
-              <p class="results-total">Total pasivos: <span id="bg-total-pasivos">C$ 0.00</span></p>
-
-              <h3>Patrimonio (3xxx)</h3>
-              <ul class="results-list" id="bg-patrimonio-list"></ul>
-              <p class="results-total">Total patrimonio: <span id="bg-total-patrimonio">C$ 0.00</span></p>
-            </div>
+          <div class="fin-table-wrapper">
+            <table class="fin-table">
+              <thead>
+                <tr>
+                  <th>Grupo</th>
+                  <th>Saldo</th>
+                </tr>
+              </thead>
+              <tbody id="bg-tbody">
+                <tr>
+                  <td>Activos (1xxx)</td>
+                  <td id="bg-activos" class="num">C$ 0.00</td>
+                </tr>
+                <tr>
+                  <td>Pasivos (2xxx)</td>
+                  <td id="bg-pasivos" class="num">C$ 0.00</td>
+                </tr>
+                <tr>
+                  <td>Patrimonio (3xxx)</td>
+                  <td id="bg-patrimonio" class="num">C$ 0.00</td>
+                </tr>
+                <tr class="fin-row-strong">
+                  <td>Activos – Pasivos – Patrimonio</td>
+                  <td id="bg-cuadre" class="num">C$ 0.00</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
+
+          <p class="fin-help">
+            Idealmente el Balance cuadra (Activos = Pasivos + Patrimonio).
+            En esta Fase 3A solo se usan las cuentas 1xxx, 2xxx y 3xxx que entren en los asientos.
+          </p>
         </section>
       </section>
-    </section>
-  </main>
+    </main>
+
+    <!-- Toast -->
+    <div id="toast" class="fin-toast"></div>
+
+    <!-- Modal detalle de asiento -->
+    <div id="detalle-modal" class="fin-modal">
+      <div class="fin-modal-content">
+        <header class="fin-modal-header">
+          <h3>Detalle de asiento</h3>
+          <button type="button" id="detalle-cerrar" class="btn-close">×</button>
+        </header>
+        <div class="fin-modal-body">
+          <div id="detalle-meta" class="fin-detalle-meta"></div>
+          <div class="fin-table-wrapper">
+            <table class="fin-table">
+              <thead>
+                <tr>
+                  <th>Cuenta</th>
+                  <th>Nombre</th>
+                  <th>Debe</th>
+                  <th>Haber</th>
+                </tr>
+              </thead>
+              <tbody id="detalle-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
 
   <script src="script.js"></script>
 </body>
