@@ -200,25 +200,35 @@ function fmtCurrency(v) {
 
 async function getAllFinData() {
   await openFinDB();
-  const [accounts, entries, lines] = await Promise.all([
+  const [accounts, rawEntries, rawLines] = await Promise.all([
     finGetAll('accounts'),
     finGetAll('journalEntries'),
     finGetAll('journalLines')
   ]);
+
+  // Normalizar fechas: si viene "date" (POS) y no "fecha", lo copiamos.
+  const entries = rawEntries.map(e => {
+    if (!e.fecha && e.date) {
+      e.fecha = e.date;
+    }
+    return e;
+  });
 
   const accountsMap = new Map();
   for (const acc of accounts) {
     accountsMap.set(String(acc.code), acc);
   }
 
+  // Construir linesByEntry soportando idEntry (Finanzas) y entryId (POS)
   const linesByEntry = new Map();
-  for (const ln of lines) {
-    const idEntry = ln.idEntry;
-    if (!linesByEntry.has(idEntry)) linesByEntry.set(idEntry, []);
-    linesByEntry.get(idEntry).push(ln);
+  for (const ln of rawLines) {
+    const entryId = ln.idEntry != null ? ln.idEntry : ln.entryId;
+    if (entryId == null) continue;
+    if (!linesByEntry.has(entryId)) linesByEntry.set(entryId, []);
+    linesByEntry.get(entryId).push(ln);
   }
 
-  return { accounts, accountsMap, entries, lines, linesByEntry };
+  return { accounts, accountsMap, entries, lines: rawLines, linesByEntry };
 }
 
 function buildEventList(entries) {
