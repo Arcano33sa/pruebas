@@ -92,28 +92,38 @@ async function ensureFinanzasDB() {
 // Mapea forma de pago del POS a cuenta contable
 function mapSaleToCuentaCobro(sale) {
   const pay = sale.payment || 'efectivo';
-  if (pay === 'efectivo') {
-    const evName = (sale.eventName || '').toString().trim().toLowerCase();
-    // Evento "General" -> Caja general, otros eventos -> Caja eventos
-    if (evName && evName !== 'general') return '1110'; // Caja eventos
-    return '1100'; // Caja general
-  }
+  if (pay === 'efectivo') return '1100';   // Caja
   if (pay === 'transferencia') return '1200'; // Banco
-  if (pay === 'credito') return '1300';       // Clientes
-  return '1100';
+  if (pay === 'credito') return '1300';    // Clientes
+  return '1200'; // Otros métodos similares a banco
 }
 
-// Crea asiento automático en Finanzas por una venta / devolución del POS
+// Crea/actualiza asiento automático en Finanzas por una venta / devolución del POS
 async function createJournalEntryForSalePOS(sale) {
   try {
     if (!sale) return;
-    // Cortesías: por ahora NO se contabilizan ingresos
+    // Cortesías: por ahora NO se contabilizan ingresos ni costo de venta
     if (sale.courtesy) return;
 
-    const amount = Math.abs(Number(sale.total) || 0);
-    if (!amount) return; // nada que contabilizar
-
     await ensureFinanzasDB();
+
+    const saleId = sale.id != null ? sale.id : null;
+
+    // Importe de ingreso (venta neta)
+    const amount = Math.abs(Number(sale.total) || 0);
+
+    // Costo de venta basado en costo por presentación
+    let unitCost = 0;
+    if (typeof sale.costPerUnit === 'number' && sale.costPerUnit > 0) {
+      unitCost = sale.costPerUnit;
+    } else {
+      unitCost = getCostoUnitarioProducto(sale.productName || '');
+    }
+    const qtyAbs = Math.abs(Number(sale.qty) || 0);
+    const amountCost = unitCost > 0 && qtyAbs > 0 ? unitCost * qtyAbs : 0;
+
+    // Si no hay ni ingreso ni costo, no hay nada que registrar
+    if (!amount && !amountCost) return;
 
     const cashAccount = mapSaleToCuentaCobro(sale);
     const evento = sale.eventName || '';
@@ -125,27 +135,107 @@ async function createJournalEntryForSalePOS(sale) {
     // Para devoluciones lo marcamos como "ajuste" para diferenciarlo visualmente
     const tipoMovimiento = sale.isReturn ? 'ajuste' : 'ingreso';
 
-    const txFin = finDb.transaction(['journalEntries', 'journalLines'], 'readwrite');
-    const entriesStore = txFin.objectStore('journalEntries');
-    const linesStore = txFin.objectStore('journalLines');
+    const totalsDebe = amount + amountCost;
+    const totalsHaber = amount + amountCost;
 
-    const entry = {
-      date: sale.date,
-      descripcion,
-      tipoMovimiento,
-      evento,
-      origen: 'POS',
-      origenId: sale.id != null ? sale.id : null,
-      totalDebe: amount,
-      totalHaber: amount
-    };
+    // Buscar si ya existe un asiento para este origen/origenId
+    let existingEntry = null;
+    if (saleId != null) {
+      await new Promise((resolve) => {
+        const txRead = finDb.transaction(['journalEntries'], 'readonly');
+        const storeRead = txRead.objectStore('journalEntries');
+        const req = storeRead.getAll();
+        req.onsuccess = () => {
+          const list = req.result || [];
+          existingEntry = list.find(
+            (e) => e && e.origen === 'POS' && e.origenId === saleId
+          ) || null;
+        };
+        txRead.oncomplete = () => resolve();
+        txRead.onerror = () => resolve();
+      });
+    }
 
-    const addReq = entriesStore.add(entry);
-    addReq.onsuccess = (ev) => {
-      const entryId = ev.target.result;
-      const makeLine = (data) => {
+    let entryId = existingEntry ? existingEntry.id : null;
+
+    // Crear/actualizar encabezado del asiento
+    await new Promise((resolve) => {
+      const txWrite = finDb.transaction(['journalEntries'], 'readwrite');
+      const storeWrite = txWrite.objectStore('journalEntries');
+
+      if (existingEntry) {
+        existingEntry.date = sale.date;
+        existingEntry.descripcion = descripcion;
+        existingEntry.tipoMovimiento = tipoMovimiento;
+        existingEntry.evento = evento;
+        existingEntry.origen = 'POS';
+        existingEntry.origenId = saleId;
+        existingEntry.totalDebe = totalsDebe;
+        existingEntry.totalHaber = totalsHaber;
+        storeWrite.put(existingEntry);
+      } else {
+        const entry = {
+          date: sale.date,
+          descripcion,
+          tipoMovimiento,
+          evento,
+          origen: 'POS',
+          origenId: saleId,
+          totalDebe: totalsDebe,
+          totalHaber: totalsHaber
+        };
+        const reqAdd = storeWrite.add(entry);
+        reqAdd.onsuccess = (ev) => {
+          entryId = ev.target.result;
+        };
+      }
+
+      txWrite.oncomplete = () => {
+        if (!entryId && existingEntry && existingEntry.id != null) {
+          entryId = existingEntry.id;
+        }
+        resolve();
+      };
+      txWrite.onerror = (e) => {
+        console.error('Error guardando asiento automático desde POS', e && e.target && e.target.error);
+        resolve();
+      };
+    });
+
+    if (!entryId) {
+      console.error('No se pudo determinar entryId para asiento automático POS');
+      return;
+    }
+
+    // Borrar líneas anteriores de este asiento (para evitar duplicados)
+    await new Promise((resolve) => {
+      const txDel = finDb.transaction(['journalLines'], 'readwrite');
+      const storeDel = txDel.objectStore('journalLines');
+      const reqLines = storeDel.getAll();
+      reqLines.onsuccess = () => {
+        const lines = reqLines.result || [];
+        lines
+          .filter((l) => String(l.entryId) === String(entryId))
+          .forEach((l) => {
+            try {
+              storeDel.delete(l.id);
+            } catch (err) {
+              console.error('Error borrando línea contable POS existente', err);
+            }
+          });
+      };
+      txDel.oncomplete = () => resolve();
+      txDel.onerror = () => resolve();
+    });
+
+    // Crear nuevas líneas (ingreso + costo de venta si aplica)
+    await new Promise((resolve) => {
+      const txLines = finDb.transaction(['journalLines'], 'readwrite');
+      const storeLines = txLines.objectStore('journalLines');
+
+      const addLine = (data) => {
         try {
-          linesStore.add(Object.assign({ entryId }, data));
+          storeLines.add(Object.assign({ entryId }, data));
         } catch (err) {
           console.error('Error guardando línea contable POS', err);
         }
@@ -153,23 +243,41 @@ async function createJournalEntryForSalePOS(sale) {
 
       if (!sale.isReturn) {
         // Venta normal:
-        // DEBE: Caja/Banco/Clientes
-        // HABER: 4100 Ingresos
-        makeLine({ accountCode: cashAccount, debe: amount, haber: 0 });
-        makeLine({ accountCode: '4100', debe: 0, haber: amount });
+        // Ingreso:
+        //   DEBE: Caja/Banco/Clientes
+        //   HABER: 4100 Ingresos por ventas Arcano 33
+        addLine({ accountCode: cashAccount, debe: amount, haber: 0 });
+        addLine({ accountCode: '4100', debe: 0, haber: amount });
+
+        // Costo de venta (si hay costo disponible):
+        //   DEBE: 5100 Costo de ventas Arcano 33
+        //   HABER: 1500 Inventario producto terminado A33
+        if (amountCost > 0) {
+          addLine({ accountCode: '5100', debe: amountCost, haber: 0 });
+          addLine({ accountCode: '1500', debe: 0, haber: amountCost });
+        }
       } else {
         // Devolución: asiento inverso
-        // DEBE: 4100
-        // HABER: Caja/Banco/Clientes
-        makeLine({ accountCode: '4100', debe: amount, haber: 0 });
-        makeLine({ accountCode: cashAccount, debe: 0, haber: amount });
+        // Ingreso inverso:
+        //   DEBE: 4100
+        //   HABER: Caja/Banco/Clientes
+        addLine({ accountCode: '4100', debe: amount, haber: 0 });
+        addLine({ accountCode: cashAccount, debe: 0, haber: amount });
+
+        // Costo de venta inverso:
+        //   DEBE: 1500
+        //   HABER: 5100
+        if (amountCost > 0) {
+          addLine({ accountCode: '1500', debe: amountCost, haber: 0 });
+          addLine({ accountCode: '5100', debe: 0, haber: amountCost });
+        }
       }
-    };
-    addReq.onerror = (e) => {
-      console.error('Error creando asiento automático desde POS', e.target.error);
-    };
+
+      txLines.oncomplete = () => resolve();
+      txLines.onerror = () => resolve();
+    });
   } catch (err) {
-    console.error('Error general creando asiento automático desde POS', err);
+    console.error('Error general creando/actualizando asiento automático desde POS', err);
   }
 }
 
@@ -1372,7 +1480,7 @@ async function addSale(){
   const saleId = await put('sales', saleRecord);
   saleRecord.id = saleId;
 
-  // Crear asiento contable automático en Finanzas
+  // Crear/actualizar asiento contable automático en Finanzas
   try {
     await createJournalEntryForSalePOS(saleRecord);
   } catch (err) {
