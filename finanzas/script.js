@@ -1,5 +1,6 @@
-// Finanzas – Suite A33 · Fase 3A
-// Contabilidad básica: diario, tablero, estado de resultados y balance general.
+// Finanzas – Suite A33 · Fase 3A + Fase 4 (Etapa 1 UI + reportes básicos)
+// Contabilidad básica: diario, tablero, estado de resultados, balance general
+// y estructura de reportes avanzados.
 
 const FIN_DB_NAME = 'finanzasDB';
 const FIN_DB_VERSION = 1;
@@ -150,7 +151,6 @@ async function ensureBaseAccounts() {
         systemProtected: !!base.systemProtected
       });
     } else {
-      // Refuerza tipo y systemProtected si falta
       let changed = false;
       if (!current.tipo) {
         current.tipo = base.tipo;
@@ -167,7 +167,7 @@ async function ensureBaseAccounts() {
   }
 }
 
-/* ---------- Utilidades de fechas y formato ---------- */
+/* ---------- Fechas y formato ---------- */
 
 function pad2(n) {
   return String(n).padStart(2, '0');
@@ -196,39 +196,63 @@ function fmtCurrency(v) {
   });
 }
 
+function fmtPercent(v) {
+  const n = Number(v || 0);
+  return n.toFixed(2);
+}
+
+function parseDateStr(dateStr) {
+  if (!dateStr) return null;
+  const parts = dateStr.split('-').map(Number);
+  if (parts.length !== 3) return null;
+  const [y, m, d] = parts;
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d);
+}
+
+function dateToStr(date) {
+  const y = date.getFullYear();
+  const m = pad2(date.getMonth() + 1);
+  const d = pad2(date.getDate());
+  return `${y}-${m}-${d}`;
+}
+
+function addDaysToDateStr(dateStr, delta) {
+  const dt = parseDateStr(dateStr);
+  if (!dt) return dateStr;
+  dt.setDate(dt.getDate() + delta);
+  return dateToStr(dt);
+}
+
+function prevDateStr(dateStr) {
+  return addDaysToDateStr(dateStr, -1);
+}
+
 /* ---------- Carga y estructura de datos ---------- */
 
 async function getAllFinData() {
   await openFinDB();
-  const [accounts, rawEntries, rawLines] = await Promise.all([
+  const [accounts, entries, lines] = await Promise.all([
     finGetAll('accounts'),
     finGetAll('journalEntries'),
     finGetAll('journalLines')
   ]);
-
-  // Normalizar fechas: si viene "date" (POS) y no "fecha", lo copiamos.
-  const entries = rawEntries.map(e => {
-    if (!e.fecha && e.date) {
-      e.fecha = e.date;
-    }
-    return e;
-  });
 
   const accountsMap = new Map();
   for (const acc of accounts) {
     accountsMap.set(String(acc.code), acc);
   }
 
-  // Construir linesByEntry soportando idEntry (Finanzas) y entryId (POS)
   const linesByEntry = new Map();
-  for (const ln of rawLines) {
-    const entryId = ln.idEntry != null ? ln.idEntry : ln.entryId;
+  for (const ln of lines) {
+    // Soportar tanto entryId (nuevo) como idEntry (viejo)
+    const entryId = ln.entryId != null ? ln.entryId : ln.idEntry;
     if (entryId == null) continue;
     if (!linesByEntry.has(entryId)) linesByEntry.set(entryId, []);
     linesByEntry.get(entryId).push(ln);
   }
 
-  return { accounts, accountsMap, entries, lines: rawLines, linesByEntry };
+  return { accounts, accountsMap, entries, lines, linesByEntry };
 }
 
 function buildEventList(entries) {
@@ -382,30 +406,52 @@ function fillMonthYearSelects() {
   const tabAnio = $('#tab-anio');
   const erAnio = $('#er-anio');
 
+  const rentMes = $('#rep-rent-mes');
+  const rentAnio = $('#rep-rent-anio');
+  const fcMes = $('#fc-mes');
+  const fcAnio = $('#fc-anio');
+
   if (tabMes) tabMes.innerHTML = '';
   if (erMes) erMes.innerHTML = '';
+  if (rentMes) rentMes.innerHTML = '';
+  if (fcMes) fcMes.innerHTML = '';
 
   months.forEach((m, idx) => {
+    const label = monthNames[idx];
+
     if (tabMes) {
       const opt = document.createElement('option');
       opt.value = m;
-      opt.textContent = monthNames[idx];
+      opt.textContent = label;
       tabMes.appendChild(opt);
     }
     if (erMes) {
       const opt = document.createElement('option');
       opt.value = m;
-      opt.textContent = monthNames[idx];
+      opt.textContent = label;
       erMes.appendChild(opt);
+    }
+    if (rentMes) {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = label;
+      rentMes.appendChild(opt);
+    }
+    if (fcMes) {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = label;
+      fcMes.appendChild(opt);
     }
   });
 
-  // Años: desde currentYear - 2 hasta currentYear + 1
   const years = [];
   for (let y = currentYear - 2; y <= currentYear + 1; y++) years.push(String(y));
 
   if (tabAnio) tabAnio.innerHTML = '';
   if (erAnio) erAnio.innerHTML = '';
+  if (rentAnio) rentAnio.innerHTML = '';
+  if (fcAnio) fcAnio.innerHTML = '';
 
   years.forEach(y => {
     if (tabAnio) {
@@ -420,22 +466,40 @@ function fillMonthYearSelects() {
       opt.textContent = y;
       erAnio.appendChild(opt);
     }
+    if (rentAnio) {
+      const opt = document.createElement('option');
+      opt.value = y;
+      opt.textContent = y;
+      rentAnio.appendChild(opt);
+    }
+    if (fcAnio) {
+      const opt = document.createElement('option');
+      opt.value = y;
+      opt.textContent = y;
+      fcAnio.appendChild(opt);
+    }
   });
 
   if (tabMes) tabMes.value = pad2(currentMonth);
   if (erMes) erMes.value = pad2(currentMonth);
+  if (rentMes) rentMes.value = pad2(currentMonth);
+  if (fcMes) fcMes.value = pad2(currentMonth);
+
   if (tabAnio) tabAnio.value = String(currentYear);
   if (erAnio) erAnio.value = String(currentYear);
+  if (rentAnio) rentAnio.value = String(currentYear);
+  if (fcAnio) fcAnio.value = String(currentYear);
 
   const bgFecha = $('#bg-fecha');
   if (bgFecha && !bgFecha.value) {
     bgFecha.value = todayStr();
   }
 
+  const { start, end } = monthRange(currentYear, currentMonth);
+
   const erDesde = $('#er-desde');
   const erHasta = $('#er-hasta');
   if (erDesde && erHasta) {
-    const { start, end } = monthRange(currentYear, currentMonth);
     erDesde.value = start;
     erHasta.value = end;
   }
@@ -444,6 +508,27 @@ function fillMonthYearSelects() {
   if (movFecha && !movFecha.value) {
     movFecha.value = todayStr();
   }
+
+  const rentDesde = $('#rep-rent-desde');
+  const rentHasta = $('#rep-rent-hasta');
+  if (rentDesde && rentHasta) {
+    rentDesde.value = start;
+    rentHasta.value = end;
+  }
+
+  const evDesde = $('#rep-ev-desde');
+  const evHasta = $('#rep-ev-hasta');
+  if (evDesde && evHasta) {
+    evDesde.value = start;
+    evHasta.value = end;
+  }
+
+  const fcDesde = $('#fc-desde');
+  const fcHasta = $('#fc-hasta');
+  if (fcDesde && fcHasta) {
+    fcDesde.value = start;
+    fcHasta.value = end;
+  }
 }
 
 function updateEventFilters(entries) {
@@ -451,7 +536,8 @@ function updateEventFilters(entries) {
   const selects = [
     $('#tab-evento'),
     $('#filtro-evento-diario'),
-    $('#er-evento')
+    $('#er-evento'),
+    $('#rep-rent-evento')
   ];
 
   selects.forEach(sel => {
@@ -664,8 +750,9 @@ function renderEstadoResultados(data) {
   let hasta = null;
 
   if (modo === 'mes') {
-    const mes = mesSel?.value || pad2(new Date().getMonth() + 1);
-    const anio = anioSel?.value || String(new Date().getFullYear());
+    const now = new Date();
+    const mes = mesSel?.value || pad2(now.getMonth() + 1);
+    const anio = anioSel?.value || String(now.getFullYear());
     const range = monthRange(Number(anio), Number(mes));
     desde = range.start;
     hasta = range.end;
@@ -719,6 +806,251 @@ function renderBalanceGeneral(data) {
   if (elP) elP.textContent = `C$ ${fmtCurrency(pasivos)}`;
   if (elPt) elPt.textContent = `C$ ${fmtCurrency(patrimonio)}`;
   if (elC) elC.textContent = `C$ ${fmtCurrency(cuadre)}`;
+}
+
+/* ---------- Render: Rentabilidad por presentación (estructura) ---------- */
+
+function renderRentabilidad(data) {
+  const tbody = $('#rep-rent-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  // Por ahora solo estructura con 0. En la siguiente etapa lo conectamos
+  // al POS para calcular cantidades, ingresos y costos reales.
+  const presentaciones = [
+    { id: 'pulso', label: 'Pulso 250 ml' },
+    { id: 'media', label: 'Media 375 ml' },
+    { id: 'djeba', label: 'Djeba 750 ml' },
+    { id: 'litro', label: 'Litro 1000 ml' },
+    { id: 'galon', label: 'Galón 3800 ml' }
+  ];
+
+  for (const p of presentaciones) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${p.label}</td>
+      <td class="num">0</td>
+      <td class="num">C$ 0.00</td>
+      <td class="num">C$ 0.00</td>
+      <td class="num">C$ 0.00</td>
+      <td class="num">0.00 %</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+/* ---------- Render: Comparativo de eventos ---------- */
+
+function renderComparativoEventos(data) {
+  const tbody = $('#rep-ev-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  if (!data) return;
+
+  const desdeInput = $('#rep-ev-desde');
+  const hastaInput = $('#rep-ev-hasta');
+  let desde = desdeInput?.value || null;
+  let hasta = hastaInput?.value || null;
+
+  if (!desde && !hasta) {
+    const now = new Date();
+    const range = monthRange(now.getFullYear(), now.getMonth() + 1);
+    desde = range.start;
+    hasta = range.end;
+    if (desdeInput) desdeInput.value = desde;
+    if (hastaInput) hastaInput.value = hasta;
+  } else if (desde && !hasta) {
+    hasta = desde;
+    if (hastaInput) hastaInput.value = hasta;
+  } else if (!desde && hasta) {
+    desde = hasta;
+    if (desdeInput) desdeInput.value = desde;
+  }
+
+  if (desde && hasta && hasta < desde) {
+    const tmp = desde;
+    desde = hasta;
+    hasta = tmp;
+    if (desdeInput) desdeInput.value = desde;
+    if (hastaInput) hastaInput.value = hasta;
+  }
+
+  const { accountsMap, entries, linesByEntry } = data;
+  const perEvent = new Map();
+
+  for (const e of entries) {
+    const f = e.fecha || '';
+    if (desde && f < desde) continue;
+    if (hasta && f > hasta) continue;
+
+    const evName = (e.evento || '').trim() || 'Sin evento';
+    let agg = perEvent.get(evName);
+    if (!agg) {
+      agg = { ingresos: 0, costos: 0, gastos: 0 };
+      perEvent.set(evName, agg);
+    }
+
+    const lines = linesByEntry.get(e.id) || [];
+    for (const ln of lines) {
+      const acc = accountsMap.get(String(ln.accountCode));
+      if (!acc) continue;
+      const tipo = getTipoCuenta(acc);
+      const debe = Number(ln.debe || 0);
+      const haber = Number(ln.haber || 0);
+
+      if (tipo === 'ingreso') {
+        agg.ingresos += (haber - debe);
+      } else if (tipo === 'costo') {
+        agg.costos += (debe - haber);
+      } else if (tipo === 'gasto') {
+        agg.gastos += (debe - haber);
+      }
+    }
+  }
+
+  const eventsSorted = Array.from(perEvent.entries()).sort((a, b) =>
+    a[0].localeCompare(b[0], 'es')
+  );
+
+  if (!eventsSorted.length) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td colspan="6" style="text-align:center;">No hay movimientos contables en el rango seleccionado.</td>
+    `;
+    tbody.appendChild(tr);
+    return;
+  }
+
+  for (const [name, agg] of eventsSorted) {
+    const ingresos = agg.ingresos;
+    const costos = agg.costos;
+    const gastos = agg.gastos;
+    const resultado = ingresos - costos - gastos;
+    const margenPct = ingresos !== 0 ? (resultado / ingresos) * 100 : 0;
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${name}</td>
+      <td class="num">C$ ${fmtCurrency(ingresos)}</td>
+      <td class="num">C$ ${fmtCurrency(costos)}</td>
+      <td class="num">C$ ${fmtCurrency(gastos)}</td>
+      <td class="num">C$ ${fmtCurrency(resultado)}</td>
+      <td class="num">${fmtPercent(margenPct)} %</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+/* ---------- Render: Flujo de Caja ---------- */
+
+function renderFlujoCaja(data) {
+  const tbody = $('#rep-flujo #fc-tbody') || $('#fc-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  if (!data) return;
+
+  const modoSel = $('#fc-modo');
+  const modo = modoSel?.value || 'mes';
+
+  let desde;
+  let hasta;
+
+  if (modo === 'mes') {
+    const now = new Date();
+    const mesSel = $('#fc-mes');
+    const anioSel = $('#fc-anio');
+    const mes = mesSel?.value || pad2(now.getMonth() + 1);
+    const anio = anioSel?.value || String(now.getFullYear());
+    const range = monthRange(Number(anio), Number(mes));
+    desde = range.start;
+    hasta = range.end;
+  } else {
+    const desdeInput = $('#fc-desde');
+    const hastaInput = $('#fc-hasta');
+    desde = desdeInput?.value || todayStr();
+    hasta = hastaInput?.value || desde;
+    if (hasta < desde) {
+      const tmp = desde;
+      desde = hasta;
+      hasta = tmp;
+      if (desdeInput) desdeInput.value = desde;
+      if (hastaInput) hastaInput.value = hasta;
+    }
+  }
+
+  const prev = prevDateStr(desde);
+  const { caja: cajaIni, banco: bancoIni } = calcCajaBancoUntilDate(data, prev);
+  const { caja: cajaFin, banco: bancoFin } = calcCajaBancoUntilDate(data, hasta);
+  const saldoInicial = cajaIni + bancoIni;
+  const saldoFinal = cajaFin + bancoFin;
+
+  const { accountsMap, entries, linesByEntry } = data;
+
+  let entradasOp = 0;
+  let salidasOp = 0;
+  let entradasAportes = 0;
+  let salidasRetiros = 0;
+
+  const isCajaBanco = (code) => (code === '1100' || code === '1110' || code === '1200');
+
+  for (const e of entries) {
+    const f = e.fecha || '';
+    if (f < desde || f > hasta) continue;
+
+    const lines = linesByEntry.get(e.id) || [];
+    if (!lines.length) continue;
+
+    const hasPatrimonio = lines.some(ln => {
+      const acc2 = accountsMap.get(String(ln.accountCode));
+      return acc2 && getTipoCuenta(acc2) === 'patrimonio';
+    });
+
+    for (const ln of lines) {
+      const code = String(ln.accountCode);
+      const acc = accountsMap.get(code);
+      if (!acc) continue;
+      const tipo = getTipoCuenta(acc);
+      if (tipo !== 'activo' || !isCajaBanco(code)) continue;
+
+      const debe = Number(ln.debe || 0);
+      const haber = Number(ln.haber || 0);
+      const delta = debe - haber;
+
+      if (delta > 0) {
+        if (hasPatrimonio) entradasAportes += delta;
+        else entradasOp += delta;
+      } else if (delta < 0) {
+        const abs = -delta;
+        if (hasPatrimonio) salidasRetiros += abs;
+        else salidasOp += abs;
+      }
+    }
+  }
+
+  const totalEntradas = entradasOp + entradasAportes;
+  const totalSalidas = salidasOp + salidasRetiros;
+
+  const rows = [
+    ['Saldo inicial Caja + Banco', saldoInicial],
+    ['Entradas de efectivo (operación)', entradasOp],
+    ['Entradas por aportes / otros', entradasAportes],
+    ['Total entradas', totalEntradas],
+    ['Salidas de efectivo (operación)', salidasOp],
+    ['Salidas por retiros / otros', salidasRetiros],
+    ['Total salidas', totalSalidas],
+    ['Saldo final Caja + Banco', saldoFinal]
+  ];
+
+  for (const [concepto, monto] of rows) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${concepto}</td>
+      <td class="num">C$ ${fmtCurrency(monto)}</td>
+    `;
+    tbody.appendChild(tr);
+  }
 }
 
 /* ---------- Guardar movimiento manual ---------- */
@@ -784,13 +1116,13 @@ async function guardarMovimientoManual() {
   const entryId = await finAdd('journalEntries', entry);
 
   const lineDebe = {
-    idEntry: entryId,
+    entryId,
     accountCode: debeCode,
     debe: monto,
     haber: 0
   };
   const lineHaber = {
-    idEntry: entryId,
+    entryId,
     accountCode: haberCode,
     debe: 0,
     haber: monto
@@ -799,7 +1131,6 @@ async function guardarMovimientoManual() {
   await finAdd('journalLines', lineDebe);
   await finAdd('journalLines', lineHaber);
 
-  // Limpia campos clave
   const montoInput = $('#mov-monto');
   const descInput = $('#mov-descripcion');
   const eventoInput = $('#mov-evento');
@@ -856,13 +1187,75 @@ function setupModoERToggle() {
       contMes.classList.add('hidden');
       contRango.classList.remove('hidden');
     }
+    if (finCachedData) renderEstadoResultados(finCachedData);
   };
 
-  modoSel.addEventListener('change', () => {
-    update();
-    renderEstadoResultados(finCachedData || {});
-  });
+  modoSel.addEventListener('change', update);
+  update();
+}
 
+function setupReportTabs() {
+  const btns = document.querySelectorAll('.fin-report-tab-btn');
+  if (!btns.length) return;
+
+  btns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const report = btn.dataset.report;
+      btns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.querySelectorAll('.fin-report-view').forEach(sec => {
+        sec.classList.toggle('active', sec.id === `rep-${report}`);
+      });
+
+      if (!finCachedData) return;
+      if (report === 'rentabilidad') renderRentabilidad(finCachedData);
+      else if (report === 'comparativo') renderComparativoEventos(finCachedData);
+      else if (report === 'flujo') renderFlujoCaja(finCachedData);
+    });
+  });
+}
+
+function setupRentabilidadModoToggle() {
+  const modoSel = $('#rep-rent-modo');
+  const contMes = $('#rep-rent-filtros-mes');
+  const contRango = $('#rep-rent-filtros-rango');
+  if (!modoSel || !contMes || !contRango) return;
+
+  const update = () => {
+    const modo = modoSel.value;
+    if (modo === 'mes') {
+      contMes.classList.remove('hidden');
+      contRango.classList.add('hidden');
+    } else {
+      contMes.classList.add('hidden');
+      contRango.classList.remove('hidden');
+    }
+    if (finCachedData) renderRentabilidad(finCachedData);
+  };
+
+  modoSel.addEventListener('change', update);
+  update();
+}
+
+function setupFlujoModoToggle() {
+  const modoSel = $('#fc-modo');
+  const contMes = $('#fc-filtros-mes');
+  const contRango = $('#fc-filtros-rango');
+  if (!modoSel || !contMes || !contRango) return;
+
+  const update = () => {
+    const modo = modoSel.value;
+    if (modo === 'mes') {
+      contMes.classList.remove('hidden');
+      contRango.classList.add('hidden');
+    } else {
+      contMes.classList.add('hidden');
+      contRango.classList.remove('hidden');
+    }
+    if (finCachedData) renderFlujoCaja(finCachedData);
+  };
+
+  modoSel.addEventListener('change', update);
   update();
 }
 
@@ -936,6 +1329,30 @@ function setupFilterListeners() {
       if (id && finCachedData) openDetalleModal(id);
     });
   }
+
+  // Rentabilidad por presentación
+  ['rep-rent-mes', 'rep-rent-anio', 'rep-rent-desde', 'rep-rent-hasta', 'rep-rent-evento'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', () => {
+      if (finCachedData) renderRentabilidad(finCachedData);
+    });
+  });
+
+  // Comparativo de eventos
+  ['rep-ev-desde', 'rep-ev-hasta'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', () => {
+      if (finCachedData) renderComparativoEventos(finCachedData);
+    });
+  });
+
+  // Flujo de Caja
+  ['fc-mes', 'fc-anio', 'fc-desde', 'fc-hasta'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', () => {
+      if (finCachedData) renderFlujoCaja(finCachedData);
+    });
+  });
 }
 
 /* ---------- Ciclo principal ---------- */
@@ -949,6 +1366,9 @@ async function refreshAllFin() {
   renderDiario(data);
   renderEstadoResultados(data);
   renderBalanceGeneral(data);
+  renderRentabilidad(data);
+  renderComparativoEventos(data);
+  renderFlujoCaja(data);
 }
 
 async function initFinanzas() {
@@ -959,6 +1379,9 @@ async function initFinanzas() {
     setupTabs();
     setupEstadosSubtabs();
     setupModoERToggle();
+    setupReportTabs();
+    setupRentabilidadModoToggle();
+    setupFlujoModoToggle();
     setupFilterListeners();
     await refreshAllFin();
   } catch (err) {
