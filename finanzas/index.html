@@ -38,7 +38,6 @@
           <button type="button" class="fin-tab-btn active" data-view="tablero">Tablero Finanzas</button>
           <button type="button" class="fin-tab-btn" data-view="diario">Diario y Ajustes</button>
           <button type="button" class="fin-tab-btn" data-view="estados">Estados Financieros</button>
-          <button type="button" class="fin-tab-btn" data-view="reportes">Reportes avanzados</button>
         </div>
       </nav>
     </header>
@@ -107,6 +106,13 @@
           <p>Registra ingresos, egresos y ajustes manuales. Por detrás se generan asientos DEBE/HABER.</p>
         </header>
 
+        <!-- Botón exportar Diario a Excel -->
+        <div class="fin-actions-row">
+          <button type="button" id="btn-export-diario" class="btn-primary">
+            Exportar Diario a Excel
+          </button>
+        </div>
+
         <div class="fin-filters-row fin-filters-row--compact">
           <label>
             Tipo
@@ -131,12 +137,6 @@
               <option value="POS">POS</option>
             </select>
           </label>
-
-          <div class="fin-actions-inline">
-            <button type="button" id="btn-export-diario" class="btn-primary">
-              Exportar Diario a Excel
-            </button>
-          </div>
         </div>
 
         <form id="form-movimiento" class="fin-form">
@@ -269,12 +269,22 @@
               Evento
               <select id="er-evento"></select>
             </label>
+          </div>
 
-            <div class="fin-actions-inline">
-              <button type="button" id="btn-export-er" class="btn-primary">
-                Exportar E.R. a Excel
-              </button>
-            </div>
+          <!-- Botones de exportación ER / Rentabilidad / Comparativo / Flujo -->
+          <div class="fin-actions-row">
+            <button type="button" id="btn-export-er" class="btn-primary">
+              Exportar ER a Excel
+            </button>
+            <button type="button" id="btn-export-rentab" class="btn-primary">
+              Exportar Rentabilidad a Excel
+            </button>
+            <button type="button" id="btn-export-comp-eventos" class="btn-primary">
+              Exportar Comparativo de eventos
+            </button>
+            <button type="button" id="btn-export-flujo" class="btn-primary">
+              Exportar Flujo de Caja
+            </button>
           </div>
 
           <div class="fin-cards-grid fin-cards-grid--er">
@@ -317,12 +327,13 @@
               Fecha de corte
               <input type="date" id="bg-fecha">
             </label>
+          </div>
 
-            <div class="fin-actions-inline">
-              <button type="button" id="btn-export-bg" class="btn-primary">
-                Exportar Balance a Excel
-              </button>
-            </div>
+          <!-- Botón exportar Balance a Excel -->
+          <div class="fin-actions-row">
+            <button type="button" id="btn-export-bg" class="btn-primary">
+              Exportar Balance a Excel
+            </button>
           </div>
 
           <div class="fin-table-wrapper">
@@ -358,210 +369,6 @@
             Idealmente el Balance cuadra (Activos = Pasivos + Patrimonio).
             En esta Fase 3A solo se usan las cuentas 1xxx, 2xxx y 3xxx que entren en los asientos.
           </p>
-        </section>
-      </section>
-
-      <!-- REPORTES AVANZADOS -->
-      <section id="view-reportes" class="fin-view">
-        <header class="fin-section-header">
-          <h2>Reportes avanzados</h2>
-          <p>
-            Análisis de rentabilidad por presentación, comparativo de eventos y flujo de caja.
-            En esta fase solo agregamos la estructura; la lógica se implementa en las siguientes etapas.
-          </p>
-        </header>
-
-        <!-- Subtabs de reportes -->
-        <div class="fin-report-tabs">
-          <button type="button" class="fin-report-tab-btn active" data-report="rentabilidad">
-            Rentabilidad por presentación
-          </button>
-          <button type="button" class="fin-report-tab-btn" data-report="comparativo">
-            Comparativo de eventos
-          </button>
-          <button type="button" class="fin-report-tab-btn" data-report="flujo">
-            Flujo de Caja
-          </button>
-        </div>
-
-        <!-- Rentabilidad por presentación -->
-        <section id="rep-rentabilidad" class="fin-report-view active">
-          <header class="fin-section-header fin-section-header--sub">
-            <h3>Rentabilidad por presentación</h3>
-            <p>
-              Muestra botellas vendidas, ingresos, costo estimado de venta y margen por cada presentación
-              (Pulso, Media, Djeba, Litro y Galón).
-            </p>
-          </header>
-
-          <div class="fin-filters-row">
-            <label>
-              Modo de periodo
-              <select id="rep-rent-modo">
-                <option value="mes">Por mes</option>
-                <option value="rango">Por rango de fechas</option>
-              </select>
-            </label>
-
-            <div id="rep-rent-filtros-mes" class="fin-inline-group">
-              <label>
-                Mes
-                <select id="rep-rent-mes"></select>
-              </label>
-              <label>
-                Año
-                <select id="rep-rent-anio"></select>
-              </label>
-            </div>
-
-            <div id="rep-rent-filtros-rango" class="fin-inline-group hidden">
-              <label>
-                Desde
-                <input type="date" id="rep-rent-desde">
-              </label>
-              <label>
-                Hasta
-                <input type="date" id="rep-rent-hasta">
-              </label>
-            </div>
-
-            <label>
-              Evento
-              <select id="rep-rent-evento"></select>
-            </label>
-
-            <div class="fin-actions-inline">
-              <button type="button" id="btn-export-rentabilidad" class="btn-primary">
-                Exportar a Excel
-              </button>
-            </div>
-          </div>
-
-          <div class="fin-table-wrapper">
-            <table class="fin-table">
-              <thead>
-                <tr>
-                  <th>Presentación</th>
-                  <th>Botellas vendidas</th>
-                  <th>Ingresos</th>
-                  <th>Costo de venta</th>
-                  <th>Margen</th>
-                  <th>% Margen</th>
-                </tr>
-              </thead>
-              <tbody id="rep-rent-tbody">
-                <!-- Se llenará por script en Fase 4.2 -->
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <!-- Comparativo de eventos -->
-        <section id="rep-comparativo" class="fin-report-view">
-          <header class="fin-section-header fin-section-header--sub">
-            <h3>Comparativo de eventos</h3>
-            <p>
-              Compara eventos por ingresos, costo de venta, gastos y resultado, con su porcentaje de margen.
-            </p>
-          </header>
-
-          <div class="fin-filters-row">
-            <label>
-              Desde
-              <input type="date" id="rep-ev-desde">
-            </label>
-            <label>
-              Hasta
-              <input type="date" id="rep-ev-hasta">
-            </label>
-
-            <div class="fin-actions-inline">
-              <button type="button" id="btn-export-comparativo" class="btn-primary">
-                Exportar a Excel
-              </button>
-            </div>
-          </div>
-
-          <div class="fin-table-wrapper">
-            <table class="fin-table">
-              <thead>
-                <tr>
-                  <th>Evento</th>
-                  <th>Ingresos</th>
-                  <th>Costo de venta</th>
-                  <th>Gastos</th>
-                  <th>Resultado</th>
-                  <th>% Margen</th>
-                </tr>
-              </thead>
-              <tbody id="rep-ev-tbody">
-                <!-- Se llenará por script en Fase 4.3 -->
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <!-- Flujo de Caja -->
-        <section id="rep-flujo" class="fin-report-view">
-          <header class="fin-section-header fin-section-header--sub">
-            <h3>Flujo de Caja</h3>
-            <p>
-              Muestra saldos iniciales y finales de Caja + Banco, entradas, salidas y, si es posible,
-              separación entre operación y aportes/retiros.
-            </p>
-          </header>
-
-          <div class="fin-filters-row">
-            <label>
-              Modo de periodo
-              <select id="fc-modo">
-                <option value="mes">Por mes</option>
-                <option value="rango">Por rango de fechas</option>
-              </select>
-            </label>
-
-            <div id="fc-filtros-mes" class="fin-inline-group">
-              <label>
-                Mes
-                <select id="fc-mes"></select>
-              </label>
-              <label>
-                Año
-                <select id="fc-anio"></select>
-              </label>
-            </div>
-
-            <div id="fc-filtros-rango" class="fin-inline-group hidden">
-              <label>
-                Desde
-                <input type="date" id="fc-desde">
-              </label>
-              <label>
-                Hasta
-                <input type="date" id="fc-hasta">
-              </label>
-            </div>
-
-            <div class="fin-actions-inline">
-              <button type="button" id="btn-export-flujo" class="btn-primary">
-                Exportar a Excel
-              </button>
-            </div>
-          </div>
-
-          <div class="fin-table-wrapper">
-            <table class="fin-table">
-              <thead>
-                <tr>
-                  <th>Concepto</th>
-                  <th>Monto</th>
-                </tr>
-              </thead>
-              <tbody id="fc-tbody">
-                <!-- Se llenará por script en Fase 4.4 -->
-              </tbody>
-            </table>
-          </div>
         </section>
       </section>
     </main>

@@ -1,7 +1,8 @@
-// Finanzas – Suite A33 · Fase 3A + Fase 4.2 + Fase 4.3.1
+// Finanzas – Suite A33 · Fase 3A + Fase 4.2 + Fase 4.3.1 + Fase 4.3.2
 // Contabilidad básica: diario, tablero, ER, BG
 // + Rentabilidad por presentación (lectura POS)
-// + Comparativo de eventos (lectura Finanzas).
+// + Comparativo de eventos (lectura Finanzas)
+// + Flujo de Caja simple (solo lectura de Finanzas).
 
 const FIN_DB_NAME = 'finanzasDB';
 const FIN_DB_VERSION = 1;
@@ -265,6 +266,16 @@ function normStr(s) {
     .trim();
 }
 
+function prevDateStr(dateStr) {
+  if (!dateStr) return todayStr();
+  const parts = dateStr.split('-').map(Number);
+  if (parts.length !== 3) return todayStr();
+  const [y, m, d] = parts;
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() - 1);
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+}
+
 /* ---------- Carga y estructura de datos ---------- */
 
 async function getAllFinData() {
@@ -442,6 +453,90 @@ function calcCajaBancoUntilDate(data, corte) {
   }
 
   return { caja, banco };
+}
+
+// Flujo de Caja simple (usa solo Finanzas)
+function calcFlujoCaja(data, desde, hasta) {
+  const { entries, linesByEntry } = data;
+  if (!desde || !hasta) {
+    return {
+      saldoInicial: 0,
+      entradasOperacion: 0,
+      salidasOperacion: 0,
+      entradasAportes: 0,
+      salidasAportes: 0,
+      entradasTotal: 0,
+      salidasTotal: 0,
+      saldoFinal: 0
+    };
+  }
+
+  const prev = prevDateStr(desde);
+  const { caja, banco } = calcCajaBancoUntilDate(data, prev);
+  const saldoInicial = caja + banco;
+
+  let entradasOperacion = 0;
+  let salidasOperacion = 0;
+  let entradasAportes = 0;
+  let salidasAportes = 0;
+
+  for (const e of entries) {
+    const f = e.fecha || '';
+    if (f < desde || f > hasta) continue;
+
+    const lines = linesByEntry.get(e.id) || [];
+    let deltaCash = 0;
+
+    for (const ln of lines) {
+      const code = String(ln.accountCode);
+      if (code === '1100' || code === '1110' || code === '1200') {
+        const debe = Number(ln.debe || 0);
+        const haber = Number(ln.haber || 0);
+        deltaCash += (debe - haber);
+      }
+    }
+
+    if (deltaCash === 0) continue;
+
+    let esAporteRetiro = false;
+    for (const ln of lines) {
+      const code = String(ln.accountCode || '');
+      if (code.startsWith('3')) {
+        esAporteRetiro = true;
+        break;
+      }
+    }
+
+    if (deltaCash > 0) {
+      if (esAporteRetiro) {
+        entradasAportes += deltaCash;
+      } else {
+        entradasOperacion += deltaCash;
+      }
+    } else {
+      const abs = -deltaCash;
+      if (esAporteRetiro) {
+        salidasAportes += abs;
+      } else {
+        salidasOperacion += abs;
+      }
+    }
+  }
+
+  const entradasTotal = entradasOperacion + entradasAportes;
+  const salidasTotal = salidasOperacion + salidasAportes;
+  const saldoFinal = saldoInicial + entradasTotal - salidasTotal;
+
+  return {
+    saldoInicial,
+    entradasOperacion,
+    salidasOperacion,
+    entradasAportes,
+    salidasAportes,
+    entradasTotal,
+    salidasTotal,
+    saldoFinal
+  };
 }
 
 /* ---------- Rentabilidad por presentación (lectura POS) ---------- */
@@ -778,6 +873,139 @@ function renderComparativoEventos(data) {
     <td class="num">${margenTotalPct.toFixed(1)}%</td>
   `;
   tbody.appendChild(trTotal);
+}
+
+/* ---------- Flujo de Caja simple (solo Finanzas) ---------- */
+
+function ensureFlujoCajaUI() {
+  const subER = document.getElementById('sub-er');
+  if (!subER) return null;
+  let section = document.getElementById('flujo-caja');
+  if (section) return section;
+
+  const wrapper = document.createElement('section');
+  wrapper.id = 'flujo-caja';
+  wrapper.className = 'fin-subsection';
+
+  wrapper.innerHTML = `
+    <header class="fin-section-header fin-section-header--sub">
+      <h3>Flujo de Caja simple</h3>
+      <p>
+        Usa el mismo periodo del Estado de Resultados y muestra el movimiento de efectivo
+        (Caja + Banco), separando operación de aportes y retiros del dueño.
+      </p>
+    </header>
+
+    <div class="fin-cards-grid fin-cards-grid--er">
+      <article class="fin-card">
+        <h3>Saldo inicial (Caja + Banco)</h3>
+        <p id="flujo-saldo-inicial" class="fin-card-number">C$ 0.00</p>
+      </article>
+      <article class="fin-card">
+        <h3>Entradas de efectivo</h3>
+        <p id="flujo-entradas" class="fin-card-number">C$ 0.00</p>
+      </article>
+      <article class="fin-card">
+        <h3>Salidas de efectivo</h3>
+        <p id="flujo-salidas" class="fin-card-number">C$ 0.00</p>
+      </article>
+      <article class="fin-card fin-card-strong">
+        <h3>Saldo final</h3>
+        <p id="flujo-saldo-final" class="fin-card-number">C$ 0.00</p>
+      </article>
+    </div>
+
+    <div class="fin-table-wrapper">
+      <table class="fin-table">
+        <thead>
+          <tr>
+            <th>Detalle</th>
+            <th>Entradas</th>
+            <th>Salidas</th>
+          </tr>
+        </thead>
+        <tbody id="flujo-detalle-tbody">
+          <tr>
+            <td>Operación</td>
+            <td class="num">C$ 0.00</td>
+            <td class="num">C$ 0.00</td>
+          </tr>
+          <tr>
+            <td>Aportes / Retiros</td>
+            <td class="num">C$ 0.00</td>
+            <td class="num">C$ 0.00</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="fin-help">
+      Solo se consideran movimientos que afectan Caja (1100, 1110) y Banco (1200).
+      Los asientos que involucren cuentas de patrimonio (3xxx) se clasifican como aportes/retiros.
+    </p>
+  `;
+  subER.appendChild(wrapper);
+  return wrapper;
+}
+
+function renderFlujoCaja(data) {
+  if (!data || !data.entries) return;
+  const section = ensureFlujoCajaUI();
+  if (!section) return;
+
+  const modoSel = document.getElementById('er-modo');
+  const mesSel = document.getElementById('er-mes');
+  const anioSel = document.getElementById('er-anio');
+  const desdeInput = document.getElementById('er-desde');
+  const hastaInput = document.getElementById('er-hasta');
+
+  const modo = modoSel ? modoSel.value : 'mes';
+  let desde;
+  let hasta;
+
+  if (modo === 'mes') {
+    const mes = (mesSel && mesSel.value) ? mesSel.value : pad2(new Date().getMonth() + 1);
+    const anio = (anioSel && anioSel.value) ? anioSel.value : String(new Date().getFullYear());
+    const range = monthRange(Number(anio), Number(mes));
+    desde = range.start;
+    hasta = range.end;
+  } else {
+    desde = (desdeInput && desdeInput.value) ? desdeInput.value : todayStr();
+    hasta = (hastaInput && hastaInput.value) ? hastaInput.value : desde;
+    if (hasta < desde) {
+      const tmp = desde;
+      desde = hasta;
+      hasta = tmp;
+    }
+  }
+
+  const res = calcFlujoCaja(data, desde, hasta);
+
+  const saldoInicialEl = document.getElementById('flujo-saldo-inicial');
+  const entradasEl = document.getElementById('flujo-entradas');
+  const salidasEl = document.getElementById('flujo-salidas');
+  const saldoFinalEl = document.getElementById('flujo-saldo-final');
+  const detalleTbody = document.getElementById('flujo-detalle-tbody');
+
+  if (saldoInicialEl) saldoInicialEl.textContent = `C$ ${fmtCurrency(res.saldoInicial)}`;
+  if (entradasEl) entradasEl.textContent = `C$ ${fmtCurrency(res.entradasTotal)}`;
+  if (salidasEl) salidasEl.textContent = `C$ ${fmtCurrency(res.salidasTotal)}`;
+  if (saldoFinalEl) saldoFinalEl.textContent = `C$ ${fmtCurrency(res.saldoFinal)}`;
+
+  if (detalleTbody) {
+    detalleTbody.innerHTML = `
+      <tr>
+        <td>Operación</td>
+        <td class="num">C$ ${fmtCurrency(res.entradasOperacion)}</td>
+        <td class="num">C$ ${fmtCurrency(res.salidasOperacion)}</td>
+      </tr>
+      <tr>
+        <td>Aportes / Retiros</td>
+        <td class="num">C$ ${fmtCurrency(res.entradasAportes)}</td>
+        <td class="num">C$ ${fmtCurrency(res.salidasAportes)}</td>
+      </tr>
+    `;
+  }
 }
 
 /* ---------- UI: helpers ---------- */
@@ -1291,6 +1519,7 @@ function setupModoERToggle() {
       renderEstadoResultados(finCachedData);
       renderRentabilidadPresentacion(finCachedData);
       renderComparativoEventos(finCachedData);
+      renderFlujoCaja(finCachedData);
     }
   });
 
@@ -1331,7 +1560,7 @@ function setupFilterListeners() {
     });
   }
 
-  // Estados de Resultados + Rentabilidad + Comparativo eventos
+  // Estados de Resultados + Rentabilidad + Comparativo eventos + Flujo de Caja
   ['er-mes', 'er-anio', 'er-desde', 'er-hasta', 'er-evento'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('change', () => {
@@ -1339,6 +1568,7 @@ function setupFilterListeners() {
         renderEstadoResultados(finCachedData);
         renderRentabilidadPresentacion(finCachedData);
         renderComparativoEventos(finCachedData);
+        renderFlujoCaja(finCachedData);
       }
     });
   });
@@ -1386,6 +1616,7 @@ async function refreshAllFin() {
   renderBalanceGeneral(data);
   renderRentabilidadPresentacion(data);
   renderComparativoEventos(data);
+  renderFlujoCaja(data);
 }
 
 async function initFinanzas() {
