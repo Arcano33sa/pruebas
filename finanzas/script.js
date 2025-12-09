@@ -1,6 +1,7 @@
-// Finanzas – Suite A33 · Fase 3A + Fase 4.2
-// Contabilidad básica: diario, tablero, estado de resultados y balance general
-// + Rentabilidad por presentación leyendo ventas del POS.
+// Finanzas – Suite A33 · Fase 3A + Fase 4.2 + Fase 4.3.1
+// Contabilidad básica: diario, tablero, ER, BG
+// + Rentabilidad por presentación (lectura POS)
+// + Comparativo de eventos (lectura Finanzas).
 
 const FIN_DB_NAME = 'finanzasDB';
 const FIN_DB_VERSION = 1;
@@ -347,6 +348,43 @@ function calcResultadosForFilter(data, filtros) {
   return { ingresos, costos, gastos };
 }
 
+// Agrupa por evento en un rango de fechas
+function calcResultadosByEventInRange(data, desde, hasta) {
+  const { accountsMap, entries, linesByEntry } = data;
+  const map = new Map(); // key: nombreEvento, value: {ingresos, costos, gastos}
+
+  for (const e of entries) {
+    const f = e.fecha || '';
+    if (desde && f < desde) continue;
+    if (hasta && f > hasta) continue;
+
+    const eventName = (e.evento || '').trim() || 'Sin evento';
+    if (!map.has(eventName)) {
+      map.set(eventName, { ingresos: 0, costos: 0, gastos: 0 });
+    }
+    const bucket = map.get(eventName);
+
+    const lines = linesByEntry.get(e.id) || [];
+    for (const ln of lines) {
+      const acc = accountsMap.get(String(ln.accountCode));
+      if (!acc) continue;
+      const tipo = getTipoCuenta(acc);
+      const debe = Number(ln.debe || 0);
+      const haber = Number(ln.haber || 0);
+
+      if (tipo === 'ingreso') {
+        bucket.ingresos += (haber - debe);
+      } else if (tipo === 'costo') {
+        bucket.costos += (debe - haber);
+      } else if (tipo === 'gasto') {
+        bucket.gastos += (debe - haber);
+      }
+    }
+  }
+
+  return map;
+}
+
 function calcBalanceGroupsUntilDate(data, corte) {
   const { accountsMap, entries, linesByEntry } = data;
   const cutoff = corte || todayStr();
@@ -380,7 +418,7 @@ function calcBalanceGroupsUntilDate(data, corte) {
 }
 
 function calcCajaBancoUntilDate(data, corte) {
-  const { accountsMap, entries, linesByEntry } = data;
+  const { entries, linesByEntry } = data;
   const cutoff = corte || todayStr();
   let caja = 0;
   let banco = 0;
@@ -390,11 +428,6 @@ function calcCajaBancoUntilDate(data, corte) {
     if (f && f > cutoff) continue;
     const lines = linesByEntry.get(e.id) || [];
     for (const ln of lines) {
-      const acc = accountsMap.get(String(ln.accountCode));
-      if (!acc) continue;
-      const tipo = getTipoCuenta(acc);
-      if (tipo !== 'activo') continue;
-
       const debe = Number(ln.debe || 0);
       const haber = Number(ln.haber || 0);
       const delta = (debe - haber);
@@ -481,8 +514,7 @@ function ensureRentabUI() {
   return wrapper;
 }
 
-function renderRentabilidadPresentacion(/* dataFinanzas, solo para mantener firma homogénea */) {
-  // Se apoya en los filtros de Estado de Resultados y en las ventas del POS
+function renderRentabilidadPresentacion(/* dataFinanzas */) {
   (async () => {
     const section = ensureRentabUI();
     if (!section) return;
@@ -538,7 +570,7 @@ function renderRentabilidadPresentacion(/* dataFinanzas, solo para mantener firm
       if (!matchEventPOS(s, evento)) continue;
 
       const courtesy = !!s.courtesy;
-      if (courtesy) continue; // Por ahora cortesías fuera de la rentabilidad
+      if (courtesy) continue; // Por ahora, cortesías fuera de la rentabilidad
 
       const presId = mapProductNameToPresIdFromPOS(s.productName || '');
       if (!presId) continue;
@@ -600,6 +632,152 @@ function renderRentabilidadPresentacion(/* dataFinanzas, solo para mantener firm
   })().catch(err => {
     console.error('Error calculando rentabilidad por presentación', err);
   });
+}
+
+/* ---------- Comparativo de eventos (solo Finanzas) ---------- */
+
+function ensureComparativoEventosUI() {
+  const subER = document.getElementById('sub-er');
+  if (!subER) return null;
+  let section = document.getElementById('comp-eventos');
+  if (section) return section;
+
+  const wrapper = document.createElement('section');
+  wrapper.id = 'comp-eventos';
+  wrapper.className = 'fin-subsection';
+
+  wrapper.innerHTML = `
+    <header class="fin-section-header fin-section-header--sub">
+      <h3>Comparativo de eventos</h3>
+      <p>
+        Usa el mismo periodo de arriba (mes o rango de fechas).
+        Muestra por evento: ingresos, costos de venta, gastos, resultado y % de margen.
+      </p>
+    </header>
+    <div class="fin-table-wrapper">
+      <table class="fin-table">
+        <thead>
+          <tr>
+            <th>Evento</th>
+            <th>Ingresos</th>
+            <th>Costo de venta</th>
+            <th>Gastos</th>
+            <th>Resultado</th>
+            <th>% Margen</th>
+          </tr>
+        </thead>
+        <tbody id="comp-eventos-tbody">
+          <tr>
+            <td colspan="6">Sin asientos registrados para el periodo seleccionado.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  `;
+  subER.appendChild(wrapper);
+  return wrapper;
+}
+
+function renderComparativoEventos(data) {
+  const section = ensureComparativoEventosUI();
+  if (!section || !data) return;
+  const tbody = document.getElementById('comp-eventos-tbody');
+  if (!tbody) return;
+
+  // Reutilizamos el mismo periodo del Estado de Resultados,
+  // pero aquí SIEMPRE comparamos TODOS los eventos.
+  const modoSel = document.getElementById('er-modo');
+  const mesSel = document.getElementById('er-mes');
+  const anioSel = document.getElementById('er-anio');
+  const desdeInput = document.getElementById('er-desde');
+  const hastaInput = document.getElementById('er-hasta');
+
+  const modo = modoSel ? modoSel.value : 'mes';
+  let desde;
+  let hasta;
+
+  if (modo === 'mes') {
+    const mes = (mesSel && mesSel.value) ? mesSel.value : pad2(new Date().getMonth() + 1);
+    const anio = (anioSel && anioSel.value) ? anioSel.value : String(new Date().getFullYear());
+    const range = monthRange(Number(anio), Number(mes));
+    desde = range.start;
+    hasta = range.end;
+  } else {
+    desde = (desdeInput && desdeInput.value) ? desdeInput.value : todayStr();
+    hasta = (hastaInput && hastaInput.value) ? hastaInput.value : desde;
+    if (hasta < desde) {
+      const tmp = desde;
+      desde = hasta;
+      hasta = tmp;
+    }
+  }
+
+  const map = calcResultadosByEventInRange(data, desde, hasta);
+
+  tbody.innerHTML = '';
+
+  if (!map || map.size === 0) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="6">Sin asientos registrados para el periodo seleccionado.</td>
+      </tr>
+    `;
+    return;
+  }
+
+  // Orden: primero eventos con nombre, luego "Sin evento"
+  const keys = Array.from(map.keys()).sort((a, b) => {
+    if (a === 'Sin evento') return 1;
+    if (b === 'Sin evento') return -1;
+    return a.localeCompare(b, 'es');
+  });
+
+  let totalIngresos = 0;
+  let totalCostos = 0;
+  let totalGastos = 0;
+  let totalResultado = 0;
+
+  for (const evName of keys) {
+    const vals = map.get(evName);
+    const ingresos = vals.ingresos;
+    const costos = vals.costos;
+    const gastos = vals.gastos;
+    const resultado = ingresos - costos - gastos;
+    const margenPct = ingresos !== 0 ? (resultado / ingresos) * 100 : 0;
+
+    totalIngresos += ingresos;
+    totalCostos += costos;
+    totalGastos += gastos;
+    totalResultado += resultado;
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${evName}</td>
+      <td class="num">C$ ${fmtCurrency(ingresos)}</td>
+      <td class="num">C$ ${fmtCurrency(costos)}</td>
+      <td class="num">C$ ${fmtCurrency(gastos)}</td>
+      <td class="num">C$ ${fmtCurrency(resultado)}</td>
+      <td class="num">${margenPct.toFixed(1)}%</td>
+    `;
+    tbody.appendChild(tr);
+  }
+
+  // Fila de totales
+  const margenTotalPct = totalIngresos !== 0
+    ? (totalResultado / totalIngresos) * 100
+    : 0;
+
+  const trTotal = document.createElement('tr');
+  trTotal.classList.add('fin-row-strong');
+  trTotal.innerHTML = `
+    <td>Total</td>
+    <td class="num">C$ ${fmtCurrency(totalIngresos)}</td>
+    <td class="num">C$ ${fmtCurrency(totalCostos)}</td>
+    <td class="num">C$ ${fmtCurrency(totalGastos)}</td>
+    <td class="num">C$ ${fmtCurrency(totalResultado)}</td>
+    <td class="num">${margenTotalPct.toFixed(1)}%</td>
+  `;
+  tbody.appendChild(trTotal);
 }
 
 /* ---------- UI: helpers ---------- */
@@ -1112,6 +1290,7 @@ function setupModoERToggle() {
     if (finCachedData) {
       renderEstadoResultados(finCachedData);
       renderRentabilidadPresentacion(finCachedData);
+      renderComparativoEventos(finCachedData);
     }
   });
 
@@ -1152,13 +1331,14 @@ function setupFilterListeners() {
     });
   }
 
-  // Estados de Resultados + Rentabilidad
+  // Estados de Resultados + Rentabilidad + Comparativo eventos
   ['er-mes', 'er-anio', 'er-desde', 'er-hasta', 'er-evento'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('change', () => {
       if (finCachedData) {
         renderEstadoResultados(finCachedData);
         renderRentabilidadPresentacion(finCachedData);
+        renderComparativoEventos(finCachedData);
       }
     });
   });
@@ -1205,6 +1385,7 @@ async function refreshAllFin() {
   renderEstadoResultados(data);
   renderBalanceGeneral(data);
   renderRentabilidadPresentacion(data);
+  renderComparativoEventos(data);
 }
 
 async function initFinanzas() {
