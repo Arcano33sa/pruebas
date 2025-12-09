@@ -78,12 +78,17 @@
           </article>
 
           <article class="fin-card">
+            <h3>Margen bruto del periodo</h3>
+            <p id="tab-bruta" class="fin-card-number">C$ 0.00</p>
+          </article>
+
+          <article class="fin-card">
             <h3>Gastos de operación (6xxx)</h3>
             <p id="tab-gastos" class="fin-card-number">C$ 0.00</p>
           </article>
 
           <article class="fin-card fin-card-strong">
-            <h3>Resultado del periodo</h3>
+            <h3>Resultado neto del periodo</h3>
             <p id="tab-resultado" class="fin-card-number">C$ 0.00</p>
           </article>
 
@@ -97,6 +102,20 @@
             <p id="tab-banco" class="fin-card-number">C$ 0.00</p>
           </article>
         </div>
+
+        <!-- Gráfico Ingresos / Costos / Resultado -->
+        <section class="fin-subsection">
+          <header class="fin-section-header fin-section-header--sub">
+            <h3>Gráfico Ingresos / Costos / Resultado</h3>
+            <p>
+              Visualiza el comportamiento del periodo y evento seleccionados.
+              Barras en colores de la Suite A33.
+            </p>
+          </header>
+          <div class="fin-chart-wrapper">
+            <canvas id="tab-chart" width="480" height="240"></canvas>
+          </div>
+        </section>
       </section>
 
       <!-- DIARIO Y AJUSTES -->

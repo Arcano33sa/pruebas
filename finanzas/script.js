@@ -1,5 +1,6 @@
-// Finanzas – Suite A33 · Fase 3A + Fase 4.2 + Fase 4.3.1 + Fase 4.3.2 + Fase 4.4
+// Finanzas – Suite A33 · Fase 3A + Fase 4.1 + Fase 4.2 + Fase 4.3.1 + Fase 4.3.2 + Fase 4.4
 // Contabilidad básica: diario, tablero, ER, BG
+// + Mejora de Tablero (margen bruto + gráfico)
 // + Rentabilidad por presentación (lectura POS)
 // + Comparativo de eventos (lectura Finanzas)
 // + Flujo de Caja simple
@@ -1018,6 +1019,61 @@ function fillCuentaSelect(data) {
 
 /* ---------- Render: Tablero ---------- */
 
+function renderTableroChart(ingresos, costos, resultado) {
+  const canvas = document.getElementById('tab-chart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+
+  ctx.clearRect(0, 0, w, h);
+
+  // Fondo negro Suite A33
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, w, h);
+
+  const labels = ['Ingresos', 'Costos', 'Resultado'];
+  const values = [ingresos, costos, resultado];
+
+  // Colores Suite A33: dorado, rojo, blanco
+  const colors = ['#D4AF37', '#C0392B', '#FFFFFF'];
+
+  const maxAbs = Math.max(...values.map(v => Math.abs(v)), 1);
+  const chartHeight = h * 0.55;
+  const baseY = h * 0.75;
+  const barWidth = w / (labels.length * 2.2);
+  const gap = barWidth * 0.8;
+
+  ctx.strokeStyle = '#FFFFFF';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, baseY);
+  ctx.lineTo(w, baseY);
+  ctx.stroke();
+
+  labels.forEach((label, i) => {
+    const val = values[i];
+    const barHeight = (Math.abs(val) / maxAbs) * chartHeight;
+    const x = gap + i * (barWidth + gap);
+    const y = val >= 0 ? baseY - barHeight : baseY;
+
+    ctx.fillStyle = colors[i];
+    ctx.fillRect(x, y, barWidth, barHeight);
+
+    // Etiqueta numérica pequeña encima
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    const textVal = fmtCurrency(val);
+    const textY = val >= 0 ? y - 4 : y + barHeight + 12;
+    ctx.fillText(`C$ ${textVal}`, x + barWidth / 2, textY);
+
+    // Etiqueta inferior
+    ctx.font = '12px sans-serif';
+    ctx.fillText(label, x + barWidth / 2, h - 8);
+  });
+}
+
 function renderTablero(data) {
   const mesSel = $('#tab-mes');
   const anioSel = $('#tab-anio');
@@ -1043,6 +1099,7 @@ function renderTablero(data) {
 
   const tabIng = $('#tab-ingresos');
   const tabCos = $('#tab-costos');
+  const tabBruta = $('#tab-bruta');
   const tabGas = $('#tab-gastos');
   const tabRes = $('#tab-resultado');
   const tabCaja = $('#tab-caja');
@@ -1050,10 +1107,13 @@ function renderTablero(data) {
 
   if (tabIng) tabIng.textContent = `C$ ${fmtCurrency(ingresos)}`;
   if (tabCos) tabCos.textContent = `C$ ${fmtCurrency(costos)}`;
+  if (tabBruta) tabBruta.textContent = `C$ ${fmtCurrency(bruta)}`;
   if (tabGas) tabGas.textContent = `C$ ${fmtCurrency(gastos)}`;
   if (tabRes) tabRes.textContent = `C$ ${fmtCurrency(neta)}`;
   if (tabCaja) tabCaja.textContent = `C$ ${fmtCurrency(caja)}`;
   if (tabBanco) tabBanco.textContent = `C$ ${fmtCurrency(banco)}`;
+
+  renderTableroChart(ingresos, costos, neta);
 }
 
 /* ---------- Render: Diario y Ajustes ---------- */
