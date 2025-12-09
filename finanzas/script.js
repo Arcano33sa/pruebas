@@ -1,10 +1,7 @@
-// Finanzas – Suite A33 · Fase 3A + Fase 4.1 + Fase 4.2 + Fase 4.3.1 + Fase 4.3.2 + Fase 4.4
+// Finanzas – Suite A33 · Fase 3A + Fase 4.2 + Fase 4.3.1
 // Contabilidad básica: diario, tablero, ER, BG
-// + Mejora de Tablero (margen bruto + gráfico)
 // + Rentabilidad por presentación (lectura POS)
-// + Comparativo de eventos (lectura Finanzas)
-// + Flujo de Caja simple
-// + Exportar todos los reportes a Excel (.xls compatible).
+// + Comparativo de eventos (lectura Finanzas).
 
 const FIN_DB_NAME = 'finanzasDB';
 const FIN_DB_VERSION = 1;
@@ -205,7 +202,9 @@ async function ensureBaseAccounts() {
   for (const base of BASE_ACCOUNTS) {
     const codeStr = String(base.code);
     const current = byCode.get(codeStr);
+
     if (!current) {
+      // Cuenta no existe → la creamos completa
       await finAdd('accounts', {
         code: codeStr,
         nombre: base.nombre,
@@ -213,16 +212,33 @@ async function ensureBaseAccounts() {
         systemProtected: !!base.systemProtected
       });
     } else {
-      // Refuerza tipo y systemProtected si falta
+      // Cuenta ya existe → reforzamos campos faltantes
       let changed = false;
+
+      // Si venía de versiones viejas con "name" en lugar de "nombre"
+      if (!current.nombre && current.name) {
+        current.nombre = current.name;
+        changed = true;
+      }
+
+      // Si sigue sin nombre, usamos el del catálogo base
+      if (!current.nombre) {
+        current.nombre = base.nombre;
+        changed = true;
+      }
+
+      // Tipo contable
       if (!current.tipo) {
         current.tipo = base.tipo;
         changed = true;
       }
+
+      // Protección de sistema
       if (base.systemProtected && !current.systemProtected) {
         current.systemProtected = true;
         changed = true;
       }
+
       if (changed) {
         await finPut('accounts', current);
       }
@@ -251,14 +267,6 @@ function monthRange(year, month) {
   return { start, end };
 }
 
-function prevDateStr(dateStr) {
-  if (!dateStr) return todayStr();
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const dt = new Date(y, m - 1, d);
-  dt.setDate(dt.getDate() - 1);
-  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
-}
-
 function fmtCurrency(v) {
   const n = Number(v || 0);
   return n.toLocaleString('es-NI', {
@@ -274,37 +282,6 @@ function normStr(s) {
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .trim();
-}
-
-// Periodo actual del Estado de Resultados (se reutiliza en Rentabilidad, Comparativo y Flujo de Caja)
-function getPeriodoERActual() {
-  const modoSel = $('#er-modo');
-  const mesSel = $('#er-mes');
-  const anioSel = $('#er-anio');
-  const desdeInput = $('#er-desde');
-  const hastaInput = $('#er-hasta');
-
-  const modo = modoSel ? modoSel.value : 'mes';
-  let desde;
-  let hasta;
-
-  if (modo === 'mes') {
-    const mes = mesSel?.value || pad2(new Date().getMonth() + 1);
-    const anio = anioSel?.value || String(new Date().getFullYear());
-    const range = monthRange(Number(anio), Number(mes));
-    desde = range.start;
-    hasta = range.end;
-  } else {
-    desde = (desdeInput?.value) || todayStr();
-    hasta = (hastaInput?.value) || desde;
-    if (hasta < desde) {
-      const tmp = desde;
-      desde = hasta;
-      hasta = tmp;
-    }
-  }
-
-  return { modo, desde, hasta };
 }
 
 /* ---------- Carga y estructura de datos ---------- */
@@ -358,7 +335,7 @@ function filterEntriesByDateAndEvent(entries, { desde, hasta, evento }) {
   });
 }
 
-/* ---------- Cálculos: resultados, balances y flujo de caja ---------- */
+/* ---------- Cálculos: resultados y balances ---------- */
 
 function calcResultadosForFilter(data, filtros) {
   const { accountsMap, entries, linesByEntry } = data;
@@ -486,68 +463,6 @@ function calcCajaBancoUntilDate(data, corte) {
   return { caja, banco };
 }
 
-// Flujo de Caja: periodo (desde/hasta) usando Caja/Banco y si hay cuentas de patrimonio
-function calcFlujoCajaPeriodo(data, desde, hasta) {
-  const { entries, linesByEntry } = data;
-  const corteInicial = prevDateStr(desde);
-  const saldosIniciales = calcCajaBancoUntilDate(data, corteInicial);
-  const saldoInicial = saldosIniciales.caja + saldosIniciales.banco;
-
-  let entradasOperacion = 0;
-  let salidasOperacion = 0;
-  let entradasAportes = 0;
-  let salidasRetiros = 0;
-
-  for (const e of entries) {
-    const f = e.fecha || '';
-    if (f < desde || f > hasta) continue;
-
-    const lines = linesByEntry.get(e.id) || [];
-    const hasPatrimonio = lines.some(ln => String(ln.accountCode).startsWith('3'));
-
-    let deltaCajaBanco = 0;
-    for (const ln of lines) {
-      const code = String(ln.accountCode);
-      if (code === '1100' || code === '1110' || code === '1200') {
-        const debe = Number(ln.debe || 0);
-        const haber = Number(ln.haber || 0);
-        deltaCajaBanco += (debe - haber);
-      }
-    }
-
-    if (deltaCajaBanco === 0) continue;
-
-    if (hasPatrimonio) {
-      if (deltaCajaBanco > 0) {
-        entradasAportes += deltaCajaBanco;
-      } else {
-        salidasRetiros += -deltaCajaBanco;
-      }
-    } else {
-      if (deltaCajaBanco > 0) {
-        entradasOperacion += deltaCajaBanco;
-      } else {
-        salidasOperacion += -deltaCajaBanco;
-      }
-    }
-  }
-
-  const entradasTotales = entradasOperacion + entradasAportes;
-  const salidasTotales = salidasOperacion + salidasRetiros;
-  const saldoFinal = saldoInicial + entradasTotales - salidasTotales;
-
-  return {
-    saldoInicial,
-    entradasOperacion,
-    salidasOperacion,
-    entradasAportes,
-    salidasRetiros,
-    entradasTotales,
-    salidasTotales,
-    saldoFinal
-  };
-}
-
 /* ---------- Rentabilidad por presentación (lectura POS) ---------- */
 
 const RENTAB_PRESENTACIONES = [
@@ -595,7 +510,7 @@ function ensureRentabUI() {
       </p>
     </header>
     <div class="fin-table-wrapper">
-      <table class="fin-table" id="rentab-table">
+      <table class="fin-table">
         <thead>
           <tr>
             <th>Presentación</th>
@@ -613,9 +528,6 @@ function ensureRentabUI() {
         </tbody>
       </table>
     </div>
-    <button type="button" id="btn-export-rentab" class="btn-link">
-      Exportar rentabilidad a Excel
-    </button>
   `;
   subER.appendChild(wrapper);
   return wrapper;
@@ -628,8 +540,34 @@ function renderRentabilidadPresentacion(/* dataFinanzas */) {
     const tbody = document.getElementById('rentab-tbody');
     if (!tbody) return;
 
-    const { desde, hasta } = getPeriodoERActual();
+    // Determinar rango de fechas y evento usando los mismos filtros del ER
+    const modoSel = document.getElementById('er-modo');
+    const mesSel = document.getElementById('er-mes');
+    const anioSel = document.getElementById('er-anio');
+    const desdeInput = document.getElementById('er-desde');
+    const hastaInput = document.getElementById('er-hasta');
     const eventoSel = document.getElementById('er-evento');
+
+    const modo = modoSel ? modoSel.value : 'mes';
+    let desde;
+    let hasta;
+
+    if (modo === 'mes') {
+      const mes = (mesSel && mesSel.value) ? mesSel.value : pad2(new Date().getMonth() + 1);
+      const anio = (anioSel && anioSel.value) ? anioSel.value : String(new Date().getFullYear());
+      const range = monthRange(Number(anio), Number(mes));
+      desde = range.start;
+      hasta = range.end;
+    } else {
+      desde = (desdeInput && desdeInput.value) ? desdeInput.value : todayStr();
+      hasta = (hastaInput && hastaInput.value) ? hastaInput.value : desde;
+      if (hasta < desde) {
+        const tmp = desde;
+        desde = hasta;
+        hasta = tmp;
+      }
+    }
+
     const evento = (eventoSel && eventoSel.value) ? eventoSel.value : 'ALL';
 
     const ventas = await getAllPosSales();
@@ -710,14 +648,6 @@ function renderRentabilidadPresentacion(/* dataFinanzas */) {
         </tr>
       `;
     }
-
-    const btnExportRentab = document.getElementById('btn-export-rentab');
-    if (btnExportRentab && !btnExportRentab.dataset.bound) {
-      btnExportRentab.addEventListener('click', () => {
-        exportRentabToExcel();
-      });
-      btnExportRentab.dataset.bound = '1';
-    }
   })().catch(err => {
     console.error('Error calculando rentabilidad por presentación', err);
   });
@@ -744,7 +674,7 @@ function ensureComparativoEventosUI() {
       </p>
     </header>
     <div class="fin-table-wrapper">
-      <table class="fin-table" id="comp-eventos-table">
+      <table class="fin-table">
         <thead>
           <tr>
             <th>Evento</th>
@@ -762,9 +692,6 @@ function ensureComparativoEventosUI() {
         </tbody>
       </table>
     </div>
-    <button type="button" id="btn-export-comp-eventos" class="btn-link">
-      Exportar comparativo de eventos a Excel
-    </button>
   `;
   subER.appendChild(wrapper);
   return wrapper;
@@ -776,7 +703,34 @@ function renderComparativoEventos(data) {
   const tbody = document.getElementById('comp-eventos-tbody');
   if (!tbody) return;
 
-  const { desde, hasta } = getPeriodoERActual();
+  // Reutilizamos el mismo periodo del Estado de Resultados,
+  // pero aquí SIEMPRE comparamos TODOS los eventos.
+  const modoSel = document.getElementById('er-modo');
+  const mesSel = document.getElementById('er-mes');
+  const anioSel = document.getElementById('er-anio');
+  const desdeInput = document.getElementById('er-desde');
+  const hastaInput = document.getElementById('er-hasta');
+
+  const modo = modoSel ? modoSel.value : 'mes';
+  let desde;
+  let hasta;
+
+  if (modo === 'mes') {
+    const mes = (mesSel && mesSel.value) ? mesSel.value : pad2(new Date().getMonth() + 1);
+    const anio = (anioSel && anioSel.value) ? anioSel.value : String(new Date().getFullYear());
+    const range = monthRange(Number(anio), Number(mes));
+    desde = range.start;
+    hasta = range.end;
+  } else {
+    desde = (desdeInput && desdeInput.value) ? desdeInput.value : todayStr();
+    hasta = (hastaInput && hastaInput.value) ? hastaInput.value : desde;
+    if (hasta < desde) {
+      const tmp = desde;
+      desde = hasta;
+      hasta = tmp;
+    }
+  }
+
   const map = calcResultadosByEventInRange(data, desde, hasta);
 
   tbody.innerHTML = '';
@@ -843,14 +797,6 @@ function renderComparativoEventos(data) {
     <td class="num">${margenTotalPct.toFixed(1)}%</td>
   `;
   tbody.appendChild(trTotal);
-
-  const btnExportComp = document.getElementById('btn-export-comp-eventos');
-  if (btnExportComp && !btnExportComp.dataset.bound) {
-    btnExportComp.addEventListener('click', () => {
-      exportComparativoEventosToExcel();
-    });
-    btnExportComp.dataset.bound = '1';
-  }
 }
 
 /* ---------- UI: helpers ---------- */
@@ -1010,69 +956,16 @@ function fillCuentaSelect(data) {
 
     if (!permitido) continue;
 
+    const nombre = acc.nombre || acc.name || `Cuenta ${acc.code}`;
+
     const opt = document.createElement('option');
     opt.value = String(acc.code);
-    opt.textContent = `${acc.code} – ${acc.nombre}`;
+    opt.textContent = `${acc.code} – ${nombre}`;
     sel.appendChild(opt);
   }
 }
 
 /* ---------- Render: Tablero ---------- */
-
-function renderTableroChart(ingresos, costos, resultado) {
-  const canvas = document.getElementById('tab-chart');
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const w = canvas.width;
-  const h = canvas.height;
-
-  ctx.clearRect(0, 0, w, h);
-
-  // Fondo negro Suite A33
-  ctx.fillStyle = '#000000';
-  ctx.fillRect(0, 0, w, h);
-
-  const labels = ['Ingresos', 'Costos', 'Resultado'];
-  const values = [ingresos, costos, resultado];
-
-  // Colores Suite A33: dorado, rojo, blanco
-  const colors = ['#D4AF37', '#C0392B', '#FFFFFF'];
-
-  const maxAbs = Math.max(...values.map(v => Math.abs(v)), 1);
-  const chartHeight = h * 0.55;
-  const baseY = h * 0.75;
-  const barWidth = w / (labels.length * 2.2);
-  const gap = barWidth * 0.8;
-
-  ctx.strokeStyle = '#FFFFFF';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, baseY);
-  ctx.lineTo(w, baseY);
-  ctx.stroke();
-
-  labels.forEach((label, i) => {
-    const val = values[i];
-    const barHeight = (Math.abs(val) / maxAbs) * chartHeight;
-    const x = gap + i * (barWidth + gap);
-    const y = val >= 0 ? baseY - barHeight : baseY;
-
-    ctx.fillStyle = colors[i];
-    ctx.fillRect(x, y, barWidth, barHeight);
-
-    // Etiqueta numérica pequeña encima
-    ctx.fillStyle = '#FFFFFF';
-    ctx.font = '11px sans-serif';
-    ctx.textAlign = 'center';
-    const textVal = fmtCurrency(val);
-    const textY = val >= 0 ? y - 4 : y + barHeight + 12;
-    ctx.fillText(`C$ ${textVal}`, x + barWidth / 2, textY);
-
-    // Etiqueta inferior
-    ctx.font = '12px sans-serif';
-    ctx.fillText(label, x + barWidth / 2, h - 8);
-  });
-}
 
 function renderTablero(data) {
   const mesSel = $('#tab-mes');
@@ -1099,7 +992,6 @@ function renderTablero(data) {
 
   const tabIng = $('#tab-ingresos');
   const tabCos = $('#tab-costos');
-  const tabBruta = $('#tab-bruta');
   const tabGas = $('#tab-gastos');
   const tabRes = $('#tab-resultado');
   const tabCaja = $('#tab-caja');
@@ -1107,13 +999,10 @@ function renderTablero(data) {
 
   if (tabIng) tabIng.textContent = `C$ ${fmtCurrency(ingresos)}`;
   if (tabCos) tabCos.textContent = `C$ ${fmtCurrency(costos)}`;
-  if (tabBruta) tabBruta.textContent = `C$ ${fmtCurrency(bruta)}`;
   if (tabGas) tabGas.textContent = `C$ ${fmtCurrency(gastos)}`;
   if (tabRes) tabRes.textContent = `C$ ${fmtCurrency(neta)}`;
   if (tabCaja) tabCaja.textContent = `C$ ${fmtCurrency(caja)}`;
   if (tabBanco) tabBanco.textContent = `C$ ${fmtCurrency(banco)}`;
-
-  renderTableroChart(ingresos, costos, neta);
 }
 
 /* ---------- Render: Diario y Ajustes ---------- */
@@ -1190,10 +1079,13 @@ function openDetalleModal(entryId) {
   const lines = linesByEntry.get(entry.id) || [];
   for (const ln of lines) {
     const acc = accountsMap.get(String(ln.accountCode));
+    const nombre = acc
+      ? (acc.nombre || acc.name || `Cuenta ${acc.code}`)
+      : '';
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${ln.accountCode}</td>
-      <td>${acc ? acc.nombre : ''}</td>
+      <td>${nombre}</td>
       <td class="num">C$ ${fmtCurrency(ln.debe || 0)}</td>
       <td class="num">C$ ${fmtCurrency(ln.haber || 0)}</td>
     `;
@@ -1211,10 +1103,34 @@ function closeDetalleModal() {
 /* ---------- Render: Estado de Resultados ---------- */
 
 function renderEstadoResultados(data) {
+  const modoSel = $('#er-modo');
+  const mesSel = $('#er-mes');
+  const anioSel = $('#er-anio');
+  const desdeInput = $('#er-desde');
+  const hastaInput = $('#er-hasta');
   const eventoSel = $('#er-evento');
-  const { desde, hasta } = getPeriodoERActual();
-  const evento = eventoSel?.value || 'ALL';
 
+  const modo = modoSel ? modoSel.value : 'mes';
+  let desde = null;
+  let hasta = null;
+
+  if (modo === 'mes') {
+    const mes = mesSel?.value || pad2(new Date().getMonth() + 1);
+    const anio = anioSel?.value || String(new Date().getFullYear());
+    const range = monthRange(Number(anio), Number(mes));
+    desde = range.start;
+    hasta = range.end;
+  } else {
+    desde = (desdeInput?.value) || todayStr();
+    hasta = (hastaInput?.value) || desde;
+    if (hasta < desde) {
+      const tmp = desde;
+      desde = hasta;
+      hasta = tmp;
+    }
+  }
+
+  const evento = eventoSel?.value || 'ALL';
   const { ingresos, costos, gastos } = calcResultadosForFilter(data, {
     desde,
     hasta,
@@ -1254,208 +1170,6 @@ function renderBalanceGeneral(data) {
   if (elP) elP.textContent = `C$ ${fmtCurrency(pasivos)}`;
   if (elPt) elPt.textContent = `C$ ${fmtCurrency(patrimonio)}`;
   if (elC) elC.textContent = `C$ ${fmtCurrency(cuadre)}`;
-}
-
-/* ---------- Render: Flujo de Caja ---------- */
-
-function renderFlujoCaja(data) {
-  const tbody = $('#fc-tbody');
-  if (!tbody || !data) return;
-
-  const { desde, hasta } = getPeriodoERActual();
-  if (!desde || !hasta) {
-    tbody.innerHTML = `
-      <tr><td colspan="2">Periodo no válido para calcular flujo de caja.</td></tr>
-    `;
-    return;
-  }
-
-  const r = calcFlujoCajaPeriodo(data, desde, hasta);
-
-  tbody.innerHTML = `
-    <tr>
-      <td>Saldo inicial (Caja + Banco)</td>
-      <td class="num">C$ ${fmtCurrency(r.saldoInicial)}</td>
-    </tr>
-    <tr>
-      <td>Entradas de efectivo – Operación</td>
-      <td class="num">C$ ${fmtCurrency(r.entradasOperacion)}</td>
-    </tr>
-    <tr>
-      <td>Salidas de efectivo – Operación</td>
-      <td class="num">C$ ${fmtCurrency(r.salidasOperacion)}</td>
-    </tr>
-    <tr>
-      <td>Entradas por aportes del dueño / capital</td>
-      <td class="num">C$ ${fmtCurrency(r.entradasAportes)}</td>
-    </tr>
-    <tr>
-      <td>Salidas por retiros del dueño</td>
-      <td class="num">C$ ${fmtCurrency(r.salidasRetiros)}</td>
-    </tr>
-    <tr>
-      <td>Entradas totales de efectivo</td>
-      <td class="num">C$ ${fmtCurrency(r.entradasTotales)}</td>
-    </tr>
-    <tr>
-      <td>Salidas totales de efectivo</td>
-      <td class="num">C$ ${fmtCurrency(r.salidasTotales)}</td>
-    </tr>
-    <tr class="fin-row-strong">
-      <td>Saldo final (Caja + Banco)</td>
-      <td class="num">C$ ${fmtCurrency(r.saldoFinal)}</td>
-    </tr>
-  `;
-}
-
-/* ---------- Exportar a Excel (.xls compatible) ---------- */
-
-function exportTableToExcel(table, filenameBase) {
-  if (!table) {
-    alert('No se encontró la tabla para exportar.');
-    return;
-  }
-  const tbody = table.querySelector('tbody');
-  if (tbody && !tbody.children.length) {
-    alert('No hay datos para exportar.');
-    return;
-  }
-
-  const filename = `${filenameBase}.xls`;
-
-  const html = `
-    <html xmlns:o="urn:schemas-microsoft-com:office:office"
-          xmlns:x="urn:schemas-microsoft-com:office:excel"
-          xmlns="http://www.w3.org/TR/REC-html40">
-    <head>
-      <!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>
-        <x:Name>Hoja1</x:Name>
-        <x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
-      </x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
-      <meta charset="UTF-8">
-    </head>
-    <body>
-      ${table.outerHTML}
-    </body>
-    </html>
-  `;
-
-  const blob = new Blob([html], {
-    type: 'application/vnd.ms-excel;charset=utf-8;'
-  });
-
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-// Estado de Resultados: generamos una tabla simple en memoria
-function exportEstadoResultadosToExcel(data) {
-  if (!data) {
-    alert('Datos de Finanzas no listos para exportar.');
-    return;
-  }
-  const eventoSel = $('#er-evento');
-  const { desde, hasta } = getPeriodoERActual();
-  const evento = eventoSel?.value || 'ALL';
-
-  const { ingresos, costos, gastos } = calcResultadosForFilter(data, {
-    desde,
-    hasta,
-    evento
-  });
-
-  const bruta = ingresos - costos;
-  const neta = bruta - gastos;
-
-  const table = document.createElement('table');
-  table.innerHTML = `
-    <thead>
-      <tr>
-        <th>Concepto</th>
-        <th>Monto (C$)</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>Ingresos (4xxx)</td>
-        <td class="num">${fmtCurrency(ingresos)}</td>
-      </tr>
-      <tr>
-        <td>Costos de venta (5xxx)</td>
-        <td class="num">${fmtCurrency(costos)}</td>
-      </tr>
-      <tr>
-        <td>Gastos de operación (6xxx)</td>
-        <td class="num">${fmtCurrency(gastos)}</td>
-      </tr>
-      <tr>
-        <td>Utilidad bruta</td>
-        <td class="num">${fmtCurrency(bruta)}</td>
-      </tr>
-      <tr>
-        <td>Utilidad neta</td>
-        <td class="num">${fmtCurrency(neta)}</td>
-      </tr>
-    </tbody>
-  `;
-
-  exportTableToExcel(table, 'Estado_Resultados_A33');
-}
-
-function exportDiarioToExcel() {
-  const table = document.querySelector('#view-diario .fin-table');
-  if (!table) {
-    alert('No se encontró la tabla del Diario.');
-    return;
-  }
-  const tbody = document.getElementById('diario-tbody');
-  if (!tbody || !tbody.children.length) {
-    alert('No hay movimientos en el Diario para exportar.');
-    return;
-  }
-  exportTableToExcel(table, 'Diario_Finanzas_A33');
-}
-
-function exportBalanceGeneralToExcel() {
-  const table = document.querySelector('#sub-bg .fin-table');
-  if (!table) {
-    alert('No se encontró la tabla del Balance General.');
-    return;
-  }
-  exportTableToExcel(table, 'Balance_General_A33');
-}
-
-function exportRentabToExcel() {
-  const table = document.getElementById('rentab-table');
-  if (!table) {
-    alert('No se encontró la tabla de rentabilidad.');
-    return;
-  }
-  exportTableToExcel(table, 'Rentabilidad_por_presentacion_A33');
-}
-
-function exportComparativoEventosToExcel() {
-  const table = document.getElementById('comp-eventos-table');
-  if (!table) {
-    alert('No se encontró la tabla del comparativo de eventos.');
-    return;
-  }
-  exportTableToExcel(table, 'Comparativo_eventos_A33');
-}
-
-function exportFlujoCajaToExcel() {
-  const table = document.getElementById('fc-table');
-  if (!table) {
-    alert('No se encontró la tabla de Flujo de Caja.');
-    return;
-  }
-  exportTableToExcel(table, 'Flujo_Caja_A33');
 }
 
 /* ---------- Guardar movimiento manual ---------- */
@@ -1601,7 +1315,6 @@ function setupModoERToggle() {
       renderEstadoResultados(finCachedData);
       renderRentabilidadPresentacion(finCachedData);
       renderComparativoEventos(finCachedData);
-      renderFlujoCaja(finCachedData);
     }
   });
 
@@ -1642,7 +1355,7 @@ function setupFilterListeners() {
     });
   }
 
-  // Estados de Resultados + Rentabilidad + Comparativo eventos + Flujo de Caja
+  // Estados de Resultados + Rentabilidad + Comparativo eventos
   ['er-mes', 'er-anio', 'er-desde', 'er-hasta', 'er-evento'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('change', () => {
@@ -1650,7 +1363,6 @@ function setupFilterListeners() {
         renderEstadoResultados(finCachedData);
         renderRentabilidadPresentacion(finCachedData);
         renderComparativoEventos(finCachedData);
-        renderFlujoCaja(finCachedData);
       }
     });
   });
@@ -1685,40 +1397,6 @@ function setupFilterListeners() {
   }
 }
 
-function setupExportButtons() {
-  const btnDiario = $('#btn-export-diario');
-  if (btnDiario) {
-    btnDiario.addEventListener('click', () => {
-      exportDiarioToExcel();
-    });
-  }
-
-  const btnER = $('#btn-export-er');
-  if (btnER) {
-    btnER.addEventListener('click', () => {
-      if (!finCachedData) {
-        alert('Datos de Finanzas no listos para exportar.');
-        return;
-      }
-      exportEstadoResultadosToExcel(finCachedData);
-    });
-  }
-
-  const btnBG = $('#btn-export-bg');
-  if (btnBG) {
-    btnBG.addEventListener('click', () => {
-      exportBalanceGeneralToExcel();
-    });
-  }
-
-  const btnFC = $('#btn-export-fc');
-  if (btnFC) {
-    btnFC.addEventListener('click', () => {
-      exportFlujoCajaToExcel();
-    });
-  }
-}
-
 /* ---------- Ciclo principal ---------- */
 
 async function refreshAllFin() {
@@ -1730,7 +1408,6 @@ async function refreshAllFin() {
   renderDiario(data);
   renderEstadoResultados(data);
   renderBalanceGeneral(data);
-  renderFlujoCaja(data);
   renderRentabilidadPresentacion(data);
   renderComparativoEventos(data);
 }
@@ -1744,7 +1421,6 @@ async function initFinanzas() {
     setupEstadosSubtabs();
     setupModoERToggle();
     setupFilterListeners();
-    setupExportButtons();
     await refreshAllFin();
   } catch (err) {
     console.error('Error inicializando Finanzas A33', err);
