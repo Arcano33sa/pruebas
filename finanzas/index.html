@@ -106,13 +106,6 @@
           <p>Registra ingresos, egresos y ajustes manuales. Por detrás se generan asientos DEBE/HABER.</p>
         </header>
 
-        <!-- Botón exportar Diario a Excel -->
-        <div class="fin-actions-row">
-          <button type="button" id="btn-export-diario" class="btn-primary">
-            Exportar Diario a Excel
-          </button>
-        </div>
-
         <div class="fin-filters-row fin-filters-row--compact">
           <label>
             Tipo
@@ -218,18 +211,24 @@
             <tbody id="diario-tbody"></tbody>
           </table>
         </div>
+
+        <!-- Exportar Diario a Excel -->
+        <button type="button" id="btn-export-diario" class="btn-link">
+          Exportar Diario a Excel
+        </button>
       </section>
 
       <!-- ESTADOS FINANCIEROS -->
       <section id="view-estados" class="fin-view">
         <header class="fin-section-header">
           <h2>Estados Financieros</h2>
-          <p>Estado de Resultados y Balance General usando los asientos de Finanzas.</p>
+          <p>Estado de Resultados, Balance General y Flujo de Caja usando los asientos de Finanzas.</p>
         </header>
 
         <div class="fin-subtabs">
           <button type="button" class="fin-subtab-btn active" data-subview="er">Estado de Resultados</button>
           <button type="button" class="fin-subtab-btn" data-subview="bg">Balance General</button>
+          <button type="button" class="fin-subtab-btn" data-subview="fc">Flujo de Caja</button>
         </div>
 
         <!-- Estado de Resultados -->
@@ -271,22 +270,6 @@
             </label>
           </div>
 
-          <!-- Botones de exportación ER / Rentabilidad / Comparativo / Flujo -->
-          <div class="fin-actions-row">
-            <button type="button" id="btn-export-er" class="btn-primary">
-              Exportar ER a Excel
-            </button>
-            <button type="button" id="btn-export-rentab" class="btn-primary">
-              Exportar Rentabilidad a Excel
-            </button>
-            <button type="button" id="btn-export-comp-eventos" class="btn-primary">
-              Exportar Comparativo de eventos
-            </button>
-            <button type="button" id="btn-export-flujo" class="btn-primary">
-              Exportar Flujo de Caja
-            </button>
-          </div>
-
           <div class="fin-cards-grid fin-cards-grid--er">
             <article class="fin-card">
               <h3>Ingresos (4xxx)</h3>
@@ -314,10 +297,20 @@
             </article>
           </div>
 
+          <!-- Exportar Estado de Resultados -->
+          <button type="button" id="btn-export-er" class="btn-link">
+            Exportar Estado de Resultados a Excel
+          </button>
+
           <p class="fin-help">
             Nota: en Fase 3A los costos (5xxx) se pueden registrar manualmente.
             En Fase 3B los costos de venta se generarán en automático desde el POS según presentaciones de Arcano 33.
           </p>
+
+          <!-- Aquí, debajo, el JS inserta:
+               - Rentabilidad por presentación
+               - Comparativo de eventos
+               con sus propios botones de exportar -->
         </section>
 
         <!-- Balance General -->
@@ -327,13 +320,6 @@
               Fecha de corte
               <input type="date" id="bg-fecha">
             </label>
-          </div>
-
-          <!-- Botón exportar Balance a Excel -->
-          <div class="fin-actions-row">
-            <button type="button" id="btn-export-bg" class="btn-primary">
-              Exportar Balance a Excel
-            </button>
           </div>
 
           <div class="fin-table-wrapper">
@@ -365,10 +351,48 @@
             </table>
           </div>
 
+          <!-- Exportar Balance General -->
+          <button type="button" id="btn-export-bg" class="btn-link">
+            Exportar Balance General a Excel
+          </button>
+
           <p class="fin-help">
             Idealmente el Balance cuadra (Activos = Pasivos + Patrimonio).
             En esta Fase 3A solo se usan las cuentas 1xxx, 2xxx y 3xxx que entren en los asientos.
           </p>
+        </section>
+
+        <!-- Flujo de Caja -->
+        <section id="sub-fc" class="fin-subview">
+          <header class="fin-section-header fin-section-header--sub">
+            <h3>Flujo de Caja simple</h3>
+            <p>
+              Usa el mismo periodo seleccionado en el Estado de Resultados (mes o rango).
+              Calcula Caja + Banco: saldo inicial, entradas, salidas y saldo final,
+              separando operación vs aportes/retiros del dueño.
+            </p>
+          </header>
+
+          <div class="fin-table-wrapper">
+            <table class="fin-table" id="fc-table">
+              <thead>
+                <tr>
+                  <th>Concepto</th>
+                  <th>Monto</th>
+                </tr>
+              </thead>
+              <tbody id="fc-tbody">
+                <tr>
+                  <td colspan="2">Sin datos de efectivo para el periodo seleccionado.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Exportar Flujo de Caja -->
+          <button type="button" id="btn-export-fc" class="btn-link">
+            Exportar Flujo de Caja a Excel
+          </button>
         </section>
       </section>
     </main>
