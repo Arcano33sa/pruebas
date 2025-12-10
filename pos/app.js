@@ -1267,6 +1267,19 @@ function downloadCSV(name, rows){
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href=url; a.download=name; a.click();
   setTimeout(()=>URL.revokeObjectURL(url),2000);
+
+
+function downloadExcel(filename, sheetName, rows){
+  if (typeof XLSX === 'undefined'){
+    alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Revisa tu conexión a internet.');
+    return;
+  }
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName || 'Hoja1');
+  XLSX.writeFile(wb, filename);
+}
+
 }
 
 async function generateInventoryCSV(eventId){
@@ -1282,7 +1295,7 @@ async function generateInventoryCSV(eventId){
     const stock = inits + repo + adj - sold;
     rows.push([p.name, p.manageStock!==false?1:0, inits, repo, adj, sold, stock]);
   }
-  downloadCSV('inventario_evento.csv', rows);
+  downloadExcel('inventario_evento.xlsx', 'Inventario', rows);
 }
 
 // Eventos UI
@@ -1387,7 +1400,7 @@ async function exportEventSalesCSV(eventId){
     rows.push([s.id, s.date, s.time||'', s.productName, s.qty, s.unitPrice, (s.discount||0), s.total, (s.payment||''), s.courtesy?1:0, s.isReturn?1:0, s.customer||'', s.courtesyTo||'', s.notes||'']);
   }
   const safeName = (ev?ev.name:'evento').replace(/[^a-z0-9_\- ]/gi,'_');
-  downloadCSV(`ventas_${safeName}.csv`, rows);
+  downloadExcel(`ventas_${safeName}.xlsx`, 'Ventas', rows);
 }
 function buildCorteSummaryRows(eName, sales){
   let efectivo=0, trans=0, credito=0, descuentos=0, cortesiasU=0, cortesiasVal=0, devolU=0, devolVal=0, bruto=0;
@@ -1438,7 +1451,7 @@ async function generateCorteCSV(eventId){
     rows.push([s.id, s.date, s.time||'', s.productName, s.qty, s.unitPrice, (s.discount||0), s.total, (s.payment||''), s.courtesy?1:0, s.isReturn?1:0, s.customer||'', s.courtesyTo||'', s.notes||'']);
   }
   const safeName = ev.name.replace(/[^a-z0-9_\- ]/gi,'_');
-  downloadCSV(`corte_${safeName}.csv`, rows);
+  downloadExcel(`corte_${safeName}.xlsx`, 'Corte', rows);
 }
 
 async function exportEventExcel(eventId){
@@ -1725,9 +1738,33 @@ async function init(){
   document.getElementById('btn-add-prod').onclick = async()=>{ const name = $('#new-name').value.trim(); const price = parseFloat($('#new-price').value||'0'); if (!name || !(price>0)) return alert('Nombre y precio'); try{ await put('products', {name, price, manageStock:true, active:true}); $('#new-name').value=''; $('#new-price').value=''; await renderProductos(); await refreshProductSelect(); await renderInventario(); toast('Producto agregado'); }catch(err){ alert('No se pudo agregar. ¿Nombre duplicado?'); } };
   document.getElementById('btn-restore-seed').onclick = restoreSeed;
 
-  // Eventos tab actions
+  
+async function exportEventosExcel(){
+  const events = await getAll('events');
+  const sales = await getAll('sales');
+  const rows = [['id','evento','estado','creado','cerrado','total']];
+
+  for (const ev of events){
+    const tot = sales.filter(s=>s.eventId===ev.id).reduce((a,b)=>a+(b.total||0),0);
+    const estado = ev.closedAt ? 'Cerrado' : 'Abierto';
+    rows.push([
+      ev.id,
+      ev.name || '',
+      estado,
+      ev.createdAt || '',
+      ev.closedAt || '',
+      tot.toFixed ? tot.toFixed(2) : tot
+    ]);
+  }
+
+  downloadExcel('eventos.xlsx', 'Eventos', rows);
+}
+
+// Eventos tab actions
   $('#filtro-eventos').addEventListener('change', renderEventos);
-  $('#btn-exportar-eventos').addEventListener('click', async()=>{ const events = await getAll('events'); const rows = [['id','evento','estado','creado','cerrado','total']]; for (const ev of events){ rows.push([ ev.id, ev.name, ev.closedAt?'cerrado':'abierto', ev.createdAt||'', ev.closedAt||'', 0 ]); } downloadCSV('eventos.csv', rows); });
+  $('#btn-exportar-eventos').addEventListener('click', async()=>{
+    await exportEventosExcel();
+  });
   $('#btn-exportar-evento-excel').addEventListener('click', async()=>{
     const evId = await getMeta('currentEventId');
     if (!evId){
