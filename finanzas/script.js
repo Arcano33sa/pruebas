@@ -1,8 +1,8 @@
-// Finanzas – Suite A33 · Fase 3A + Fase 4.2 + Fase 4.3.1 + F5.3 (Consumo Vaso)
+// Finanzas – Suite A33 · Fase 3A + Fase 4.2 + Fase 4.3.1 + Fase 6 (Flujo de Caja)
 // Contabilidad básica: diario, tablero, ER, BG
 // + Rentabilidad por presentación (lectura POS)
 // + Comparativo de eventos (lectura Finanzas)
-// + Atajo para consumo estimado de galón para Vaso.
+// + Flujo de Caja (Caja + Banco) por periodo.
 
 const FIN_DB_NAME = 'finanzasDB';
 const FIN_DB_VERSION = 1;
@@ -82,7 +82,7 @@ function finPut(storeName, val) {
 /* ---------- IndexedDB helpers: POS (solo lectura) ---------- */
 
 function openPosDB() {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     if (posDB) return resolve(posDB);
     let req;
     try {
@@ -302,11 +302,7 @@ async function getAllFinData() {
 
   const linesByEntry = new Map();
   for (const ln of lines) {
-    // Compatibilidad: usar ln.idEntry si existe, si no ln.entryId
-    const idEntry = (ln.idEntry != null && ln.idEntry !== undefined)
-      ? ln.idEntry
-      : ln.entryId;
-    if (idEntry == null) continue;
+    const idEntry = ln.idEntry;
     if (!linesByEntry.has(idEntry)) linesByEntry.set(idEntry, []);
     linesByEntry.get(idEntry).push(ln);
   }
@@ -538,7 +534,7 @@ function ensureRentabUI() {
   return wrapper;
 }
 
-function renderRentabilidadPresentacion() {
+function renderRentabilidadPresentacion(/* dataFinanzas */) {
   (async () => {
     const section = ensureRentabUI();
     if (!section) return;
@@ -802,6 +798,174 @@ function renderComparativoEventos(data) {
     <td class="num">${margenTotalPct.toFixed(1)}%</td>
   `;
   tbody.appendChild(trTotal);
+}
+
+/* ---------- Flujo de Caja (Caja + Banco) ---------- */
+
+function calcFlujoCaja(data) {
+  if (!data) return null;
+
+  const { entries, linesByEntry } = data;
+
+  // Usamos mismo periodo del ER (mes / rango)
+  const modoSel = $('#er-modo');
+  const mesSel = $('#er-mes');
+  const anioSel = $('#er-anio');
+  const desdeInput = $('#er-desde');
+  const hastaInput = $('#er-hasta');
+
+  const modo = modoSel ? modoSel.value : 'mes';
+  let desde;
+  let hasta;
+
+  if (modo === 'mes') {
+    const mes = mesSel && mesSel.value ? mesSel.value : pad2(new Date().getMonth() + 1);
+    const anio = anioSel && anioSel.value ? anioSel.value : String(new Date().getFullYear());
+    const range = monthRange(Number(anio), Number(mes));
+    desde = range.start;
+    hasta = range.end;
+  } else {
+    desde = (desdeInput && desdeInput.value) ? desdeInput.value : todayStr();
+    hasta = (hastaInput && hastaInput.value) ? hastaInput.value : desde;
+    if (hasta < desde) {
+      const tmp = desde;
+      desde = hasta;
+      hasta = tmp;
+    }
+  }
+
+  if (!desde || !hasta) return null;
+
+  // Saldo inicial = Caja+Banco hasta el día anterior a "desde"
+  let fechaAntes = desde;
+  try {
+    const [y, m, d] = desde.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+    dt.setDate(dt.getDate() - 1);
+    const y2 = dt.getFullYear();
+    const m2 = pad2(dt.getMonth() + 1);
+    const d2 = pad2(dt.getDate());
+    fechaAntes = `${y2}-${m2}-${d2}`;
+  } catch {
+    // si algo falla, usamos mismo "desde" como corte inicial
+    fechaAntes = desde;
+  }
+
+  const saldoInicialData = calcCajaBancoUntilDate(data, fechaAntes);
+  const saldoFinalData = calcCajaBancoUntilDate(data, hasta);
+
+  const saldoInicial = (saldoInicialData.caja || 0) + (saldoInicialData.banco || 0);
+  const saldoFinal = (saldoFinalData.caja || 0) + (saldoFinalData.banco || 0);
+
+  let opIn = 0;
+  let opOut = 0;
+  let ownerIn = 0;
+  let ownerOut = 0;
+
+  const isCajaBanco = (code) => (code === '1100' || code === '1110' || code === '1200');
+  const isOwnerEquity = (code) => (code === '3100' || code === '3200' || code === '3300');
+
+  for (const e of entries) {
+    const f = e.fecha || e.date || '';
+    if (!f) continue;
+    if (f < desde || f > hasta) continue;
+
+    const lines = linesByEntry.get(e.id) || [];
+    if (!lines.length) continue;
+
+    let deltaCash = 0;
+    let hasOwner = false;
+    let hasOp = false;
+
+    for (const ln of lines) {
+      const code = String(ln.accountCode);
+      const debe = Number(ln.debe || 0);
+      const haber = Number(ln.haber || 0);
+
+      if (isCajaBanco(code)) {
+        deltaCash += (debe - haber);
+      } else {
+        if (isOwnerEquity(code)) {
+          hasOwner = true;
+        } else {
+          // cualquier otra cuenta distinta de patrimonio dueño la consideramos "operación"
+          hasOp = true;
+        }
+      }
+    }
+
+    if (!deltaCash) continue;
+
+    const isOwnerMov = hasOwner && !hasOp;
+    if (isOwnerMov) {
+      if (deltaCash > 0) ownerIn += deltaCash;
+      else ownerOut += -deltaCash;
+    } else {
+      if (deltaCash > 0) opIn += deltaCash;
+      else opOut += -deltaCash;
+    }
+  }
+
+  const netOp = opIn - opOut;
+  const netOwner = ownerIn - ownerOut;
+  const netPeriodo = saldoFinal - saldoInicial;
+  const otros = netPeriodo - netOp - netOwner;
+
+  return {
+    desde,
+    hasta,
+    saldoInicial,
+    opIn,
+    opOut,
+    netOp,
+    ownerIn,
+    ownerOut,
+    netOwner,
+    otros,
+    saldoFinal
+  };
+}
+
+function renderFlujoCaja(data) {
+  const tbody = $('#fc-tbody');
+  if (!tbody) return;
+
+  if (!data) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="2">Sin datos contables para calcular flujo de caja.</td>
+      </tr>
+    `;
+    return;
+  }
+
+  const r = calcFlujoCaja(data);
+  if (!r) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="2">Selecciona un periodo válido para ver el flujo de caja.</td>
+      </tr>
+    `;
+    return;
+  }
+
+  const rows = [
+    ['Saldo inicial Caja + Banco', r.saldoInicial],
+    ['Flujo neto de operación (cobros - pagos)', r.netOp],
+    ['Flujo neto aportes / retiros del dueño', r.netOwner],
+    ['Otros movimientos de caja', r.otros],
+    ['Saldo final Caja + Banco', r.saldoFinal]
+  ];
+
+  tbody.innerHTML = '';
+  for (const [label, val] of rows) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${label}</td>
+      <td class="num">C$ ${fmtCurrency(val)}</td>
+    `;
+    tbody.appendChild(tr);
+  }
 }
 
 /* ---------- UI: helpers ---------- */
@@ -1267,169 +1431,6 @@ async function guardarMovimientoManual() {
   await refreshAllFin();
 }
 
-/* ---------- Atajo: Consumo estimado de galón para Vaso ---------- */
-
-function leerCostosPresentacionFin() {
-  try {
-    const raw = localStorage.getItem('arcano33_recetas_v1');
-    if (!raw) return null;
-    const data = JSON.parse(raw);
-    if (data && data.costosPresentacion) {
-      return data.costosPresentacion;
-    }
-    return null;
-  } catch (err) {
-    console.warn('No se pudieron leer los costos de presentación desde la Calculadora (Finanzas)', err);
-    return null;
-  }
-}
-
-function getCostoGalonUnitarioFin() {
-  const costos = leerCostosPresentacionFin();
-  if (!costos) return 0;
-  const info = costos.galon || costos.galón;
-  if (!info) return 0;
-  let val = 0;
-  if (typeof info.costoUnidad === 'number') {
-    val = info.costoUnidad;
-  } else if (info.costoUnidad != null) {
-    const parsed = parseFloat(String(info.costoUnidad).replace(',', '.'));
-    val = Number.isNaN(parsed) ? 0 : parsed;
-  }
-  return val > 0 ? val : 0;
-}
-
-function ensureConsumoVasoUI() {
-  const view = document.getElementById('view-diario');
-  if (!view) return null;
-
-  let sec = document.getElementById('consumo-vaso');
-  if (sec) return sec;
-
-  sec = document.createElement('section');
-  sec.id = 'consumo-vaso';
-  sec.className = 'fin-subsection';
-  sec.innerHTML = `
-    <header class="fin-section-header fin-section-header--sub">
-      <h3>Consumo estimado para Vaso</h3>
-      <p>
-        Atajo para registrar el costo de producto terminado usado en ventas de "Vaso".
-        Genera un asiento automático: <strong>DEBE 5100</strong> / <strong>HABER 1500</strong>,
-        usando el costo del galón desde la Calculadora.
-      </p>
-    </header>
-    <div class="fin-form-row">
-      <label>
-        Fecha
-        <input type="date" id="cv-fecha">
-      </label>
-      <label>
-        Evento (opcional)
-        <input type="text" id="cv-evento" placeholder="Nombre del evento o nota">
-      </label>
-    </div>
-    <div class="fin-form-row">
-      <label>
-        Galones estimados consumidos para Vaso
-        <input type="number" id="cv-galones" min="0" step="0.01" placeholder="Ej. 1.5">
-      </label>
-      <label>
-        Descripción
-        <input type="text" id="cv-descripcion" placeholder="Consumo estimado de producto para Vaso">
-      </label>
-    </div>
-    <p class="fin-help-text">
-      Úsalo cuando quieras reconocer el costo de los vasos vendidos usando galón base.
-      No afecta inventario físico, solo contabilidad (Costo de ventas vs Inventario producto terminado).
-    </p>
-    <button type="button" id="cv-registrar" class="fin-btn-primary">
-      Registrar consumo Vaso
-    </button>
-  `;
-  view.appendChild(sec);
-
-  const fechaInput = document.getElementById('cv-fecha');
-  if (fechaInput && !fechaInput.value) {
-    fechaInput.value = todayStr();
-  }
-
-  const btn = document.getElementById('cv-registrar');
-  if (btn) {
-    btn.addEventListener('click', () => {
-      registrarConsumoVaso().catch(err => {
-        console.error('Error registrando consumo Vaso', err);
-        alert('No se pudo registrar el consumo estimado para Vaso.');
-      });
-    });
-  }
-
-  return sec;
-}
-
-async function registrarConsumoVaso() {
-  const fechaInput = document.getElementById('cv-fecha');
-  const eventoInput = document.getElementById('cv-evento');
-  const galonesInput = document.getElementById('cv-galones');
-  const descInput = document.getElementById('cv-descripcion');
-
-  const fecha = (fechaInput && fechaInput.value) ? fechaInput.value : todayStr();
-  const evento = eventoInput ? (eventoInput.value || '').trim() : '';
-  const galonesRaw = galonesInput ? galonesInput.value : '0';
-  const galones = parseFloat(String(galonesRaw).replace(',', '.'));
-
-  if (!(galones > 0)) {
-    alert('Ingresa cuántos galones estimados se consumieron para Vaso.');
-    return;
-  }
-
-  const costoUnit = getCostoGalonUnitarioFin();
-  if (!(costoUnit > 0)) {
-    alert('No se encontró el costo del galón en la Calculadora. Abre la Calculadora, guarda los costos y vuelve a intentar.');
-    return;
-  }
-
-  const monto = galones * costoUnit;
-  const descripcion = descInput && descInput.value.trim()
-    ? descInput.value.trim()
-    : 'Consumo estimado de producto para Vaso';
-
-  await openFinDB();
-
-  const entry = {
-    fecha,
-    descripcion,
-    tipoMovimiento: 'ajuste',
-    evento,
-    origen: 'ConsumoVaso',
-    origenId: null,
-    totalDebe: monto,
-    totalHaber: monto
-  };
-
-  const entryId = await finAdd('journalEntries', entry);
-
-  const lineDebe = {
-    idEntry: entryId,
-    accountCode: '5100', // Costo de ventas Arcano 33
-    debe: monto,
-    haber: 0
-  };
-  const lineHaber = {
-    idEntry: entryId,
-    accountCode: '1500', // Inventario producto terminado A33
-    debe: 0,
-    haber: monto
-  };
-
-  await finAdd('journalLines', lineDebe);
-  await finAdd('journalLines', lineHaber);
-
-  if (galonesInput) galonesInput.value = '';
-  if (descInput) descInput.value = descripcion;
-
-  showToast('Consumo estimado de Vaso registrado en el Diario');
-}
-
 /* ---------- Tabs y eventos UI ---------- */
 
 function setupTabs() {
@@ -1483,6 +1484,7 @@ function setupModoERToggle() {
       renderEstadoResultados(finCachedData);
       renderRentabilidadPresentacion(finCachedData);
       renderComparativoEventos(finCachedData);
+      renderFlujoCaja(finCachedData);
     }
   });
 
@@ -1523,7 +1525,7 @@ function setupFilterListeners() {
     });
   }
 
-  // Estados de Resultados + Rentabilidad + Comparativo eventos
+  // Estados de Resultados + Rentabilidad + Comparativo eventos + Flujo de Caja
   ['er-mes', 'er-anio', 'er-desde', 'er-hasta', 'er-evento'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('change', () => {
@@ -1531,6 +1533,7 @@ function setupFilterListeners() {
         renderEstadoResultados(finCachedData);
         renderRentabilidadPresentacion(finCachedData);
         renderComparativoEventos(finCachedData);
+        renderFlujoCaja(finCachedData);
       }
     });
   });
@@ -1578,6 +1581,7 @@ async function refreshAllFin() {
   renderBalanceGeneral(data);
   renderRentabilidadPresentacion(data);
   renderComparativoEventos(data);
+  renderFlujoCaja(data);
 }
 
 async function initFinanzas() {
@@ -1589,7 +1593,6 @@ async function initFinanzas() {
     setupEstadosSubtabs();
     setupModoERToggle();
     setupFilterListeners();
-    ensureConsumoVasoUI();
     await refreshAllFin();
   } catch (err) {
     console.error('Error inicializando Finanzas A33', err);
