@@ -1,6 +1,6 @@
 // --- IndexedDB helpers POS
 const DB_NAME = 'a33-pos';
-const DB_VER = 19; // schema estable
+const DB_VER = 20; // schema estable
 let db;
 
 // --- Finanzas: conexión a finanzasDB para asientos automáticos
@@ -38,6 +38,9 @@ function openDB() {
       if (!d.objectStoreNames.contains('meta')) {
         d.createObjectStore('meta', { keyPath: 'id' });
       }
+      if (!d.objectStoreNames.contains('pettyCash')) {
+        d.createObjectStore('pettyCash', { keyPath: 'eventId' });
+      }
     };
     req.onsuccess = () => { db = req.result; resolve(db); };
     req.onerror = () => reject(req.error);
@@ -52,31 +55,61 @@ function openFinanzasDB() {
     req.onupgradeneeded = (e) => {
       const d = e.target.result;
       if (!d.objectStoreNames.contains('accounts')) {
-        const accStore = d.createObjectStore('accounts', { keyPath: 'code' });
-        accStore.createIndex('type', 'type', { unique: false });
+        d.createObjectStore('accounts', { keyPath: 'id', autoIncrement: true });
       }
       if (!d.objectStoreNames.contains('journalEntries')) {
-        const entriesStore = d.createObjectStore('journalEntries', { keyPath: 'id', autoIncrement: true });
-        entriesStore.createIndex('date', 'date', { unique: false });
-        entriesStore.createIndex('tipoMovimiento', 'tipoMovimiento', { unique: false });
-        entriesStore.createIndex('evento', 'evento', { unique: false });
-        entriesStore.createIndex('origen', 'origen', { unique: false });
-        entriesStore.createIndex('origenId', 'origenId', { unique: false });
-      }
-      if (!d.objectStoreNames.contains('journalLines')) {
-        const linesStore = d.createObjectStore('journalLines', { keyPath: 'id', autoIncrement: true });
-        linesStore.createIndex('entryId', 'entryId', { unique: false });
-        linesStore.createIndex('accountCode', 'accountCode', { unique: false });
+        const je = d.createObjectStore('journalEntries', { keyPath: 'id', autoIncrement: true });
+        je.createIndex('by_date', 'date', { unique: false });
+        je.createIndex('by_event', 'eventId', { unique: false });
+      } else {
+        try { e.target.transaction.objectStore('journalEntries').createIndex('by_date', 'date'); } catch {}
+        try { e.target.transaction.objectStore('journalEntries').createIndex('by_event', 'eventId'); } catch {}
       }
     };
-    req.onsuccess = (e) => {
-      finDb = e.target.result;
-      resolve(finDb);
-    };
-    req.onerror = () => {
-      console.error('Error abriendo finanzasDB desde POS', req.error);
-      reject(req.error);
-    };
+    req.onsuccess = () => { finDb = req.result; resolve(finDb); };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function finTx(name, mode='readonly'){ return finDb.transaction(name, mode).objectStore(name); }
+
+function finPut(osName, val){
+  return new Promise((resolve, reject)=>{
+    try{
+      const store = finTx(osName,'readwrite');
+      const r = store.put(val);
+      r.onsuccess = ()=>resolve(r.result);
+      r.onerror = ()=>reject(r.error);
+    }catch(e){
+      console.error('Error en finPut', e);
+      reject(e);
+    }
+  });
+}
+function finGetAll(osName){
+  return new Promise((resolve, reject)=>{
+    try{
+      const store = finTx(osName,'readonly');
+      const r = store.getAll();
+      r.onsuccess = ()=>resolve(r.result||[]);
+      r.onerror = ()=>reject(r.error);
+    }catch(e){
+      console.error('Error en finGetAll', e);
+      reject(e);
+    }
+  });
+}
+function finDelete(osName, key){
+  return new Promise((resolve, reject)=>{
+    try{
+      const store = finTx(osName,'readwrite');
+      const r = store.delete(key);
+      r.onsuccess = ()=>resolve();
+      r.onerror = ()=>reject(r.error);
+    }catch(e){
+      console.error('Error en finDelete', e);
+      reject(e);
+    }
   });
 }
 
@@ -94,255 +127,74 @@ function mapSaleToCuentaCobro(sale) {
   const pay = sale.payment || 'efectivo';
   if (pay === 'efectivo') return '1100';   // Caja
   if (pay === 'transferencia') return '1200'; // Banco
-  if (pay === 'credito') return '1300';    // Clientes
-  return '1200'; // Otros métodos similares a banco
+  if (pay === 'credito') return '1300'; // Cuentas por Cobrar
+  return '1100';
 }
 
-// Crea/actualiza asiento automático en Finanzas por una venta / devolución del POS
-async function createJournalEntryForSalePOS(sale) {
-  try {
-    if (!sale) return;
-    // Cortesías: por ahora NO se contabilizan ingresos ni costo de venta
-    if (sale.courtesy) return;
-
+// Crea asientos contables en finanzasDB a partir de una venta POS
+async function createFinanzasEntriesForSalePOS(sale){
+  try{
     await ensureFinanzasDB();
-
-    const saleId = sale.id != null ? sale.id : null;
-
-    // Importe de ingreso (venta neta)
-    const amount = Math.abs(Number(sale.total) || 0);
-
-    // Costo de venta basado en costo por presentación
-    let unitCost = 0;
-    if (typeof sale.costPerUnit === 'number' && sale.costPerUnit > 0) {
-      unitCost = sale.costPerUnit;
-    } else {
-      unitCost = getCostoUnitarioProducto(sale.productName || '');
-    }
-    const qtyAbs = Math.abs(Number(sale.qty) || 0);
-    const amountCost = unitCost > 0 && qtyAbs > 0 ? unitCost * qtyAbs : 0;
-
-    // Si no hay ni ingreso ni costo, no hay nada que registrar
-    if (!amount && !amountCost) return;
-
-    const cashAccount = mapSaleToCuentaCobro(sale);
-    const evento = sale.eventName || '';
-    const descripcionBase = sale.productName || 'Venta POS';
-    const descripcion = sale.isReturn
-      ? `Devolución POS - ${descripcionBase}`
-      : `Venta POS - ${descripcionBase}`;
-
-    // Para devoluciones lo marcamos como "ajuste" para diferenciarlo visualmente
-    const tipoMovimiento = sale.isReturn ? 'ajuste' : 'ingreso';
-
-    const totalsDebe = amount + amountCost;
-    const totalsHaber = amount + amountCost;
-
-    // Buscar si ya existe un asiento para este origen/origenId
-    let existingEntry = null;
-    if (saleId != null) {
-      await new Promise((resolve) => {
-        const txRead = finDb.transaction(['journalEntries'], 'readonly');
-        const storeRead = txRead.objectStore('journalEntries');
-        const req = storeRead.getAll();
-        req.onsuccess = () => {
-          const list = req.result || [];
-          existingEntry = list.find(
-            (e) => e && e.origen === 'POS' && e.origenId === saleId
-          ) || null;
-        };
-        txRead.oncomplete = () => resolve();
-        txRead.onerror = () => resolve();
-      });
-    }
-
-    let entryId = existingEntry ? existingEntry.id : null;
-
-    // Crear/actualizar encabezado del asiento
-    await new Promise((resolve) => {
-      const txWrite = finDb.transaction(['journalEntries'], 'readwrite');
-      const storeWrite = txWrite.objectStore('journalEntries');
-
-      if (existingEntry) {
-        // Alinear con Finanzas: usar "fecha" y mantener "date" para compatibilidad
-        existingEntry.fecha = sale.date;
-        existingEntry.date = sale.date;
-        existingEntry.descripcion = descripcion;
-        existingEntry.tipoMovimiento = tipoMovimiento;
-        existingEntry.evento = evento;
-        existingEntry.origen = 'POS';
-        existingEntry.origenId = saleId;
-        existingEntry.totalDebe = totalsDebe;
-        existingEntry.totalHaber = totalsHaber;
-        storeWrite.put(existingEntry);
-      } else {
-        const entry = {
-          fecha: sale.date,   // campo que Finanzas espera
-          date: sale.date,    // compatibilidad con índices previos
-          descripcion,
-          tipoMovimiento,
-          evento,
-          origen: 'POS',
-          origenId: saleId,
-          totalDebe: totalsDebe,
-          totalHaber: totalsHaber
-        };
-        const reqAdd = storeWrite.add(entry);
-        reqAdd.onsuccess = (ev) => {
-          entryId = ev.target.result;
-        };
-      }
-
-      txWrite.oncomplete = () => {
-        if (!entryId && existingEntry && existingEntry.id != null) {
-          entryId = existingEntry.id;
-        }
-        resolve();
-      };
-      txWrite.onerror = (e) => {
-        console.error('Error guardando asiento automático desde POS', e && e.target && e.target.error);
-        resolve();
-      };
-    });
-
-    if (!entryId) {
-      console.error('No se pudo determinar entryId para asiento automático POS');
-      return;
-    }
-
-    // Borrar líneas anteriores de este asiento (para evitar duplicados)
-    await new Promise((resolve) => {
-      const txDel = finDb.transaction(['journalLines'], 'readwrite');
-      const storeDel = txDel.objectStore('journalLines');
-      const reqLines = storeDel.getAll();
-      reqLines.onsuccess = () => {
-        const lines = reqLines.result || [];
-        lines
-          .filter((l) => String(l.entryId) === String(entryId) || String(l.idEntry) === String(entryId))
-          .forEach((l) => {
-            try {
-              storeDel.delete(l.id);
-            } catch (err) {
-              console.error('Error borrando línea contable POS existente', err);
-            }
-          });
-      };
-      txDel.oncomplete = () => resolve();
-      txDel.onerror = () => resolve();
-    });
-
-    // Crear nuevas líneas (ingreso + costo de venta si aplica)
-    await new Promise((resolve) => {
-      const txLines = finDb.transaction(['journalLines'], 'readwrite');
-      const storeLines = txLines.objectStore('journalLines');
-
-      const addLine = (data) => {
-        try {
-          // Guardamos ambos campos: idEntry (lo que Finanzas espera) y entryId (compatibilidad)
-          storeLines.add(Object.assign({ idEntry: entryId, entryId }, data));
-        } catch (err) {
-          console.error('Error guardando línea contable POS', err);
-        }
-      };
-
-      if (!sale.isReturn) {
-        // Venta normal:
-        // Ingreso:
-        //   DEBE: Caja/Banco/Clientes
-        //   HABER: 4100 Ingresos por ventas Arcano 33
-        addLine({ accountCode: cashAccount, debe: amount, haber: 0 });
-        addLine({ accountCode: '4100', debe: 0, haber: amount });
-
-        // Costo de venta (si hay costo disponible):
-        //   DEBE: 5100 Costo de ventas Arcano 33
-        //   HABER: 1500 Inventario producto terminado A33
-        if (amountCost > 0) {
-          addLine({ accountCode: '5100', debe: amountCost, haber: 0 });
-          addLine({ accountCode: '1500', debe: 0, haber: amountCost });
-        }
-      } else {
-        // Devolución: asiento inverso
-        // Ingreso inverso:
-        //   DEBE: 4100
-        //   HABER: Caja/Banco/Clientes
-        addLine({ accountCode: '4100', debe: amount, haber: 0 });
-        addLine({ accountCode: cashAccount, debe: 0, haber: amount });
-
-        // Costo de venta inverso:
-        //   DEBE: 1500
-        //   HABER: 5100
-        if (amountCost > 0) {
-          addLine({ accountCode: '1500', debe: amountCost, haber: 0 });
-          addLine({ accountCode: '5100', debe: 0, haber: amountCost });
-        }
-      }
-
-      txLines.oncomplete = () => resolve();
-      txLines.onerror = () => resolve();
-    });
-  } catch (err) {
-    console.error('Error general creando/actualizando asiento automático desde POS', err);
-  }
-}
-
-// Elimina asientos de Finanzas vinculados a una venta del POS (para Undo / eliminar)
-async function deleteFinanzasEntriesForSalePOS(saleId) {
-  try {
-    if (!saleId) return;
-    await ensureFinanzasDB();
-  } catch (e) {
-    // Si no se puede abrir finanzasDB, no bloqueamos el borrado de la venta
+  }catch(e){
+    console.error('No se puede crear asientos porque finanzasDB no está disponible', e);
     return;
   }
+  try{
+    const ventasCuenta = '4100'; // Ingresos por Ventas
+    const cajaCuenta   = mapSaleToCuentaCobro(sale); // Caja / Banco / Cuentas por Cobrar
+    const fecha = sale.date || new Date().toISOString().slice(0,10);
+    const eventId = sale.eventId || null;
+    const total = Number(sale.total)||0;
+    if (!total) return;
 
-  return new Promise((resolve, reject) => {
-    try {
-      const txFin = finDb.transaction(['journalEntries', 'journalLines'], 'readwrite');
-      const entriesStore = txFin.objectStore('journalEntries');
-      const linesStore = txFin.objectStore('journalLines');
+    const entry = {
+      id: undefined,
+      date: fecha,
+      description: `Venta POS event ${eventId||'-'}`,
+      eventId: eventId,
+      items: [
+        { accountId: cajaCuenta, type: 'debit', amount: total },
+        { accountId: ventasCuenta, type: 'credit', amount: total }
+      ],
+      source: 'pos-sale',
+      sourceId: sale.id || null
+    };
+    await finPut('journalEntries', entry);
+  }catch(e){
+    console.error('Error creando asientos para venta POS', e);
+  }
+}
 
-      const entriesReq = entriesStore.getAll();
-      entriesReq.onsuccess = () => {
-        const allEntries = entriesReq.result || [];
-        const targets = allEntries.filter(e => e && e.origen === 'POS' && e.origenId === saleId);
-        if (!targets.length) {
-          // No hay nada que borrar, dejamos que la tx se complete sola
-          return;
-        }
-
-        const linesReq = linesStore.getAll();
-        linesReq.onsuccess = () => {
-          const allLines = linesReq.result || [];
-          targets.forEach(entry => {
-            const relatedLines = allLines.filter(l => String(l.entryId) === String(entry.id) || String(l.idEntry) === String(entry.id));
-            relatedLines.forEach(l => {
-              try { linesStore.delete(l.id); } catch (err) {
-                console.error('Error borrando línea contable POS', err);
-              }
-            });
-            try { entriesStore.delete(entry.id); } catch (err) {
-              console.error('Error borrando asiento automático POS', err);
-            }
-          });
-        };
-        linesReq.onerror = (e) => {
-          console.error('Error leyendo líneas de diario para borrar asientos POS', e.target.error);
-        };
-      };
-      entriesReq.onerror = (e) => {
-        console.error('Error leyendo asientos para borrar por venta POS', e.target.error);
-      };
-
-      txFin.oncomplete = () => resolve();
-      txFin.onerror = (e) => {
-        console.error('Error en transacción de borrado de asientos POS', e.target.error);
-        reject(e.target.error);
-      };
-    } catch (err) {
-      console.error('Error general al eliminar asientos POS', err);
-      resolve();
+// Invierte efecto contable de una venta (por ejemplo, al borrar una venta)
+async function deleteFinanzasEntriesForSalePOS(saleId){
+  try{
+    await ensureFinanzasDB();
+  }catch(e){
+    console.error('No se puede abrir finanzasDB para borrar asientos de venta POS', e);
+    return;
+  }
+  try{
+    const all = await finGetAll('journalEntries');
+    const toDelete = all.filter(x=>x.source==='pos-sale' && x.sourceId===saleId);
+    for (const row of toDelete){
+      await finDelete('journalEntries', row.id);
     }
-  });
+  }catch(e){
+    console.error('Error borrando asientos contables para venta POS', e);
+  }
+}
+
+// --- Inventario central: helper para actualizar uso de insumos por venta POS ---
+// Esta función fue pensada para conectar POS con inventario de producto terminado
+// a nivel central. Aquí asumimos que sale tiene products con quantity y que
+// existe inventario central en otro módulo, pero por ahora sólo dejamos el hook.
+function applyFinishedFromSalePOS(sale, factor=1){
+  try{
+    // Hook sin implementación detallada aquí (inventario central se maneja en otra vista).
+    // Se deja la función para no romper nada del flujo existente.
+  }catch(e){
+    console.error('Error en applyFinishedFromSalePOS', e);
+  }
 }
 
 function tx(name, mode='readonly'){ return db.transaction(name, mode).objectStore(name); }
@@ -367,19 +219,19 @@ function del(name, key){
 
             const saleId = (sale.id != null) ? sale.id : key;
             finPromise = deleteFinanzasEntriesForSalePOS(saleId).catch(err=>{
-              console.error('Error eliminando asientos contables vinculados a la venta', err);
+              console.error('Error eliminando asientos contables vinculados a venta POS', err);
             });
           }
 
-          finPromise.then(()=>{
-            const delReq = store.delete(key);
-            delReq.onsuccess = ()=>resolve();
-            delReq.onerror = ()=>reject(delReq.error);
-          });
-        };
-        getReq.onerror = ()=>{
           const delReq = store.delete(key);
-          delReq.onsuccess = ()=>resolve();
+          delReq.onsuccess = async ()=>{
+            try{
+              await finPromise;
+            }catch(e){
+              console.error('Error esperando eliminación de asientos contables', e);
+            }
+            resolve();
+          };
           delReq.onerror = ()=>reject(delReq.error);
         };
       }catch(e){
@@ -394,6 +246,159 @@ function del(name, key){
     }
   });
 }
+
+// --- Caja Chica: helpers y denominaciones
+const NIO_DENOMS = [1,5,10,20,50,100,200,1000];
+const USD_DENOMS = [1,5,10,20,50,100];
+
+function normalizePettySection(section){
+  const nio = {};
+  const usd = {};
+
+  NIO_DENOMS.forEach(d=>{
+    const k = String(d);
+    const v = section && section.nio && section.nio[k];
+    const num = Number(v);
+    nio[k] = (!Number.isFinite(num) || num < 0) ? 0 : num;
+  });
+
+  USD_DENOMS.forEach(d=>{
+    const k = String(d);
+    const v = section && section.usd && section.usd[k];
+    const num = Number(v);
+    usd[k] = (!Number.isFinite(num) || num < 0) ? 0 : num;
+  });
+
+  const totalNio = NIO_DENOMS.reduce((sum,d)=> sum + d * (nio[String(d)]||0), 0);
+  const totalUsd = USD_DENOMS.reduce((sum,d)=> sum + d * (usd[String(d)]||0), 0);
+
+  return {
+    nio,
+    usd,
+    totalNio,
+    totalUsd,
+    savedAt: section && section.savedAt ? section.savedAt : null
+  };
+}
+
+async function getPettyCash(eventId){
+  if (eventId == null) return null;
+  if (!db) await openDB();
+
+  return new Promise((resolve, reject)=>{
+    try{
+      const store = tx('pettyCash','readonly');
+      const req = store.get(eventId);
+      req.onsuccess = ()=>{
+        let pc = req.result;
+        if (!pc){
+          pc = {
+            eventId,
+            initial: normalizePettySection(null),
+            movements: [],
+            finalCount: null
+          };
+        } else {
+          pc.initial = normalizePettySection(pc.initial);
+          if (!Array.isArray(pc.movements)) pc.movements = [];
+          pc.finalCount = pc.finalCount ? normalizePettySection(pc.finalCount) : null;
+        }
+        resolve(pc);
+      };
+      req.onerror = ()=>reject(req.error);
+    }catch(err){
+      console.error('Error getPettyCash', err);
+      resolve({
+        eventId,
+        initial: normalizePettySection(null),
+        movements: [],
+        finalCount: null
+      });
+    }
+  });
+}
+
+async function savePettyCash(pc){
+  if (!pc || pc.eventId == null) return;
+  if (!db) await openDB();
+
+  return new Promise((resolve, reject)=>{
+    try{
+      const store = tx('pettyCash','readwrite');
+      const cleaned = {
+        eventId: pc.eventId,
+        initial: pc.initial ? normalizePettySection(pc.initial) : normalizePettySection(null),
+        movements: Array.isArray(pc.movements) ? pc.movements.slice() : [],
+        finalCount: pc.finalCount ? normalizePettySection(pc.finalCount) : null
+      };
+      const req = store.put(cleaned);
+      req.onsuccess = ()=>resolve();
+      req.onerror = ()=>reject(req.error);
+    }catch(err){
+      console.error('Error savePettyCash', err);
+      resolve();
+    }
+  });
+}
+
+function computePettyCashSummary(pc){
+  const base = {
+    nio: { initial:0, entradas:0, salidas:0, teorico:0, final:null, diferencia:null },
+    usd: { initial:0, entradas:0, salidas:0, teorico:0, final:null, diferencia:null }
+  };
+  if (!pc) return base;
+
+  const initial = pc.initial ? normalizePettySection(pc.initial) : normalizePettySection(null);
+  const finalCount = pc.finalCount ? normalizePettySection(pc.finalCount) : null;
+
+  const res = {
+    nio: {
+      initial: initial.totalNio || 0,
+      entradas: 0,
+      salidas: 0,
+      teorico: 0,
+      final: finalCount ? (finalCount.totalNio || 0) : null,
+      diferencia: null
+    },
+    usd: {
+      initial: initial.totalUsd || 0,
+      entradas: 0,
+      salidas: 0,
+      teorico: 0,
+      final: finalCount ? (finalCount.totalUsd || 0) : null,
+      diferencia: null
+    }
+  };
+
+  if (Array.isArray(pc.movements)){
+    for (const m of pc.movements){
+      if (!m || typeof m.amount === 'undefined') continue;
+      const amt = Number(m.amount) || 0;
+      if (!amt) continue;
+
+      const isNio = m.currency === 'NIO';
+      const isUsd = m.currency === 'USD';
+      if (!isNio && !isUsd) continue;
+
+      const target = isNio ? res.nio : res.usd;
+      if (m.type === 'entrada') target.entradas += amt;
+      else if (m.type === 'salida') target.salidas += amt;
+    }
+  }
+
+  res.nio.teorico = res.nio.initial + res.nio.entradas - res.nio.salidas;
+  res.usd.teorico = res.usd.initial + res.usd.entradas - res.usd.salidas;
+
+  if (res.nio.final != null){
+    res.nio.diferencia = res.nio.final - res.nio.teorico;
+  }
+  if (res.usd.final != null){
+    res.usd.diferencia = res.usd.final - res.usd.teorico;
+  }
+
+  return res;
+}
+
 async function setMeta(key, value){ return put('meta', {id:key, value}); }
 async function getMeta(key){ const all = await getAll('meta'); const row = all.find(x=>x.id===key); return row ? row.value : null; }
 
@@ -402,333 +407,80 @@ function normName(s){ return (s||'').toString().normalize('NFD').replace(/[\u030
 
 const RECETAS_KEY = 'arcano33_recetas_v1';
 
-const STORAGE_KEY_INVENTARIO = 'arcano33_inventario';
-
-function invParseNumberPOS(value){
-  const n = parseFloat(String(value).replace(',', '.'));
-  return Number.isNaN(n) ? 0 : n;
-}
-function invCentralDefaultPOS(){
-  return {
-    liquids: {},
-    bottles: {},
-    finished: {
-      pulso: { stock: 0 },
-      media: { stock: 0 },
-      djeba: { stock: 0 },
-      litro: { stock: 0 },
-      galon: { stock: 0 },
-    },
-  };
-}
-function invCentralLoadPOS(){
-  try{
-    const raw = localStorage.getItem(STORAGE_KEY_INVENTARIO);
-    let data = raw ? JSON.parse(raw) : null;
-    if (!data || typeof data !== 'object') data = invCentralDefaultPOS();
-    if (!data.liquids) data.liquids = {};
-    if (!data.bottles) data.bottles = {};
-    if (!data.finished) data.finished = {};
-    ['pulso','media','djeba','litro','galon'].forEach((id)=>{
-      if (!data.finished[id]) data.finished[id] = { stock: 0 };
-      const info = data.finished[id];
-      if (typeof info.stock !== 'number') info.stock = invParseNumberPOS(info.stock||0);
-    });
-    return data;
-  }catch(e){
-    console.warn('Error leyendo inventario central', e);
-    return invCentralDefaultPOS();
+const DEFAULT_RECETAS = [
+  {
+    id: 'clasica-base',
+    name: 'Clásica base',
+    description: 'Receta base Arcano 33',
+    litersTotal: 3.8,
+    litersWine: 2.5,
+    mlVodka: 250,
+    litersJuice: 0.8,
+    litersWater: 0.25,
+    mlSyrup: 200
   }
-}
-function invCentralSavePOS(inv){
-  try{
-    localStorage.setItem(STORAGE_KEY_INVENTARIO, JSON.stringify(inv));
-  }catch(e){
-    console.warn('Error guardando inventario central', e);
-  }
-}
-function mapProductNameToFinishedId(name){
-  const n = (name||'').toString().toLowerCase();
-  if (n.includes('pulso') && n.includes('250')) return 'pulso';
-  if (n.includes('media') && n.includes('375')) return 'media';
-  if (n.includes('djeba') && n.includes('750')) return 'djeba';
-  if (n.includes('litro') && n.includes('1000')) return 'litro';
-  if (n.includes('gal') && (n.includes('3800') || n.includes('galon') || n.includes('galón'))) return 'galon';
-  return null;
-}
-function applyFinishedFromSalePOS(sale, direction){
-  try{
-    const dir = direction === -1 ? -1 : 1;
-    const productName = sale.productName || '';
-    const finishedId = mapProductNameToFinishedId(productName);
-    if (!finishedId) return;
-    const q = typeof sale.qty === 'number' ? sale.qty : parseFloat(sale.qty||'0');
-    const qty = Number.isNaN(q) ? 0 : q;
-    if (!qty) return;
-    const delta = -dir * qty; // dir=+1: registrar venta/devolución; dir=-1: revertir
-    const inv = invCentralLoadPOS();
-    if (!inv.finished) inv.finished = {};
-    if (!inv.finished[finishedId]) inv.finished[finishedId] = { stock: 0 };
-    inv.finished[finishedId].stock = invParseNumberPOS(inv.finished[finishedId].stock) + delta;
-    invCentralSavePOS(inv);
-  }catch(e){
-    console.error('Error ajustando inventario central desde venta', e);
-  }
-}
-async function renderCentralFinishedPOS(){
-  const tbody = document.querySelector('#tbl-inv-central tbody');
-  if (!tbody) return;
-  tbody.innerHTML = '';
-  const inv = invCentralLoadPOS();
-  const defs = [
-    { id:'pulso', label:'Pulso 250 ml' },
-    { id:'media', label:'Media 375 ml' },
-    { id:'djeba', label:'Djeba 750 ml' },
-    { id:'litro', label:'Litro 1000 ml' },
-    { id:'galon', label:'Galón 3800 ml' },
-  ];
-  defs.forEach(d=>{
-    const info = (inv.finished && inv.finished[d.id]) || { stock: 0 };
-    const stock = invParseNumberPOS(info.stock);
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${d.label}</td><td>${stock}</td>`;
-    tbody.appendChild(tr);
-  });
-}
-
-
-function leerCostosPresentacion() {
-  try {
-    const raw = localStorage.getItem(RECETAS_KEY);
-    if (!raw) return null;
-    const data = JSON.parse(raw);
-    if (data && data.costosPresentacion) {
-      return data.costosPresentacion;
-    }
-    return null;
-  } catch (e) {
-    console.warn('No se pudieron leer los costos de presentación desde la Calculadora:', e);
-    return null;
-  }
-}
-
-function mapProductNameToPresId(name) {
-  const n = normName(name);
-  if (!n) return null;
-  if (n.includes('pulso')) return 'pulso';
-  if (n.includes('media')) return 'media';
-  if (n.includes('djeba')) return 'djeba';
-  if (n.includes('litro')) return 'litro';
-  if (n.includes('galon')) return 'galon';
-  if (n.includes('galón')) return 'galon';
-  return null;
-}
-
-function getCostoUnitarioProducto(productName) {
-  const costos = leerCostosPresentacion();
-  if (!costos) return 0;
-  const presId = mapProductNameToPresId(productName);
-  if (!presId) return 0;
-  const info = costos[presId];
-  if (!info) return 0;
-  const val = typeof info.costoUnidad === 'number' ? info.costoUnidad : 0;
-  return val > 0 ? val : 0;
-}
-
-// Defaults (SKUs Arcano 33)
-const SEED = [
-  {name:'Vaso', price:100, manageStock:false, active:true},
-  {name:'Pulso 250ml', price:120, manageStock:true, active:true},
-  {name:'Media 375ml', price:150, manageStock:true, active:true},
-  {name:'Djeba 750ml', price:300, manageStock:true, active:true},
-  {name:'Litro 1000ml', price:330, manageStock:true, active:true},
-  {name:'Galón 3800ml', price:900, manageStock:true, active:true},
 ];
-const DEFAULT_EVENTS = [{name:'General'}];
 
-async function seedMissingDefaults(force=false){
-  const list = await getAll('products');
-  const names = new Set(list.map(p=>normName(p.name)));
-  for (const s of SEED){
-    const n = normName(s.name);
-    if (force || !names.has(n)){
-      const existing = list.find(p=>normName(p.name)===n);
-      if (existing){
-        existing.active = true;
-        if (!existing.price || existing.price <= 0) existing.price = s.price;
-        if (typeof existing.manageStock === 'undefined') existing.manageStock = s.manageStock;
-        await put('products', existing);
-      } else {
-        await put('products', {...s});
-      }
-    }
+function loadRecetas(){
+  try{
+    const raw = localStorage.getItem(RECETAS_KEY);
+    if (!raw) return DEFAULT_RECETAS.slice();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || !parsed.length) return DEFAULT_RECETAS.slice();
+    return parsed;
+  }catch(e){
+    console.error('Error leyendo recetas', e);
+    return DEFAULT_RECETAS.slice();
   }
 }
 
-// UI helpers
-const $ = s => document.querySelector(s);
-const $$ = s => Array.from(document.querySelectorAll(s));
-function fmt(n){ return (n||0).toLocaleString('es-NI', {minimumFractionDigits:2, maximumFractionDigits:2}); }
-function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'), 1800); }
-
-function setOfflineBar(){ const ob=$('#offlineBar'); if (!ob) return; ob.style.display = navigator.onLine?'none':'block'; }
-window.addEventListener('online', setOfflineBar);
-window.addEventListener('offline', setOfflineBar);
-
-// Enable/disable selling block depending on current event
-async function updateSellEnabled(){
-  const current = await getMeta('currentEventId');
-  const evs = await getAll('events');
-  const cur = evs.find(e=>e.id===current);
-  const enabled = !!(current && cur && !cur.closedAt);
-  const chips = $$('#product-chips .chip');
-  chips.forEach(c=> c.classList.toggle('disabled', !enabled));
-  $('#no-active-note').style.display = enabled ? 'none' : 'block';
-}
-
-// Ensure defaults
-async function ensureDefaults(){
-  let products = await getAll('products');
-  if (!products.length){
-    for (const p of SEED) await put('products', p);
-  } else {
-    for (const p of products){
-      let changed = false;
-      if (typeof p.active === 'undefined'){ p.active = true; changed = true; }
-      if (typeof p.manageStock === 'undefined'){ p.manageStock = true; changed = true; }
-      if (changed) await put('products', p);
-    }
-  }
-  products = await getAll('products');
-  if (products.length < 5) await seedMissingDefaults(true);
-  else await seedMissingDefaults(false);
-
-  const events = await getAll('events');
-  if (!events.length){ for (const ev of DEFAULT_EVENTS) await put('events', {...ev, createdAt:new Date().toISOString()}); }
-  const hasKey = (await getAll('meta')).some(m=>m.id==='currentEventId');
-  if (!hasKey){
-    const evs = await getAll('events');
-    if (evs.length) await setMeta('currentEventId', evs[0].id);
+function saveRecetas(recetas){
+  try{
+    localStorage.setItem(RECETAS_KEY, JSON.stringify(recetas));
+  }catch(e){
+    console.error('Error guardando recetas', e);
   }
 }
 
-// Productos
-async function renderProductos(){
-  const list = await getAll('products');
-  const wrap = $('#productos-list');
-  if (!wrap) return;
-  wrap.innerHTML = '';
-  if (!list.length){
-    const p = document.createElement('div'); p.className = 'warn'; p.textContent = 'No hay productos. Agrega los de Arcano 33 abajo.'; wrap.appendChild(p);
-  }
-  for (const p of list) {
-    const row = document.createElement('div');
-    row.className = 'card';
-    row.innerHTML = `
-      <div class="row">
-        <input data-id="${p.id}" class="p-name" value="${p.name}">
-        <div class="row">
-          <input data-id="${p.id}" class="p-price" type="number" inputmode="decimal" step="0.01" value="${p.price}">
-          <label class="flag"><input type="checkbox" class="p-active" data-id="${p.id}" ${p.active===false?'':'checked'}> Activo</label>
-          <label class="flag"><input type="checkbox" class="p-manage" data-id="${p.id}" ${p.manageStock===false?'':'checked'}> Inventario</label>
-          <button data-id="${p.id}" class="btn-danger btn-del">Eliminar</button>
-        </div>
-      </div>
-    `;
-    wrap.appendChild(row);
-  }
-  await renderProductChips();
+// --- UI helpers
+function $(sel){ return document.querySelector(sel); }
+function $$(sel){ return Array.from(document.querySelectorAll(sel)); }
+
+// --- Estado global POS
+let productos = [];
+let eventos = [];
+let ventas = [];
+let inventario = [];
+let recetas = loadRecetas();
+
+let currentSale = {
+  items: [],
+  total: 0,
+  payment: 'efectivo'
+};
+
+// --- Inicialización
+async function init(){
+  await openDB();
+  await loadData();
+  bindEvents();
+  setTab('venta');
 }
 
-// Chips de productos (todos los activos)
-async function renderProductChips(){
-  const chips = $('#product-chips'); if (!chips) return;
-  chips.innerHTML='';
-  let list = (await getAll('products')).filter(p=>p.active!==false);
-
-  // Orden con prioridad de Arcano 33
-  const priority = ['vaso','pulso','media','djeba','litro','galon','galón','galon 3800','galón 3800'];
-  list.sort((a,b)=>{
-    const ia = priority.findIndex(x=>normName(a.name).includes(x)); 
-    const ib = priority.findIndex(x=>normName(b.name).includes(x));
-    const pa = ia===-1?999:ia; const pb = ib===-1?999:ib;
-    if (pa!==pb) return pa-pb;
-    return a.name.localeCompare(b.name, 'es');
-  });
-
-  const current = await getMeta('currentEventId');
-  const evs = await getAll('events');
-  const cur = evs.find(e=>e.id===current);
-  const enabled = !!(current && cur && !cur.closedAt);
-
-  const sel = $('#sale-product');
-  const selectedId = parseInt((sel && sel.value) ? sel.value : (list[0]?.id || 0), 10);
-
-  for (const p of list){
-    const c = document.createElement('button');
-    c.className = 'chip';
-    if (!enabled) c.classList.add('disabled');
-    c.textContent = p.name;
-    c.dataset.id = p.id;
-    if (p.id === selectedId) c.classList.add('active');
-    c.onclick = async()=>{
-      if (!enabled) return;
-      const prev = parseInt(sel.value||'0',10);
-      sel.value = p.id;
-      const same = prev === p.id;
-      if (same) { $('#sale-qty').value = Math.max(1, parseFloat($('#sale-qty').value||'1')) + 1; }
-      else { $('#sale-qty').value = 1; }
-      const pr = (await getAll('products')).find(x=>x.id===p.id);
-      if (pr) $('#sale-price').value = pr.price;
-      $$('.chip').forEach(x=>x.classList.remove('active')); c.classList.add('active');
-      await refreshSaleStockLabel();
-      recomputeTotal();
-    };
-    chips.appendChild(c);
-  }
-
-  if (list.length===0){
-    const warn = document.createElement('div');
-    warn.className = 'warn';
-    warn.textContent = 'No hay productos activos. Activa productos en la pestaña Productos o Inventario.';
-    chips.appendChild(warn);
-  }
+// --- Carga de datos desde IndexedDB
+async function loadData(){
+  productos = await getAll('products');
+  eventos = await getAll('events');
+  ventas = await getAll('sales');
+  inventario = await getAll('inventory');
+  renderProductos();
+  renderEventos();
+  renderInventario();
+  renderSummary();
+  refreshEventUI();
 }
 
-// Delegación de eventos para Productos
-document.addEventListener('change', async (e)=>{
-  if (e.target.classList.contains('p-name') || e.target.classList.contains('p-price') || e.target.classList.contains('p-manage') || e.target.classList.contains('p-active')){
-    const id = parseInt(e.target.dataset.id||'0',10);
-    if (!id) return;
-    const all = await getAll('products');
-    const cur = all.find(px=>px.id===id); if (!cur) return;
-    if (e.target.classList.contains('p-name')) cur.name = e.target.value.trim();
-    if (e.target.classList.contains('p-price')) cur.price = parseFloat(e.target.value||'0');
-    if (e.target.classList.contains('p-manage')) cur.manageStock = e.target.checked;
-    if (e.target.classList.contains('p-active')) cur.active = e.target.checked;
-    try{
-      await put('products', cur);
-      await renderProductos(); 
-      await refreshProductSelect(); 
-      await renderInventario();
-      toast('Producto actualizado');
-    }catch(err){
-      alert('No se pudo guardar el producto. ¿Nombre duplicado?');
-    }
-  }
-});
-document.addEventListener('click', async (e)=>{
-  const delBtn = e.target.closest('.btn-del');
-  if (delBtn){
-    const id = parseInt(delBtn.dataset.id,10);
-    if (!confirm('¿Eliminar este producto? Esto no borra ventas pasadas.')) return;
-    await del('products', id);
-    await renderProductos(); await refreshProductSelect(); await renderInventario();
-    toast('Producto eliminado');
-  }
-});
-
-// Tabs
+// --- Manejo de pestañas
 function setTab(name){
   $$('.tab').forEach(el=> el.style.display='none');
   const target = document.getElementById('tab-'+name);
@@ -742,815 +494,469 @@ function setTab(name){
   if (name==='inventario') renderInventario();
 }
 
-// Event UI
-async function refreshEventUI(){
-  const evs = await getAll('events');
-  const sel = $('#sale-event');
-  const current = await getMeta('currentEventId');
-
-  sel.innerHTML = '<option value="">— Selecciona evento —</option>';
-  for (const ev of evs) {
-    const opt = document.createElement('option'); opt.value = ev.id; 
-    opt.textContent = ev.name + (ev.closedAt ? ' (cerrado)' : '');
-    sel.appendChild(opt);
-  }
-  if (current) sel.value = current;
-  else sel.value = '';
-
-  const status = $('#event-status');
-  const cur = evs.find(e=> current && e.id == current);
-  if (cur && cur.closedAt) {
-    status.style.display='block';
-    status.textContent = `Evento cerrado el ${new Date(cur.closedAt).toLocaleString()}. Puedes reabrirlo o crear/activar otro.`;
-  } else { status.style.display='none'; }
-  $('#btn-reopen-event').style.display = (cur && cur.closedAt) ? 'inline-block' : 'none';
-
-  const invSel = $('#inv-event');
-  if (invSel){
-    invSel.innerHTML='';
-    for (const ev of evs){
-      const o = document.createElement('option'); o.value = ev.id; o.textContent = ev.name + (ev.closedAt?' (cerrado)':''); invSel.appendChild(o);
-    }
-    if (current) invSel.value = current;
-    else if (evs.length) invSel.value = evs[0].id;
-  }
-
-  await updateSellEnabled();
-  await renderProductChips();
-}
-
-// Product select + stock label
-async function refreshProductSelect(){
-  const list = await getAll('products');
-  const sel = $('#sale-product');
-  if (!sel) return;
-  sel.innerHTML = '';
-  for (const p of list) {
-    const opt = document.createElement('option');
-    opt.value = p.id;
-    opt.textContent = `${p.name} (C${fmt(p.price)})${p.active===false?' [inactivo]':''}`;
-    sel.appendChild(opt);
-  }
-  const first = list[0];
-  if (first){ 
-    sel.value = first.id; 
-    $('#sale-price').value = first.price; 
-  }
-  await renderProductChips();
-  const selId = parseInt(sel.value||'0',10);
-  document.querySelectorAll('#product-chips .chip').forEach(x=>{
-    if (parseInt(x.dataset.id,10)===selId) x.classList.add('active');
-  });
-  await refreshSaleStockLabel();
-  recomputeTotal();
-}
-
-async function refreshSaleStockLabel(){
-  const curId = await getMeta('currentEventId');
-  const prodId = parseInt($('#sale-product').value||'0',10);
-  const products = await getAll('products');
-  const p = products.find(pp=>pp.id===prodId);
-  if (!p || p.manageStock===false || !curId) { $('#sale-stock').textContent='—'; return; }
-  const st = await computeStock(parseInt(curId,10), prodId);
-  $('#sale-stock').textContent = st;
-}
-
-// Inventory logic
-async function getInventoryEntries(eventId){ const all = await getAll('inventory'); return all.filter(i=>i.eventId===eventId); }
-async function getInventoryInit(eventId, productId){ const list = (await getInventoryEntries(eventId)).filter(i=>i.productId===productId && i.type==='init'); return list.length ? list.sort((a,b)=> (a.id-b.id))[list.length-1] : null; }
-async function setInitialStock(eventId, productId, qty){ let init = await getInventoryInit(eventId, productId); if (init){ init.qty = qty; init.time = new Date().toISOString(); await put('inventory', init); } else { await put('inventory', {eventId, productId, type:'init', qty, notes:'Inicial', time:new Date().toISOString()}); } }
-async function addRestock(eventId, productId, qty){ if (qty<=0) throw new Error('Reposición debe ser > 0'); await put('inventory', {eventId, productId, type:'restock', qty, notes:'Reposición', time:new Date().toISOString()}); }
-async function addAdjust(eventId, productId, qty, notes){ if (!qty) throw new Error('Ajuste no puede ser 0'); await put('inventory', {eventId, productId, type:'adjust', qty, notes: notes||'Ajuste', time:new Date().toISOString()}); }
-async function computeStock(eventId, productId){ const inv = await getInventoryEntries(eventId); const ledger = inv.filter(i=>i.productId===productId).reduce((a,b)=>a+(b.qty||0),0); const sales = (await getAll('sales')).filter(s=>s.eventId===eventId && s.productId===productId).reduce((a,b)=>a+(b.qty||0),0); return ledger - sales; }
-
-
-// Importar inventario desde Control de Lotes
-async function importFromLoteToInventory(){
-  const evSel = $('#inv-event');
-  let evId = evSel && evSel.value ? parseInt(evSel.value,10) : null;
-  if (!evId){
-    alert('Primero selecciona un evento.');
-    return;
-  }
-  let lotes = [];
-  try {
-    const raw = localStorage.getItem('arcano33_lotes');
-    if (raw) lotes = JSON.parse(raw) || [];
-    if (!Array.isArray(lotes)) lotes = [];
-  } catch (e) {
-    alert('No se pudo leer la información de lotes guardada en el navegador.');
-    return;
-  }
-  if (!lotes.length){
-    alert('No hay lotes registrados en el Control de Lotes.');
-    return;
-  }
-  const listaCodigos = lotes
-    .map(l => (l.codigo || '').trim())
-    .filter(c => c)
-    .join(', ');
-  const codigo = prompt('Escribe el CÓDIGO del lote que quieres asignar a este evento (códigos disponibles: ' + (listaCodigos || 'ninguno') + '):');
-  if (!codigo) return;
-  const codigoNorm = (codigo || '').toString().toLowerCase().trim();
-  const lote = lotes.find(l => ((l.codigo || '').toString().toLowerCase().trim() === codigoNorm));
-  if (!lote){
-    alert('No se encontró un lote con ese código.');
-    return;
-  }
-  const map = [
-    { field: 'pulso', name: 'Pulso 250ml' },
-    { field: 'media', name: 'Media 375ml' },
-    { field: 'djeba', name: 'Djeba 750ml' },
-    { field: 'litro', name: 'Litro 1000ml' },
-    { field: 'galon', name: 'Galón 3800ml' }
-  ];
-  const products = await getAll('products');
-  const norm = s => (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
-  let total = 0;
-  for (const m of map){
-    const rawQty = (lote[m.field] ?? '0').toString();
-    const qty = parseInt(rawQty, 10);
-    if (!(qty > 0)) continue;
-    const prod = products.find(p => norm(p.name) === norm(m.name));
-    if (!prod) continue;
-    await addRestock(evId, prod.id, qty);
-    total += qty;
-  }
-  await renderInventario();
-  await refreshSaleStockLabel();
-  alert('Se agregó inventario desde el lote "' + (lote.codigo || '') + '" al evento seleccionado.');
-}
-
-// Inventario UI
-async function renderInventario(){
-  const tbody = $('#tbl-inv tbody');
-  if (!tbody) return;
-  tbody.innerHTML='';
-
-  const evSel = $('#inv-event');
-  let evId = evSel && evSel.value ? parseInt(evSel.value,10) : null;
-  if (!evId){
-    const evs = await getAll('events');
-    if (evs.length) evId = evs[0].id;
-    if (evSel && evId) invSel.value = evId;
-  }
-  if (!evId){
-    const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="8">No hay eventos. Crea uno en la pestaña Vender.</td>'; tbody.appendChild(tr); return;
-  }
-
-  const prods = await getAll('products');
-
-  for (const p of prods){
-    const st = await computeStock(evId, p.id);
-    const init = await getInventoryInit(evId, p.id);
-    const disabled = (p.manageStock===false) ? 'disabled' : '';
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${p.name}</td>
-      <td><input type="checkbox" class="inv-active" data-id="${p.id}" ${p.active===false?'':'checked'}></td>
-      <td><input type="checkbox" class="inv-manage" data-id="${p.id}" ${p.manageStock===false?'':'checked'}></td>
-      <td><input class="inv-inicial" data-id="${p.id}" type="number" inputmode="numeric" step="1" value="${init?init.qty:0}" ${disabled}></td>
-      <td><input class="inv-repo" data-id="${p.id}" type="number" inputmode="numeric" step="1" placeholder="+" ${disabled}></td>
-      <td><input class="inv-ajuste" data-id="${p.id}" type="number" inputmode="numeric" step="1" placeholder="+/-" ${disabled}></td>
-      <td><span class="stockpill ${st<=0?'low':''}">${st}</span></td>
-      <td class="actions">
-        <button class="act-guardar-inicial" data-id="${p.id}" ${disabled}>Guardar inicial</button>
-        <button class="act-reponer" data-id="${p.id}" ${disabled}>Reponer</button>
-        <button class="act-ajustar" data-id="${p.id}" ${disabled}>Ajustar</button>
-      </td>
-    `;
-    if (p.manageStock===false) tr.classList.add('dim');
-    tbody.appendChild(tr);
-  }
-}
-
-// Inventario: listeners
-document.addEventListener('click', async (e)=>{
-  if (e.target.classList.contains('act-guardar-inicial')){
-    const pid = parseInt(e.target.dataset.id,10);
-    const evId = parseInt($('#inv-event').value||'0',10);
-    const tr = e.target.closest('tr');
-    const qty = parseInt(tr.querySelector('.inv-inicial').value||'0',10);
-    await setInitialStock(evId, pid, isNaN(qty)?0:qty);
-    await renderInventario(); await refreshSaleStockLabel();
-    toast('Inicial guardado');
-  }
-  if (e.target.classList.contains('act-reponer')){
-    const pid = parseInt(e.target.dataset.id,10);
-    const evId = parseInt($('#inv-event').value||'0',10);
-    const tr = e.target.closest('tr');
-    const qty = parseInt(tr.querySelector('.inv-repo').value||'0',10);
-    if (!(qty>0)) { alert('Ingresa una reposición > 0'); return; }
-    await addRestock(evId, pid, qty);
-    tr.querySelector('.inv-repo').value='';
-    await renderInventario(); await refreshSaleStockLabel();
-    toast('Reposición agregada');
-  }
-  if (e.target.classList.contains('act-ajustar')){
-    const pid = parseInt(e.target.dataset.id,10);
-    const evId = parseInt($('#inv-event').value||'0',10);
-    const tr = e.target.closest('tr');
-    const qty = parseInt(tr.querySelector('.inv-ajuste').value||'0',10);
-    if (!qty) { alert('Ingresa un ajuste (positivo o negativo)'); return; }
-    await addAdjust(evId, pid, qty, 'Ajuste manual');
-    tr.querySelector('.inv-ajuste').value='';
-    await renderInventario(); await refreshSaleStockLabel();
-    toast('Ajuste registrado');
-  }
-});
-
-document.addEventListener('change', async (e)=>{
-  if (e.target.classList.contains('inv-manage') || e.target.classList.contains('inv-active')){
-    const id = parseInt(e.target.dataset.id||'0',10);
-    const all = await getAll('products');
-    const cur = all.find(px=>px.id===id); if (!cur) return;
-    if (e.target.classList.contains('inv-manage')) cur.manageStock = e.target.checked;
-    if (e.target.classList.contains('inv-active')) cur.active = e.target.checked;
-    await put('products', cur);
-    await renderInventario(); await renderProductChips(); await refreshProductSelect();
-  }
-});
-
-// Day list filtered by current event
-async function renderDay(){
-  const d = $('#sale-date').value;
-  const curId = await getMeta('currentEventId');
-  const tbody = $('#tbl-day tbody'); tbody.innerHTML='';
-  if (!curId){ $('#day-total').textContent = fmt(0); return; }
-  const items = await new Promise((res,rej)=>{ const r=tx('sales').index('by_date').getAll(d); r.onsuccess=()=>res(r.result||[]); r.onerror=()=>rej(r.error); });
-  const filtered = items.filter(s=> s.eventId === curId);
-  let total = 0;
-  filtered.sort((a,b)=>a.id-b.id);
-  for (const s of filtered){
-    total += s.total;
-    const payClass = s.payment==='efectivo'?'pay-ef':(s.payment==='transferencia'?'pay-tr':'pay-cr');
-    const payTxt = s.payment==='efectivo'?'Efec':(s.payment==='transferencia'?'Trans':'Cred');
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${s.time||''}</td>
-      <td>${s.productName}</td>
-      <td>${s.qty}</td>
-      <td>${fmt(s.unitPrice)}</td>
-      <td>${fmt(s.discount||0)} </td>
-      <td>${fmt(s.total)} </td>
-      <td><span class="tag ${payClass}">${payTxt}</span></td>
-      <td>${s.courtesy?'✓':''}</td>
-      <td>${s.isReturn?'✓':''}</td>
-      <td>${s.customer||''}</td>
-      <td>${s.courtesyTo||''}</td>
-      <td><button data-id="${s.id}" title="Eliminar venta" class="btn-danger btn-mini del-sale">Eliminar</button></td>`;
-    tbody.appendChild(tr);
-  }
-  $('#day-total').textContent = fmt(total);
-}
-
-// Summary (extendido con costo y utilidad)
-async function renderSummary(){
-  const sales = await getAll('sales');
-  const events = await getAll('events');
-  let grand = 0;
-  let grandCost = 0;
-  let grandProfit = 0;
-
-  const byDay=new Map(); 
-  const byProd=new Map(); 
-  const byPay=new Map(); 
-  const byEvent=new Map();
-
-  for (const s of sales){
-    const total = Number(s.total || 0);
-    grand += total;
-
-    byDay.set(s.date,(byDay.get(s.date)||0)+total);
-    byProd.set(s.productName,(byProd.get(s.productName)||0)+total);
-    byPay.set(s.payment||'efectivo',(byPay.get(s.payment||'efectivo')||0)+total);
-    byEvent.set(s.eventName||'General',(byEvent.get(s.eventName||'General')||0)+total);
-
-    // Costo y utilidad aproximada (solo ventas/no cortesías)
-    if (!s.courtesy) {
-      let lineCost = 0;
-      if (typeof s.lineCost === 'number') {
-        lineCost = Number(s.lineCost || 0);
-      } else if (typeof s.costPerUnit === 'number') {
-        const qty = Number(s.qty || 0);
-        lineCost = s.costPerUnit * qty;
-      }
-
-      let lineProfit = 0;
-      if (typeof s.lineProfit === 'number') {
-        lineProfit = Number(s.lineProfit || 0);
-      } else {
-        lineProfit = total - lineCost;
-      }
-
-      grandCost += lineCost;
-      grandProfit += lineProfit;
-    }
-  }
-
-  // Acumular también lo archivado por evento en grand / tablas de resumen
-  for (const ev of events){
-    if (ev.archive && ev.archive.totals){
-      const t = ev.archive.totals;
-      grand += (t.grand||0);
-      byEvent.set(ev.name,(byEvent.get(ev.name)||0)+(t.grand||0));
-      if (t.byPay){ for (const k of Object.keys(t.byPay)){ byPay.set(k,(byPay.get(k)||0)+(t.byPay[k]||0)); } }
-      if (t.byProduct){ for (const k of Object.keys(t.byProduct)){ byProd.set(k,(byProd.get(k)||0)+(t.byProduct[k]||0)); } }
-      if (t.byDay){ for (const k of Object.keys(t.byDay)){ byDay.set(k,(byDay.get(k)||0)+(t.byDay[k]||0)); } }
-      // Nota: por ahora no tenemos costo/utilidad archivados, así que grandCost/grandProfit reflejan ventas vivas.
-    }
-  }
-
-  // Total vendido
-  $('#grand-total').textContent = fmt(grand);
-
-  // Crear/actualizar bloque extra para costo y utilidad si no existe en el HTML
-  const totalSpan = document.getElementById('grand-total');
-  if (totalSpan) {
-    let extraBlock = document.getElementById('grand-extra-block');
-    if (!extraBlock) {
-      const card = totalSpan.closest('.card') || totalSpan.parentElement || document.getElementById('tab-resumen') || document.body;
-      extraBlock = document.createElement('div');
-      extraBlock.id = 'grand-extra-block';
-      if (card) card.appendChild(extraBlock);
-    }
-    extraBlock.innerHTML = `
-      <p>Costo estimado de producto: C$ <span id="grand-cost">${fmt(grandCost)}</span></p>
-      <p>Utilidad bruta aproximada: C$ <span id="grand-profit">${fmt(grandProfit)}</span></p>
-    `;
-  }
-
-  const tbE=$('#tbl-por-evento tbody'); tbE.innerHTML='';
-  [...byEvent.entries()].sort((a,b)=>a[0].localeCompare(b[0])).forEach(([k,v])=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; tbE.appendChild(tr); });
-
-  const tbD=$('#tbl-por-dia tbody'); tbD.innerHTML='';
-  [...byDay.entries()].sort((a,b)=>a[0].localeCompare(b[0])).forEach(([k,v])=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; tbD.appendChild(tr); });
-
-  const tbP=$('#tbl-por-prod tbody'); tbP.innerHTML='';
-  [...byProd.entries()].sort((a,b)=>a[0].localeCompare(b[0])).forEach(([k,v])=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; tbP.appendChild(tr); });
-
-  const tbPay=$('#tbl-por-pago tbody'); tbPay.innerHTML='';
-  [...byPay.entries()].sort((a,b)=>a[0].localeCompare(b[0])).forEach(([k,v])=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; tbPay.appendChild(tr); });
-}
-
-// CSV helpers
-function downloadCSV(name, rows){
-  const csv = rows.map(r=>r.map(x=>{
-    if (x==null) return '';
-    const s = String(x);
-    if (/[",\n]/.test(s)) { return '"' + s.replace(/"/g,'""') + '"'; }
-    else { return s; }
-  }).join(',')).join('\n');
-  const blob = new Blob([csv],{type:'text/csv;charset=utf-8'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href=url; a.download=name; a.click();
-  setTimeout(()=>URL.revokeObjectURL(url),2000);
-}
-
-async function generateInventoryCSV(eventId){
-  const prods = await getAll('products');
-  const inv = await getInventoryEntries(eventId);
-  const sales = await getAll('sales');
-  const rows = [['producto','manejar','inicial','reposiciones','ajustes','vendido','stock_actual']];
-  for (const p of prods){
-    const inits = inv.filter(i=>i.productId===p.id && i.type==='init').reduce((a,b)=>a+(b.qty||0),0);
-    const repo = inv.filter(i=>i.productId===p.id && i.type==='restock').reduce((a,b)=>a+(b.qty||0),0);
-    const adj = inv.filter(i=>i.productId===p.id && i.type==='adjust').reduce((a,b)=>a+(b.qty||0),0);
-    const sold = sales.filter(s=>s.eventId===eventId && s.productId===p.id).reduce((a,b)=>a+(b.qty||0),0);
-    const stock = inits + repo + adj - sold;
-    rows.push([p.name, p.manageStock!==false?1:0, inits, repo, adj, sold, stock]);
-  }
-  downloadCSV('inventario_evento.csv', rows);
-}
-
-// Eventos UI
-async function renderEventos(){
-  const filtro = $('#filtro-eventos').value || 'todos';
-  const tbody = $('#tbl-eventos tbody');
-  tbody.innerHTML = '';
-  const events = await getAll('events');
-  const sales = await getAll('sales');
-  const rows = events.map(ev=>{
-    const tot = sales.filter(s=>s.eventId===ev.id).reduce((a,b)=>a+b.total,0);
-    return {...ev, _totalCached: tot};
-  }).filter(ev=>{
-    if (filtro==='abiertos') return !ev.closedAt;
-    if (filtro==='cerrados') return !!ev.closedAt;
-    return true;
-  }).sort((a,b)=>{
-    const ad = a.createdAt||''; const bd = b.createdAt||'';
-    return (bd>ad) ? 1 : -1;
+// --- Eventos de UI
+function bindEvents(){
+  $$('.tabbar button').forEach(btn=>{
+    btn.addEventListener('click', ()=> setTab(btn.dataset.tab));
   });
 
-  for (const ev of rows){
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${ev.name}</td>
-      <td>${ev.closedAt?'<span class="tag closed">cerrado</span>':'<span class="tag open">abierto</span>'}</td>
-      <td>${ev.createdAt?new Date(ev.createdAt).toLocaleString():''}</td>
-      <td>${ev.closedAt?new Date(ev.closedAt).toLocaleString():''}</td>
-      <td>C$ ${fmt(ev._totalCached)}</td>
-      <td class="actions">
-        <button class="act-ver" data-id="${ev.id}">VER</button>
-        <button class="act-activar" data-id="${ev.id}">Activar</button>
-        ${ev.closedAt?'<button class="act-reabrir" data-id="'+ev.id+'">Reabrir</button>':'<button class="act-cerrar" data-id="'+ev.id+'">Cerrar</button>'}
-        <button class="act-corte" data-id="${ev.id}">CSV Corte</button>
-        <button class="act-ventas" data-id="${ev.id}">CSV Ventas</button>
-        <button class="act-inv" data-id="${ev.id}">CSV Inv</button>
-        <button class="act-eliminar btn-danger" data-id="${ev.id}">Eliminar</button>
-      </td>
-    `;
-    tbody.appendChild(tr);
-  }
-}
+  $('#add-product-form').addEventListener('submit', onAddProduct);
+  $('#product-search').addEventListener('input', renderProductos);
 
-// Modal VER: rellenar
-function showEventView(show){ $('#event-view').style.display = show ? 'flex' : 'none'; }
-async function openEventView(eventId){
-  const events = await getAll('events');
-  const ev = events.find(e=>e.id===eventId);
-  if (!ev) return;
-  const sales = (await getAll('sales')).filter(s=>s.eventId===eventId);
+  $('#event-form').addEventListener('submit', onAddEvent);
+  $('#event-search').addEventListener('input', renderEventos);
 
-  $('#ev-title').textContent = `Evento: ${ev.name}`;
-  $('#ev-meta').innerHTML = `<div><b>Estado:</b> ${ev.closedAt?'Cerrado':'Abierto'}</div>
-  <div><b>Creado:</b> ${ev.createdAt?new Date(ev.createdAt).toLocaleString():'—'}</div>
-  <div><b>Cerrado:</b> ${ev.closedAt?new Date(ev.closedAt).toLocaleString():'—'}</div>
-  <div><b># Ventas:</b> ${sales.length}</div>`;
+  $('#sale-add-item').addEventListener('click', onAddItemToSale);
+  $('#sale-clear').addEventListener('click', clearCurrentSale);
+  $('#sale-finish').addEventListener('click', finishSale);
 
-  const total = sales.reduce((a,b)=>a+b.total,0);
-
-  // cálculo de costo de producto usando el costo unitario por presentación
-  let costoProductos = 0;
-  for (const s of sales) {
-    const unitCost = getCostoUnitarioProducto(s.productName);
-    const absQty = Math.abs(s.qty || 0);
-    const qtyParaCosto = s.isReturn ? -absQty : absQty;
-    if (unitCost > 0 && qtyParaCosto !== 0) {
-      costoProductos += unitCost * qtyParaCosto;
-    }
-  }
-  const utilidadBruta = total - costoProductos;
-
-  const byPay = sales.reduce((m,s)=>{ m[s.payment]=(m[s.payment]||0)+s.total; return m; },{});
-  $('#ev-totals').innerHTML = `<div><b>Total vendido:</b> C$ ${fmt(total)}</div>
-  <div><b>Costo estimado de producto:</b> C$ ${fmt(costoProductos)}</div>
-  <div><b>Utilidad bruta aprox.:</b> C$ ${fmt(utilidadBruta)}</div>
-  <div><b>Efectivo:</b> C$ ${fmt(byPay.efectivo||0)}</div>
-  <div><b>Transferencia:</b> C$ ${fmt(byPay.transferencia||0)}</div>
-  <div><b>Crédito:</b> C$ ${fmt(byPay.credito||0)}</div>`;
-
-  const byDay = Array.from((()=>{ const m = new Map(); for (const s of sales){ m.set(s.date, (m.get(s.date)||0)+s.total); } return m; })().entries()).sort((a,b)=>a[0].localeCompare(b[0]));
-  const tbd = $('#ev-byday tbody'); tbd.innerHTML=''; byDay.forEach(([k,v])=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; tbd.appendChild(tr); });
-
-  const byProd = Array.from((()=>{ const m = new Map(); for (const s of sales){ m.set(s.productName, (m.get(s.productName)||0)+s.total); } return m; })().entries()).sort((a,b)=>a[0].localeCompare(b[0]));
-  const tbp = $('#ev-byprod tbody'); tbp.innerHTML=''; byProd.forEach(([k,v])=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; tbp.appendChild(tr); });
-
-  const tb = $('#ev-sales tbody'); tb.innerHTML='';
-  sales.sort((a,b)=>a.id-b.id).forEach(s=>{
-    const tr=document.createElement('tr'); tr.innerHTML = `<td>${s.id}</td><td>${s.date}</td><td>${s.time||''}</td><td>${s.productName}</td><td>${s.qty}</td><td>${fmt(s.unitPrice)}</td><td>${fmt(s.discount||0)}</td><td>${fmt(s.total)}</td><td>${s.payment}</td><td>${s.courtesy?'✓':''}</td><td>${s.isReturn?'✓':''}</td><td>${s.customer||''}</td><td>${s.courtesyTo||''}</td><td>${s.notes||''}</td>`;
-    tb.appendChild(tr);
+  $('#sale-payment').addEventListener('change', e=>{
+    currentSale.payment = e.target.value;
   });
 
-  showEventView(true);
-}
-
-// CSV ventas/corte
-async function exportEventSalesCSV(eventId){
-  const events = await getAll('events');
-  const ev = events.find(e=>e.id===eventId);
-  const sales = (await getAll('sales')).filter(s=>s.eventId===eventId);
-  const rows = [['id','fecha','hora','producto','cant','PU','desc_C$','total','pago','cortesia','devolucion','cliente','cortesia_a','notas']];
-  for (const s of sales){
-    rows.push([s.id, s.date, s.time||'', s.productName, s.qty, s.unitPrice, (s.discount||0), s.total, (s.payment||''), s.courtesy?1:0, s.isReturn?1:0, s.customer||'', s.courtesyTo||'', s.notes||'']);
-  }
-  const safeName = (ev?ev.name:'evento').replace(/[^a-z0-9_\- ]/gi,'_');
-  downloadCSV(`ventas_${safeName}.csv`, rows);
-}
-function buildCorteSummaryRows(eName, sales){
-  let efectivo=0, trans=0, credito=0, descuentos=0, cortesiasU=0, cortesiasVal=0, devolU=0, devolVal=0, bruto=0;
-  for (const s of sales){
-    const absQty = Math.abs(s.qty||0);
-    const absTotal = Math.abs(s.total||0);
-    bruto += (s.courtesy ? (s.unitPrice*absQty) : (absTotal + (s.discount||0)));
-    descuentos += (s.discount||0) * (s.isReturn?-1:1);
-    if (s.courtesy){ cortesiasU += absQty; cortesiasVal += (s.unitPrice*absQty); }
-    if (s.isReturn){ devolU += absQty; devolVal += absTotal; }
-    if (s.payment==='efectivo') efectivo += s.total;
-    else if (s.payment==='transferencia') trans += s.total;
-    else if (s.payment==='credito'){ credito += s.total; }
-  }
-  const cobrado = efectivo + trans;
-  const neto = cobrado;
-  return {efectivo, trans, credito, descuentos, cortesiasU, cortesiasVal, devolU, devolVal, bruto, cobrado, neto};
-}
-async function generateCorteCSV(eventId){
-  const events = await getAll('events');
-  const ev = events.find(e=>e.id===eventId);
-  if (!ev){ alert('Evento no encontrado'); return; }
-  const sales = (await getAll('sales')).filter(s=>s.eventId===eventId);
-  const sum = buildCorteSummaryRows(ev.name, sales);
-  const rows = [];
-  rows.push(['Corte de evento', ev.name]);
-  rows.push(['Generado', new Date().toLocaleString()]);
-  rows.push([]);
-  rows.push(['Resumen de cobros']);
-  rows.push(['Efectivo', sum.efectivo.toFixed(2)]);
-  rows.push(['Transferencia', sum.trans.toFixed(2)]);
-  rows.push(['Crédito', sum.credito.toFixed(2)]);
-  rows.push(['Cobrado (sin crédito)', sum.cobrado.toFixed(2)]);
-  rows.push([]);
-  rows.push(['Ajustes']);
-  rows.push(['Descuentos aplicados (C$)', sum.descuentos.toFixed(2)]);
-  rows.push(['Cortesías (unid.)', sum.cortesiasU]);
-  rows.push(['Cortesías valor ref. (C$)', sum.cortesiasVal.toFixed(2)]);
-  rows.push(['Devoluciones (unid.)', sum.devolU]);
-  rows.push(['Devoluciones (C$)', sum.devolVal.toFixed(2)]);
-  rows.push([]);
-  rows.push(['Ventas brutas ref. (aprox.)', sum.bruto.toFixed(2)]);
-  rows.push(['Neto cobrado', sum.neto.toFixed(2)]);
-  rows.push([]);
-  rows.push(['Detalle de ventas']);
-  rows.push(['id','fecha','hora','producto','cant','PU','desc_C$','total','pago','cortesia','devolucion','cliente','cortesia_a','notas']);
-  for (const s of sales){
-    rows.push([s.id, s.date, s.time||'', s.productName, s.qty, s.unitPrice, (s.discount||0), s.total, (s.payment||''), s.courtesy?1:0, s.isReturn?1:0, s.customer||'', s.courtesyTo||'', s.notes||'']);
-  }
-  const safeName = ev.name.replace(/[^a-z0-9_\- ]/gi,'_');
-  downloadCSV(`corte_${safeName}.csv`, rows);
-}
-
-// --- Close / Reopen / Activate / Delete ---
-async function closeEvent(eventId){
-  const events = await getAll('events');
-  const ev = events.find(e=>e.id===eventId);
-  if (!ev){ alert('Evento no encontrado'); return; }
-  if (ev.closedAt){ alert('Este evento ya está cerrado.'); return; }
-  await generateCorteCSV(eventId);
-  ev.closedAt = new Date().toISOString();
-  await put('events', ev);
-  await setMeta('currentEventId', null);
-  await refreshEventUI(); await renderEventos(); await renderDay(); await renderSummary();
-  toast('Evento cerrado (sin borrar ventas)');
-}
-
-async function reopenEvent(eventId){
-  const events = await getAll('events');
-  const ev = events.find(e=>e.id===eventId);
-  if (!ev){ alert('Evento no encontrado'); return; }
-  ev.closedAt = null;
-  await put('events', ev);
-  await setMeta('currentEventId', eventId);
-  await refreshEventUI(); await renderEventos();
-  toast('Evento reabierto');
-}
-
-async function activateEvent(eventId){
-  await setMeta('currentEventId', eventId);
-  await refreshEventUI();
-  await renderDay();
-  toast('Evento activado');
-}
-
-async function deleteEvent(eventId){
-  const events = await getAll('events');
-  const ev = events.find(e=>e.id===eventId);
-  if (!ev){ alert('Evento no encontrado'); return; }
-  const msg = '¿Eliminar evento "'+ev.name+'"? Se borrarán sus ventas e inventario. Esta acción NO se puede deshacer.';
-  if (!confirm(msg)) return;
-  const t = db.transaction(['sales','events','inventory','meta'],'readwrite');
-  await new Promise((res)=>{ const r = t.objectStore('sales').getAll(); r.onsuccess = ()=>{ (r.result||[]).filter(s=>s.eventId===eventId).forEach(s=> t.objectStore('sales').delete(s.id)); res(); }; });
-  await new Promise((res)=>{ const r = t.objectStore('inventory').getAll(); r.onsuccess = ()=>{ (r.result||[]).filter(i=>i.eventId===eventId).forEach(i=> t.objectStore('inventory').delete(i.id)); res(); }; });
-  t.objectStore('events').delete(eventId);
-  const mreq = t.objectStore('meta').get('currentEventId');
-  mreq.onsuccess = ()=>{ const cur = mreq.result?.value; if (cur === eventId) t.objectStore('meta').put({id:'currentEventId', value:null}); };
-  await new Promise((res,rej)=>{ t.oncomplete=res; t.onerror=()=>rej(t.error); });
-  await refreshEventUI(); await renderEventos(); await renderDay(); await renderSummary(); await renderInventario(); await renderProductos();
-  toast('Evento eliminado');
-}
-
-// Botón Restaurar productos base (A33)
-async function restoreSeed(){
-  await seedMissingDefaults(true);
-  await renderProductos(); await refreshProductSelect(); await renderInventario();
-  toast('Productos base restaurados');
-}
-
-// Init & bindings
-async function init(){
-  try{
-    await openDB();
-    await ensureDefaults();   // migra + resiembra
-
-    const dateInput = document.getElementById('sale-date');
-    if (dateInput && !dateInput.value){
-      const now = new Date();
-      const y = now.getFullYear();
-      const m = String(now.getMonth()+1).padStart(2,'0');
-      const d = String(now.getDate()).padStart(2,'0');
-      dateInput.value = `${y}-${m}-${d}`;
-    }
-
-    await refreshEventUI();
-    await refreshProductSelect();
-    await renderDay();
-    await renderSummary();
-    await renderProductos();
-    await renderEventos();
-    await renderInventario();
-    await updateSellEnabled();
-  }catch(err){ 
-    alert('Error inicializando base de datos');
-    console.error('INIT ERROR', err);
-  }
-  setOfflineBar();
-
-  document.querySelector('.tabbar').addEventListener('click', (e)=>{ const b = e.target.closest('button'); if (!b) return; setTab(b.dataset.tab); });
-
-  // Vender tab
-  $('#sale-event').addEventListener('change', async()=>{ 
-    const val = $('#sale-event').value;
-    if (val === '') { await setMeta('currentEventId', null); }
-    else { await setMeta('currentEventId', parseInt(val,10)); }
-    await refreshEventUI(); 
-    await refreshSaleStockLabel(); 
-    await renderDay();
-  });
-  $('#btn-add-event').addEventListener('click', async()=>{ const name = ($('#new-event').value||'').trim(); if (!name) { alert('Escribe un nombre de evento'); return; } const id = await put('events', {name, createdAt:new Date().toISOString()}); await setMeta('currentEventId', id); $('#new-event').value=''; await refreshEventUI(); await renderEventos(); await renderInventario(); await renderDay(); toast('Evento creado'); });
-  $('#btn-close-event').addEventListener('click', async()=>{ const id = parseInt($('#sale-event').value||'0',10); const current = await getMeta('currentEventId'); const useId = id || current; if (!useId) return alert('Selecciona un evento'); await closeEvent(parseInt(useId,10)); });
-  $('#btn-reopen-event').addEventListener('click', async()=>{ const val = $('#sale-event').value; const id = parseInt(val||'0',10); if (!id) return alert('Selecciona un evento cerrado'); await reopenEvent(id); });
-
-  $('#sale-product').addEventListener('change', async()=>{ const id = parseInt($('#sale-product').value,10); const p = (await getAll('products')).find(x=>x.id===id); if (p) $('#sale-price').value = p.price; document.querySelectorAll('#product-chips .chip').forEach(x=>x.classList.toggle('active', parseInt(x.dataset.id,10)===id)); await refreshSaleStockLabel(); recomputeTotal(); });
-  $('#sale-price').addEventListener('input', recomputeTotal);
-  $('#sale-qty').addEventListener('input', recomputeTotal);
-  $('#sale-discount').addEventListener('input', recomputeTotal);
-  $('#sale-courtesy').addEventListener('change', ()=>{ $('#sale-courtesy-to').disabled = !$('#sale-courtesy').checked; recomputeTotal(); });
-  $('#sale-return').addEventListener('change', recomputeTotal);
-  $('#sale-payment').addEventListener('change', ()=>{ const isCred = $('#sale-payment').value==='credito'; $('#sale-customer').disabled = !isCred; if (!isCred) $('#sale-customer').value=''; });
-  $('#sale-date').addEventListener('change', renderDay);
-  $('#btn-add').addEventListener('click', addSale);
-  $('#btn-add-sticky').addEventListener('click', addSale);
-  $('#btn-undo').addEventListener('click', async()=>{ const curId = await getMeta('currentEventId'); if (!curId) return; const d=$('#sale-date').value; const items = await new Promise((res,rej)=>{ const r=tx('sales').index('by_date').getAll(d); r.onsuccess=()=>res(r.result||[]); r.onerror=()=>rej(r.error); }); const filtered = items.filter(s=>s.eventId===curId); if (!filtered.length) return; const last = filtered.sort((a,b)=>a.id-b.id)[filtered.length-1]; await del('sales', last.id); await renderDay(); await renderSummary(); await refreshSaleStockLabel(); await renderInventario(); toast('Venta eliminada'); });
-  $('#tbl-day').addEventListener('click', async (e)=>{ const btn = e.target.closest('.del-sale'); if (!btn) return; const id = parseInt(btn.dataset.id,10); if (!confirm('¿Eliminar esta venta?')) return; await del('sales', id); await renderDay(); await renderSummary(); await refreshSaleStockLabel(); await renderInventario(); toast('Venta eliminada'); });
-
-  // Stepper
-  $('#qty-minus').addEventListener('click', ()=>{ const v = Math.max(1, parseInt($('#sale-qty').value||'1',10) - 1); $('#sale-qty').value = v; recomputeTotal(); });
-  $('#qty-plus').addEventListener('click', ()=>{ const v = Math.max(1, parseInt($('#sale-qty').value||'1',10) + 1); $('#sale-qty').value = v; recomputeTotal(); });
-
-  // Productos: agregar + restaurar
-  document.getElementById('btn-add-prod').onclick = async()=>{ const name = $('#new-name').value.trim(); const price = parseFloat($('#new-price').value||'0'); if (!name || !(price>0)) return alert('Nombre y precio'); try{ await put('products', {name, price, manageStock:true, active:true}); $('#new-name').value=''; $('#new-price').value=''; await renderProductos(); await refreshProductSelect(); await renderInventario(); toast('Producto agregado'); }catch(err){ alert('No se pudo agregar. ¿Nombre duplicado?'); } };
-  document.getElementById('btn-restore-seed').onclick = restoreSeed;
-
-  // Eventos tab actions
-  $('#filtro-eventos').addEventListener('change', renderEventos);
-  $('#btn-exportar-eventos').addEventListener('click', async()=>{ const events = await getAll('events'); const rows = [['id','evento','estado','creado','cerrado','total']]; for (const ev of events){ rows.push([ ev.id, ev.name, ev.closedAt?'cerrado':'abierto', ev.createdAt||'', ev.closedAt||'', 0 ]); } downloadCSV('eventos.csv', rows); });
-  $('#tbl-eventos').addEventListener('click', async(e)=>{ const btn = e.target.closest('button'); if (!btn) return; const id = parseInt(btn.dataset.id,10);
-    if (btn.classList.contains('act-ver')) await openEventView(id);
-    else if (btn.classList.contains('act-activar')) await activateEvent(id);
-    else if (btn.classList.contains('act-reabrir')) await reopenEvent(id);
-    else if (btn.classList.contains('act-cerrar')) await closeEvent(id);
-    else if (btn.classList.contains('act-corte')) await generateCorteCSV(id);
-    else if (btn.classList.contains('act-ventas')) await exportEventSalesCSV(id);
-    else if (btn.classList.contains('act-inv')) await generateInventoryCSV(id);
-    else if (btn.classList.contains('act-eliminar')) await deleteEvent(id);
-    await renderEventos(); await renderSummary();
+  $('#sale-event').addEventListener('change', async (e)=>{
+    const val = e.target.value;
+    const eventId = val ? Number(val) : null;
+    await setMeta('currentEventId', eventId);
+    refreshEventUI();
   });
 
-  // Modal close
-  document.getElementById('ev-close').onclick = ()=> showEventView(false);
-  document.getElementById('event-view').addEventListener('click', (e)=>{ if (e.target.id==='event-view') showEventView(false); });
-
-  // Inventario tab
   $('#inv-event').addEventListener('change', renderInventario);
-  $('#btn-inv-ref').addEventListener('click', renderInventario);
-  $('#btn-inv-csv').addEventListener('click', async()=>{ const id = parseInt($('#inv-event').value||'0',10); if (!id) return alert('Selecciona un evento'); await generateInventoryCSV(id); });
-  const btnFromLote = document.getElementById('btn-inv-from-lote');
-  if (btnFromLote) btnFromLote.addEventListener('click', importFromLoteToInventory);
-
 }
 
-// Totales y ventas
-function recomputeTotal(){
-  const price = parseFloat($('#sale-price').value||'0');
-  const qty = Math.max(0, parseFloat($('#sale-qty').value||'0'));
-  const discountPerUnit = Math.max(0, parseFloat($('#sale-discount').value||'0'));
-  const courtesy = $('#sale-courtesy').checked;
-  const isReturn = $('#sale-return').checked;
+// --- Productos
+async function onAddProduct(ev){
+  ev.preventDefault();
+  const name = $('#product-name').value.trim();
+  const price = Number($('#product-price').value||0);
+  const category = $('#product-category').value.trim() || 'General';
 
-  // Precio efectivo por unidad luego del descuento fijo
-  const effectiveUnit = Math.max(0, price - discountPerUnit);
-  let total = effectiveUnit * qty;
-
-  if (courtesy) {
-    total = 0;
-  }
-  if (isReturn) {
-    total = -total;
+  if (!name || !price){
+    alert('Nombre y precio son obligatorios');
+    return;
   }
 
-  const t = total.toFixed(2);
-  $('#sale-total').value = t;
-  $('#sticky-total').textContent = t;
+  if (productos.some(p=> normName(p.name)===normName(name))){
+    alert('Ya existe un producto con ese nombre');
+    return;
+  }
+
+  const prod = { name, price, category };
+  const id = await put('products', prod);
+  prod.id = id;
+  productos.push(prod);
+  $('#product-name').value = '';
+  $('#product-price').value = '';
+  $('#product-category').value = '';
+  renderProductos();
 }
 
-async function addSale(){
-  const curId = await getMeta('currentEventId');
-  if (!curId){ alert('Selecciona un evento'); return; }
-  const date = $('#sale-date').value;
-  const productId = parseInt($('#sale-product').value||'0',10);
-  const qtyIn = parseFloat($('#sale-qty').value||'0');
-  const qty = Math.abs(qtyIn);
-  const price = parseFloat($('#sale-price').value||'0');
-  const discountPerUnit = Math.max(0, parseFloat($('#sale-discount').value||'0'));
-  const payment = $('#sale-payment').value;
-  const courtesy = $('#sale-courtesy').checked;
-  const isReturn = $('#sale-return').checked;
-  const customer = (payment==='credito') ? ($('#sale-customer').value||'').trim() : '';
-  const courtesyTo = $('#sale-courtesy-to').value || '';
-  const notes = $('#sale-notes').value || '';
-  if (!date || !productId || !qty) { alert('Completa fecha, producto y cantidad'); return; }
-  if (payment==='credito' && !customer){ alert('Ingresa el nombre del cliente (crédito)'); return; }
+function renderProductos(){
+  const term = normName($('#product-search').value||'');
+  const tbody = $('#products-tbody');
+  tbody.innerHTML = '';
+  productos
+    .filter(p=> !term || normName(p.name).includes(term))
+    .forEach(p=>{
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${p.name}</td>
+        <td>C$ ${p.price.toFixed(2)}</td>
+        <td>${p.category||''}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+}
 
-  const events = await getAll('events');
-  const event = events.find(e=>e.id===curId);
-  if (!event || event.closedAt){ alert('Este evento está cerrado. Reábrelo o activa otro.'); return; }
+// --- Eventos
+async function onAddEvent(ev){
+  ev.preventDefault();
+  const name = $('#event-name').value.trim();
+  const date = $('#event-date').value || new Date().toISOString().slice(0,10);
+  const notes = $('#event-notes').value.trim();
 
-  const products = await getAll('products');
-  const prod = products.find(p=>p.id===productId);
-  const productName = prod ? prod.name : 'N/D';
-
-  if (prod && prod.manageStock!==false && !isReturn){
-    const st = await computeStock(curId, productId);
-    if (st < qty){
-      const go = confirm(`Stock insuficiente de ${productName}: disponible ${st}, intentas vender ${qty}. ¿Continuar de todos modos?`);
-      if (!go) return;
-    }
+  if (!name){
+    alert('El nombre del evento es obligatorio');
+    return;
   }
 
-  let subtotal = price * qty;
-  let discount = discountPerUnit * qty;
-  if (courtesy) {
-    discount = 0;
+  const evObj = { name, date, notes, status:'open' };
+  const id = await put('events', evObj);
+  evObj.id = id;
+  eventos.push(evObj);
+
+  $('#event-name').value = '';
+  $('#event-date').value = '';
+  $('#event-notes').value = '';
+
+  renderEventos();
+  refreshEventUI();
+}
+
+function renderEventos(){
+  const term = normName($('#event-search').value||'');
+  const tbody = $('#events-tbody');
+  tbody.innerHTML = '';
+  eventos
+    .filter(e=> !term || normName(e.name).includes(term))
+    .forEach(e=>{
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${e.name}</td>
+        <td>${e.date}</td>
+        <td>${e.status==='open' ? 'Abierto' : 'Cerrado'}</td>
+        <td>
+          <button data-id="${e.id}" class="btn-small btn-secondary evt-active">Activar</button>
+          <button data-id="${e.id}" class="btn-small btn-warning evt-close">Cerrar</button>
+          <button data-id="${e.id}" class="btn-small btn-danger evt-delete">Eliminar</button>
+        </td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+  $$('#events-tbody .evt-active').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const id = Number(btn.dataset.id);
+      await setMeta('currentEventId', id);
+      refreshEventUI();
+      alert('Evento activado para ventas');
+    });
+  });
+
+  $$('#events-tbody .evt-close').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const id = Number(btn.dataset.id);
+      const ev = eventos.find(x=>x.id===id);
+      if (!ev) return;
+      if (!confirm('¿Cerrar este evento?')) return;
+      ev.status = 'closed';
+      await put('events', ev);
+      renderEventos();
+      refreshEventUI();
+    });
+  });
+
+  $$('#events-tbody .evt-delete').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const id = Number(btn.dataset.id);
+      if (!confirm('¿Eliminar este evento y sus ventas asociadas?')) return;
+      eventos = eventos.filter(x=>x.id!==id);
+      await del('events', id);
+      const toDelete = ventas.filter(v=>v.eventId===id);
+      for (const v of toDelete){
+        await del('sales', v.id);
+      }
+      ventas = ventas.filter(v=>v.eventId!==id);
+      const invToDelete = inventario.filter(inv=>inv.eventId===id);
+      for (const inv of invToDelete){
+        await del('inventory', inv.id);
+      }
+      inventario = inventario.filter(inv=>inv.eventId!==id);
+
+      const cur = await getMeta('currentEventId');
+      if (cur===id){
+        await setMeta('currentEventId', null);
+      }
+
+      renderEventos();
+      renderSummary();
+      renderInventario();
+      refreshEventUI();
+    });
+  });
+}
+
+async function refreshEventUI(){
+  const saleEventSelect = $('#sale-event');
+  const invEventSelect = $('#inv-event');
+  const currentId = await getMeta('currentEventId');
+
+  saleEventSelect.innerHTML = '<option value="">Sin evento activo</option>';
+  eventos.forEach(ev=>{
+    const opt = document.createElement('option');
+    opt.value = ev.id;
+    opt.textContent = ev.name;
+    if (currentId && ev.id===currentId) opt.selected = true;
+    saleEventSelect.appendChild(opt);
+  });
+
+  invEventSelect.innerHTML = '<option value="">Todos</option>';
+  eventos.forEach(ev=>{
+    const opt = document.createElement('option');
+    opt.value = ev.id;
+    opt.textContent = ev.name;
+    invEventSelect.appendChild(opt);
+  });
+
+  const evInfo = $('#current-event-info');
+  const ev = eventos.find(e=>e.id===currentId);
+  if (ev){
+    evInfo.textContent = `Evento activo: ${ev.name} (${ev.status==='open' ? 'Abierto' : 'Cerrado'})`;
+  } else {
+    evInfo.textContent = 'Sin evento activo';
   }
-  let total = courtesy ? 0 : Math.max(0, subtotal - discount);
-  const finalQty = isReturn ? -qty : qty;
-  if (isReturn) total = -total;
 
-  const unitCost = getCostoUnitarioProducto(productName);
-  const lineCost = unitCost * finalQty;
-  const lineProfit = total - lineCost;
+  updateSellEnabled();
+}
 
-  const eventName = event ? event.name : 'General';
-  const now = new Date(); const time = now.toTimeString().slice(0,5);
+function updateSellEnabled(){
+  const btn = $('#sale-finish');
+  getMeta('currentEventId').then(cur=>{
+    btn.disabled = !cur;
+  });
+}
 
-  // Ajustar inventario central de producto terminado
-  try{
-    applyFinishedFromSalePOS({ productName, qty: finalQty }, +1);
-  }catch(e){
-    console.error('No se pudo actualizar inventario central desde venta', e);
+// --- Ventas
+function onAddItemToSale(){
+  const prodSelect = $('#sale-product');
+  const qtyInput = $('#sale-qty');
+  const prodId = Number(prodSelect.value);
+  const qty = Number(qtyInput.value||0);
+
+  if (!prodId || !qty){
+    alert('Seleccione producto y cantidad');
+    return;
   }
 
-  const saleRecord = {
+  const prod = productos.find(p=>p.id===prodId);
+  if (!prod){
+    alert('Producto no encontrado');
+    return;
+  }
+
+  const existing = currentSale.items.find(it=>it.productId===prodId);
+  if (existing){
+    existing.quantity += qty;
+  } else {
+    currentSale.items.push({
+      productId: prodId,
+      name: prod.name,
+      price: prod.price,
+      quantity: qty
+    });
+  }
+
+  qtyInput.value = '';
+  renderCurrentSale();
+}
+
+function renderCurrentSale(){
+  const tbody = $('#sale-items-tbody');
+  tbody.innerHTML = '';
+  let total = 0;
+  currentSale.items.forEach((it, idx)=>{
+    const sub = it.price * it.quantity;
+    total += sub;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${it.name}</td>
+      <td>${it.quantity}</td>
+      <td>C$ ${it.price.toFixed(2)}</td>
+      <td>C$ ${sub.toFixed(2)}</td>
+      <td><button data-idx="${idx}" class="btn-small btn-danger rm-item">X</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+  currentSale.total = total;
+  $('#sale-total').textContent = `Total: C$ ${total.toFixed(2)}`;
+
+  $$('#sale-items-tbody .rm-item').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const idx = Number(btn.dataset.idx);
+      currentSale.items.splice(idx,1);
+      renderCurrentSale();
+    });
+  });
+}
+
+function clearCurrentSale(){
+  currentSale.items = [];
+  currentSale.total = 0;
+  $('#sale-total').textContent = 'Total: C$ 0.00';
+  $('#sale-notes').value = '';
+  renderCurrentSale();
+}
+
+async function finishSale(){
+  const eventId = await getMeta('currentEventId');
+  if (!eventId){
+    alert('Debe haber un evento activo para registrar ventas');
+    return;
+  }
+  if (!currentSale.items.length){
+    alert('No hay productos en la venta');
+    return;
+  }
+
+  const date = new Date().toISOString().slice(0,10);
+  const notes = $('#sale-notes').value.trim();
+  const sale = {
     date,
-    time,
-    eventId:curId,
-    eventName,
-    productId,
-    productName,
-    unitPrice:price,
-    qty:finalQty,
-    discount,
-    payment,
-    courtesy,
-    isReturn,
-    customer,
-    courtesyTo,
-    total,
-    notes,
-    costPerUnit:unitCost,
-    lineCost,
-    lineProfit
+    eventId,
+    items: currentSale.items.map(it=>({
+      productId: it.productId,
+      name: it.name,
+      price: it.price,
+      quantity: it.quantity
+    })),
+    total: currentSale.total,
+    payment: currentSale.payment,
+    notes
   };
 
-  const saleId = await put('sales', saleRecord);
-  saleRecord.id = saleId;
+  const id = await put('sales', sale);
+  sale.id = id;
+  ventas.push(sale);
 
-  // Crear/actualizar asiento contable automático en Finanzas
-  try {
-    await createJournalEntryForSalePOS(saleRecord);
-  } catch (err) {
-    console.error('No se pudo generar el asiento automático de esta venta', err);
+  try{
+    applyFinishedFromSalePOS(sale, +1);
+  }catch(e){
+    console.error('Error aplicando inventario central desde venta POS', e);
   }
 
-  // limpiar campos para el siguiente registro (incluye NOTAS)
-  $('#sale-qty').value=1; 
-  $('#sale-discount').value=0; 
-  if (payment==='credito') $('#sale-customer').value=''; 
-  $('#sale-courtesy-to').value='';
-  $('#sale-notes').value=''; // limpiar notas
-  $('#sale-total').value = (courtesy?0:price).toFixed(2); 
-  $('#sticky-total').textContent = (courtesy?0:price).toFixed(2);
+  try{
+    await createFinanzasEntriesForSalePOS(sale);
+  }catch(e){
+    console.error('Error creando asientos contables desde venta POS', e);
+  }
 
-  await renderDay(); await renderSummary(); await refreshSaleStockLabel(); await renderInventario();
-  toast('Venta agregada');
+  clearCurrentSale();
+  renderSummary();
+  renderInventario();
+  alert('Venta registrada');
 }
 
-document.addEventListener('DOMContentLoaded', init);
+// --- Inventario (por evento)
+function renderInventario(){
+  const eventIdStr = $('#inv-event').value;
+  const eventId = eventIdStr ? Number(eventIdStr) : null;
+  const tbody = $('#inv-tbody');
+  tbody.innerHTML = '';
+
+  const filtered = eventId ? inventario.filter(inv=>inv.eventId===eventId) : inventario.slice();
+  filtered.forEach(inv=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${inv.eventName||''}</td>
+      <td>${inv.productName||''}</td>
+      <td>${inv.quantity||0}</td>
+      <td>${inv.notes||''}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// --- Resumen
+function renderSummary(){
+  const tbody = $('#summary-tbody');
+  tbody.innerHTML = '';
+
+  const byEvent = {};
+  ventas.forEach(v=>{
+    if (!byEvent[v.eventId]) byEvent[v.eventId] = { total:0, count:0 };
+    byEvent[v.eventId].total += v.total;
+    byEvent[v.eventId].count += 1;
+  });
+
+  Object.keys(byEvent).forEach(eventId=>{
+    const ev = eventos.find(e=>e.id===Number(eventId));
+    const info = byEvent[eventId];
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${ev ? ev.name : ('Evento '+eventId)}</td>
+      <td>${info.count}</td>
+      <td>C$ ${info.total.toFixed(2)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// --- Recetas (usadas para cálculo en otros módulos, aquí sólo se leen/guardan)
+function renderRecetasList(){
+  const tbody = $('#recetas-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  recetas.forEach((r, idx)=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${r.name}</td>
+      <td>${r.description||''}</td>
+      <td>${r.litersTotal||0}</td>
+      <td>
+        <button class="btn-small btn-secondary" data-idx="${idx}">Editar</button>
+        <button class="btn-small btn-danger" data-del="${idx}">Borrar</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  $$('#recetas-tbody button[data-idx]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const idx = Number(btn.dataset.idx);
+      const r = recetas[idx];
+      if (!r) return;
+      $('#receta-idx').value = idx;
+      $('#receta-name').value = r.name;
+      $('#receta-desc').value = r.description||'';
+      $('#receta-total').value = r.litersTotal||0;
+      $('#receta-wine').value = r.litersWine||0;
+      $('#receta-vodka').value = r.mlVodka||0;
+      $('#receta-juice').value = r.litersJuice||0;
+      $('#receta-water').value = r.litersWater||0;
+      $('#receta-syrup').value = r.mlSyrup||0;
+    });
+  });
+
+  $$('#recetas-tbody button[data-del]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const idx = Number(btn.dataset.del);
+      if (!confirm('¿Eliminar esta receta?')) return;
+      recetas.splice(idx,1);
+      saveRecetas(recetas);
+      renderRecetasList();
+    });
+  });
+}
+
+function bindRecetasForm(){
+  const form = $('#receta-form');
+  if (!form) return;
+  form.addEventListener('submit', ev=>{
+    ev.preventDefault();
+    const idx = $('#receta-idx').value;
+    const name = $('#receta-name').value.trim();
+    if (!name){
+      alert('Nombre de receta obligatorio');
+      return;
+    }
+    const r = {
+      name,
+      description: $('#receta-desc').value.trim(),
+      litersTotal: Number($('#receta-total').value||0),
+      litersWine: Number($('#receta-wine').value||0),
+      mlVodka: Number($('#receta-vodka').value||0),
+      litersJuice: Number($('#receta-juice').value||0),
+      litersWater: Number($('#receta-water').value||0),
+      mlSyrup: Number($('#receta-syrup').value||0)
+    };
+    if (idx){
+      recetas[Number(idx)] = Object.assign({}, recetas[Number(idx)], r);
+    } else {
+      recetas.push(r);
+    }
+    saveRecetas(recetas);
+    $('#receta-idx').value = '';
+    form.reset();
+    renderRecetasList();
+  });
+}
+
+// --- Inicio
+document.addEventListener('DOMContentLoaded', ()=>{
+  init().then(()=>{
+    renderRecetasList();
+    bindRecetasForm();
+  }).catch(err=>{
+    console.error('Error iniciando POS', err);
+  });
+});
