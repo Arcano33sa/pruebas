@@ -151,3 +151,6 @@ small.muted{color:var(--muted)}
   font-size:11px;
   padding:2px 6px;
 }
+.petty-final h3{
+  margin-top:0;
+}

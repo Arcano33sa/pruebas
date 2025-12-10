@@ -1734,6 +1734,7 @@ async function renderCajaChica(){
     main.classList.add('disabled');
     updatePettySummaryUI(null);
     resetPettyInitialInputs();
+    resetPettyFinalInputs();
     renderPettyMovements(null);
     return;
   }
@@ -1745,6 +1746,7 @@ async function renderCajaChica(){
   const pc = await getPettyCash(evId);
   updatePettySummaryUI(pc);
   fillPettyInitialFromPc(pc);
+  fillPettyFinalFromPc(pc);
   renderPettyMovements(pc);
 }
 
@@ -1799,6 +1801,29 @@ function resetPettyInitialInputs(){
   if (tu) tu.textContent = '0.00';
 }
 
+function resetPettyFinalInputs(){
+  if (typeof NIO_DENOMS === 'undefined' || typeof USD_DENOMS === 'undefined') return;
+
+  NIO_DENOMS.forEach(d=>{
+    const q = document.getElementById('pc-fnio-q-'+d);
+    const s = document.getElementById('pc-fnio-sub-'+d);
+    if (q) q.value = '0';
+    if (s) s.textContent = '0.00';
+  });
+
+  USD_DENOMS.forEach(d=>{
+    const q = document.getElementById('pc-fusd-q-'+d);
+    const s = document.getElementById('pc-fusd-sub-'+d);
+    if (q) q.value = '0';
+    if (s) s.textContent = '0.00';
+  });
+
+  const tn = document.getElementById('pc-fnio-total');
+  const tu = document.getElementById('pc-fusd-total');
+  if (tn) tn.textContent = '0.00';
+  if (tu) tu.textContent = '0.00';
+}
+
 function fillPettyInitialFromPc(pc){
   resetPettyInitialInputs();
   if (!pc || !pc.initial) return;
@@ -1830,6 +1855,37 @@ function fillPettyInitialFromPc(pc){
   if (tu) tu.textContent = fmt(init.totalUsd || 0);
 }
 
+function fillPettyFinalFromPc(pc){
+  resetPettyFinalInputs();
+  if (!pc || !pc.finalCount) return;
+  const fin = normalizePettySection(pc.finalCount);
+
+  NIO_DENOMS.forEach(d=>{
+    const key = String(d);
+    const q = document.getElementById('pc-fnio-q-'+d);
+    const s = document.getElementById('pc-fnio-sub-'+d);
+    const qty = fin.nio[key] || 0;
+    if (q) q.value = String(qty);
+    const sub = d * qty;
+    if (s) s.textContent = fmt(sub);
+  });
+
+  USD_DENOMS.forEach(d=>{
+    const key = String(d);
+    const q = document.getElementById('pc-fusd-q-'+d);
+    const s = document.getElementById('pc-fusd-sub-'+d);
+    const qty = fin.usd[key] || 0;
+    if (q) q.value = String(qty);
+    const sub = d * qty;
+    if (s) s.textContent = fmt(sub);
+  });
+
+  const tn = document.getElementById('pc-fnio-total');
+  const tu = document.getElementById('pc-fusd-total');
+  if (tn) tn.textContent = fmt(fin.totalNio || 0);
+  if (tu) tu.textContent = fmt(fin.totalUsd || 0);
+}
+
 function recalcPettyInitialTotalsFromInputs(){
   if (typeof NIO_DENOMS === 'undefined' || typeof USD_DENOMS === 'undefined') return;
   let totalNio = 0;
@@ -1857,6 +1913,37 @@ function recalcPettyInitialTotalsFromInputs(){
 
   const tn = document.getElementById('pc-nio-total');
   const tu = document.getElementById('pc-usd-total');
+  if (tn) tn.textContent = fmt(totalNio);
+  if (tu) tu.textContent = fmt(totalUsd);
+}
+
+function recalcPettyFinalTotalsFromInputs(){
+  if (typeof NIO_DENOMS === 'undefined' || typeof USD_DENOMS === 'undefined') return;
+  let totalNio = 0;
+  let totalUsd = 0;
+
+  NIO_DENOMS.forEach(d=>{
+    const q = document.getElementById('pc-fnio-q-'+d);
+    const s = document.getElementById('pc-fnio-sub-'+d);
+    const raw = q ? Number(q.value || 0) : 0;
+    const qty = (Number.isFinite(raw) && raw > 0) ? raw : 0;
+    const sub = d * qty;
+    if (s) s.textContent = fmt(sub);
+    totalNio += sub;
+  });
+
+  USD_DENOMS.forEach(d=>{
+    const q = document.getElementById('pc-fusd-q-'+d);
+    const s = document.getElementById('pc-fusd-sub-'+d);
+    const raw = q ? Number(q.value || 0) : 0;
+    const qty = (Number.isFinite(raw) && raw > 0) ? raw : 0;
+    const sub = d * qty;
+    if (s) s.textContent = fmt(sub);
+    totalUsd += sub;
+  });
+
+  const tn = document.getElementById('pc-fnio-total');
+  const tu = document.getElementById('pc-fusd-total');
   if (tn) tn.textContent = fmt(totalNio);
   if (tu) tu.textContent = fmt(totalUsd);
 }
@@ -1896,6 +1983,43 @@ async function onSavePettyInitial(){
   updatePettySummaryUI(pc);
   fillPettyInitialFromPc(pc);
   toast('Saldo inicial de Caja Chica guardado');
+}
+
+async function onSavePettyFinal(){
+  const evId = await getMeta('currentEventId');
+  if (!evId){
+    alert('Debes activar un evento en la pestaña Vender antes de guardar el arqueo final.');
+    return;
+  }
+  const pc = await getPettyCash(evId);
+
+  const nio = {};
+  const usd = {};
+
+  NIO_DENOMS.forEach(d=>{
+    const q = document.getElementById('pc-fnio-q-'+d);
+    const raw = q ? Number(q.value || 0) : 0;
+    const qty = (Number.isFinite(raw) && raw > 0) ? raw : 0;
+    nio[String(d)] = qty;
+  });
+
+  USD_DENOMS.forEach(d=>{
+    const q = document.getElementById('pc-fusd-q-'+d);
+    const raw = q ? Number(q.value || 0) : 0;
+    const qty = (Number.isFinite(raw) && raw > 0) ? raw : 0;
+    usd[String(d)] = qty;
+  });
+
+  pc.finalCount = normalizePettySection({
+    nio,
+    usd,
+    savedAt: new Date().toISOString()
+  });
+
+  await savePettyCash(pc);
+  updatePettySummaryUI(pc);
+  fillPettyFinalFromPc(pc);
+  toast('Arqueo final de Caja Chica guardado');
 }
 
 function renderPettyMovements(pc){
@@ -1997,24 +2121,45 @@ async function onDeletePettyMovement(id){
 }
 
 function bindCajaChicaEvents(){
-  const inputs = document.querySelectorAll('#pc-table-nio input[type="number"], #pc-table-usd input[type="number"]');
-  inputs.forEach(inp=>{
+  const inputsInit = document.querySelectorAll('#pc-table-nio input[type="number"], #pc-table-usd input[type="number"]');
+  inputsInit.forEach(inp=>{
     inp.addEventListener('input', recalcPettyInitialTotalsFromInputs);
   });
 
-  const btnSave = document.getElementById('pc-btn-save-initial');
-  if (btnSave){
-    btnSave.addEventListener('click', (e)=>{
+  const inputsFinal = document.querySelectorAll('#pc-table-fnio input[type="number"], #pc-table-fusd input[type="number"]');
+  inputsFinal.forEach(inp=>{
+    inp.addEventListener('input', recalcPettyFinalTotalsFromInputs);
+  });
+
+  const btnSaveInit = document.getElementById('pc-btn-save-initial');
+  if (btnSaveInit){
+    btnSaveInit.addEventListener('click', (e)=>{
       e.preventDefault();
       onSavePettyInitial();
     });
   }
 
-  const btnClear = document.getElementById('pc-btn-clear-initial');
-  if (btnClear){
-    btnClear.addEventListener('click', (e)=>{
+  const btnClearInit = document.getElementById('pc-btn-clear-initial');
+  if (btnClearInit){
+    btnClearInit.addEventListener('click', (e)=>{
       e.preventDefault();
       resetPettyInitialInputs();
+    });
+  }
+
+  const btnSaveFinal = document.getElementById('pc-btn-save-final');
+  if (btnSaveFinal){
+    btnSaveFinal.addEventListener('click', (e)=>{
+      e.preventDefault();
+      onSavePettyFinal();
+    });
+  }
+
+  const btnClearFinal = document.getElementById('pc-btn-clear-final');
+  if (btnClearFinal){
+    btnClearFinal.addEventListener('click', (e)=>{
+      e.preventDefault();
+      resetPettyFinalInputs();
     });
   }
 

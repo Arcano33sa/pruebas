@@ -306,7 +306,58 @@
           </tbody>
         </table>
       </div>
-    </div>
+    
+      <div class="card petty-final">
+        <h3>Arqueo final</h3>
+        <div class="row">
+          <div class="petty-block">
+            <h4>Córdobas (C$)</h4>
+            <table class="pc-table" id="pc-table-fnio">
+              <thead>
+                <tr><th>Denominación</th><th>Cantidad</th><th>Subtotal</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>C$ 1</td><td><input id="pc-fnio-q-1" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-1">0.00</span></td></tr>
+                <tr><td>C$ 5</td><td><input id="pc-fnio-q-5" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-5">0.00</span></td></tr>
+                <tr><td>C$ 10</td><td><input id="pc-fnio-q-10" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-10">0.00</span></td></tr>
+                <tr><td>C$ 20</td><td><input id="pc-fnio-q-20" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-20">0.00</span></td></tr>
+                <tr><td>C$ 50</td><td><input id="pc-fnio-q-50" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-50">0.00</span></td></tr>
+                <tr><td>C$ 100</td><td><input id="pc-fnio-q-100" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-100">0.00</span></td></tr>
+                <tr><td>C$ 200</td><td><input id="pc-fnio-q-200" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-200">0.00</span></td></tr>
+                <tr><td>C$ 500</td><td><input id="pc-fnio-q-500" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-500">0.00</span></td></tr>
+                <tr><td>C$ 1000</td><td><input id="pc-fnio-q-1000" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-1000">0.00</span></td></tr>
+              </tbody>
+              <tfoot>
+                <tr><td colspan="2">Total final C$</td><td>C$ <span id="pc-fnio-total">0.00</span></td></tr>
+              </tfoot>
+            </table>
+          </div>
+          <div class="petty-block">
+            <h4>Dólares (US$)</h4>
+            <table class="pc-table" id="pc-table-fusd">
+              <thead>
+                <tr><th>Denominación</th><th>Cantidad</th><th>Subtotal</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>US$ 1</td><td><input id="pc-fusd-q-1" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-1">0.00</span></td></tr>
+                <tr><td>US$ 5</td><td><input id="pc-fusd-q-5" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-5">0.00</span></td></tr>
+                <tr><td>US$ 10</td><td><input id="pc-fusd-q-10" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-10">0.00</span></td></tr>
+                <tr><td>US$ 20</td><td><input id="pc-fusd-q-20" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-20">0.00</span></td></tr>
+                <tr><td>US$ 50</td><td><input id="pc-fusd-q-50" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-50">0.00</span></td></tr>
+                <tr><td>US$ 100</td><td><input id="pc-fusd-q-100" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-100">0.00</span></td></tr>
+              </tbody>
+              <tfoot>
+                <tr><td colspan="2">Total final US$</td><td>US$ <span id="pc-fusd-total">0.00</span></td></tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+        <div class="row">
+          <button id="pc-btn-save-final" class="btn-ok">Guardar arqueo final</button>
+          <button id="pc-btn-clear-final" class="btn-warn">Limpiar</button>
+        </div>
+      </div>
+</div>
   </section>
 
 <section id="tab-resumen" class="tab card" style="display:none">
