@@ -1441,6 +1441,167 @@ async function generateCorteCSV(eventId){
   downloadCSV(`corte_${safeName}.csv`, rows);
 }
 
+async function exportEventExcel(eventId){
+  if (typeof XLSX === 'undefined'){
+    alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Revisa tu conexión a internet.');
+    return;
+  }
+
+  const events = await getAll('events');
+  const ev = events.find(e=>e.id===eventId);
+  if (!ev){
+    alert('Evento no encontrado');
+    return;
+  }
+
+  const allSales = await getAll('sales');
+  const sales = allSales.filter(s=>s.eventId===eventId);
+
+  const pc = await getPettyCash(eventId);
+  const summary = computePettyCashSummary(pc || null);
+  const init = pc && pc.initial ? normalizePettySection(pc.initial) : normalizePettySection(null);
+  const fin  = pc && pc.finalCount ? normalizePettySection(pc.finalCount) : normalizePettySection(null);
+  const movs = pc && Array.isArray(pc.movements) ? pc.movements.slice() : [];
+
+  // --- Hoja 1: Resumen del evento ---
+  const resumenRows = [];
+  resumenRows.push(['Evento', ev.name || '']);
+  resumenRows.push(['ID', ev.id]);
+  resumenRows.push(['Estado', ev.closedAt ? 'Cerrado' : 'Abierto']);
+  resumenRows.push(['Creado', ev.createdAt ? new Date(ev.createdAt).toLocaleString() : '']);
+  resumenRows.push(['Cerrado', ev.closedAt ? new Date(ev.closedAt).toLocaleString() : '']);
+  resumenRows.push([]);
+
+  const totalVentas = sales.reduce((acc,s)=>acc + (s.total || 0), 0);
+  resumenRows.push(['Resumen de ventas']);
+  resumenRows.push(['Total vendido C$', totalVentas]);
+
+  const byPay = sales.reduce((m,s)=>{
+    const pay = s.payment || 'desconocido';
+    m[pay] = (m[pay] || 0) + (s.total || 0);
+    return m;
+  },{});
+  resumenRows.push([]);
+  resumenRows.push(['Cobros por forma de pago']);
+  resumenRows.push(['Efectivo C$', byPay.efectivo || 0]);
+  resumenRows.push(['Transferencia C$', byPay.transferencia || 0]);
+  resumenRows.push(['Crédito C$', byPay.credito || 0]);
+
+  resumenRows.push([]);
+  resumenRows.push(['Caja Chica - C$']);
+  resumenRows.push(['Saldo inicial C$', summary.nio.initial]);
+  resumenRows.push(['Entradas C$', summary.nio.entradas]);
+  resumenRows.push(['Salidas C$', summary.nio.salidas]);
+  resumenRows.push(['Saldo teórico C$', summary.nio.teorico]);
+  resumenRows.push(['Saldo final contado C$', summary.nio.final != null ? summary.nio.final : '—']);
+  resumenRows.push(['Diferencia C$', summary.nio.diferencia != null ? summary.nio.diferencia : '—']);
+
+  resumenRows.push([]);
+  resumenRows.push(['Caja Chica - US$']);
+  resumenRows.push(['Saldo inicial US$', summary.usd.initial]);
+  resumenRows.push(['Entradas US$', summary.usd.entradas]);
+  resumenRows.push(['Salidas US$', summary.usd.salidas]);
+  resumenRows.push(['Saldo teórico US$', summary.usd.teorico]);
+  resumenRows.push(['Saldo final contado US$', summary.usd.final != null ? summary.usd.final : '—']);
+  resumenRows.push(['Diferencia US$', summary.usd.diferencia != null ? summary.usd.diferencia : '—']);
+
+  const wb = XLSX.utils.book_new();
+  const wsResumen = XLSX.utils.aoa_to_sheet(resumenRows);
+  XLSX.utils.book_append_sheet(wb, wsResumen, 'Resumen_Evento');
+
+  // --- Hoja 2: CajaChica_Detalle ---
+  const detRows = [];
+
+  // Saldo inicial C$
+  detRows.push(['Saldo inicial C$']);
+  detRows.push(['Denominación','Cantidad','Subtotal C$']);
+  for (const d of NIO_DENOMS){
+    const qty = init.nio[String(d)] || 0;
+    const sub = d * qty;
+    detRows.push([d, qty, sub]);
+  }
+  detRows.push(['', '', '']);
+  detRows.push(['Total inicial C$', '', init.totalNio || 0]);
+
+  detRows.push([]);
+  // Saldo inicial US$
+  detRows.push(['Saldo inicial US$']);
+  detRows.push(['Denominación','Cantidad','Subtotal US$']);
+  for (const d of USD_DENOMS){
+    const qty = init.usd[String(d)] || 0;
+    const sub = d * qty;
+    detRows.push([d, qty, sub]);
+  }
+  detRows.push(['', '', '']);
+  detRows.push(['Total inicial US$', '', init.totalUsd || 0]);
+  detRows.push(['Fecha/hora saldo inicial', init.savedAt || '']);
+
+  detRows.push([]);
+  // Movimientos
+  detRows.push(['Movimientos de Caja Chica']);
+  detRows.push(['Fecha','Tipo','Moneda','Monto','Descripción']);
+  for (const m of movs){
+    const tipoText = m.type === 'salida' ? 'Salida' : 'Entrada';
+    const monedaText = m.currency === 'USD' ? 'US$' : 'C$';
+    detRows.push([m.date || '', tipoText, monedaText, m.amount || 0, m.description || '']);
+  }
+
+  detRows.push([]);
+  // Arqueo final C$
+  detRows.push(['Arqueo final C$']);
+  detRows.push(['Denominación','Cantidad','Subtotal C$']);
+  for (const d of NIO_DENOMS){
+    const qty = fin.nio[String(d)] || 0;
+    const sub = d * qty;
+    detRows.push([d, qty, sub]);
+  }
+  detRows.push(['', '', '']);
+  detRows.push(['Total final C$', '', fin.totalNio || 0]);
+
+  detRows.push([]);
+  // Arqueo final US$
+  detRows.push(['Arqueo final US$']);
+  detRows.push(['Denominación','Cantidad','Subtotal US$']);
+  for (const d of USD_DENOMS){
+    const qty = fin.usd[String(d)] || 0;
+    const sub = d * qty;
+    detRows.push([d, qty, sub]);
+  }
+  detRows.push(['', '', '']);
+  detRows.push(['Total final US$', '', fin.totalUsd || 0]);
+  detRows.push(['Fecha/hora arqueo final', fin.savedAt || '']);
+
+  const wsCaja = XLSX.utils.aoa_to_sheet(detRows);
+  XLSX.utils.book_append_sheet(wb, wsCaja, 'CajaChica_Detalle');
+
+  // --- Hoja 3 opcional: Ventas_Detalle ---
+  const ventasRows = [];
+  ventasRows.push(['id','fecha','hora','producto','cantidad','PU_C$','descuento_C$','total_C$','pago','cortesia','devolucion','cliente','cortesia_a','notas']);
+  for (const s of sales){
+    ventasRows.push([
+      s.id,
+      s.date || '',
+      s.time || '',
+      s.productName || '',
+      s.qty || 0,
+      s.unitPrice || 0,
+      s.discount || 0,
+      s.total || 0,
+      s.payment || '',
+      s.courtesy ? 1 : 0,
+      s.isReturn ? 1 : 0,
+      s.customer || '',
+      s.courtesyTo || '',
+      s.notes || ''
+    ]);
+  }
+  const wsVentas = XLSX.utils.aoa_to_sheet(ventasRows);
+  XLSX.utils.book_append_sheet(wb, wsVentas, 'Ventas_Detalle');
+
+  const safeName = (ev.name || 'evento').replace(/[^a-z0-9_\- ]/gi,'_');
+  XLSX.writeFile(wb, `evento_${safeName}.xlsx`);
+}
+
 // --- Close / Reopen / Activate / Delete ---
 async function closeEvent(eventId){
   const events = await getAll('events');
@@ -1567,6 +1728,14 @@ async function init(){
   // Eventos tab actions
   $('#filtro-eventos').addEventListener('change', renderEventos);
   $('#btn-exportar-eventos').addEventListener('click', async()=>{ const events = await getAll('events'); const rows = [['id','evento','estado','creado','cerrado','total']]; for (const ev of events){ rows.push([ ev.id, ev.name, ev.closedAt?'cerrado':'abierto', ev.createdAt||'', ev.closedAt||'', 0 ]); } downloadCSV('eventos.csv', rows); });
+  $('#btn-exportar-evento-excel').addEventListener('click', async()=>{
+    const evId = await getMeta('currentEventId');
+    if (!evId){
+      alert('Debes activar un evento en la pestaña Vender antes de exportar a Excel.');
+      return;
+    }
+    await exportEventExcel(evId);
+  });
   $('#tbl-eventos').addEventListener('click', async(e)=>{ const btn = e.target.closest('button'); if (!btn) return; const id = parseInt(btn.dataset.id,10);
     if (btn.classList.contains('act-ver')) await openEventView(id);
     else if (btn.classList.contains('act-activar')) await activateEvent(id);

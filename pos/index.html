@@ -162,6 +162,7 @@
         <option value="cerrados">Solo cerrados</option>
       </select>
       <button id="btn-exportar-eventos" class="btn-primary">Exportar lista (CSV)</button>
+      <button id="btn-exportar-evento-excel" class="btn-ok">Exportar evento activo (Excel)</button>
     </div>
     <table id="tbl-eventos">
       <thead><tr><th>Evento</th><th>Estado</th><th>Creado</th><th>Cerrado</th><th>Total</th><th>Acciones</th></tr></thead>
@@ -472,6 +473,7 @@
   <button data-tab="ayuda">Ayuda</button>
 </nav>
 
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="app.js?v=3.18"></script>
 <script>
   if ('serviceWorker' in navigator) { navigator.serviceWorker.register('./sw.js?v=3.18'); }
