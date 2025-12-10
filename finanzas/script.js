@@ -301,7 +301,11 @@ async function getAllFinData() {
 
   const linesByEntry = new Map();
   for (const ln of lines) {
-    const idEntry = ln.idEntry;
+    const rawId = (ln.idEntry != null && ln.idEntry !== undefined)
+      ? ln.idEntry
+      : ln.entryId;
+    if (rawId == null || rawId === undefined) continue;
+    const idEntry = Number(rawId);
     if (!linesByEntry.has(idEntry)) linesByEntry.set(idEntry, []);
     linesByEntry.get(idEntry).push(ln);
   }
@@ -327,7 +331,7 @@ function matchEvent(entry, eventFilter) {
 
 function filterEntriesByDateAndEvent(entries, { desde, hasta, evento }) {
   return entries.filter(e => {
-    const f = e.fecha || '';
+    const f = e.fecha || e.date || '';
     if (desde && f < desde) return false;
     if (hasta && f > hasta) return false;
     if (!matchEvent(e, evento)) return false;
@@ -373,7 +377,7 @@ function calcResultadosByEventInRange(data, desde, hasta) {
   const map = new Map(); // key: nombreEvento, value: {ingresos, costos, gastos}
 
   for (const e of entries) {
-    const f = e.fecha || '';
+    const f = e.fecha || e.date || '';
     if (desde && f < desde) continue;
     if (hasta && f > hasta) continue;
 
@@ -413,7 +417,7 @@ function calcBalanceGroupsUntilDate(data, corte) {
   let patrimonio = 0;
 
   for (const e of entries) {
-    const f = e.fecha || '';
+    const f = e.fecha || e.date || '';
     if (f && f > cutoff) continue;
     const lines = linesByEntry.get(e.id) || [];
     for (const ln of lines) {
@@ -443,7 +447,7 @@ function calcCajaBancoUntilDate(data, corte) {
   let banco = 0;
 
   for (const e of entries) {
-    const f = e.fecha || '';
+    const f = e.fecha || e.date || '';
     if (f && f > cutoff) continue;
     const lines = linesByEntry.get(e.id) || [];
     for (const ln of lines) {
@@ -1019,8 +1023,8 @@ function renderDiario(data) {
   const { entries, linesByEntry } = data;
 
   const sorted = [...entries].sort((a, b) => {
-    const fa = a.fecha || '';
-    const fb = b.fecha || '';
+    const fa = a.fecha || a.date || '';
+    const fb = b.fecha || b.date || '';
     if (fa === fb) return (a.id || 0) - (b.id || 0);
     return fa.localeCompare(fb);
   });
@@ -1043,7 +1047,7 @@ function renderDiario(data) {
 
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${e.fecha || ''}</td>
+      <td>${e.fecha || e.date || ''}</td>
       <td>${e.descripcion || ''}</td>
       <td>${tipoMov}</td>
       <td>${(e.evento || '').trim() || '—'}</td>
@@ -1068,7 +1072,7 @@ function openDetalleModal(entryId) {
   if (!modal || !meta || !tbody) return;
 
   meta.innerHTML = `
-    <p><strong>Fecha:</strong> ${entry.fecha || ''}</p>
+    <p><strong>Fecha:</strong> ${entry.fecha || entry.date || ''}</p>
     <p><strong>Descripción:</strong> ${entry.descripcion || ''}</p>
     <p><strong>Tipo:</strong> ${entry.tipoMovimiento || ''}</p>
     <p><strong>Evento:</strong> ${(entry.evento || '').trim() || '—'}</p>
