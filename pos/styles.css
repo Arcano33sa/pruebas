@@ -79,8 +79,6 @@ small.muted{color:var(--muted)}
 .modal .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .modal table{max-width:100%}
 .modal .scroll{max-height:40vh;overflow:auto;border:1px solid #2a2a2a;border-radius:10px;padding:6px}
-
-
 /* Caja Chica POS */
 .info-strong{
   font-size:14px;

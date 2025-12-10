@@ -169,181 +169,97 @@
     </table>
   </section>
 
-
+  
   <section id="tab-caja" class="tab card" style="display:none">
     <h2>Caja Chica</h2>
 
-    <div id="pc-event-block" class="card">
-      <div class="row">
-        <div>
-          <label>Evento activo</label>
-          <div id="pc-event-info" class="info-strong">Sin evento activo</div>
-        </div>
-        <div class="info">
-          <small>Caja Chica funciona por evento. Activa un evento en la pestaña <b>Vender</b> para comenzar.</small>
-        </div>
-      </div>
-      <div id="pc-no-event-note" class="disabled-note" style="display:none">
-        Sin evento activo. Crea o selecciona uno en la pestaña <b>Vender</b>.
-      </div>
-    </div>
+    <p><span id="pc-event-info" class="info-strong">Evento activo: —</span></p>
+    <p id="pc-no-event-note" class="disabled-note" style="display:none">Activa un evento en la pestaña Vender para usar Caja Chica.</p>
 
     <div id="pc-main" class="pc-main">
-      <div class="card petty-summary">
-        <h3>Resumen de Caja Chica</h3>
-        <div class="row">
-          <div class="card petty-block">
-            <h4>Córdobas (C$)</h4>
-            <p><small>Saldo inicial:</small> C$ <span id="pc-nio-inicial">0.00</span></p>
-            <p><small>Entradas:</small> C$ <span id="pc-nio-entradas">0.00</span></p>
-            <p><small>Salidas:</small> C$ <span id="pc-nio-salidas">0.00</span></p>
-            <p><small>Saldo teórico:</small> C$ <span id="pc-nio-teorico">0.00</span></p>
-            <p><small>Saldo final contado:</small> C$ <span id="pc-nio-final">—</span></p>
-            <p><small>Diferencia:</small> C$ <span id="pc-nio-diferencia">—</span></p>
-          </div>
-          <div class="card petty-block">
-            <h4>Dólares (US$)</h4>
-            <p><small>Saldo inicial:</small> US$ <span id="pc-usd-inicial">0.00</span></p>
-            <p><small>Entradas:</small> US$ <span id="pc-usd-entradas">0.00</span></p>
-            <p><small>Salidas:</small> US$ <span id="pc-usd-salidas">0.00</span></p>
-            <p><small>Saldo teórico:</small> US$ <span id="pc-usd-teorico">0.00</span></p>
-            <p><small>Saldo final contado:</small> US$ <span id="pc-usd-final">—</span></p>
-            <p><small>Diferencia:</small> US$ <span id="pc-usd-diferencia">—</span></p>
-          </div>
+      <div class="row petty-summary">
+        <div class="card">
+          <h3>Córdobas (C$)</h3>
+          <table class="pc-table">
+            <tbody>
+              <tr><th>Saldo inicial</th><td>C$ <span id="pc-nio-inicial">0.00</span></td></tr>
+              <tr><th>Entradas</th><td>C$ <span id="pc-nio-entradas">0.00</span></td></tr>
+              <tr><th>Salidas</th><td>C$ <span id="pc-nio-salidas">0.00</span></td></tr>
+              <tr><th>Saldo teórico</th><td>C$ <span id="pc-nio-teorico">0.00</span></td></tr>
+              <tr><th>Saldo final contado</th><td>C$ <span id="pc-nio-final">—</span></td></tr>
+              <tr><th>Diferencia</th><td>C$ <span id="pc-nio-diferencia">—</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card">
+          <h3>Dólares (US$)</h3>
+          <table class="pc-table">
+            <tbody>
+              <tr><th>Saldo inicial</th><td>US$ <span id="pc-usd-inicial">0.00</span></td></tr>
+              <tr><th>Entradas</th><td>US$ <span id="pc-usd-entradas">0.00</span></td></tr>
+              <tr><th>Salidas</th><td>US$ <span id="pc-usd-salidas">0.00</span></td></tr>
+              <tr><th>Saldo teórico</th><td>US$ <span id="pc-usd-teorico">0.00</span></td></tr>
+              <tr><th>Saldo final contado</th><td>US$ <span id="pc-usd-final">—</span></td></tr>
+              <tr><th>Diferencia</th><td>US$ <span id="pc-usd-diferencia">—</span></td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
       <div class="card petty-inicial">
         <h3>Saldo inicial</h3>
         <div class="row">
-          <div>
+          <div class="petty-block">
             <h4>Córdobas (C$)</h4>
             <table class="pc-table" id="pc-table-nio">
               <thead>
-                <tr>
-                  <th>Denominación</th>
-                  <th>Cantidad</th>
-                  <th>Subtotal</th>
-                </tr>
+                <tr><th>Denominación</th><th>Cantidad</th><th>Subtotal</th></tr>
               </thead>
               <tbody>
-                <tr>
-                  <td>1 C$</td>
-                  <td><input id="pc-nio-q-1" type="number" inputmode="numeric" min="0" step="1" value="0"></td>
-                  <td>C$ <span id="pc-nio-sub-1">0.00</span></td>
-                </tr>
-                <tr>
-                  <td>5 C$</td>
-                  <td><input id="pc-nio-q-5" type="number" inputmode="numeric" min="0" step="1" value="0"></td>
-                  <td>C$ <span id="pc-nio-sub-5">0.00</span></td>
-                </tr>
-                <tr>
-                  <td>10 C$</td>
-                  <td><input id="pc-nio-q-10" type="number" inputmode="numeric" min="0" step="1" value="0"></td>
-                  <td>C$ <span id="pc-nio-sub-10">0.00</span></td>
-                </tr>
-                <tr>
-                  <td>20 C$</td>
-                  <td><input id="pc-nio-q-20" type="number" inputmode="numeric" min="0" step="1" value="0"></td>
-                  <td>C$ <span id="pc-nio-sub-20">0.00</span></td>
-                </tr>
-                <tr>
-                  <td>50 C$</td>
-                  <td><input id="pc-nio-q-50" type="number" inputmode="numeric" min="0" step="1" value="0"></td>
-                  <td>C$ <span id="pc-nio-sub-50">0.00</span></td>
-                </tr>
-                <tr>
-                  <td>100 C$</td>
-                  <td><input id="pc-nio-q-100" type="number" inputmode="numeric" min="0" step="1" value="0"></td>
-                  <td>C$ <span id="pc-nio-sub-100">0.00</span></td>
-                </tr>
-                <tr>
-                  <td>200 C$</td>
-                  <td><input id="pc-nio-q-200" type="number" inputmode="numeric" min="0" step="1" value="0"></td>
-                  <td>C$ <span id="pc-nio-sub-200">0.00</span></td>
-                </tr>
-                <tr>
-                  <td>1000 C$</td>
-                  <td><input id="pc-nio-q-1000" type="number" inputmode="numeric" min="0" step="1" value="0"></td>
-                  <td>C$ <span id="pc-nio-sub-1000">0.00</span></td>
-                </tr>
+                <tr><td>C$ 1</td><td><input id="pc-nio-q-1" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-1">0.00</span></td></tr>
+                <tr><td>C$ 5</td><td><input id="pc-nio-q-5" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-5">0.00</span></td></tr>
+                <tr><td>C$ 10</td><td><input id="pc-nio-q-10" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-10">0.00</span></td></tr>
+                <tr><td>C$ 20</td><td><input id="pc-nio-q-20" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-20">0.00</span></td></tr>
+                <tr><td>C$ 50</td><td><input id="pc-nio-q-50" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-50">0.00</span></td></tr>
+                <tr><td>C$ 100</td><td><input id="pc-nio-q-100" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-100">0.00</span></td></tr>
+                <tr><td>C$ 200</td><td><input id="pc-nio-q-200" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-200">0.00</span></td></tr>
+                <tr><td>C$ 500</td><td><input id="pc-nio-q-500" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-500">0.00</span></td></tr>
+                <tr><td>C$ 1000</td><td><input id="pc-nio-q-1000" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-1000">0.00</span></td></tr>
               </tbody>
               <tfoot>
-                <tr>
-                  <td colspan="2"><strong>Total inicial C$</strong></td>
-                  <td><strong>C$ <span id="pc-nio-total">0.00</span></strong></td>
-                </tr>
+                <tr><td colspan="2">Total inicial C$</td><td>C$ <span id="pc-nio-total">0.00</span></td></tr>
               </tfoot>
             </table>
           </div>
-          <div>
+          <div class="petty-block">
             <h4>Dólares (US$)</h4>
             <table class="pc-table" id="pc-table-usd">
               <thead>
-                <tr>
-                  <th>Denominación</th>
-                  <th>Cantidad</th>
-                  <th>Subtotal</th>
-                </tr>
+                <tr><th>Denominación</th><th>Cantidad</th><th>Subtotal</th></tr>
               </thead>
               <tbody>
-                <tr>
-                  <td>1 US$</td>
-                  <td><input id="pc-usd-q-1" type="number" inputmode="numeric" min="0" step="1" value="0"></td>
-                  <td>US$ <span id="pc-usd-sub-1">0.00</span></td>
-                </tr>
-                <tr>
-                  <td>5 US$</td>
-                  <td><input id="pc-usd-q-5" type="number" inputmode="numeric" min="0" step="1" value="0"></td>
-                  <td>US$ <span id="pc-usd-sub-5">0.00</span></td>
-                </tr>
-                <tr>
-                  <td>10 US$</td>
-                  <td><input id="pc-usd-q-10" type="number" inputmode="numeric" min="0" step="1" value="0"></td>
-                  <td>US$ <span id="pc-usd-sub-10">0.00</span></td>
-                </tr>
-                <tr>
-                  <td>20 US$</td>
-                  <td><input id="pc-usd-q-20" type="number" inputmode="numeric" min="0" step="1" value="0"></td>
-                  <td>US$ <span id="pc-usd-sub-20">0.00</span></td>
-                </tr>
-                <tr>
-                  <td>50 US$</td>
-                  <td><input id="pc-usd-q-50" type="number" inputmode="numeric" min="0" step="1" value="0"></td>
-                  <td>US$ <span id="pc-usd-sub-50">0.00</span></td>
-                </tr>
-                <tr>
-                  <td>100 US$</td>
-                  <td><input id="pc-usd-q-100" type="number" inputmode="numeric" min="0" step="1" value="0"></td>
-                  <td>US$ <span id="pc-usd-sub-100">0.00</span></td>
-                </tr>
+                <tr><td>US$ 1</td><td><input id="pc-usd-q-1" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-1">0.00</span></td></tr>
+                <tr><td>US$ 5</td><td><input id="pc-usd-q-5" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-5">0.00</span></td></tr>
+                <tr><td>US$ 10</td><td><input id="pc-usd-q-10" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-10">0.00</span></td></tr>
+                <tr><td>US$ 20</td><td><input id="pc-usd-q-20" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-20">0.00</span></td></tr>
+                <tr><td>US$ 50</td><td><input id="pc-usd-q-50" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-50">0.00</span></td></tr>
+                <tr><td>US$ 100</td><td><input id="pc-usd-q-100" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-100">0.00</span></td></tr>
               </tbody>
               <tfoot>
-                <tr>
-                  <td colspan="2"><strong>Total inicial US$</strong></td>
-                  <td><strong>US$ <span id="pc-usd-total">0.00</span></strong></td>
-                </tr>
+                <tr><td colspan="2">Total inicial US$</td><td>US$ <span id="pc-usd-total">0.00</span></td></tr>
               </tfoot>
             </table>
           </div>
         </div>
-
         <div class="row">
-          <div>
-            <button id="pc-btn-save-initial" class="btn-primary">Guardar saldo inicial</button>
-          </div>
-          <div style="text-align:right">
-            <button id="pc-btn-clear-initial" class="btn-warn btn-ghost">Limpiar</button>
-          </div>
+          <button id="pc-btn-save-initial" class="btn-ok">Guardar saldo inicial</button>
+          <button id="pc-btn-clear-initial" class="btn-warn">Limpiar</button>
         </div>
-        <div class="info"><small>El saldo inicial se guarda por evento. Podés actualizarlo cuando sea necesario.</small></div>
       </div>
-
-      <!-- Bloques de Movimientos y Arqueo final se implementan en CC.3 y CC.4 -->
     </div>
   </section>
 
-  <section id="tab-resumen" class="tab card" style="display:none">
+<section id="tab-resumen" class="tab card" style="display:none">
     <h2>Resumen</h2>
     <div class="card">
       <strong>Total general: C$ <span id="grand-total">0</span></strong>
