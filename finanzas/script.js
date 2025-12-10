@@ -968,6 +968,245 @@ function renderFlujoCaja(data) {
   }
 }
 
+
+/* ---------- Exportar a Excel: Diario, ER, BG, Flujo de Caja ---------- */
+
+async function exportDiarioExcel() {
+  if (typeof XLSX === 'undefined') {
+    alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Revisa tu conexión a internet.');
+    return;
+  }
+  if (!finCachedData) {
+    await refreshAllFin();
+  }
+  const data = finCachedData;
+  if (!data || !Array.isArray(data.entries) || !data.entries.length) {
+    alert('No hay movimientos en el Diario para exportar.');
+    return;
+  }
+
+  const tipoFilter = ($('#filtro-tipo')?.value) || 'todos';
+  const eventoFilter = ($('#filtro-evento-diario')?.value) || 'ALL';
+  const origenFilter = ($('#filtro-origen')?.value) || 'todos';
+
+  const { entries, linesByEntry } = data;
+
+  const sorted = [...entries].sort((a, b) => {
+    const fa = a.fecha || a.date || '';
+    const fb = b.fecha || b.date || '';
+    if (fa === fb) return (a.id || 0) - (b.id || 0);
+    return fa < fb ? -1 : 1;
+  });
+
+  const rows = [];
+  rows.push(['Fecha', 'Descripción', 'Tipo', 'Evento', 'Origen', 'Debe total', 'Haber total']);
+
+  for (const e of sorted) {
+    const tipo = e.tipoMovimiento || 'otro';
+    if (tipoFilter !== 'todos' && tipo !== tipoFilter) continue;
+
+    const origen = e.origen || 'Manual';
+    if (origenFilter !== 'todos' && origen !== origenFilter) continue;
+
+    if (!matchEvent(e, eventoFilter)) continue;
+
+    const lines = linesByEntry.get(e.id) || [];
+    let totalDebe = 0;
+    let totalHaber = 0;
+    for (const ln of lines) {
+      totalDebe += Number(ln.debe || 0);
+      totalHaber += Number(ln.haber || 0);
+    }
+
+    rows.push([
+      e.fecha || e.date || '',
+      e.descripcion || '',
+      tipo,
+      (e.evento || '').trim() || '—',
+      origen,
+      Number(totalDebe.toFixed(2)),
+      Number(totalHaber.toFixed(2))
+    ]);
+  }
+
+  if (rows.length <= 1) {
+    showToast('No hay movimientos para exportar con los filtros actuales.');
+    return;
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Diario');
+  const filename = `finanzas_diario_${todayStr()}.xlsx`;
+  XLSX.writeFile(wb, filename);
+  showToast('Diario exportado a Excel');
+}
+
+async function exportEstadoResultadosExcel() {
+  if (typeof XLSX === 'undefined') {
+    alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Revisa tu conexión a internet.');
+    return;
+  }
+  if (!finCachedData) {
+    await refreshAllFin();
+  }
+  const data = finCachedData;
+  if (!data || !Array.isArray(data.entries) || !data.entries.length) {
+    alert('No hay datos contables para exportar el Estado de Resultados.');
+    return;
+  }
+
+  const modoSel = $('#er-modo');
+  const mesSel = $('#er-mes');
+  const anioSel = $('#er-anio');
+  const desdeInput = $('#er-desde');
+  const hastaInput = $('#er-hasta');
+  const eventoSel = $('#er-evento');
+
+  const modo = modoSel ? modoSel.value : 'mes';
+  let desde;
+  let hasta;
+
+  if (modo === 'mes') {
+    const mes = (mesSel && mesSel.value) ? mesSel.value : pad2(new Date().getMonth() + 1);
+    const anio = (anioSel && anioSel.value) ? anioSel.value : String(new Date().getFullYear());
+    const range = monthRange(Number(anio), Number(mes));
+    desde = range.start;
+    hasta = range.end;
+  } else {
+    desde = (desdeInput && desdeInput.value) ? desdeInput.value : todayStr();
+    hasta = (hastaInput && hastaInput.value) ? hastaInput.value : desde;
+    if (hasta < desde) {
+      const tmp = desde;
+      desde = hasta;
+      hasta = tmp;
+    }
+  }
+
+  const evento = (eventoSel && eventoSel.value) ? eventoSel.value : 'ALL';
+  const { ingresos, costos, gastos } = calcResultadosForFilter(data, {
+    desde,
+    hasta,
+    evento
+  });
+
+  const bruta = ingresos - costos;
+  const neta = bruta - gastos;
+
+  let eventoLabel = 'Todos los eventos';
+  if (evento === 'NONE') {
+    eventoLabel = 'Sin evento';
+  } else if (evento !== 'ALL') {
+    const opt = eventoSel && eventoSel.options && eventoSel.selectedIndex >= 0
+      ? eventoSel.options[eventoSel.selectedIndex]
+      : null;
+    eventoLabel = opt ? opt.textContent : evento;
+  }
+
+  const num = (v) => Number((v || 0).toFixed(2));
+
+  const rows = [];
+  rows.push(['Estado de Resultados', '']);
+  rows.push(['Periodo', `${desde} a ${hasta}`]);
+  rows.push(['Evento', eventoLabel]);
+  rows.push([]);
+  rows.push(['Concepto', 'Monto C$']);
+  rows.push(['Ingresos (4xxx)', num(ingresos)]);
+  rows.push(['Costos de venta (5xxx)', num(costos)]);
+  rows.push(['Gastos de operación (6xxx)', num(gastos)]);
+  rows.push(['Utilidad bruta', num(bruta)]);
+  rows.push(['Utilidad neta', num(neta)]);
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'EstadoResultados');
+  const filename = `finanzas_ER_${todayStr()}.xlsx`;
+  XLSX.writeFile(wb, filename);
+  showToast('Estado de Resultados exportado a Excel');
+}
+
+async function exportBalanceGeneralExcel() {
+  if (typeof XLSX === 'undefined') {
+    alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Revisa tu conexión a internet.');
+    return;
+  }
+  if (!finCachedData) {
+    await refreshAllFin();
+  }
+  const data = finCachedData;
+  if (!data || !Array.isArray(data.entries) || !data.entries.length) {
+    alert('No hay datos contables para exportar el Balance General.');
+    return;
+  }
+
+  const corteInput = $('#bg-fecha');
+  const corte = (corteInput && corteInput.value) ? corteInput.value : todayStr();
+  const { activos, pasivos, patrimonio } = calcBalanceGroupsUntilDate(data, corte);
+  const cuadre = activos - (pasivos + patrimonio);
+
+  const num = (v) => Number((v || 0).toFixed(2));
+
+  const rows = [];
+  rows.push(['Balance General', '']);
+  rows.push(['Corte al', corte]);
+  rows.push([]);
+  rows.push(['Grupo', 'Monto C$']);
+  rows.push(['Activos (1xxx)', num(activos)]);
+  rows.push(['Pasivos (2xxx)', num(pasivos)]);
+  rows.push(['Patrimonio (3xxx)', num(patrimonio)]);
+  rows.push(['Activos – Pasivos – Patrimonio', num(cuadre)]);
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'BalanceGeneral');
+  const filename = `finanzas_BG_${todayStr()}.xlsx`;
+  XLSX.writeFile(wb, filename);
+  showToast('Balance General exportado a Excel');
+}
+
+async function exportFlujoCajaExcel() {
+  if (typeof XLSX === 'undefined') {
+    alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Revisa tu conexión a internet.');
+    return;
+  }
+  if (!finCachedData) {
+    await refreshAllFin();
+  }
+  const data = finCachedData;
+  if (!data || !Array.isArray(data.entries) || !data.entries.length) {
+    alert('No hay datos contables para exportar el Flujo de Caja.');
+    return;
+  }
+
+  const r = calcFlujoCaja(data);
+  if (!r) {
+    alert('Selecciona un periodo válido para exportar el Flujo de Caja.');
+    return;
+  }
+
+  const num = (v) => Number((v || 0).toFixed(2));
+
+  const rows = [];
+  rows.push(['Flujo de Caja', '']);
+  rows.push(['Periodo', `${r.desde} a ${r.hasta}`]);
+  rows.push([]);
+  rows.push(['Concepto', 'Monto C$']);
+  rows.push(['Saldo inicial Caja + Banco', num(r.saldoInicial)]);
+  rows.push(['Flujo neto de operación (cobros - pagos)', num(r.netOp)]);
+  rows.push(['Flujo neto aportes / retiros del dueño', num(r.netOwner)]);
+  rows.push(['Otros movimientos de caja', num(r.otros)]);
+  rows.push(['Saldo final Caja + Banco', num(r.saldoFinal)]);
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'FlujoCaja');
+  const filename = `finanzas_FC_${todayStr()}.xlsx`;
+  XLSX.writeFile(wb, filename);
+  showToast('Flujo de Caja exportado a Excel');
+}
+
+/* ---------- UI: helpers ---------- */
+
 /* ---------- UI: helpers ---------- */
 
 function showToast(msg) {
@@ -1584,6 +1823,53 @@ async function refreshAllFin() {
   renderFlujoCaja(data);
 }
 
+
+function setupExportButtons() {
+  const btnDiario = document.getElementById('btn-export-diario');
+  if (btnDiario) {
+    btnDiario.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      exportDiarioExcel().catch(err => {
+        console.error('Error exportando Diario a Excel', err);
+        alert('Ocurrió un error exportando el Diario a Excel.');
+      });
+    });
+  }
+
+  const btnER = document.getElementById('btn-export-er');
+  if (btnER) {
+    btnER.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      exportEstadoResultadosExcel().catch(err => {
+        console.error('Error exportando ER a Excel', err);
+        alert('Ocurrió un error exportando el Estado de Resultados a Excel.');
+      });
+    });
+  }
+
+  const btnBG = document.getElementById('btn-export-bg');
+  if (btnBG) {
+    btnBG.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      exportBalanceGeneralExcel().catch(err => {
+        console.error('Error exportando BG a Excel', err);
+        alert('Ocurrió un error exportando el Balance General a Excel.');
+      });
+    });
+  }
+
+  const btnFC = document.getElementById('btn-export-fc');
+  if (btnFC) {
+    btnFC.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      exportFlujoCajaExcel().catch(err => {
+        console.error('Error exportando Flujo de Caja a Excel', err);
+        alert('Ocurrió un error exportando el Flujo de Caja a Excel.');
+      });
+    });
+  }
+}
+
 async function initFinanzas() {
   try {
     await openFinDB();
@@ -1593,6 +1879,7 @@ async function initFinanzas() {
     setupEstadosSubtabs();
     setupModoERToggle();
     setupFilterListeners();
+    setupExportButtons();
     await refreshAllFin();
   } catch (err) {
     console.error('Error inicializando Finanzas A33', err);

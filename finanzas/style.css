@@ -137,7 +137,8 @@ body.fin-body {
 }
 
 .fin-main-nav a,
-.fin-tab-btn {
+.fin-tab-btn,
+.fin-btn-export {
   border-radius: 999px;
   padding: 6px 12px;
   border: 1px solid rgba(255,255,255,0.08);
@@ -150,7 +151,8 @@ body.fin-body {
 }
 
 .fin-main-nav a:hover,
-.fin-tab-btn:hover {
+.fin-tab-btn:hover,
+.fin-btn-export:hover {
   border-color: rgba(212,175,55,0.6);
   background: rgba(15,20,30,0.98);
 }
