@@ -256,6 +256,56 @@
           <button id="pc-btn-clear-initial" class="btn-warn">Limpiar</button>
         </div>
       </div>
+
+      <div class="card petty-mov">
+        <h3>Movimientos de Caja Chica</h3>
+        <div class="row">
+          <div class="col">
+            <label for="pc-mov-date">Fecha</label>
+            <input id="pc-mov-date" type="date">
+          </div>
+          <div class="col">
+            <label for="pc-mov-type">Tipo</label>
+            <select id="pc-mov-type">
+              <option value="entrada">Entrada</option>
+              <option value="salida">Salida</option>
+            </select>
+          </div>
+          <div class="col">
+            <label for="pc-mov-currency">Moneda</label>
+            <select id="pc-mov-currency">
+              <option value="NIO">C$</option>
+              <option value="USD">US$</option>
+            </select>
+          </div>
+          <div class="col">
+            <label for="pc-mov-amount">Monto</label>
+            <input id="pc-mov-amount" type="number" min="0" step="0.01" value="0.00">
+          </div>
+          <div class="col">
+            <label for="pc-mov-desc">Descripción</label>
+            <input id="pc-mov-desc" type="text" placeholder="Detalle del movimiento">
+          </div>
+          <div class="col">
+            <button id="pc-mov-add" class="btn-ok">Agregar movimiento</button>
+          </div>
+        </div>
+
+        <table class="pc-table" id="pc-mov-table">
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Tipo</th>
+              <th>Moneda</th>
+              <th>Monto</th>
+              <th>Descripción</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="pc-mov-tbody">
+          </tbody>
+        </table>
+      </div>
     </div>
   </section>
 

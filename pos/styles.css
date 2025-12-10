@@ -123,3 +123,31 @@ small.muted{color:var(--muted)}
 .pc-table input[type="number"]{
   width:80px;
 }
+
+.petty-mov h3{
+  margin-top:0;
+}
+
+.petty-mov .row{
+  margin-top:8px;
+  gap:8px;
+  align-items:flex-end;
+}
+
+.petty-mov .row label{
+  display:block;
+  font-size:12px;
+  margin-bottom:2px;
+}
+
+.petty-mov .row input[type="number"],
+.petty-mov .row input[type="date"],
+.petty-mov .row input[type="text"],
+.petty-mov .row select{
+  width:100%;
+}
+
+.btn-small{
+  font-size:11px;
+  padding:2px 6px;
+}

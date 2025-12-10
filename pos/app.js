@@ -397,10 +397,15 @@ function del(name, key){
     }
   });
 }
-async function setMeta(key, value){ return put('meta', {id:key, value}); }
-async function getMeta(key){ const all = await getAll('meta'); const row = all.find(x=>x.id===key); return row ? row.value : null; }
 
-// Normalizar nombres
+async function setMeta(key, value){ 
+  return put('meta', {id:key, value});
+}
+async function getMeta(key){ 
+  const all = await getAll('meta');
+  const row = all.find(x=>x.id===key);
+  return row ? row.value : null;
+}
 
 // --- Caja Chica: helpers y denominaciones
 const NIO_DENOMS = [1,5,10,20,50,100,200,500,1000];
@@ -554,6 +559,7 @@ function computePettyCashSummary(pc){
   return res;
 }
 
+// Normalizar nombres
 function normName(s){ return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim(); }
 
 const RECETAS_KEY = 'arcano33_recetas_v1';
@@ -1513,6 +1519,7 @@ async function init(){
     await renderProductos();
     await renderEventos();
     await renderInventario();
+    await renderCajaChica();
     await updateSellEnabled();
   }catch(err){ 
     alert('Error inicializando base de datos');
@@ -1520,7 +1527,6 @@ async function init(){
   }
   setOfflineBar();
   bindCajaChicaEvents();
-
 
   document.querySelector('.tabbar').addEventListener('click', (e)=>{ const b = e.target.closest('button'); if (!b) return; setTab(b.dataset.tab); });
 
@@ -1728,6 +1734,7 @@ async function renderCajaChica(){
     main.classList.add('disabled');
     updatePettySummaryUI(null);
     resetPettyInitialInputs();
+    renderPettyMovements(null);
     return;
   }
 
@@ -1738,6 +1745,7 @@ async function renderCajaChica(){
   const pc = await getPettyCash(evId);
   updatePettySummaryUI(pc);
   fillPettyInitialFromPc(pc);
+  renderPettyMovements(pc);
 }
 
 function updatePettySummaryUI(pc){
@@ -1890,6 +1898,104 @@ async function onSavePettyInitial(){
   toast('Saldo inicial de Caja Chica guardado');
 }
 
+function renderPettyMovements(pc){
+  const tbody = document.getElementById('pc-mov-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  if (!pc || !Array.isArray(pc.movements) || pc.movements.length === 0){
+    return;
+  }
+
+  for (const m of pc.movements){
+    const tr = document.createElement('tr');
+    const tipoText = m.type === 'entrada' ? 'Entrada' : 'Salida';
+    const currencyText = m.currency === 'USD' ? 'US$' : 'C$';
+    const desc = m.description || '';
+    tr.innerHTML = `
+      <td>${m.date || ''}</td>
+      <td>${tipoText}</td>
+      <td>${currencyText}</td>
+      <td>${fmt(Number(m.amount||0))}</td>
+      <td>${desc.replace ? desc.replace(/</g,'&lt;').replace(/>/g,'&gt;') : desc}</td>
+      <td><button class="btn-small btn-danger" data-movid="${m.id}">Eliminar</button></td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+async function onAddPettyMovement(){
+  const evId = await getMeta('currentEventId');
+  if (!evId){
+    alert('Debes activar un evento en la pestaña Vender antes de registrar movimientos de Caja Chica.');
+    return;
+  }
+
+  const dateInput = document.getElementById('pc-mov-date');
+  const typeSel = document.getElementById('pc-mov-type');
+  const curSel  = document.getElementById('pc-mov-currency');
+  const amtInput = document.getElementById('pc-mov-amount');
+  const descInput = document.getElementById('pc-mov-desc');
+
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth()+1).padStart(2,'0');
+  const d = String(now.getDate()).padStart(2,'0');
+  const todayStr = `${y}-${m}-${d}`;
+
+  const date = (dateInput && dateInput.value) ? dateInput.value : todayStr;
+  const type = typeSel ? typeSel.value : 'entrada';
+  const currency = curSel ? curSel.value : 'NIO';
+  const rawAmt = amtInput ? Number(amtInput.value || 0) : 0;
+  const amount = Number.isFinite(rawAmt) ? rawAmt : 0;
+  const description = descInput ? (descInput.value || '').trim() : '';
+
+  if (!amount || amount <= 0){
+    alert('Ingresa un monto mayor a cero.');
+    return;
+  }
+  if (type !== 'entrada' && type !== 'salida'){
+    alert('Tipo de movimiento inválido.');
+    return;
+  }
+  if (currency !== 'NIO' && currency !== 'USD'){
+    alert('Moneda inválida.');
+    return;
+  }
+
+  const pc = await getPettyCash(evId);
+  if (!Array.isArray(pc.movements)) pc.movements = [];
+
+  const newId = pc.movements.length ? Math.max(...pc.movements.map(m=>m.id||0)) + 1 : 1;
+
+  pc.movements.push({
+    id: newId,
+    date,
+    type,
+    currency,
+    amount,
+    description
+  });
+
+  await savePettyCash(pc);
+  updatePettySummaryUI(pc);
+  renderPettyMovements(pc);
+
+  if (amtInput) amtInput.value = '0.00';
+  if (descInput) descInput.value = '';
+}
+
+async function onDeletePettyMovement(id){
+  const evId = await getMeta('currentEventId');
+  if (!evId) return;
+  const pc = await getPettyCash(evId);
+  if (!Array.isArray(pc.movements)) pc.movements = [];
+  pc.movements = pc.movements.filter(m => m.id !== id);
+  await savePettyCash(pc);
+  updatePettySummaryUI(pc);
+  renderPettyMovements(pc);
+}
+
 function bindCajaChicaEvents(){
   const inputs = document.querySelectorAll('#pc-table-nio input[type="number"], #pc-table-usd input[type="number"]');
   inputs.forEach(inp=>{
@@ -1909,6 +2015,25 @@ function bindCajaChicaEvents(){
     btnClear.addEventListener('click', (e)=>{
       e.preventDefault();
       resetPettyInitialInputs();
+    });
+  }
+
+  const btnAddMov = document.getElementById('pc-mov-add');
+  if (btnAddMov){
+    btnAddMov.addEventListener('click', (e)=>{
+      e.preventDefault();
+      onAddPettyMovement();
+    });
+  }
+
+  const tbody = document.getElementById('pc-mov-tbody');
+  if (tbody){
+    tbody.addEventListener('click', (e)=>{
+      const btn = e.target.closest('button[data-movid]');
+      if (!btn) return;
+      const id = Number(btn.dataset.movid);
+      if (!id) return;
+      onDeletePettyMovement(id);
     });
   }
 }
