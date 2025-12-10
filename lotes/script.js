@@ -254,6 +254,11 @@ function exportToCSV() {
     return;
   }
 
+  if (typeof XLSX === "undefined") {
+    alert("No se pudo generar el archivo de Excel (librería XLSX no cargada). Revisa tu conexión a internet.");
+    return;
+  }
+
   const headers = [
     "Fecha",
     "Código",
@@ -290,30 +295,14 @@ function exportToCSV() {
     (l.notas || "").replace(/\r?\n/g, " "),
   ]);
 
-  const all = [headers, ...rows]
-    .map((row) =>
-      row
-        .map((cell) => {
-          const text = String(cell ?? "");
-          if (text.includes(";") || text.includes('"') || text.includes(",")) {
-            return '"' + text.replace(/"/g, '""') + '"';
-          }
-          return text;
-        })
-        .join(";")
-    )
-    .join("\n");
+  const aoa = [headers, ...rows];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Lotes");
 
-  const blob = new Blob([all], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
   const timestamp = new Date().toISOString().slice(0, 10);
-  a.href = url;
-  a.download = `arcano33_lotes_${timestamp}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  const filename = `arcano33_lotes_${timestamp}.xlsx`;
+  XLSX.writeFile(wb, filename);
 }
 
 function registerServiceWorker() {
