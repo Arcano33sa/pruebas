@@ -164,6 +164,8 @@ async function createJournalEntryForSalePOS(sale) {
       const storeWrite = txWrite.objectStore('journalEntries');
 
       if (existingEntry) {
+        // Alinear con Finanzas: usar "fecha" y mantener "date" para compatibilidad
+        existingEntry.fecha = sale.date;
         existingEntry.date = sale.date;
         existingEntry.descripcion = descripcion;
         existingEntry.tipoMovimiento = tipoMovimiento;
@@ -175,7 +177,8 @@ async function createJournalEntryForSalePOS(sale) {
         storeWrite.put(existingEntry);
       } else {
         const entry = {
-          date: sale.date,
+          fecha: sale.date,   // campo que Finanzas espera
+          date: sale.date,    // compatibilidad con índices previos
           descripcion,
           tipoMovimiento,
           evento,
@@ -215,7 +218,7 @@ async function createJournalEntryForSalePOS(sale) {
       reqLines.onsuccess = () => {
         const lines = reqLines.result || [];
         lines
-          .filter((l) => String(l.entryId) === String(entryId))
+          .filter((l) => String(l.entryId) === String(entryId) || String(l.idEntry) === String(entryId))
           .forEach((l) => {
             try {
               storeDel.delete(l.id);
@@ -235,7 +238,8 @@ async function createJournalEntryForSalePOS(sale) {
 
       const addLine = (data) => {
         try {
-          storeLines.add(Object.assign({ entryId }, data));
+          // Guardamos ambos campos: idEntry (lo que Finanzas espera) y entryId (compatibilidad)
+          storeLines.add(Object.assign({ idEntry: entryId, entryId }, data));
         } catch (err) {
           console.error('Error guardando línea contable POS', err);
         }
@@ -310,7 +314,7 @@ async function deleteFinanzasEntriesForSalePOS(saleId) {
         linesReq.onsuccess = () => {
           const allLines = linesReq.result || [];
           targets.forEach(entry => {
-            const relatedLines = allLines.filter(l => String(l.entryId) === String(entry.id));
+            const relatedLines = allLines.filter(l => String(l.entryId) === String(entry.id) || String(l.idEntry) === String(entry.id));
             relatedLines.forEach(l => {
               try { linesStore.delete(l.id); } catch (err) {
                 console.error('Error borrando línea contable POS', err);
@@ -344,92 +348,52 @@ async function deleteFinanzasEntriesForSalePOS(saleId) {
 function tx(name, mode='readonly'){ return db.transaction(name, mode).objectStore(name); }
 function getAll(name){ return new Promise((res,rej)=>{ const r=tx(name).getAll(); r.onsuccess=()=>res(r.result||[]); r.onerror=()=>rej(r.error); }); }
 function put(name, val){ return new Promise((res,rej)=>{ const r=tx(name,'readwrite').put(val); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
-
-// 🔧 NUEVA VERSIÓN COMPLETA DE del(): maneja bien ventas + Finanzas
 function del(name, key){ 
   return new Promise((resolve, reject)=>{ 
-    if (name === 'sales') {
-      try {
-        // Paso 1: leer la venta en una transacción separada (solo lectura)
-        const tRead = db.transaction('sales', 'readonly');
-        const storeRead = tRead.objectStore('sales');
-        const getReq = storeRead.get(key);
-        let sale = null;
+    if (name === 'sales'){
+      try{
+        const store = tx('sales','readwrite');
+        const getReq = store.get(key);
+        getReq.onsuccess = ()=>{
+          const sale = getReq.result;
+          let finPromise = Promise.resolve();
 
-        getReq.onsuccess = () => {
-          sale = getReq.result || null;
-        };
-        getReq.onerror = () => {
-          console.error('Error obteniendo venta para eliminar', getReq.error);
-        };
-
-        tRead.oncomplete = async () => {
-          // Paso 2: revertir inventario central y asientos de Finanzas
-          try {
-            if (sale) {
-              try {
-                // Revertir efecto en inventario central
-                applyFinishedFromSalePOS(sale, -1); // revertir efecto de la venta en inventario central
-              } catch (e) {
-                console.error('Error revertiendo inventario central al eliminar venta', e);
-              }
-
-              const saleId = (sale.id != null) ? sale.id : key;
-              try {
-                // Borrar asientos contables ligados a esta venta
-                await deleteFinanzasEntriesForSalePOS(saleId);
-              } catch (err) {
-                console.error('Error eliminando asientos contables vinculados a la venta', err);
-              }
+          if (sale){
+            try{
+              applyFinishedFromSalePOS(sale, -1); // revertir efecto de la venta en inventario central
+            }catch(e){
+              console.error('Error revertiendo inventario central al eliminar venta', e);
             }
-          } catch (e) {
-            console.error('Error en pasos previos al borrado de venta', e);
+
+            const saleId = (sale.id != null) ? sale.id : key;
+            finPromise = deleteFinanzasEntriesForSalePOS(saleId).catch(err=>{
+              console.error('Error eliminando asientos contables vinculados a la venta', err);
+            });
           }
 
-          // Paso 3: borrar la venta en una nueva transacción de escritura
-          try {
-            const tDel = db.transaction('sales', 'readwrite');
-            const storeDel = tDel.objectStore('sales');
-            const delReq = storeDel.delete(key);
-
-            delReq.onsuccess = () => {
-              // nada extra, esperamos oncomplete de la transacción
-            };
-            delReq.onerror = () => {
-              console.error('Error borrando venta en POS', delReq.error);
-            };
-
-            tDel.oncomplete = () => resolve();
-            tDel.onerror = () => {
-              console.error('Error en transacción de borrado de venta', tDel.error);
-              reject(tDel.error);
-            };
-          } catch (e) {
-            console.error('Error creando transacción de borrado de venta', e);
-            // No bloqueamos el flujo general del POS
-            resolve();
-          }
+          finPromise.then(()=>{
+            const delReq = store.delete(key);
+            delReq.onsuccess = ()=>resolve();
+            delReq.onerror = ()=>reject(delReq.error);
+          });
         };
-      } catch (e) {
-        console.error('Error general en del("sales", key)', e);
-        // Para no romper la UI, resolvemos aunque algo haya fallado
+        getReq.onerror = ()=>{
+          const delReq = store.delete(key);
+          delReq.onsuccess = ()=>resolve();
+          delReq.onerror = ()=>reject(delReq.error);
+        };
+      }catch(e){
+        console.error('Error en del(sales,key)', e);
         resolve();
       }
     } else {
-      // Otros stores siguen con la lógica simple
-      try {
-        const store = tx(name,'readwrite');
-        const r = store.delete(key);
-        r.onsuccess = ()=>resolve();
-        r.onerror = ()=>reject(r.error);
-      } catch (e) {
-        console.error('Error borrando en store ' + name, e);
-        resolve();
-      }
+      const store = tx(name,'readwrite');
+      const r = store.delete(key);
+      r.onsuccess = ()=>resolve();
+      r.onerror = ()=>reject(r.error);
     }
   });
 }
-
 async function setMeta(key, value){ return put('meta', {id:key, value}); }
 async function getMeta(key){ const all = await getAll('meta'); const row = all.find(x=>x.id===key); return row ? row.value : null; }
 
@@ -784,7 +748,7 @@ async function refreshEventUI(){
   const sel = $('#sale-event');
   const current = await getMeta('currentEventId');
 
-  sel.innerHTML = '<option value=\"\">— Selecciona evento —</option>';
+  sel.innerHTML = '<option value="">— Selecciona evento —</option>';
   for (const ev of evs) {
     const opt = document.createElement('option'); opt.value = ev.id; 
     opt.textContent = ev.name + (ev.closedAt ? ' (cerrado)' : '');
@@ -1039,20 +1003,51 @@ async function renderDay(){
   $('#day-total').textContent = fmt(total);
 }
 
-// Summary
+// Summary (extendido con costo y utilidad)
 async function renderSummary(){
   const sales = await getAll('sales');
   const events = await getAll('events');
-  let grand=0; const byDay=new Map(); const byProd=new Map(); const byPay=new Map(); const byEvent=new Map();
+  let grand = 0;
+  let grandCost = 0;
+  let grandProfit = 0;
+
+  const byDay=new Map(); 
+  const byProd=new Map(); 
+  const byPay=new Map(); 
+  const byEvent=new Map();
 
   for (const s of sales){
-    grand += s.total;
-    byDay.set(s.date,(byDay.get(s.date)||0)+s.total);
-    byProd.set(s.productName,(byProd.get(s.productName)||0)+s.total);
-    byPay.set(s.payment||'efectivo',(byPay.get(s.payment||'efectivo')||0)+s.total);
-    byEvent.set(s.eventName||'General',(byEvent.get(s.eventName||'General')||0)+s.total);
+    const total = Number(s.total || 0);
+    grand += total;
+
+    byDay.set(s.date,(byDay.get(s.date)||0)+total);
+    byProd.set(s.productName,(byProd.get(s.productName)||0)+total);
+    byPay.set(s.payment||'efectivo',(byPay.get(s.payment||'efectivo')||0)+total);
+    byEvent.set(s.eventName||'General',(byEvent.get(s.eventName||'General')||0)+total);
+
+    // Costo y utilidad aproximada (solo ventas/no cortesías)
+    if (!s.courtesy) {
+      let lineCost = 0;
+      if (typeof s.lineCost === 'number') {
+        lineCost = Number(s.lineCost || 0);
+      } else if (typeof s.costPerUnit === 'number') {
+        const qty = Number(s.qty || 0);
+        lineCost = s.costPerUnit * qty;
+      }
+
+      let lineProfit = 0;
+      if (typeof s.lineProfit === 'number') {
+        lineProfit = Number(s.lineProfit || 0);
+      } else {
+        lineProfit = total - lineCost;
+      }
+
+      grandCost += lineCost;
+      grandProfit += lineProfit;
+    }
   }
 
+  // Acumular también lo archivado por evento en grand / tablas de resumen
   for (const ev of events){
     if (ev.archive && ev.archive.totals){
       const t = ev.archive.totals;
@@ -1061,10 +1056,28 @@ async function renderSummary(){
       if (t.byPay){ for (const k of Object.keys(t.byPay)){ byPay.set(k,(byPay.get(k)||0)+(t.byPay[k]||0)); } }
       if (t.byProduct){ for (const k of Object.keys(t.byProduct)){ byProd.set(k,(byProd.get(k)||0)+(t.byProduct[k]||0)); } }
       if (t.byDay){ for (const k of Object.keys(t.byDay)){ byDay.set(k,(byDay.get(k)||0)+(t.byDay[k]||0)); } }
+      // Nota: por ahora no tenemos costo/utilidad archivados, así que grandCost/grandProfit reflejan ventas vivas.
     }
   }
 
+  // Total vendido
   $('#grand-total').textContent = fmt(grand);
+
+  // Crear/actualizar bloque extra para costo y utilidad si no existe en el HTML
+  const totalSpan = document.getElementById('grand-total');
+  if (totalSpan) {
+    let extraBlock = document.getElementById('grand-extra-block');
+    if (!extraBlock) {
+      const card = totalSpan.closest('.card') || totalSpan.parentElement || document.getElementById('tab-resumen') || document.body;
+      extraBlock = document.createElement('div');
+      extraBlock.id = 'grand-extra-block';
+      if (card) card.appendChild(extraBlock);
+    }
+    extraBlock.innerHTML = `
+      <p>Costo estimado de producto: C$ <span id="grand-cost">${fmt(grandCost)}</span></p>
+      <p>Utilidad bruta aproximada: C$ <span id="grand-profit">${fmt(grandProfit)}</span></p>
+    `;
+  }
 
   const tbE=$('#tbl-por-evento tbody'); tbE.innerHTML='';
   [...byEvent.entries()].sort((a,b)=>a[0].localeCompare(b[0])).forEach(([k,v])=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; tbE.appendChild(tr); });

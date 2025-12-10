@@ -301,11 +301,11 @@ async function getAllFinData() {
 
   const linesByEntry = new Map();
   for (const ln of lines) {
-    const rawId = (ln.idEntry != null && ln.idEntry !== undefined)
+    // Compatibilidad: usar ln.idEntry si existe, si no ln.entryId
+    const idEntry = (ln.idEntry != null && ln.idEntry !== undefined)
       ? ln.idEntry
       : ln.entryId;
-    if (rawId == null || rawId === undefined) continue;
-    const idEntry = Number(rawId);
+    if (idEntry == null) continue;
     if (!linesByEntry.has(idEntry)) linesByEntry.set(idEntry, []);
     linesByEntry.get(idEntry).push(ln);
   }
