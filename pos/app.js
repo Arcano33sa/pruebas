@@ -896,6 +896,7 @@ function setTab(name){
   if (name==='productos') renderProductos();
   if (name==='eventos') renderEventos();
   if (name==='inventario') renderInventario();
+  if (name==='caja') renderCajaChica();
 }
 
 // Event UI
@@ -1512,12 +1513,15 @@ async function init(){
     await renderProductos();
     await renderEventos();
     await renderInventario();
+    await renderCajaChica();
     await updateSellEnabled();
   }catch(err){ 
     alert('Error inicializando base de datos');
     console.error('INIT ERROR', err);
   }
   setOfflineBar();
+
+  bindCajaChicaEvents();
 
   document.querySelector('.tabbar').addEventListener('click', (e)=>{ const b = e.target.closest('button'); if (!b) return; setTab(b.dataset.tab); });
 
@@ -1708,5 +1712,205 @@ async function addSale(){
   await renderDay(); await renderSummary(); await refreshSaleStockLabel(); await renderInventario();
   toast('Venta agregada');
 }
+
+
+
+async function renderCajaChica(){
+  const main = document.getElementById('pc-main');
+  const note = document.getElementById('pc-no-event-note');
+  const lbl = document.getElementById('pc-event-info');
+  if (!main || !note || !lbl) return;
+
+  const evId = await getMeta('currentEventId');
+  const evs = await getAll('events');
+  const ev = evId ? evs.find(e => e.id === evId) : null;
+
+  if (!evId || !ev){
+    lbl.textContent = 'Sin evento activo';
+    note.style.display = 'block';
+    main.classList.add('disabled');
+    // limpiar resumen e inicial
+    updatePettySummaryUI(null);
+    resetPettyInitialInputs();
+    return;
+  }
+
+  lbl.textContent = `Evento activo: ${ev.name}`;
+  note.style.display = 'none';
+  main.classList.remove('disabled');
+
+  const pc = await getPettyCash(evId);
+  updatePettySummaryUI(pc);
+  fillPettyInitialFromPc(pc);
+}
+
+function updatePettySummaryUI(pc){
+  const sum = computePettyCashSummary(pc || null);
+
+  const set = (id, value, allowDash) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (allowDash && (value === null || typeof value === 'undefined')){
+      el.textContent = '—';
+    } else {
+      const num = Number(value||0);
+      el.textContent = num.toLocaleString('es-NI',{minimumFractionDigits:2,maximumFractionDigits:2});
+    }
+  };
+
+  set('pc-nio-inicial', sum.nio.initial);
+  set('pc-nio-entradas', sum.nio.entradas);
+  set('pc-nio-salidas', sum.nio.salidas);
+  set('pc-nio-teorico', sum.nio.teorico);
+  set('pc-nio-final', sum.nio.final, true);
+  set('pc-nio-diferencia', sum.nio.diferencia, true);
+
+  set('pc-usd-inicial', sum.usd.initial);
+  set('pc-usd-entradas', sum.usd.entradas);
+  set('pc-usd-salidas', sum.usd.salidas);
+  set('pc-usd-teorico', sum.usd.teorico);
+  set('pc-usd-final', sum.usd.final, true);
+  set('pc-usd-diferencia', sum.usd.diferencia, true);
+
+  // también reflejamos totales de inicio en las tablas, si existen
+  const nioTotalEl = document.getElementById('pc-nio-total');
+  if (nioTotalEl) nioTotalEl.textContent = sum.nio.initial.toLocaleString('es-NI',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const usdTotalEl = document.getElementById('pc-usd-total');
+  if (usdTotalEl) usdTotalEl.textContent = sum.usd.initial.toLocaleString('es-NI',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+
+function resetPettyInitialInputs(){
+  if (typeof NIO_DENOMS === 'undefined' || typeof USD_DENOMS === 'undefined') return;
+  NIO_DENOMS.forEach(d=>{
+    const q = document.getElementById('pc-nio-q-'+d);
+    const s = document.getElementById('pc-nio-sub-'+d);
+    if (q) q.value = '0';
+    if (s) s.textContent = '0.00';
+  });
+  USD_DENOMS.forEach(d=>{
+    const q = document.getElementById('pc-usd-q-'+d);
+    const s = document.getElementById('pc-usd-sub-'+d);
+    if (q) q.value = '0';
+    if (s) s.textContent = '0.00';
+  });
+  const tn = document.getElementById('pc-nio-total');
+  const tu = document.getElementById('pc-usd-total');
+  if (tn) tn.textContent = '0.00';
+  if (tu) tu.textContent = '0.00';
+}
+
+function fillPettyInitialFromPc(pc){
+  resetPettyInitialInputs();
+  if (!pc || !pc.initial) return;
+  const init = normalizePettySection(pc.initial);
+
+  NIO_DENOMS.forEach(d=>{
+    const key = String(d);
+    const q = document.getElementById('pc-nio-q-'+d);
+    const s = document.getElementById('pc-nio-sub-'+d);
+    const qty = init.nio[key] || 0;
+    if (q) q.value = String(qty);
+    if (s) s.textContent = (d * qty).toLocaleString('es-NI',{minimumFractionDigits:2,maximumFractionDigits:2});
+  });
+
+  USD_DENOMS.forEach(d=>{
+    const key = String(d);
+    const q = document.getElementById('pc-usd-q-'+d);
+    const s = document.getElementById('pc-usd-sub-'+d);
+    const qty = init.usd[key] || 0;
+    if (q) q.value = String(qty);
+    if (s) s.textContent = (d * qty).toLocaleString('es-NI',{minimumFractionDigits:2,maximumFractionDigits:2});
+  });
+
+  const tn = document.getElementById('pc-nio-total');
+  const tu = document.getElementById('pc-usd-total');
+  if (tn) tn.textContent = init.totalNio.toLocaleString('es-NI',{minimumFractionDigits:2,maximumFractionDigits:2});
+  if (tu) tu.textContent = init.totalUsd.toLocaleString('es-NI',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+
+function recalcPettyInitialTotalsFromInputs(){
+  if (typeof NIO_DENOMS === 'undefined' || typeof USD_DENOMS === 'undefined') return;
+  let totalNio = 0;
+  let totalUsd = 0;
+
+  NIO_DENOMS.forEach(d=>{
+    const q = document.getElementById('pc-nio-q-'+d);
+    const s = document.getElementById('pc-nio-sub-'+d);
+    const qty = q ? Number(q.value||0) : 0;
+    const sub = d * (Number.isFinite(qty) && qty>0 ? qty : 0);
+    if (s) s.textContent = sub.toLocaleString('es-NI',{minimumFractionDigits:2,maximumFractionDigits:2});
+    totalNio += sub;
+  });
+
+  USD_DENOMS.forEach(d=>{
+    const q = document.getElementById('pc-usd-q-'+d);
+    const s = document.getElementById('pc-usd-sub-'+d);
+    const qty = q ? Number(q.value||0) : 0;
+    const sub = d * (Number.isFinite(qty) && qty>0 ? qty : 0);
+    if (s) s.textContent = sub.toLocaleString('es-NI',{minimumFractionDigits:2,maximumFractionDigits:2});
+    totalUsd += sub;
+  });
+
+  const tn = document.getElementById('pc-nio-total');
+  const tu = document.getElementById('pc-usd-total');
+  if (tn) tn.textContent = totalNio.toLocaleString('es-NI',{minimumFractionDigits:2,maximumFractionDigits:2});
+  if (tu) tu.textContent = totalUsd.toLocaleString('es-NI',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+
+async function onSavePettyInitial(){
+  const evId = await getMeta('currentEventId');
+  if (!evId){
+    alert('Debes activar un evento en la pestaña Vender antes de guardar Caja Chica.');
+    return;
+  }
+  const pc = await getPettyCash(evId);
+
+  const nio = {};
+  const usd = {};
+
+  NIO_DENOMS.forEach(d=>{
+    const q = document.getElementById('pc-nio-q-'+d);
+    const qty = q ? Number(q.value||0) : 0;
+    nio[String(d)] = Number.isFinite(qty) && qty>0 ? qty : 0;
+  });
+
+  USD_DENOMS.forEach(d=>{
+    const q = document.getElementById('pc-usd-q-'+d);
+    const qty = q ? Number(q.value||0) : 0;
+    usd[String(d)] = Number.isFinite(qty) && qty>0 ? qty : 0;
+  });
+
+  pc.initial = normalizePettySection({
+    nio,
+    usd,
+    savedAt: new Date().toISOString()
+  });
+
+  await savePettyCash(pc);
+  await renderCajaChica();
+  toast('Saldo inicial de Caja Chica guardado');
+}
+
+function bindCajaChicaEvents(){
+  const inputs = document.querySelectorAll('#pc-table-nio input[type="number"], #pc-table-usd input[type="number"]');
+  inputs.forEach(inp=>{
+    inp.addEventListener('input', recalcPettyInitialTotalsFromInputs);
+  });
+  const btnSave = document.getElementById('pc-btn-save-initial');
+  if (btnSave){
+    btnSave.addEventListener('click', (e)=>{
+      e.preventDefault();
+      onSavePettyInitial();
+    });
+  }
+  const btnClear = document.getElementById('pc-btn-clear-initial');
+  if (btnClear){
+    btnClear.addEventListener('click', (e)=>{
+      e.preventDefault();
+      resetPettyInitialInputs();
+    });
+  }
+}
+
 
 document.addEventListener('DOMContentLoaded', init);
