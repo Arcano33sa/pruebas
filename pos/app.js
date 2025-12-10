@@ -344,52 +344,92 @@ async function deleteFinanzasEntriesForSalePOS(saleId) {
 function tx(name, mode='readonly'){ return db.transaction(name, mode).objectStore(name); }
 function getAll(name){ return new Promise((res,rej)=>{ const r=tx(name).getAll(); r.onsuccess=()=>res(r.result||[]); r.onerror=()=>rej(r.error); }); }
 function put(name, val){ return new Promise((res,rej)=>{ const r=tx(name,'readwrite').put(val); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
+
+// 🔧 NUEVA VERSIÓN COMPLETA DE del(): maneja bien ventas + Finanzas
 function del(name, key){ 
   return new Promise((resolve, reject)=>{ 
-    if (name === 'sales'){
-      try{
-        const store = tx('sales','readwrite');
-        const getReq = store.get(key);
-        getReq.onsuccess = ()=>{
-          const sale = getReq.result;
-          let finPromise = Promise.resolve();
+    if (name === 'sales') {
+      try {
+        // Paso 1: leer la venta en una transacción separada (solo lectura)
+        const tRead = db.transaction('sales', 'readonly');
+        const storeRead = tRead.objectStore('sales');
+        const getReq = storeRead.get(key);
+        let sale = null;
 
-          if (sale){
-            try{
-              applyFinishedFromSalePOS(sale, -1); // revertir efecto de la venta en inventario central
-            }catch(e){
-              console.error('Error revertiendo inventario central al eliminar venta', e);
+        getReq.onsuccess = () => {
+          sale = getReq.result || null;
+        };
+        getReq.onerror = () => {
+          console.error('Error obteniendo venta para eliminar', getReq.error);
+        };
+
+        tRead.oncomplete = async () => {
+          // Paso 2: revertir inventario central y asientos de Finanzas
+          try {
+            if (sale) {
+              try {
+                // Revertir efecto en inventario central
+                applyFinishedFromSalePOS(sale, -1); // revertir efecto de la venta en inventario central
+              } catch (e) {
+                console.error('Error revertiendo inventario central al eliminar venta', e);
+              }
+
+              const saleId = (sale.id != null) ? sale.id : key;
+              try {
+                // Borrar asientos contables ligados a esta venta
+                await deleteFinanzasEntriesForSalePOS(saleId);
+              } catch (err) {
+                console.error('Error eliminando asientos contables vinculados a la venta', err);
+              }
             }
-
-            const saleId = (sale.id != null) ? sale.id : key;
-            finPromise = deleteFinanzasEntriesForSalePOS(saleId).catch(err=>{
-              console.error('Error eliminando asientos contables vinculados a la venta', err);
-            });
+          } catch (e) {
+            console.error('Error en pasos previos al borrado de venta', e);
           }
 
-          finPromise.then(()=>{
-            const delReq = store.delete(key);
-            delReq.onsuccess = ()=>resolve();
-            delReq.onerror = ()=>reject(delReq.error);
-          });
+          // Paso 3: borrar la venta en una nueva transacción de escritura
+          try {
+            const tDel = db.transaction('sales', 'readwrite');
+            const storeDel = tDel.objectStore('sales');
+            const delReq = storeDel.delete(key);
+
+            delReq.onsuccess = () => {
+              // nada extra, esperamos oncomplete de la transacción
+            };
+            delReq.onerror = () => {
+              console.error('Error borrando venta en POS', delReq.error);
+            };
+
+            tDel.oncomplete = () => resolve();
+            tDel.onerror = () => {
+              console.error('Error en transacción de borrado de venta', tDel.error);
+              reject(tDel.error);
+            };
+          } catch (e) {
+            console.error('Error creando transacción de borrado de venta', e);
+            // No bloqueamos el flujo general del POS
+            resolve();
+          }
         };
-        getReq.onerror = ()=>{
-          const delReq = store.delete(key);
-          delReq.onsuccess = ()=>resolve();
-          delReq.onerror = ()=>reject(delReq.error);
-        };
-      }catch(e){
-        console.error('Error en del(sales,key)', e);
+      } catch (e) {
+        console.error('Error general en del("sales", key)', e);
+        // Para no romper la UI, resolvemos aunque algo haya fallado
         resolve();
       }
     } else {
-      const store = tx(name,'readwrite');
-      const r = store.delete(key);
-      r.onsuccess = ()=>resolve();
-      r.onerror = ()=>reject(r.error);
+      // Otros stores siguen con la lógica simple
+      try {
+        const store = tx(name,'readwrite');
+        const r = store.delete(key);
+        r.onsuccess = ()=>resolve();
+        r.onerror = ()=>reject(r.error);
+      } catch (e) {
+        console.error('Error borrando en store ' + name, e);
+        resolve();
+      }
     }
   });
 }
+
 async function setMeta(key, value){ return put('meta', {id:key, value}); }
 async function getMeta(key){ const all = await getAll('meta'); const row = all.find(x=>x.id===key); return row ? row.value : null; }
 
