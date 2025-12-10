@@ -564,3 +564,33 @@ body.fin-body {
     flex-direction: column;
   }
 }
+
+/* Botones de exportación: más destacados */
+.fin-btn-export {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  margin-bottom: 4px;
+
+  background: linear-gradient(135deg, #c9a43b, #f7e29a);
+  color: #080a12;
+  font-weight: 600;
+  border-color: rgba(247, 226, 154, 0.9);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.6),
+    0 6px 14px rgba(0, 0, 0, 0.6);
+  text-transform: none;
+}
+
+.fin-btn-export::before {
+  content: "⬇️";
+  font-size: 0.9rem;
+}
+
+/* Hover más marcado para export */
+.fin-btn-export:hover {
+  transform: translateY(-1px);
+  background: linear-gradient(135deg, #f7e29a, #ffeccb);
+  border-color: #f7e29a;
+}
