@@ -55,15 +55,21 @@ function openFinanzasDB() {
     req.onupgradeneeded = (e) => {
       const d = e.target.result;
       if (!d.objectStoreNames.contains('accounts')) {
-        d.createObjectStore('accounts', { keyPath: 'id', autoIncrement: true });
+        const accStore = d.createObjectStore('accounts', { keyPath: 'code' });
+        accStore.createIndex('type', 'type', { unique: false });
       }
       if (!d.objectStoreNames.contains('journalEntries')) {
-        const je = d.createObjectStore('journalEntries', { keyPath: 'id', autoIncrement: true });
-        je.createIndex('by_date', 'date', { unique: false });
-        je.createIndex('by_event', 'eventId', { unique: false });
+        const entriesStore = d.createObjectStore('journalEntries', { keyPath: 'id', autoIncrement: true });
+        entriesStore.createIndex('date', 'date', { unique: false });
+        entriesStore.createIndex('tipoMovimiento', 'tipoMovimiento', { unique: false });
+        entriesStore.createIndex('evento', 'evento', { unique: false });
+        entriesStore.createIndex('origen', 'origen', { unique: false });
       } else {
-        try { e.target.transaction.objectStore('journalEntries').createIndex('by_date', 'date'); } catch {}
-        try { e.target.transaction.objectStore('journalEntries').createIndex('by_event', 'eventId'); } catch {}
+        const entriesStore = e.target.transaction.objectStore('journalEntries');
+        try { entriesStore.createIndex('date', 'date', { unique: false }); } catch(e){}
+        try { entriesStore.createIndex('tipoMovimiento', 'tipoMovimiento', { unique: false }); } catch(e){}
+        try { entriesStore.createIndex('evento', 'evento', { unique: false }); } catch(e){}
+        try { entriesStore.createIndex('origen', 'origen', { unique: false }); } catch(e){}
       }
     };
     req.onsuccess = () => { finDb = req.result; resolve(finDb); };
@@ -127,45 +133,55 @@ function mapSaleToCuentaCobro(sale) {
   const pay = sale.payment || 'efectivo';
   if (pay === 'efectivo') return '1100';   // Caja
   if (pay === 'transferencia') return '1200'; // Banco
-  if (pay === 'credito') return '1300'; // Cuentas por Cobrar
-  return '1100';
+  if (pay === 'credito') return '1300';    // Clientes
+  return '1200'; // Otros métodos similares a banco
 }
 
-// Crea asientos contables en finanzasDB a partir de una venta POS
-async function createFinanzasEntriesForSalePOS(sale){
-  try{
+// Crea/actualiza asiento automático en Finanzas por una venta / devolución del POS
+async function createJournalEntryForSalePOS(sale) {
+  try {
+    if (!sale) return;
+    // Cortesías: por ahora NO se contabilizan ingresos ni costo de venta
+    if (sale.courtesy) return;
+
     await ensureFinanzasDB();
-  }catch(e){
-    console.error('No se puede crear asientos porque finanzasDB no está disponible', e);
-    return;
-  }
-  try{
-    const ventasCuenta = '4100'; // Ingresos por Ventas
-    const cajaCuenta   = mapSaleToCuentaCobro(sale); // Caja / Banco / Cuentas por Cobrar
-    const fecha = sale.date || new Date().toISOString().slice(0,10);
-    const eventId = sale.eventId || null;
-    const total = Number(sale.total)||0;
-    if (!total) return;
 
-    const entry = {
-      id: undefined,
-      date: fecha,
-      description: `Venta POS event ${eventId||'-'}`,
-      eventId: eventId,
-      items: [
-        { accountId: cajaCuenta, type: 'debit', amount: total },
-        { accountId: ventasCuenta, type: 'credit', amount: total }
-      ],
-      source: 'pos-sale',
-      sourceId: sale.id || null
-    };
-    await finPut('journalEntries', entry);
-  }catch(e){
-    console.error('Error creando asientos para venta POS', e);
+    const saleId = sale.id != null ? sale.id : null;
+
+    // Importe de ingreso (venta neta)
+    const amount = Math.abs(Number(sale.total)||0);
+    if (!amount) return;
+
+    const fecha = sale.date || new Date().toISOString().slice(0,10);
+    const evento = sale.eventName || (sale.eventId != null ? `Evento ${sale.eventId}` : 'POS');
+    const tipoMovimiento = 'venta-pos';
+    const origen = 'A33 POS';
+
+    const cuentaVentas = '4100'; // Ingresos por Ventas
+    const cuentaCobro = mapSaleToCuentaCobro(sale);
+
+    const entries = await finGetAll('journalEntries');
+    const existing = entries.find(e=> e.origenId === saleId && e.tipoMovimiento === tipoMovimiento);
+    const entry = existing || { id: undefined };
+
+    entry.date = fecha;
+    entry.tipoMovimiento = tipoMovimiento;
+    entry.evento = evento;
+    entry.origen = origen;
+    entry.origenId = saleId;
+    entry.details = [
+      { account: cuentaCobro, type: 'debit', amount },
+      { account: cuentaVentas, type: 'credit', amount }
+    ];
+
+    const id = await finPut('journalEntries', entry);
+    entry.id = id;
+  } catch (e) {
+    console.error('Error creando asiento automático para venta POS', e);
   }
 }
 
-// Invierte efecto contable de una venta (por ejemplo, al borrar una venta)
+// Elimina asiento automático vinculado a una venta POS
 async function deleteFinanzasEntriesForSalePOS(saleId){
   try{
     await ensureFinanzasDB();
@@ -175,7 +191,7 @@ async function deleteFinanzasEntriesForSalePOS(saleId){
   }
   try{
     const all = await finGetAll('journalEntries');
-    const toDelete = all.filter(x=>x.source==='pos-sale' && x.sourceId===saleId);
+    const toDelete = all.filter(x=>x.origenId===saleId && x.tipoMovimiento==='venta-pos');
     for (const row of toDelete){
       await finDelete('journalEntries', row.id);
     }
@@ -187,11 +203,11 @@ async function deleteFinanzasEntriesForSalePOS(saleId){
 // --- Inventario central: helper para actualizar uso de insumos por venta POS ---
 // Esta función fue pensada para conectar POS con inventario de producto terminado
 // a nivel central. Aquí asumimos que sale tiene products con quantity y que
-// existe inventario central en otro módulo, pero por ahora sólo dejamos el hook.
+// existe inventario central en otro módulo.
 function applyFinishedFromSalePOS(sale, factor=1){
   try{
-    // Hook sin implementación detallada aquí (inventario central se maneja en otra vista).
-    // Se deja la función para no romper nada del flujo existente.
+    if (!sale || !sale.items) return;
+    // Aquí se podría sumar/restar inventario central, pero por ahora solo se deja el hook.
   }catch(e){
     console.error('Error en applyFinishedFromSalePOS', e);
   }
@@ -219,19 +235,19 @@ function del(name, key){
 
             const saleId = (sale.id != null) ? sale.id : key;
             finPromise = deleteFinanzasEntriesForSalePOS(saleId).catch(err=>{
-              console.error('Error eliminando asientos contables vinculados a venta POS', err);
+              console.error('Error eliminando asientos contables vinculados a la venta', err);
             });
           }
 
+          finPromise.then(()=>{
+            const delReq = store.delete(key);
+            delReq.onsuccess = ()=>resolve();
+            delReq.onerror = ()=>reject(delReq.error);
+          });
+        };
+        getReq.onerror = ()=>{
           const delReq = store.delete(key);
-          delReq.onsuccess = async ()=>{
-            try{
-              await finPromise;
-            }catch(e){
-              console.error('Error esperando eliminación de asientos contables', e);
-            }
-            resolve();
-          };
+          delReq.onsuccess = ()=>resolve();
           delReq.onerror = ()=>reject(delReq.error);
         };
       }catch(e){
@@ -400,46 +416,22 @@ function computePettyCashSummary(pc){
 }
 
 async function setMeta(key, value){ return put('meta', {id:key, value}); }
-async function getMeta(key){ const all = await getAll('meta'); const row = all.find(x=>x.id===key); return row ? row.value : null; }
+async function getMeta(key){
+  const all = await getAll('meta');
+  const row = all.find(x=>x.id===key);
+  return row ? row.value : null;
+}
 
 // Normalizar nombres
 function normName(s){ return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim(); }
 
 const RECETAS_KEY = 'arcano33_recetas_v1';
 
-const DEFAULT_RECETAS = [
-  {
-    id: 'clasica-base',
-    name: 'Clásica base',
-    description: 'Receta base Arcano 33',
-    litersTotal: 3.8,
-    litersWine: 2.5,
-    mlVodka: 250,
-    litersJuice: 0.8,
-    litersWater: 0.25,
-    mlSyrup: 200
-  }
-];
+const STORAGE_KEY_INVENTARIO = 'arcano33_inventario';
 
-function loadRecetas(){
-  try{
-    const raw = localStorage.getItem(RECETAS_KEY);
-    if (!raw) return DEFAULT_RECETAS.slice();
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed) || !parsed.length) return DEFAULT_RECETAS.slice();
-    return parsed;
-  }catch(e){
-    console.error('Error leyendo recetas', e);
-    return DEFAULT_RECETAS.slice();
-  }
-}
-
-function saveRecetas(recetas){
-  try{
-    localStorage.setItem(RECETAS_KEY, JSON.stringify(recetas));
-  }catch(e){
-    console.error('Error guardando recetas', e);
-  }
+function invParseNumberPOS(value){
+  const n = parseFloat(String(value).replace(',','.'));
+  return Number.isFinite(n) ? n : 0;
 }
 
 // --- UI helpers
@@ -450,37 +442,44 @@ function $$(sel){ return Array.from(document.querySelectorAll(sel)); }
 let productos = [];
 let eventos = [];
 let ventas = [];
-let inventario = [];
-let recetas = loadRecetas();
+let inventarioMovs = [];
+let inventarioCache = [];
+let currentEventId = null;
 
-let currentSale = {
-  items: [],
-  total: 0,
-  payment: 'efectivo'
-};
-
-// --- Inicialización
+// --- Carga inicial
 async function init(){
   await openDB();
-  await loadData();
-  bindEvents();
+  await loadAllData();
+  bindPOSUI();
   setTab('venta');
 }
 
-// --- Carga de datos desde IndexedDB
-async function loadData(){
+// Carga productos, eventos, ventas, inventario y meta
+async function loadAllData(){
   productos = await getAll('products');
   eventos = await getAll('events');
   ventas = await getAll('sales');
-  inventario = await getAll('inventory');
-  renderProductos();
-  renderEventos();
-  renderInventario();
-  renderSummary();
+  inventarioMovs = await getAll('inventory');
+  currentEventId = await getMeta('currentEventId');
+  rebuildInventarioCache();
+  renderProductsSelect();
+  renderEventosList();
   refreshEventUI();
+  renderVentasResumen();
 }
 
-// --- Manejo de pestañas
+// --- Inventario cacheado por evento y producto
+function rebuildInventarioCache(){
+  const cache = {};
+  for (const mov of inventarioMovs){
+    const key = `${mov.eventId||'global'}|${mov.productId||'?'}`;
+    if (!cache[key]) cache[key] = { eventId: mov.eventId||null, productId: mov.productId||null, quantity:0 };
+    cache[key].quantity += invParseNumberPOS(mov.quantity||0) * (mov.type==='entrada' ? 1 : -1);
+  }
+  inventarioCache = Object.values(cache);
+}
+
+// --- Tabs
 function setTab(name){
   $$('.tab').forEach(el=> el.style.display='none');
   const target = document.getElementById('tab-'+name);
@@ -488,47 +487,137 @@ function setTab(name){
   $$('.tabbar button').forEach(b=>b.classList.remove('active'));
   const btn = document.querySelector(`.tabbar button[data-tab="${name}"]`);
   if (btn) btn.classList.add('active');
-  if (name==='resumen') renderSummary();
-  if (name==='productos') renderProductos();
-  if (name==='eventos') renderEventos();
-  if (name==='inventario') renderInventario();
+  if (name==='resumen') renderVentasResumen();
+  if (name==='productos') renderProductsTable();
+  if (name==='eventos') renderEventosList();
+  if (name==='inventario') renderInventarioTabla();
 }
 
-// --- Eventos de UI
-function bindEvents(){
+// --- Event UI (evento activo, select de evento, etc.)
+async function refreshEventUI(){
+  const sel = $('#sale-event');
+  const evs = eventos.slice().sort((a,b)=> (a.date||'').localeCompare(b.date||''));
+  const cur = currentEventId;
+
+  sel.innerHTML = '<option value="">— Selecciona evento —</option>';
+  for (const ev of evs){
+    const opt = document.createElement('option');
+    opt.value = ev.id;
+    opt.textContent = ev.name + (ev.closedAt ? ' (cerrado)' : '');
+    sel.appendChild(opt);
+  }
+  if (cur) sel.value = cur;
+  else sel.value = '';
+
+  const status = $('#event-status');
+  const evCur = evs.find(e=> cur && e.id == cur);
+  if (evCur && evCur.closedAt) {
+    status.style.display='block';
+    status.textContent = `Evento cerrado el ${new Date(evCur.closedAt).toLocaleString()}. Puedes reabrirlo o crear/activar otro.`;
+  } else {
+    status.style.display='none';
+  }
+  $('#btn-reopen-event').style.display = (evCur && evCur.closedAt) ? 'inline-block' : 'none';
+
+  const invSel = $('#inv-event');
+  if (invSel){
+    invSel.innerHTML = '<option value="">Todos</option>';
+    for (const ev of evs){
+      const opt = document.createElement('option');
+      opt.value = ev.id;
+      opt.textContent = ev.name;
+      invSel.appendChild(opt);
+    }
+  }
+
+  $('#current-event-label').textContent = evCur ? evCur.name : 'Sin evento activo';
+}
+
+// --- Binding de UI principal
+function bindPOSUI(){
   $$('.tabbar button').forEach(btn=>{
     btn.addEventListener('click', ()=> setTab(btn.dataset.tab));
   });
 
-  $('#add-product-form').addEventListener('submit', onAddProduct);
-  $('#product-search').addEventListener('input', renderProductos);
+  // Productos
+  const formProd = $('#form-producto');
+  if (formProd){
+    formProd.addEventListener('submit', onAddProducto);
+  }
+  $('#product-search')?.addEventListener('input', renderProductsTable);
 
-  $('#event-form').addEventListener('submit', onAddEvent);
-  $('#event-search').addEventListener('input', renderEventos);
+  // Eventos
+  $('#form-evento')?.addEventListener('submit', onAddEvento);
+  $('#btn-reopen-event')?.addEventListener('click', onReopenEvento);
+  $('#event-search')?.addEventListener('input', renderEventosList);
 
-  $('#sale-add-item').addEventListener('click', onAddItemToSale);
-  $('#sale-clear').addEventListener('click', clearCurrentSale);
-  $('#sale-finish').addEventListener('click', finishSale);
-
-  $('#sale-payment').addEventListener('change', e=>{
-    currentSale.payment = e.target.value;
+  // Ventas
+  $('#sale-event')?.addEventListener('change', onChangeSaleEvent);
+  $('#sale-product')?.addEventListener('change', onChangeSaleProduct);
+  $('#sale-qty')?.addEventListener('input', recomputeTotal);
+  $('#sale-price')?.addEventListener('input', recomputeTotal);
+  $('#sale-add-item')?.addEventListener('click', onAddItemToSale);
+  $('#sale-finish')?.addEventListener('click', onFinishSale);
+  $('#sale-clear')?.addEventListener('click', clearVentaActual);
+  $('#sale-payment')?.addEventListener('change', e=>{
+    ventaActual.payment = e.target.value;
   });
 
-  $('#sale-event').addEventListener('change', async (e)=>{
-    const val = e.target.value;
-    const eventId = val ? Number(val) : null;
-    await setMeta('currentEventId', eventId);
-    refreshEventUI();
-  });
+  // Inventario
+  $('#form-inventario')?.addEventListener('submit', onAddInventarioMov);
+  $('#inv-event')?.addEventListener('change', renderInventarioTabla);
+}
 
-  $('#inv-event').addEventListener('change', renderInventario);
+// --- Normalizar nombres
+function normText(s){
+  return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
 }
 
 // --- Productos
-async function onAddProduct(ev){
+let ventaActual = {
+  items: [],
+  total: 0,
+  payment: 'efectivo'
+};
+
+function renderProductsSelect(){
+  const sel = $('#sale-product');
+  if (!sel) return;
+  sel.innerHTML = '';
+  productos.forEach(p=>{
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = `${p.name} (C$ ${Number(p.price||0).toFixed(2)})`;
+    sel.appendChild(opt);
+  });
+  if (productos.length){
+    sel.value = productos[0].id;
+    $('#sale-price').value = Number(productos[0].price||0).toFixed(2);
+  }
+}
+
+function renderProductsTable(){
+  const tbody = $('#products-tbody');
+  if (!tbody) return;
+  const term = normText($('#product-search')?.value||'');
+  tbody.innerHTML = '';
+  productos
+    .filter(p=> !term || normText(p.name).includes(term))
+    .forEach(p=>{
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${p.name}</td>
+        <td>C$ ${Number(p.price||0).toFixed(2)}</td>
+        <td>${p.category||''}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+}
+
+async function onAddProducto(ev){
   ev.preventDefault();
   const name = $('#product-name').value.trim();
-  const price = Number($('#product-price').value||0);
+  const price = invParseNumberPOS($('#product-price').value);
   const category = $('#product-category').value.trim() || 'General';
 
   if (!name || !price){
@@ -536,7 +625,8 @@ async function onAddProduct(ev){
     return;
   }
 
-  if (productos.some(p=> normName(p.name)===normName(name))){
+  const exists = productos.some(p=> normText(p.name)===normText(name));
+  if (exists){
     alert('Ya existe un producto con ese nombre');
     return;
   }
@@ -548,260 +638,214 @@ async function onAddProduct(ev){
   $('#product-name').value = '';
   $('#product-price').value = '';
   $('#product-category').value = '';
-  renderProductos();
-}
-
-function renderProductos(){
-  const term = normName($('#product-search').value||'');
-  const tbody = $('#products-tbody');
-  tbody.innerHTML = '';
-  productos
-    .filter(p=> !term || normName(p.name).includes(term))
-    .forEach(p=>{
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td>${p.name}</td>
-        <td>C$ ${p.price.toFixed(2)}</td>
-        <td>${p.category||''}</td>
-      `;
-      tbody.appendChild(tr);
-    });
+  renderProductsSelect();
+  renderProductsTable();
 }
 
 // --- Eventos
-async function onAddEvent(ev){
+async function onAddEvento(ev){
   ev.preventDefault();
   const name = $('#event-name').value.trim();
   const date = $('#event-date').value || new Date().toISOString().slice(0,10);
+  const location = $('#event-location').value.trim();
   const notes = $('#event-notes').value.trim();
-
   if (!name){
-    alert('El nombre del evento es obligatorio');
+    alert('Nombre del evento obligatorio');
     return;
   }
-
-  const evObj = { name, date, notes, status:'open' };
+  const evObj = { name, date, location, notes, closedAt:null };
   const id = await put('events', evObj);
   evObj.id = id;
   eventos.push(evObj);
-
   $('#event-name').value = '';
   $('#event-date').value = '';
+  $('#event-location').value = '';
   $('#event-notes').value = '';
-
-  renderEventos();
+  renderEventosList();
   refreshEventUI();
 }
 
-function renderEventos(){
-  const term = normName($('#event-search').value||'');
+function renderEventosList(){
   const tbody = $('#events-tbody');
+  if (!tbody) return;
+  const term = normText($('#event-search')?.value||'');
   tbody.innerHTML = '';
-  eventos
-    .filter(e=> !term || normName(e.name).includes(term))
-    .forEach(e=>{
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td>${e.name}</td>
-        <td>${e.date}</td>
-        <td>${e.status==='open' ? 'Abierto' : 'Cerrado'}</td>
-        <td>
-          <button data-id="${e.id}" class="btn-small btn-secondary evt-active">Activar</button>
-          <button data-id="${e.id}" class="btn-small btn-warning evt-close">Cerrar</button>
-          <button data-id="${e.id}" class="btn-small btn-danger evt-delete">Eliminar</button>
-        </td>
-      `;
-      tbody.appendChild(tr);
-    });
-
-  $$('#events-tbody .evt-active').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const id = Number(btn.dataset.id);
-      await setMeta('currentEventId', id);
-      refreshEventUI();
-      alert('Evento activado para ventas');
-    });
-  });
-
-  $$('#events-tbody .evt-close').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const id = Number(btn.dataset.id);
-      const ev = eventos.find(x=>x.id===id);
-      if (!ev) return;
-      if (!confirm('¿Cerrar este evento?')) return;
-      ev.status = 'closed';
-      await put('events', ev);
-      renderEventos();
-      refreshEventUI();
-    });
-  });
-
-  $$('#events-tbody .evt-delete').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const id = Number(btn.dataset.id);
-      if (!confirm('¿Eliminar este evento y sus ventas asociadas?')) return;
-      eventos = eventos.filter(x=>x.id!==id);
-      await del('events', id);
-      const toDelete = ventas.filter(v=>v.eventId===id);
-      for (const v of toDelete){
-        await del('sales', v.id);
-      }
-      ventas = ventas.filter(v=>v.eventId!==id);
-      const invToDelete = inventario.filter(inv=>inv.eventId===id);
-      for (const inv of invToDelete){
-        await del('inventory', inv.id);
-      }
-      inventario = inventario.filter(inv=>inv.eventId!==id);
-
-      const cur = await getMeta('currentEventId');
-      if (cur===id){
-        await setMeta('currentEventId', null);
-      }
-
-      renderEventos();
-      renderSummary();
-      renderInventario();
-      refreshEventUI();
-    });
-  });
-}
-
-async function refreshEventUI(){
-  const saleEventSelect = $('#sale-event');
-  const invEventSelect = $('#inv-event');
-  const currentId = await getMeta('currentEventId');
-
-  saleEventSelect.innerHTML = '<option value="">Sin evento activo</option>';
-  eventos.forEach(ev=>{
-    const opt = document.createElement('option');
-    opt.value = ev.id;
-    opt.textContent = ev.name;
-    if (currentId && ev.id===currentId) opt.selected = true;
-    saleEventSelect.appendChild(opt);
-  });
-
-  invEventSelect.innerHTML = '<option value="">Todos</option>';
-  eventos.forEach(ev=>{
-    const opt = document.createElement('option');
-    opt.value = ev.id;
-    opt.textContent = ev.name;
-    invEventSelect.appendChild(opt);
-  });
-
-  const evInfo = $('#current-event-info');
-  const ev = eventos.find(e=>e.id===currentId);
-  if (ev){
-    evInfo.textContent = `Evento activo: ${ev.name} (${ev.status==='open' ? 'Abierto' : 'Cerrado'})`;
-  } else {
-    evInfo.textContent = 'Sin evento activo';
+  const list = eventos
+    .filter(e=> !term || normText(e.name).includes(term))
+    .sort((a,b)=> (a.date||'').localeCompare(b.date||''));
+  for (const ev of list){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${ev.name}</td>
+      <td>${ev.date||''}</td>
+      <td>${ev.location||''}</td>
+      <td>${ev.closedAt ? 'Cerrado' : 'Abierto'}</td>
+      <td>
+        <button class="btn-small" data-action="activar" data-id="${ev.id}">Activar</button>
+        ${ev.closedAt ? `<button class="btn-small" data-action="reabrir" data-id="${ev.id}">Reabrir</button>` : `<button class="btn-small" data-action="cerrar" data-id="${ev.id}">Cerrar</button>`}
+      </td>
+    `;
+    tbody.appendChild(tr);
   }
 
-  updateSellEnabled();
+  tbody.querySelectorAll('button[data-action]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const id = parseInt(btn.dataset.id,10);
+      const action = btn.dataset.action;
+      const ev = eventos.find(x=>x.id===id);
+      if (!ev) return;
+
+      if (action==='activar'){
+        currentEventId = id;
+        await setMeta('currentEventId', id);
+        refreshEventUI();
+        alert('Evento activado para ventas');
+      } else if (action==='cerrar'){
+        if (!confirm('¿Cerrar este evento?')) return;
+        ev.closedAt = new Date().toISOString();
+        await put('events', ev);
+        renderEventosList();
+        refreshEventUI();
+      } else if (action==='reabrir'){
+        ev.closedAt = null;
+        await put('events', ev);
+        renderEventosList();
+        refreshEventUI();
+      }
+    });
+  });
 }
 
-function updateSellEnabled(){
-  const btn = $('#sale-finish');
-  getMeta('currentEventId').then(cur=>{
-    btn.disabled = !cur;
-  });
+async function onReopenEvento(){
+  if (!currentEventId) return;
+  const ev = eventos.find(e=>e.id===currentEventId);
+  if (!ev) return;
+  ev.closedAt = null;
+  await put('events', ev);
+  renderEventosList();
+  refreshEventUI();
+}
+
+async function onChangeSaleEvent(e){
+  const val = e.target.value;
+  currentEventId = val ? parseInt(val,10) : null;
+  await setMeta('currentEventId', currentEventId);
+  refreshEventUI();
 }
 
 // --- Ventas
-function onAddItemToSale(){
-  const prodSelect = $('#sale-product');
-  const qtyInput = $('#sale-qty');
-  const prodId = Number(prodSelect.value);
-  const qty = Number(qtyInput.value||0);
+function onChangeSaleProduct(){
+  const prodId = parseInt($('#sale-product').value||'0',10);
+  const prod = productos.find(p=>p.id===prodId);
+  if (prod){
+    $('#sale-price').value = Number(prod.price||0).toFixed(2);
+  }
+  recomputeTotal();
+}
 
-  if (!prodId || !qty){
-    alert('Seleccione producto y cantidad');
+function recomputeTotal(){
+  const qty = invParseNumberPOS($('#sale-qty').value);
+  const price = invParseNumberPOS($('#sale-price').value);
+  const total = qty * price;
+  $('#sale-total').textContent = `Total: C$ ${total.toFixed(2)}`;
+}
+
+function clearVentaActual(){
+  ventaActual.items = [];
+  ventaActual.total = 0;
+  ventaActual.payment = $('#sale-payment')?.value || 'efectivo';
+  $('#sale-qty').value = '';
+  $('#sale-notes').value = '';
+  $('#sale-items-tbody').innerHTML = '';
+  $('#sale-total').textContent = 'Total: C$ 0.00';
+}
+
+function onAddItemToSale(){
+  const prodId = parseInt($('#sale-product').value||'0',10);
+  const qty = invParseNumberPOS($('#sale-qty').value);
+  const price = invParseNumberPOS($('#sale-price').value);
+  if (!prodId || !qty || !price){
+    alert('Producto, cantidad y precio son obligatorios');
     return;
   }
-
   const prod = productos.find(p=>p.id===prodId);
   if (!prod){
     alert('Producto no encontrado');
     return;
   }
-
-  const existing = currentSale.items.find(it=>it.productId===prodId);
+  const existing = ventaActual.items.find(it=>it.productId===prodId && it.price===price);
   if (existing){
     existing.quantity += qty;
   } else {
-    currentSale.items.push({
+    ventaActual.items.push({
       productId: prodId,
       name: prod.name,
-      price: prod.price,
+      price,
       quantity: qty
     });
   }
-
-  qtyInput.value = '';
-  renderCurrentSale();
+  renderVentaActualItems();
+  $('#sale-qty').value = '';
+  recomputeTotal();
 }
 
-function renderCurrentSale(){
+function renderVentaActualItems(){
   const tbody = $('#sale-items-tbody');
+  if (!tbody) return;
   tbody.innerHTML = '';
   let total = 0;
-  currentSale.items.forEach((it, idx)=>{
-    const sub = it.price * it.quantity;
-    total += sub;
+  ventaActual.items.forEach((it, idx)=>{
+    const subtotal = it.price * it.quantity;
+    total += subtotal;
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${it.name}</td>
       <td>${it.quantity}</td>
       <td>C$ ${it.price.toFixed(2)}</td>
-      <td>C$ ${sub.toFixed(2)}</td>
-      <td><button data-idx="${idx}" class="btn-small btn-danger rm-item">X</button></td>
+      <td>C$ ${subtotal.toFixed(2)}</td>
+      <td><button class="btn-small btn-danger" data-idx="${idx}">X</button></td>
     `;
     tbody.appendChild(tr);
   });
-  currentSale.total = total;
+  ventaActual.total = total;
   $('#sale-total').textContent = `Total: C$ ${total.toFixed(2)}`;
 
-  $$('#sale-items-tbody .rm-item').forEach(btn=>{
+  tbody.querySelectorAll('button[data-idx]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      const idx = Number(btn.dataset.idx);
-      currentSale.items.splice(idx,1);
-      renderCurrentSale();
+      const idx = parseInt(btn.dataset.idx,10);
+      ventaActual.items.splice(idx,1);
+      renderVentaActualItems();
     });
   });
 }
 
-function clearCurrentSale(){
-  currentSale.items = [];
-  currentSale.total = 0;
-  $('#sale-total').textContent = 'Total: C$ 0.00';
-  $('#sale-notes').value = '';
-  renderCurrentSale();
-}
-
-async function finishSale(){
-  const eventId = await getMeta('currentEventId');
-  if (!eventId){
-    alert('Debe haber un evento activo para registrar ventas');
+async function onFinishSale(){
+  if (!currentEventId){
+    alert('Debes seleccionar un evento para registrar ventas');
     return;
   }
-  if (!currentSale.items.length){
-    alert('No hay productos en la venta');
+  if (!ventaActual.items.length){
+    alert('No hay items en la venta');
     return;
   }
 
   const date = new Date().toISOString().slice(0,10);
   const notes = $('#sale-notes').value.trim();
+  const payment = $('#sale-payment').value || 'efectivo';
+
   const sale = {
     date,
-    eventId,
-    items: currentSale.items.map(it=>({
+    eventId: currentEventId,
+    items: ventaActual.items.map(it=>({
       productId: it.productId,
       name: it.name,
       price: it.price,
       quantity: it.quantity
     })),
-    total: currentSale.total,
-    payment: currentSale.payment,
-    notes
+    total: ventaActual.total,
+    payment,
+    notes,
+    courtesy: false
   };
 
   const id = await put('sales', sale);
@@ -815,55 +859,36 @@ async function finishSale(){
   }
 
   try{
-    await createFinanzasEntriesForSalePOS(sale);
+    await createJournalEntryForSalePOS(sale);
   }catch(e){
-    console.error('Error creando asientos contables desde venta POS', e);
+    console.error('Error creando asiento contable automático desde venta POS', e);
   }
 
-  clearCurrentSale();
-  renderSummary();
-  renderInventario();
+  clearVentaActual();
+  renderVentasResumen();
+  renderInventarioTabla();
   alert('Venta registrada');
 }
 
-// --- Inventario (por evento)
-function renderInventario(){
-  const eventIdStr = $('#inv-event').value;
-  const eventId = eventIdStr ? Number(eventIdStr) : null;
-  const tbody = $('#inv-tbody');
-  tbody.innerHTML = '';
-
-  const filtered = eventId ? inventario.filter(inv=>inv.eventId===eventId) : inventario.slice();
-  filtered.forEach(inv=>{
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${inv.eventName||''}</td>
-      <td>${inv.productName||''}</td>
-      <td>${inv.quantity||0}</td>
-      <td>${inv.notes||''}</td>
-    `;
-    tbody.appendChild(tr);
-  });
-}
-
-// --- Resumen
-function renderSummary(){
+// --- Resumen de ventas por evento
+function renderVentasResumen(){
   const tbody = $('#summary-tbody');
+  if (!tbody) return;
   tbody.innerHTML = '';
-
   const byEvent = {};
-  ventas.forEach(v=>{
-    if (!byEvent[v.eventId]) byEvent[v.eventId] = { total:0, count:0 };
-    byEvent[v.eventId].total += v.total;
-    byEvent[v.eventId].count += 1;
-  });
-
-  Object.keys(byEvent).forEach(eventId=>{
-    const ev = eventos.find(e=>e.id===Number(eventId));
-    const info = byEvent[eventId];
+  for (const v of ventas){
+    const key = v.eventId || 'sin';
+    if (!byEvent[key]) byEvent[key] = { total:0, count:0 };
+    byEvent[key].total += Number(v.total||0);
+    byEvent[key].count += 1;
+  }
+  Object.keys(byEvent).forEach(key=>{
+    const info = byEvent[key];
+    const ev = eventos.find(e=>e.id===Number(key));
+    const name = ev ? ev.name : 'Sin evento';
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${ev ? ev.name : ('Evento '+eventId)}</td>
+      <td>${name}</td>
       <td>${info.count}</td>
       <td>C$ ${info.total.toFixed(2)}</td>
     `;
@@ -871,92 +896,72 @@ function renderSummary(){
   });
 }
 
-// --- Recetas (usadas para cálculo en otros módulos, aquí sólo se leen/guardan)
-function renderRecetasList(){
-  const tbody = $('#recetas-tbody');
-  if (!tbody) return;
-  tbody.innerHTML = '';
-  recetas.forEach((r, idx)=>{
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${r.name}</td>
-      <td>${r.description||''}</td>
-      <td>${r.litersTotal||0}</td>
-      <td>
-        <button class="btn-small btn-secondary" data-idx="${idx}">Editar</button>
-        <button class="btn-small btn-danger" data-del="${idx}">Borrar</button>
-      </td>
-    `;
-    tbody.appendChild(tr);
-  });
+// --- Inventario movimientos
+async function onAddInventarioMov(ev){
+  ev.preventDefault();
+  const eventIdStr = $('#inv-event-mov').value;
+  const prodIdStr = $('#inv-product-mov').value;
+  const qty = invParseNumberPOS($('#inv-qty').value);
+  const type = $('#inv-type').value || 'entrada';
+  const notes = $('#inv-notes').value.trim();
 
-  $$('#recetas-tbody button[data-idx]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const idx = Number(btn.dataset.idx);
-      const r = recetas[idx];
-      if (!r) return;
-      $('#receta-idx').value = idx;
-      $('#receta-name').value = r.name;
-      $('#receta-desc').value = r.description||'';
-      $('#receta-total').value = r.litersTotal||0;
-      $('#receta-wine').value = r.litersWine||0;
-      $('#receta-vodka').value = r.mlVodka||0;
-      $('#receta-juice').value = r.litersJuice||0;
-      $('#receta-water').value = r.litersWater||0;
-      $('#receta-syrup').value = r.mlSyrup||0;
-    });
-  });
+  if (!eventIdStr || !prodIdStr || !qty){
+    alert('Evento, producto y cantidad obligatorios');
+    return;
+  }
+  const eventId = parseInt(eventIdStr,10);
+  const productId = parseInt(prodIdStr,10);
+  const evObj = eventos.find(e=>e.id===eventId);
+  const prod = productos.find(p=>p.id===productId);
+  if (!evObj || !prod){
+    alert('Evento o producto inválido');
+    return;
+  }
 
-  $$('#recetas-tbody button[data-del]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const idx = Number(btn.dataset.del);
-      if (!confirm('¿Eliminar esta receta?')) return;
-      recetas.splice(idx,1);
-      saveRecetas(recetas);
-      renderRecetasList();
-    });
-  });
+  const mov = {
+    eventId,
+    eventName: evObj.name,
+    productId,
+    productName: prod.name,
+    quantity: qty,
+    type,
+    notes
+  };
+
+  const id = await put('inventory', mov);
+  mov.id = id;
+  inventarioMovs.push(mov);
+  rebuildInventarioCache();
+  renderInventarioTabla();
+
+  $('#inv-qty').value = '';
+  $('#inv-notes').value = '';
 }
 
-function bindRecetasForm(){
-  const form = $('#receta-form');
-  if (!form) return;
-  form.addEventListener('submit', ev=>{
-    ev.preventDefault();
-    const idx = $('#receta-idx').value;
-    const name = $('#receta-name').value.trim();
-    if (!name){
-      alert('Nombre de receta obligatorio');
-      return;
-    }
-    const r = {
-      name,
-      description: $('#receta-desc').value.trim(),
-      litersTotal: Number($('#receta-total').value||0),
-      litersWine: Number($('#receta-wine').value||0),
-      mlVodka: Number($('#receta-vodka').value||0),
-      litersJuice: Number($('#receta-juice').value||0),
-      litersWater: Number($('#receta-water').value||0),
-      mlSyrup: Number($('#receta-syrup').value||0)
-    };
-    if (idx){
-      recetas[Number(idx)] = Object.assign({}, recetas[Number(idx)], r);
-    } else {
-      recetas.push(r);
-    }
-    saveRecetas(recetas);
-    $('#receta-idx').value = '';
-    form.reset();
-    renderRecetasList();
-  });
+function renderInventarioTabla(){
+  const tbody = $('#inv-tbody');
+  if (!tbody) return;
+  const eventIdStr = $('#inv-event')?.value || '';
+  const eventId = eventIdStr ? parseInt(eventIdStr,10) : null;
+  tbody.innerHTML = '';
+
+  const list = inventarioCache.filter(row=> !eventId || row.eventId===eventId);
+  for (const row of list){
+    const ev = eventos.find(e=>e.id===row.eventId);
+    const prod = productos.find(p=>p.id===row.productId);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${ev ? ev.name : 'Global'}</td>
+      <td>${prod ? prod.name : 'Desconocido'}</td>
+      <td>${row.quantity}</td>
+    `;
+    tbody.appendChild(tr);
+  }
 }
 
 // --- Inicio
 document.addEventListener('DOMContentLoaded', ()=>{
-  init().then(()=>{
-    renderRecetasList();
-    bindRecetasForm();
-  }).catch(err=>{
-    console.error('Error iniciando POS', err);
+  init().catch(err=>{
+    console.error('Error inicializando POS', err);
   });
 });
