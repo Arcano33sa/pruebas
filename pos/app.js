@@ -1,6 +1,6 @@
 // --- IndexedDB helpers POS
 const DB_NAME = 'a33-pos';
-const DB_VER = 20; // schema estable
+const DB_VER = 21; // schema estable
 let db;
 
 // --- Finanzas: conexión a finanzasDB para asientos automáticos
