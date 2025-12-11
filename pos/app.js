@@ -1817,6 +1817,14 @@ async function exportEventosExcel(){
   if (cierreExcelBtn){
     cierreExcelBtn.addEventListener('click', exportCierreTotalGrupoExcel);
   }
+  const cierreCajaBtn = document.getElementById('btn-cierre-caja-grupo');
+  if (cierreCajaBtn){
+    cierreCajaBtn.addEventListener('click', computeCierreCajaChicaGrupo);
+  }
+  const cierreCajaExcelBtn = document.getElementById('btn-cierre-caja-excel');
+  if (cierreCajaExcelBtn){
+    cierreCajaExcelBtn.addEventListener('click', exportCierreCajaChicaGrupoExcel);
+  }
   $('#btn-exportar-eventos').addEventListener('click', async()=>{
     await exportEventosExcel();
   });
@@ -2680,6 +2688,244 @@ async function exportCierreTotalGrupoExcel(){
   const filename = `cierre_total_${safeGroup || 'grupo'}.xlsx`;
   XLSX.writeFile(wb, filename);
 }
+
+
+
+async function getCierreCajaChicaGrupoData(){
+  const groupSelect = $('#filtro-grupo');
+  if (!groupSelect){
+    alert('No se encontró el filtro de grupo en la pestaña de eventos.');
+    return null;
+  }
+  const groupVal = groupSelect.value || '';
+  if (!groupVal){
+    alert('Selecciona un grupo en la lista "Grupos" para generar el cierre de Caja Chica.');
+    return null;
+  }
+
+  const events = await getAll('events');
+  let selectedEvents;
+  let groupLabel;
+  if (groupVal === '__sin_grupo__'){
+    selectedEvents = events.filter(ev => !(ev.groupName || '').trim());
+    groupLabel = '[Sin grupo]';
+  } else {
+    selectedEvents = events.filter(ev => (ev.groupName || '').trim() === groupVal);
+    groupLabel = groupVal;
+  }
+  if (!selectedEvents.length){
+    alert('No hay eventos para ese grupo.');
+    return null;
+  }
+
+  // Obtener Caja Chica por evento
+  const pettyList = [];
+  for (const ev of selectedEvents){
+    const pc = await getPettyCash(ev.id);
+    pettyList.push(pc);
+  }
+
+  const eventos = [];
+  const totalNio = { initial:0, entradas:0, salidas:0, teorico:0, final:0, diferencia:0, tieneFinal:false, tieneDif:false };
+  const totalUsd = { initial:0, entradas:0, salidas:0, teorico:0, final:0, diferencia:0, tieneFinal:false, tieneDif:false };
+
+  for (let i = 0; i < selectedEvents.length; i++){
+    const ev = selectedEvents[i];
+    const pc = pettyList[i];
+    const summary = computePettyCashSummary(pc);
+
+    const nio = summary.nio || {};
+    const usd = summary.usd || {};
+
+    eventos.push({
+      id: ev.id,
+      name: ev.name || '',
+      createdAt: ev.createdAt || '',
+      closedAt: ev.closedAt || '',
+      nio,
+      usd
+    });
+
+    // Acumulados NIO
+    totalNio.initial += nio.initial || 0;
+    totalNio.entradas += nio.entradas || 0;
+    totalNio.salidas += nio.salidas || 0;
+    totalNio.teorico += nio.teorico || 0;
+    if (nio.final != null){
+      totalNio.final += nio.final;
+      totalNio.tieneFinal = true;
+    }
+    if (nio.diferencia != null){
+      totalNio.diferencia += nio.diferencia;
+      totalNio.tieneDif = true;
+    }
+
+    // Acumulados USD
+    totalUsd.initial += usd.initial || 0;
+    totalUsd.entradas += usd.entradas || 0;
+    totalUsd.salidas += usd.salidas || 0;
+    totalUsd.teorico += usd.teorico || 0;
+    if (usd.final != null){
+      totalUsd.final += usd.final;
+      totalUsd.tieneFinal = true;
+    }
+    if (usd.diferencia != null){
+      totalUsd.diferencia += usd.diferencia;
+      totalUsd.tieneDif = true;
+    }
+  }
+
+  if (!totalNio.tieneFinal) totalNio.final = null;
+  if (!totalNio.tieneDif) totalNio.diferencia = null;
+  if (!totalUsd.tieneFinal) totalUsd.final = null;
+  if (!totalUsd.tieneDif) totalUsd.diferencia = null;
+
+  return {
+    groupLabel,
+    eventos,
+    nio: totalNio,
+    usd: totalUsd
+  };
+}
+
+async function computeCierreCajaChicaGrupo(){
+  const data = await getCierreCajaChicaGrupoData();
+  if (!data) return;
+
+  const resumenEl = document.getElementById('cierre-caja-resumen');
+  const eventosEl = document.getElementById('cierre-caja-eventos');
+  if (!resumenEl || !eventosEl) return;
+
+  if (!data.eventos.length){
+    resumenEl.innerHTML = '<p class="muted">No hay datos de Caja Chica para este grupo.</p>';
+    eventosEl.innerHTML = '';
+    return;
+  }
+
+  let html = '';
+  html += `<div><strong>Grupo:</strong> ${data.groupLabel}</div>`;
+  html += `<div><strong>Eventos incluidos:</strong> ${data.eventos.length}</div>`;
+  html += '<hr>';
+  html += '<h4>Córdobas (C$)</h4>';
+  html += '<ul>';
+  html += `<li>Saldo inicial: C$ ${fmt(data.nio.initial)}</li>`;
+  html += `<li>Entradas: C$ ${fmt(data.nio.entradas)}</li>`;
+  html += `<li>Salidas: C$ ${fmt(data.nio.salidas)}</li>`;
+  html += `<li>Saldo teórico: C$ ${fmt(data.nio.teorico)}</li>`;
+  if (data.nio.final != null){
+    html += `<li>Saldo final contado: C$ ${fmt(data.nio.final)}</li>`;
+  }
+  if (data.nio.diferencia != null){
+    html += `<li>Diferencia: C$ ${fmt(data.nio.diferencia)}</li>`;
+  }
+  html += '</ul>';
+
+  html += '<h4>Dólares (US$)</h4>';
+  html += '<ul>';
+  html += `<li>Saldo inicial: US$ ${fmt(data.usd.initial)}</li>`;
+  html += `<li>Entradas: US$ ${fmt(data.usd.entradas)}</li>`;
+  html += `<li>Salidas: US$ ${fmt(data.usd.salidas)}</li>`;
+  html += `<li>Saldo teórico: US$ ${fmt(data.usd.teorico)}</li>`;
+  if (data.usd.final != null){
+    html += `<li>Saldo final contado: US$ ${fmt(data.usd.final)}</li>`;
+  }
+  if (data.usd.diferencia != null){
+    html += `<li>Diferencia: US$ ${fmt(data.usd.diferencia)}</li>`;
+  }
+  html += '</ul>';
+
+  resumenEl.innerHTML = html;
+
+  // Tabla por evento
+  const rows = data.eventos.slice();
+  if (!rows.length){
+    eventosEl.innerHTML = '<p class="muted">No hay eventos con Caja Chica registrada en este grupo.</p>';
+    return;
+  }
+
+  let tabla = '<table class="table small"><thead><tr>';
+  tabla += '<th>Evento</th><th>NIO inicial</th><th>NIO entradas</th><th>NIO salidas</th><th>NIO teórico</th><th>NIO final</th><th>NIO diferencia</th>';
+  tabla += '<th>USD inicial</th><th>USD entradas</th><th>USD salidas</th><th>USD teórico</th><th>USD final</th><th>USD diferencia</th>';
+  tabla += '</tr></thead><tbody>';
+  for (const e of rows){
+    const n = e.nio || {}; const u = e.usd || {};
+    tabla += '<tr>';
+    tabla += `<td>${e.name}</td>`;
+    tabla += `<td>C$ ${fmt(n.initial || 0)}</td>`;
+    tabla += `<td>C$ ${fmt(n.entradas || 0)}</td>`;
+    tabla += `<td>C$ ${fmt(n.salidas || 0)}</td>`;
+    tabla += `<td>C$ ${fmt(n.teorico || 0)}</td>`;
+    tabla += `<td>${n.final != null ? 'C$ '+fmt(n.final) : '—'}</td>`;
+    tabla += `<td>${n.diferencia != null ? 'C$ '+fmt(n.diferencia) : '—'}</td>`;
+    tabla += `<td>US$ ${fmt(u.initial || 0)}</td>`;
+    tabla += `<td>US$ ${fmt(u.entradas || 0)}</td>`;
+    tabla += `<td>US$ ${fmt(u.salidas || 0)}</td>`;
+    tabla += `<td>US$ ${fmt(u.teorico || 0)}</td>`;
+    tabla += `<td>${u.final != null ? 'US$ '+fmt(u.final) : '—'}</td>`;
+    tabla += `<td>${u.diferencia != null ? 'US$ '+fmt(u.diferencia) : '—'}</td>`;
+    tabla += '</tr>';
+  }
+  tabla += '</tbody></table>';
+  eventosEl.innerHTML = tabla;
+}
+
+async function exportCierreCajaChicaGrupoExcel(){
+  const data = await getCierreCajaChicaGrupoData();
+  if (!data) return;
+
+  if (typeof XLSX === 'undefined'){
+    alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Revisa tu conexión a internet.');
+    return;
+  }
+
+  const sheets = [];
+
+  // Hoja ResumenCajaChica
+  const resumenRows = [];
+  resumenRows.push(['Grupo', data.groupLabel]);
+  resumenRows.push([]);
+  resumenRows.push(['Moneda','Saldo inicial','Entradas','Salidas','Saldo teórico','Saldo final','Diferencia']);
+  resumenRows.push(['Córdobas (C$)', data.nio.initial, data.nio.entradas, data.nio.salidas, data.nio.teorico, data.nio.final, data.nio.diferencia]);
+  resumenRows.push(['Dólares (US$)', data.usd.initial, data.usd.entradas, data.usd.salidas, data.usd.teorico, data.usd.final, data.usd.diferencia]);
+  sheets.push({ name: 'ResumenCajaChica', rows: resumenRows });
+
+  // Hoja EventosCajaChica
+  const eventosRows = [];
+  eventosRows.push(['id','evento','creado','cerrado','NIO inicial','NIO entradas','NIO salidas','NIO teórico','NIO final','NIO diferencia','USD inicial','USD entradas','USD salidas','USD teórico','USD final','USD diferencia']);
+  for (const e of data.eventos){
+    const n = e.nio || {}; const u = e.usd || {};
+    eventosRows.push([
+      e.id,
+      e.name,
+      e.createdAt,
+      e.closedAt,
+      n.initial || 0,
+      n.entradas || 0,
+      n.salidas || 0,
+      n.teorico || 0,
+      n.final != null ? n.final : '',
+      n.diferencia != null ? n.diferencia : '',
+      u.initial || 0,
+      u.entradas || 0,
+      u.salidas || 0,
+      u.teorico || 0,
+      u.final != null ? u.final : '',
+      u.diferencia != null ? u.diferencia : ''
+    ]);
+  }
+  sheets.push({ name: 'EventosCajaChica', rows: eventosRows });
+
+  const wb = XLSX.utils.book_new();
+  for (const sh of sheets){
+    const ws = XLSX.utils.aoa_to_sheet(sh.rows);
+    XLSX.utils.book_append_sheet(wb, ws, sh.name);
+  }
+
+  const safeGroup = data.groupLabel.replace(/[\/:*?\[\]]/g,' ');
+  const filename = `caja_chica_${safeGroup || 'grupo'}.xlsx`;
+  XLSX.writeFile(wb, filename);
+}
+
 
 
 document.addEventListener('DOMContentLoaded', init);
