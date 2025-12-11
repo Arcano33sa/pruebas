@@ -3,7 +3,7 @@
 
 (function(){
   const DB_NAME = 'a33-pos';
-  const DB_VER = 19;
+  const DB_VER = 20;
   const RECETAS_KEY = 'arcano33_recetas_v1';
 
   let db = null;
@@ -1521,6 +1521,7 @@ function rebuildHorasEventOptions(filteredSales){
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     }, 0);
+  
 
   function downloadExcel(filename, sheetName, rows){
     if (!rows || !rows.length) return;
@@ -1534,8 +1535,7 @@ function rebuildHorasEventOptions(filteredSales){
     XLSX.writeFile(wb, filename);
   }
 
-
-  }
+}
 
   function exportResumenCsv(){
     const filtered = lastFilteredSales || [];
