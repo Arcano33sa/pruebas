@@ -1308,7 +1308,7 @@ async function renderEventos(){
   const events = await getAll('events');
   const sales = await getAll('sales');
 
-  // Construir opciones de grupos en el filtro de grupos
+  // Construir opciones de filtro de grupo
   if (groupSelect){
     const current = groupSelect.value || '';
     const grupos = [];
@@ -1339,7 +1339,7 @@ async function renderEventos(){
   const filtroGrupo = groupSelect ? (groupSelect.value || '') : '';
 
   const rows = events.map(ev=>{
-    const tot = sales.filter(s=>s.eventId===ev.id).reduce((a,b)=>a+Number(b.total||0),0);
+    const tot = sales.filter(s=>s.eventId===ev.id).reduce((a,b)=>a+(b.total||0),0);
     return {...ev, _totalCached: tot};
   }).filter(ev=>{
     if (filtro==='abiertos' && ev.closedAt) return false;
@@ -1353,7 +1353,6 @@ async function renderEventos(){
         if (g !== filtroGrupo) return false;
       }
     }
-
     return true;
   }).sort((a,b)=>{
     const ad = a.createdAt||''; const bd = b.createdAt||'';
@@ -1382,6 +1381,8 @@ async function renderEventos(){
     tbody.appendChild(tr);
   }
 }
+// Modal VER: rellenar
+function showEventView(show){ $('#event-view').style.display = show ? 'flex' : 'none'; }
 async function openEventView(eventId){
   const events = await getAll('events');
   const ev = events.find(e=>e.id===eventId);
@@ -1780,123 +1781,10 @@ async function init(){
   document.getElementById('btn-restore-seed').onclick = restoreSeed;
 
   
-
-async function computeCierreTotalGrupo(){
-  const groupSelect = $('#filtro-grupo');
-  if (!groupSelect){
-    alert('No se encontró el selector de grupos.');
-    return;
-  }
-  const groupVal = groupSelect.value || '';
-  if (!groupVal){
-    alert('Selecciona un grupo en la lista "Grupos" antes de generar el cierre total.');
-    return;
-  }
-
-  const events = await getAll('events');
-  let groupEvents = [];
-  let labelGrupo = '';
-
-  if (groupVal === '__sin_grupo__'){
-    groupEvents = events.filter(ev => !ev.groupName || !ev.groupName.trim());
-    labelGrupo = '[Sin grupo]';
-  } else {
-    groupEvents = events.filter(ev => (ev.groupName || '').trim() === groupVal);
-    labelGrupo = groupVal;
-  }
-
-  const resumenDiv = $('#cierre-total-resumen');
-  const presDiv = $('#cierre-total-presentaciones');
-  if (!resumenDiv || !presDiv){
-    alert('No se encontró el área de resumen de cierre total.');
-    return;
-  }
-
-  if (!groupEvents.length){
-    resumenDiv.innerHTML = '<div class="warn">No hay eventos en este grupo.</div>';
-    presDiv.innerHTML = '';
-    return;
-  }
-
-  const sales = await getAll('sales');
-  const ids = new Set(groupEvents.map(ev => ev.id));
-  const groupSales = sales.filter(s => ids.has(s.eventId));
-
-  let totalGrupo = 0;
-  const porPago = {};
-  let cortesiasUnidades = 0;
-  let devolucionesUnidades = 0;
-  let devolucionesMonto = 0;
-
-  const porPresentacion = new Map(); // productName -> { unidades, monto }
-
-  for (const s of groupSales){
-    const total = Number(s.total || 0);
-    totalGrupo += total;
-
-    const pay = s.payment || 'otro';
-    if (!porPago[pay]) porPago[pay] = 0;
-    porPago[pay] += total;
-
-    const qty = Number(s.qty || 0);
-    const courtesy = !!s.courtesy;
-    const isReturn = !!s.isReturn;
-
-    if (courtesy){
-      cortesiasUnidades += Math.abs(qty);
-    }
-    if (isReturn){
-      devolucionesUnidades += Math.abs(qty);
-      devolucionesMonto += Math.abs(total);
-    }
-
-    // Para resumen por presentación: solo ventas normales (no cortesías, no devoluciones)
-    if (!courtesy && !isReturn){
-      const name = s.productName || 'N/D';
-      let info = porPresentacion.get(name);
-      if (!info){
-        info = { unidades: 0, monto: 0 };
-        porPresentacion.set(name, info);
-      }
-      info.unidades += qty;
-      info.monto += total;
-    }
-  }
-
-  let html = '';
-  html += `<div><strong>Grupo:</strong> ${labelGrupo}</div>`;
-  html += `<div><strong>Total ventas netas del grupo:</strong> C$ ${fmt(totalGrupo)}</div>`;
-
-  html += '<div style="margin-top:0.5rem;"><strong>Por forma de pago:</strong></div>';
-  html += '<ul>';
-  const labelsPago = { efectivo:'Efectivo', transferencia:'Transferencia', tarjeta:'Tarjeta', credito:'Crédito', otro:'Otro' };
-  for (const key of Object.keys(porPago)){
-    html += `<li>${labelsPago[key] || key}: C$ ${fmt(porPago[key])}</li>`;
-  }
-  html += '</ul>';
-
-  html += `<div><strong>Cortesías (unidades):</strong> ${cortesiasUnidades}</div>`;
-  html += `<div><strong>Devoluciones (unidades):</strong> ${devolucionesUnidades}</div>`;
-  html += `<div><strong>Devoluciones (monto absoluto):</strong> C$ ${fmt(devolucionesMonto)}</div>`;
-
-  resumenDiv.innerHTML = html;
-
-  if (!porPresentacion.size){
-    presDiv.innerHTML = '<div class="muted">No hay ventas normales registradas para este grupo.</div>';
-  } else {
-    let rowsHtml = '<table class="table small"><thead><tr><th>Presentación</th><th>Unidades vendidas</th><th>Ventas C$</th></tr></thead><tbody>';
-    for (const [name, info] of porPresentacion.entries()){
-      rowsHtml += `<tr><td>${name}</td><td>${info.unidades}</td><td>C$ ${fmt(info.monto)}</td></tr>`;
-    }
-    rowsHtml += '</tbody></table>';
-    presDiv.innerHTML = rowsHtml;
-  }
-}
-
 async function exportEventosExcel(){
   const events = await getAll('events');
   const sales = await getAll('sales');
-  const rows = [['id','evento','estado','creado','cerrado','total']];
+  const rows = [['id','evento','grupo','estado','creado','cerrado','total']];
 
   for (const ev of events){
     const tot = sales.filter(s=>s.eventId===ev.id).reduce((a,b)=>a+(b.total||0),0);
@@ -1904,6 +1792,7 @@ async function exportEventosExcel(){
     rows.push([
       ev.id,
       ev.name || '',
+      ev.groupName || '',
       estado,
       ev.createdAt || '',
       ev.closedAt || '',
@@ -1916,15 +1805,20 @@ async function exportEventosExcel(){
 
 // Eventos tab actions
   $('#filtro-eventos').addEventListener('change', renderEventos);
-  const filtroGrupoEl = $('#filtro-grupo');
+  const filtroGrupoEl = document.getElementById('filtro-grupo');
   if (filtroGrupoEl){
     filtroGrupoEl.addEventListener('change', renderEventos);
   }
+  const cierreBtn = document.getElementById('btn-cierre-total');
+  if (cierreBtn){
+    cierreBtn.addEventListener('click', computeCierreTotalGrupo);
+  }
+  const cierreExcelBtn = document.getElementById('btn-cierre-total-excel');
+  if (cierreExcelBtn){
+    cierreExcelBtn.addEventListener('click', exportCierreTotalGrupoExcel);
+  }
   $('#btn-exportar-eventos').addEventListener('click', async()=>{
     await exportEventosExcel();
-  });
-  $('#btn-cierre-total').addEventListener('click', async()=>{
-    await computeCierreTotalGrupo();
   });
   $('#btn-exportar-evento-excel').addEventListener('click', async()=>{
     const evId = await getMeta('currentEventId');
@@ -2549,5 +2443,243 @@ function bindCajaChicaEvents(){
     });
   }
 }
+
+
+async function getCierreTotalGrupoData(){
+  const groupSelect = $('#filtro-grupo');
+  if (!groupSelect){
+    alert('No se encontró el filtro de grupo en la pestaña de eventos.');
+    return null;
+  }
+  const groupVal = groupSelect.value || '';
+  if (!groupVal){
+    alert('Selecciona un grupo en la lista "Grupos" para generar el cierre total.');
+    return null;
+  }
+
+  const events = await getAll('events');
+  let selectedEvents;
+  let groupLabel;
+  if (groupVal === '__sin_grupo__'){
+    selectedEvents = events.filter(ev => !(ev.groupName || '').trim());
+    groupLabel = '[Sin grupo]';
+  } else {
+    selectedEvents = events.filter(ev => (ev.groupName || '').trim() === groupVal);
+    groupLabel = groupVal;
+  }
+  if (!selectedEvents.length){
+    alert('No hay eventos para ese grupo.');
+    return null;
+  }
+
+  const sales = await getAll('sales');
+  const eventIds = new Set(selectedEvents.map(ev=>ev.id));
+  const salesGrupo = sales.filter(s => eventIds.has(s.eventId));
+
+  const data = {
+    groupValue: groupVal,
+    groupLabel,
+    eventos: [],
+    totalGrupo: 0,
+    porPago: {},
+    cortesiasUnid: 0,
+    devolUnid: 0,
+    devolMonto: 0,
+    presentaciones: []
+  };
+
+  if (!salesGrupo.length){
+    data.eventos = selectedEvents.map(ev => ({
+      id: ev.id,
+      name: ev.name || '',
+      createdAt: ev.createdAt || '',
+      closedAt: ev.closedAt || '',
+      total: 0
+    }));
+    return data;
+  }
+
+  const totalsPorEvento = new Map();
+  for (const ev of selectedEvents){
+    totalsPorEvento.set(ev.id, 0);
+  }
+
+  const presentacionesMap = new Map();
+
+  for (const s of salesGrupo){
+    const t = s.total || 0;
+    const qty = s.qty || 0;
+    const pago = s.payment || 'otro';
+
+    data.totalGrupo += t;
+    if (!data.porPago[pago]) data.porPago[pago] = 0;
+    data.porPago[pago] += t;
+
+    if (s.courtesy){
+      data.cortesiasUnid += Math.abs(qty);
+    }
+    if (s.isReturn){
+      data.devolUnid += Math.abs(qty);
+      data.devolMonto += Math.abs(t);
+    }
+
+    if (totalsPorEvento.has(s.eventId)){
+      totalsPorEvento.set(s.eventId, totalsPorEvento.get(s.eventId) + t);
+    }
+
+    if (!s.courtesy && !s.isReturn){
+      const nombre = s.productName || 'N/D';
+      let acc = presentacionesMap.get(nombre);
+      if (!acc) acc = { unidades: 0, monto: 0 };
+      acc.unidades += qty;
+      acc.monto += t;
+      presentacionesMap.set(nombre, acc);
+    }
+  }
+
+  data.eventos = selectedEvents.map(ev => ({
+    id: ev.id,
+    name: ev.name || '',
+    createdAt: ev.createdAt || '',
+    closedAt: ev.closedAt || '',
+    total: totalsPorEvento.get(ev.id) || 0
+  }));
+
+  data.presentaciones = Array.from(presentacionesMap.entries()).map(([name, info]) => ({
+    name,
+    unidades: info.unidades,
+    monto: info.monto
+  }));
+
+  return data;
+}
+
+async function computeCierreTotalGrupo(){
+  const data = await getCierreTotalGrupoData();
+  if (!data) return;
+
+  const resumenEl = document.getElementById('cierre-total-resumen');
+  const presEl = document.getElementById('cierre-total-presentaciones');
+  if (!resumenEl || !presEl) return;
+
+  if (!data.eventos.length && !data.totalGrupo && !Object.keys(data.porPago).length){
+    resumenEl.innerHTML = '<p class="muted">No hay ventas registradas para este grupo.</p>';
+    presEl.innerHTML = '';
+    return;
+  }
+
+  let html = '';
+  html += `<div><strong>Grupo:</strong> ${data.groupLabel}</div>`;
+  html += `<div><strong>Eventos incluidos:</strong> ${data.eventos.length}</div>`;
+  html += `<div><strong>Ventas totales del grupo:</strong> C$ ${fmt(data.totalGrupo)}</div>`;
+  html += '<hr>';
+  html += '<div><strong>Por forma de pago:</strong></div>';
+  html += '<ul>';
+
+  const ordenPagos = ['efectivo','transferencia','tarjeta','credito'];
+  const ya = new Set();
+  for (const metodo of ordenPagos){
+    if (data.porPago[metodo] != null){
+      html += `<li>${metodo}: C$ ${fmt(data.porPago[metodo])}</li>`;
+      ya.add(metodo);
+    }
+  }
+  for (const metodo in data.porPago){
+    if (!ya.has(metodo)){
+      html += `<li>${metodo}: C$ ${fmt(data.porPago[metodo])}</li>`;
+    }
+  }
+  html += '</ul>';
+  html += `<div><strong>Cortesías (unidades):</strong> ${data.cortesiasUnid}</div>`;
+  html += `<div><strong>Devoluciones:</strong> ${data.devolUnid} u. | C$ ${fmt(data.devolMonto)}</div>`;
+
+  resumenEl.innerHTML = html;
+
+  if (!data.presentaciones.length){
+    presEl.innerHTML = '<p class="muted">No hay ventas normales (sin cortesías ni devoluciones) en este grupo.</p>';
+  } else {
+    const rows = data.presentaciones.slice().sort((a,b)=>a.name.localeCompare(b.name,'es-NI'));
+    let tabla = '<table class="table small"><thead><tr><th>Presentación</th><th>Unidades vendidas</th><th>Ventas C$</th></tr></thead><tbody>';
+    for (const p of rows){
+      tabla += `<tr><td>${p.name}</td><td>${p.unidades}</td><td>C$ ${fmt(p.monto)}</td></tr>`;
+    }
+    tabla += '</tbody></table>';
+    presEl.innerHTML = tabla;
+  }
+}
+
+async function exportCierreTotalGrupoExcel(){
+  const data = await getCierreTotalGrupoData();
+  if (!data) return;
+
+  if (typeof XLSX === 'undefined'){
+    alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Revisa tu conexión a internet.');
+    return;
+  }
+
+  const sheets = [];
+
+  // Hoja Resumen
+  const resumenRows = [];
+  resumenRows.push(['Grupo', data.groupLabel]);
+  resumenRows.push(['Eventos incluidos', data.eventos.length]);
+  resumenRows.push(['Ventas totales del grupo (C$)', data.totalGrupo]);
+  resumenRows.push([]);
+  resumenRows.push(['Forma de pago', 'Monto C$']);
+
+  const ordenPagos = ['efectivo','transferencia','tarjeta','credito'];
+  const ya = new Set();
+  for (const metodo of ordenPagos){
+    if (data.porPago[metodo] != null){
+      resumenRows.push([metodo, data.porPago[metodo]]);
+      ya.add(metodo);
+    }
+  }
+  for (const metodo in data.porPago){
+    if (!ya.has(metodo)){
+      resumenRows.push([metodo, data.porPago[metodo]]);
+    }
+  }
+  resumenRows.push([]);
+  resumenRows.push(['Cortesías (unidades)', data.cortesiasUnid]);
+  resumenRows.push(['Devoluciones unidades', data.devolUnid]);
+  resumenRows.push(['Devoluciones monto C$', data.devolMonto]);
+  sheets.push({ name: 'Resumen', rows: resumenRows });
+
+  // Hoja Eventos
+  const eventosRows = [];
+  eventosRows.push(['id','evento','creado','cerrado','total C$']);
+  for (const ev of data.eventos){
+    eventosRows.push([
+      ev.id,
+      ev.name,
+      ev.createdAt,
+      ev.closedAt,
+      ev.total
+    ]);
+  }
+  sheets.push({ name: 'Eventos', rows: eventosRows });
+
+  // Hoja Presentaciones
+  const presRows = [];
+  presRows.push(['presentacion','unidades vendidas','ventas C$']);
+  if (data.presentaciones.length){
+    for (const p of data.presentaciones){
+      presRows.push([p.name, p.unidades, p.monto]);
+    }
+  }
+  sheets.push({ name: 'Presentaciones', rows: presRows });
+
+  const wb = XLSX.utils.book_new();
+  for (const sh of sheets){
+    const ws = XLSX.utils.aoa_to_sheet(sh.rows);
+    XLSX.utils.book_append_sheet(wb, ws, sh.name);
+  }
+
+  const safeGroup = data.groupLabel.replace(/[\\/:*?\[\]]/g,' ');
+  const filename = `cierre_total_${safeGroup || 'grupo'}.xlsx`;
+  XLSX.writeFile(wb, filename);
+}
+
 
 document.addEventListener('DOMContentLoaded', init);
