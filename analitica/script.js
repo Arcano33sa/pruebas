@@ -1521,6 +1521,20 @@ function rebuildHorasEventOptions(filteredSales){
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     }, 0);
+
+  function downloadExcel(filename, sheetName, rows){
+    if (!rows || !rows.length) return;
+    if (typeof XLSX === 'undefined'){
+      alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Revisa tu conexión a internet.');
+      return;
+    }
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, sheetName || 'Hoja1');
+    XLSX.writeFile(wb, filename);
+  }
+
+
   }
 
   function exportResumenCsv(){
@@ -1578,7 +1592,7 @@ function rebuildHorasEventOptions(filteredSales){
       ]);
     }
 
-    downloadCsv('analitica_resumen.csv', rows);
+    downloadExcel('analitica_resumen.xlsx', 'Resumen', rows);
   }
 
   function exportEventosCsv(){
@@ -1611,7 +1625,7 @@ function rebuildHorasEventOptions(filteredSales){
       ]);
     }
 
-    downloadCsv('analitica_eventos.csv', rows);
+    downloadExcel('analitica_eventos.xlsx', 'Eventos', rows);
   }
 
   function exportPresentacionesCsv(){
@@ -1639,7 +1653,7 @@ function rebuildHorasEventOptions(filteredSales){
       ]);
     }
 
-    downloadCsv('analitica_presentaciones.csv', rows);
+    downloadExcel('analitica_presentaciones.xlsx', 'Presentaciones', rows);
   }
 
   // --- Gráficas simples en canvas ---
