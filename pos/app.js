@@ -1713,7 +1713,7 @@ async function init(){
     await refreshSaleStockLabel(); 
     await renderDay();
   });
-  $('#btn-add-event').addEventListener('click', async()=>{ const name = ($('#new-event').value||'').trim(); if (!name) { alert('Escribe un nombre de evento'); return; } const id = await put('events', {name, createdAt:new Date().toISOString()}); await setMeta('currentEventId', id); $('#new-event').value=''; await refreshEventUI(); await renderEventos(); await renderInventario(); await renderDay(); toast('Evento creado'); });
+  $('#btn-add-event').addEventListener('click', async()=>{ const name = ($('#new-event').value||'').trim(); const groupInput = $('#event-group'); const groupName = groupInput ? groupInput.value.trim() : ''; if (!name) { alert('Escribe un nombre de evento'); return; } const id = await put('events', {name, groupName, createdAt:new Date().toISOString()}); await setMeta('currentEventId', id); $('#new-event').value=''; await refreshEventUI(); await renderEventos(); await renderInventario(); await renderDay(); toast('Evento creado'); });
   $('#btn-close-event').addEventListener('click', async()=>{ const id = parseInt($('#sale-event').value||'0',10); const current = await getMeta('currentEventId'); const useId = id || current; if (!useId) return alert('Selecciona un evento'); await closeEvent(parseInt(useId,10)); });
   $('#btn-reopen-event').addEventListener('click', async()=>{ const val = $('#sale-event').value; const id = parseInt(val||'0',10); if (!id) return alert('Selecciona un evento cerrado'); await reopenEvent(id); });
 
