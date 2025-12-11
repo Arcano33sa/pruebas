@@ -167,11 +167,14 @@
         <option value="abiertos">Solo abiertos</option>
         <option value="cerrados">Solo cerrados</option>
       </select>
+      <select id="filtro-grupo">
+        <option value="">Grupos: Todos</option>
+      </select>
       <button id="btn-exportar-eventos" class="btn-primary">Exportar lista (Excel)</button>
       <button id="btn-exportar-evento-excel" class="btn-ok">Exportar evento activo (Excel)</button>
     </div>
     <table id="tbl-eventos">
-      <thead><tr><th>Evento</th><th>Estado</th><th>Creado</th><th>Cerrado</th><th>Total</th><th>Acciones</th></tr></thead>
+      <thead><tr><th>Evento</th><th>Grupo</th><th>Estado</th><th>Creado</th><th>Cerrado</th><th>Total</th><th>Acciones</th></tr></thead>
       <tbody></tbody>
     </table>
   </section>
