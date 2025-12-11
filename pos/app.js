@@ -1301,58 +1301,17 @@ async function generateInventoryCSV(eventId){
 // Eventos UI
 async function renderEventos(){
   const filtro = $('#filtro-eventos').value || 'todos';
-  const groupSelect = $('#filtro-grupo');
   const tbody = $('#tbl-eventos tbody');
   tbody.innerHTML = '';
-
   const events = await getAll('events');
   const sales = await getAll('sales');
 
-  // Construir opciones de filtro de grupo
-  if (groupSelect){
-    const current = groupSelect.value || '';
-    const grupos = [];
-    let haySinGrupo = false;
-    for (const ev of events){
-      const g = (ev.groupName || '').trim();
-      if (g){
-        if (!grupos.includes(g)) grupos.push(g);
-      } else {
-        haySinGrupo = true;
-      }
-    }
-    grupos.sort((a,b)=>a.localeCompare(b,'es-NI'));
-    let opts = '<option value="">Grupos: Todos</option>';
-    if (haySinGrupo){
-      opts += '<option value="__sin_grupo__">[Sin grupo]</option>';
-    }
-    for (const g of grupos){
-      const esc = g.replace(/"/g,'&quot;');
-      opts += `<option value="${esc}">${esc}</option>`;
-    }
-    groupSelect.innerHTML = opts;
-    if (current && Array.from(groupSelect.options).some(o=>o.value===current)){
-      groupSelect.value = current;
-    }
-  }
-
-  const filtroGrupo = groupSelect ? (groupSelect.value || '') : '';
-
   const rows = events.map(ev=>{
-    const tot = sales.filter(s=>s.eventId===ev.id).reduce((a,b)=>a+(b.total||0),0);
+    const tot = sales.filter(s=>s.eventId===ev.id).reduce((a,b)=>a+b.total,0);
     return {...ev, _totalCached: tot};
   }).filter(ev=>{
-    if (filtro==='abiertos' && ev.closedAt) return false;
-    if (filtro==='cerrados' && !ev.closedAt) return false;
-
-    if (filtroGrupo){
-      const g = (ev.groupName || '').trim();
-      if (filtroGrupo === '__sin_grupo__'){
-        if (g) return false;
-      } else {
-        if (g !== filtroGrupo) return false;
-      }
-    }
+    if (filtro==='abiertos') return !ev.closedAt;
+    if (filtro==='cerrados') return !!ev.closedAt;
     return true;
   }).sort((a,b)=>{
     const ad = a.createdAt||''; const bd = b.createdAt||'';
@@ -1381,7 +1340,6 @@ async function renderEventos(){
     tbody.appendChild(tr);
   }
 }
-
 // Modal VER: rellenar
 function showEventView(show){ $('#event-view').style.display = show ? 'flex' : 'none'; }
 async function openEventView(eventId){
@@ -1392,15 +1350,13 @@ async function openEventView(eventId){
 
   $('#ev-title').textContent = `Evento: ${ev.name}`;
   $('#ev-meta').innerHTML = `<div><b>Estado:</b> ${ev.closedAt?'Cerrado':'Abierto'}</div>
-  <div><b>Grupo:</b> ${(ev.groupName || '—')}</div>
   <div><b>Creado:</b> ${ev.createdAt?new Date(ev.createdAt).toLocaleString():'—'}</div>
   <div><b>Cerrado:</b> ${ev.closedAt?new Date(ev.closedAt).toLocaleString():'—'}</div>
   <div><b># Ventas:</b> ${sales.length}</div>`;
 
   const total = sales.reduce((a,b)=>a+b.total,0);
 
-  // cálculo
-// cálculo de costo de producto usando el costo unitario por presentación
+  // cálculo de costo de producto usando el costo unitario por presentación
   let costoProductos = 0;
   for (const s of sales) {
     const unitCost = getCostoUnitarioProducto(s.productName);
@@ -1787,7 +1743,7 @@ async function init(){
 async function exportEventosExcel(){
   const events = await getAll('events');
   const sales = await getAll('sales');
-  const rows = [['id','evento','grupo','estado','creado','cerrado','total']];
+  const rows = [['id','evento','estado','creado','cerrado','total']];
 
   for (const ev of events){
     const tot = sales.filter(s=>s.eventId===ev.id).reduce((a,b)=>a+(b.total||0),0);
@@ -1795,7 +1751,6 @@ async function exportEventosExcel(){
     rows.push([
       ev.id,
       ev.name || '',
-      ev.groupName || '',
       estado,
       ev.createdAt || '',
       ev.closedAt || '',
@@ -1805,11 +1760,9 @@ async function exportEventosExcel(){
 
   downloadExcel('eventos.xlsx', 'Eventos', rows);
 }
-}
 
 // Eventos tab actions
   $('#filtro-eventos').addEventListener('change', renderEventos);
-  $('#filtro-grupo').addEventListener('change', renderEventos);
   $('#btn-exportar-eventos').addEventListener('click', async()=>{
     await exportEventosExcel();
   });
