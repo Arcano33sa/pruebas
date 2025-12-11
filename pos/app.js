@@ -1381,7 +1381,6 @@ async function renderEventos(){
     tbody.appendChild(tr);
   }
 }
-}
 
 // Modal VER: rellenar
 function showEventView(show){ $('#event-view').style.display = show ? 'flex' : 'none'; }
