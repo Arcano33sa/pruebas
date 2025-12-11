@@ -174,9 +174,27 @@
       <button id="btn-exportar-evento-excel" class="btn-ok">Exportar evento activo (Excel)</button>
     </div>
     <table id="tbl-eventos">
-      <thead><tr><th>Evento</th><th>Grupo</th><th>Estado</th><th>Creado</th><th>Cerrado</th><th>Total</th><th>Acciones</th></tr></thead>
+      <thead>
+        <tr>
+          <th>Evento</th>
+          <th>Grupo</th>
+          <th>Estado</th>
+          <th>Creado</th>
+          <th>Cerrado</th>
+          <th>Total</th>
+          <th>Acciones</th>
+        </tr>
+      </thead>
       <tbody></tbody>
     </table>
+
+    <div class="card" id="cierre-total-card">
+      <h3>Cierre Total por grupo</h3>
+      <p class="muted">Selecciona un grupo en la lista "Grupos" de arriba y luego genera el cierre consolidado.</p>
+      <button id="btn-cierre-total" class="btn-primary">Cierre Total del grupo</button>
+      <div id="cierre-total-resumen" class="summary"></div>
+      <div id="cierre-total-presentaciones" class="summary"></div>
+    </div>
   </section>
 
   

@@ -1301,17 +1301,59 @@ async function generateInventoryCSV(eventId){
 // Eventos UI
 async function renderEventos(){
   const filtro = $('#filtro-eventos').value || 'todos';
+  const groupSelect = $('#filtro-grupo');
   const tbody = $('#tbl-eventos tbody');
   tbody.innerHTML = '';
+
   const events = await getAll('events');
   const sales = await getAll('sales');
 
+  // Construir opciones de grupos en el filtro de grupos
+  if (groupSelect){
+    const current = groupSelect.value || '';
+    const grupos = [];
+    let haySinGrupo = false;
+    for (const ev of events){
+      const g = (ev.groupName || '').trim();
+      if (g){
+        if (!grupos.includes(g)) grupos.push(g);
+      } else {
+        haySinGrupo = true;
+      }
+    }
+    grupos.sort((a,b)=>a.localeCompare(b,'es-NI'));
+    let opts = '<option value="">Grupos: Todos</option>';
+    if (haySinGrupo){
+      opts += '<option value="__sin_grupo__">[Sin grupo]</option>';
+    }
+    for (const g of grupos){
+      const esc = g.replace(/"/g,'&quot;');
+      opts += `<option value="${esc}">${esc}</option>`;
+    }
+    groupSelect.innerHTML = opts;
+    if (current && Array.from(groupSelect.options).some(o=>o.value===current)){
+      groupSelect.value = current;
+    }
+  }
+
+  const filtroGrupo = groupSelect ? (groupSelect.value || '') : '';
+
   const rows = events.map(ev=>{
-    const tot = sales.filter(s=>s.eventId===ev.id).reduce((a,b)=>a+b.total,0);
+    const tot = sales.filter(s=>s.eventId===ev.id).reduce((a,b)=>a+Number(b.total||0),0);
     return {...ev, _totalCached: tot};
   }).filter(ev=>{
-    if (filtro==='abiertos') return !ev.closedAt;
-    if (filtro==='cerrados') return !!ev.closedAt;
+    if (filtro==='abiertos' && ev.closedAt) return false;
+    if (filtro==='cerrados' && !ev.closedAt) return false;
+
+    if (filtroGrupo){
+      const g = (ev.groupName || '').trim();
+      if (filtroGrupo === '__sin_grupo__'){
+        if (g) return false;
+      } else {
+        if (g !== filtroGrupo) return false;
+      }
+    }
+
     return true;
   }).sort((a,b)=>{
     const ad = a.createdAt||''; const bd = b.createdAt||'';
@@ -1340,8 +1382,6 @@ async function renderEventos(){
     tbody.appendChild(tr);
   }
 }
-// Modal VER: rellenar
-function showEventView(show){ $('#event-view').style.display = show ? 'flex' : 'none'; }
 async function openEventView(eventId){
   const events = await getAll('events');
   const ev = events.find(e=>e.id===eventId);
@@ -1740,6 +1780,119 @@ async function init(){
   document.getElementById('btn-restore-seed').onclick = restoreSeed;
 
   
+
+async function computeCierreTotalGrupo(){
+  const groupSelect = $('#filtro-grupo');
+  if (!groupSelect){
+    alert('No se encontró el selector de grupos.');
+    return;
+  }
+  const groupVal = groupSelect.value || '';
+  if (!groupVal){
+    alert('Selecciona un grupo en la lista "Grupos" antes de generar el cierre total.');
+    return;
+  }
+
+  const events = await getAll('events');
+  let groupEvents = [];
+  let labelGrupo = '';
+
+  if (groupVal === '__sin_grupo__'){
+    groupEvents = events.filter(ev => !ev.groupName || !ev.groupName.trim());
+    labelGrupo = '[Sin grupo]';
+  } else {
+    groupEvents = events.filter(ev => (ev.groupName || '').trim() === groupVal);
+    labelGrupo = groupVal;
+  }
+
+  const resumenDiv = $('#cierre-total-resumen');
+  const presDiv = $('#cierre-total-presentaciones');
+  if (!resumenDiv || !presDiv){
+    alert('No se encontró el área de resumen de cierre total.');
+    return;
+  }
+
+  if (!groupEvents.length){
+    resumenDiv.innerHTML = '<div class="warn">No hay eventos en este grupo.</div>';
+    presDiv.innerHTML = '';
+    return;
+  }
+
+  const sales = await getAll('sales');
+  const ids = new Set(groupEvents.map(ev => ev.id));
+  const groupSales = sales.filter(s => ids.has(s.eventId));
+
+  let totalGrupo = 0;
+  const porPago = {};
+  let cortesiasUnidades = 0;
+  let devolucionesUnidades = 0;
+  let devolucionesMonto = 0;
+
+  const porPresentacion = new Map(); // productName -> { unidades, monto }
+
+  for (const s of groupSales){
+    const total = Number(s.total || 0);
+    totalGrupo += total;
+
+    const pay = s.payment || 'otro';
+    if (!porPago[pay]) porPago[pay] = 0;
+    porPago[pay] += total;
+
+    const qty = Number(s.qty || 0);
+    const courtesy = !!s.courtesy;
+    const isReturn = !!s.isReturn;
+
+    if (courtesy){
+      cortesiasUnidades += Math.abs(qty);
+    }
+    if (isReturn){
+      devolucionesUnidades += Math.abs(qty);
+      devolucionesMonto += Math.abs(total);
+    }
+
+    // Para resumen por presentación: solo ventas normales (no cortesías, no devoluciones)
+    if (!courtesy && !isReturn){
+      const name = s.productName || 'N/D';
+      let info = porPresentacion.get(name);
+      if (!info){
+        info = { unidades: 0, monto: 0 };
+        porPresentacion.set(name, info);
+      }
+      info.unidades += qty;
+      info.monto += total;
+    }
+  }
+
+  let html = '';
+  html += `<div><strong>Grupo:</strong> ${labelGrupo}</div>`;
+  html += `<div><strong>Total ventas netas del grupo:</strong> C$ ${fmt(totalGrupo)}</div>`;
+
+  html += '<div style="margin-top:0.5rem;"><strong>Por forma de pago:</strong></div>';
+  html += '<ul>';
+  const labelsPago = { efectivo:'Efectivo', transferencia:'Transferencia', tarjeta:'Tarjeta', credito:'Crédito', otro:'Otro' };
+  for (const key of Object.keys(porPago)){
+    html += `<li>${labelsPago[key] || key}: C$ ${fmt(porPago[key])}</li>`;
+  }
+  html += '</ul>';
+
+  html += `<div><strong>Cortesías (unidades):</strong> ${cortesiasUnidades}</div>`;
+  html += `<div><strong>Devoluciones (unidades):</strong> ${devolucionesUnidades}</div>`;
+  html += `<div><strong>Devoluciones (monto absoluto):</strong> C$ ${fmt(devolucionesMonto)}</div>`;
+
+  resumenDiv.innerHTML = html;
+
+  if (!porPresentacion.size){
+    presDiv.innerHTML = '<div class="muted">No hay ventas normales registradas para este grupo.</div>';
+  } else {
+    let rowsHtml = '<table class="table small"><thead><tr><th>Presentación</th><th>Unidades vendidas</th><th>Ventas C$</th></tr></thead><tbody>';
+    for (const [name, info] of porPresentacion.entries()){
+      rowsHtml += `<tr><td>${name}</td><td>${info.unidades}</td><td>C$ ${fmt(info.monto)}</td></tr>`;
+    }
+    rowsHtml += '</tbody></table>';
+    presDiv.innerHTML = rowsHtml;
+  }
+}
+
 async function exportEventosExcel(){
   const events = await getAll('events');
   const sales = await getAll('sales');
@@ -1763,8 +1916,15 @@ async function exportEventosExcel(){
 
 // Eventos tab actions
   $('#filtro-eventos').addEventListener('change', renderEventos);
+  const filtroGrupoEl = $('#filtro-grupo');
+  if (filtroGrupoEl){
+    filtroGrupoEl.addEventListener('change', renderEventos);
+  }
   $('#btn-exportar-eventos').addEventListener('click', async()=>{
     await exportEventosExcel();
+  });
+  $('#btn-cierre-total').addEventListener('click', async()=>{
+    await computeCierreTotalGrupo();
   });
   $('#btn-exportar-evento-excel').addEventListener('click', async()=>{
     const evId = await getMeta('currentEventId');
