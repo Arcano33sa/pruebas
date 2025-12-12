@@ -1228,34 +1228,50 @@ document.addEventListener('change', async (e)=>{
 
 // Day list filtered by current event
 async function renderDay(){
-  const d = $('#sale-date').value;
-  const curId = await getMeta('currentEventId');
-  const tbody = $('#tbl-day tbody'); tbody.innerHTML='';
-  if (!curId){ $('#day-total').textContent = fmt(0); return; }
-  const items = await new Promise((res,rej)=>{ const r=tx('sales').index('by_date').getAll(d); r.onsuccess=()=>res(r.result||[]); r.onerror=()=>rej(r.error); });
-  const filtered = items.filter(s=> s.eventId === curId);
-  let total = 0;
-  filtered.sort((a,b)=>a.id-b.id);
-  for (const s of filtered){
-    total += s.total;
-    const payClass = s.payment==='efectivo'?'pay-ef':(s.payment==='transferencia'?'pay-tr':'pay-cr');
-    const payTxt = s.payment==='efectivo'?'Efec':(s.payment==='transferencia'?'Trans':'Cred');
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${s.time||''}</td>
-      <td>${s.productName}</td>
-      <td>${s.qty}</td>
-      <td>${fmt(s.unitPrice)}</td>
-      <td>${fmt(s.discount||0)} </td>
-      <td>${fmt(s.total)} </td>
-      <td><span class="tag ${payClass}">${payTxt}</span></td>
-      <td>${s.courtesy?'✓':''}</td>
-      <td>${s.isReturn?'✓':''}</td>
-      <td>${s.customer||''}</td>
-      <td>${s.courtesyTo||''}</td>
-      <td><button data-id="${s.id}" title="Eliminar venta" class="btn-danger btn-mini del-sale">Eliminar</button></td>`;
-    tbody.appendChild(tr);
+  try {
+    const d = $('#sale-date').value;
+    const curId = await getMeta('currentEventId');
+    const tbody = $('#tbl-day tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    if (!curId){ 
+      $('#day-total').textContent = fmt(0); 
+      return; 
+    }
+    const allSales = await getAll('sales');
+    const filtered = allSales.filter(s => s.eventId === curId && s.date === d);
+    let total = 0;
+    filtered.sort((a,b)=> (a.id||0) - (b.id||0));
+    for (const s of filtered){
+      total += Number(s.total || 0);
+      const payClass = s.payment==='efectivo'
+        ? 'pay-ef'
+        : (s.payment==='transferencia' ? 'pay-tr' : 'pay-cr');
+      const payTxt = s.payment==='efectivo'
+        ? 'Efec'
+        : (s.payment==='transferencia' ? 'Trans' : 'Cred');
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${s.time||''}</td>
+        <td>${s.productName}</td>
+        <td>${s.qty}</td>
+        <td>${fmt(s.unitPrice)}</td>
+        <td>${fmt(s.discount||0)}</td>
+        <td>${fmt(s.total)}</td>
+        <td><span class="tag ${payClass}">${payTxt}</span></td>
+        <td>${s.courtesy?'✓':''}</td>
+        <td>${s.isReturn?'✓':''}</td>
+        <td>${s.customer||''}</td>
+        <td>${s.courtesyTo||''}</td>
+        <td><button data-id="${s.id}" title="Eliminar venta" class="btn-danger btn-mini del-sale">Eliminar</button></td>`;
+      tbody.appendChild(tr);
+    }
+    $('#day-total').textContent = fmt(total);
+  } catch (e) {
+    console.error('Error en renderDay', e);
+    const tbody = $('#tbl-day tbody');
+    if (tbody) tbody.innerHTML = '';
+    $('#day-total').textContent = fmt(0);
   }
-  $('#day-total').textContent = fmt(total);
 }
 
 // Summary (extendido con costo y utilidad)
@@ -2002,17 +2018,8 @@ async function init(){
       return;
     }
     const d = $('#sale-date').value;
-    const items = await new Promise((res, rej)=>{
-      try {
-        const r = tx('sales').index('by_date').getAll(d);
-        r.onsuccess = ()=> res(r.result || []);
-        r.onerror = ()=> rej(r.error);
-      } catch (e) {
-        console.error('Error leyendo ventas para deshacer', e);
-        res([]);
-      }
-    });
-    const filtered = items.filter(s => s.eventId === curId);
+    const allSales = await getAll('sales');
+    const filtered = allSales.filter(s => s.eventId === curId && s.date === d);
     if (!filtered.length) {
       alert('No hay ventas para deshacer en este día.');
       return;
