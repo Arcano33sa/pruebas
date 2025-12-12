@@ -2038,14 +2038,35 @@ async function init(){
   $('#tbl-day').addEventListener('click', async (e)=>{
     const btn = e.target.closest('button.del-sale');
     if (!btn) return;
-    const id = parseInt(btn.dataset.id, 10);
-    if (!id) return;
+    const rawId = btn.dataset.id;
+    const id = parseInt(rawId, 10);
+    if (!id && id !== 0) return;
     if (!confirm('¿Eliminar esta venta?')) return;
-    await del('sales', id);
-    await renderDay();
-    await renderSummary();
-    await refreshSaleStockLabel();
-    await renderInventario();
+    try {
+      await del('sales', id);
+    } catch (err) {
+      console.error('Error usando del("sales") para borrar, se intentará borrado directo', err);
+      try {
+        const store = tx('sales','readwrite');
+        await new Promise((resolve, reject) => {
+          const r = store.delete(id);
+          r.onsuccess = () => resolve();
+          r.onerror = () => reject(r.error);
+        });
+      } catch (err2) {
+        console.error('Error en borrado directo de la venta', err2);
+        alert('No se pudo eliminar la venta. Revisa la consola para más detalles.');
+        return;
+      }
+    }
+    try {
+      await renderDay();
+      await renderSummary();
+      await refreshSaleStockLabel();
+      await renderInventario();
+    } catch (uiErr) {
+      console.error('Error refrescando UI después de eliminar venta', uiErr);
+    }
     toast('Venta eliminada');
   });
 
@@ -2159,8 +2180,14 @@ function recomputeTotal(){
   }
 
   const t = total.toFixed(2);
-  $('#sale-total').value = t;
-  $('#sticky-total').textContent = t;
+  const saleTotalInput = $('#sale-total');
+  if (saleTotalInput) {
+    saleTotalInput.value = t;
+  }
+  const stickyEl = $('#sticky-total');
+  if (stickyEl) {
+    stickyEl.textContent = t;
+  }
 }
 
 async function addSale(){
@@ -2258,8 +2285,15 @@ async function addSale(){
   if (payment==='credito') $('#sale-customer').value=''; 
   $('#sale-courtesy-to').value='';
   $('#sale-notes').value=''; // limpiar notas
-  $('#sale-total').value = (courtesy?0:price).toFixed(2); 
-  $('#sticky-total').textContent = (courtesy?0:price).toFixed(2);
+  const nextTotal = (courtesy?0:price).toFixed(2);
+  const saleTotal2 = $('#sale-total');
+  if (saleTotal2) {
+    saleTotal2.value = nextTotal;
+  }
+  const sticky2 = $('#sticky-total');
+  if (sticky2) {
+    sticky2.textContent = nextTotal;
+  }
 
   await renderDay(); await renderSummary(); await refreshSaleStockLabel(); await renderInventario();
   toast('Venta agregada');
