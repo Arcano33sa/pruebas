@@ -290,12 +290,15 @@ async function createJournalEntryForSalePOS(sale) {
 
 // Elimina asientos de Finanzas vinculados a una venta del POS (para Undo / eliminar)
 async function deleteFinanzasEntriesForSalePOS(saleId) {
+  // IMPORTANTE: esta función SIEMPRE debe devolver una Promise
+  // para que el POS no se rompa al hacer: Promise.resolve(...).catch(...)
+  if (saleId == null || saleId === '' || Number.isNaN(saleId)) return Promise.resolve();
+
   try {
-    if (!saleId) return;
     await ensureFinanzasDB();
   } catch (e) {
     // Si no se puede abrir finanzasDB, no bloqueamos el borrado de la venta
-    return;
+    return Promise.resolve();
   }
 
   return new Promise((resolve, reject) => {
@@ -351,52 +354,101 @@ async function deleteFinanzasEntriesForSalePOS(saleId) {
 function tx(name, mode='readonly'){ return db.transaction(name, mode).objectStore(name); }
 function getAll(name){ return new Promise((res,rej)=>{ const r=tx(name).getAll(); r.onsuccess=()=>res(r.result||[]); r.onerror=()=>rej(r.error); }); }
 function put(name, val){ return new Promise((res,rej)=>{ const r=tx(name,'readwrite').put(val); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
-function del(name, key){ 
-  return new Promise((resolve, reject)=>{ 
-    if (name === 'sales'){
-      try{
-        const store = tx('sales','readwrite');
-        const getReq = store.get(key);
-        getReq.onsuccess = ()=>{
-          const sale = getReq.result;
-          let finPromise = Promise.resolve();
-
-          if (sale){
-            try{
-              applyFinishedFromSalePOS(sale, -1); // revertir efecto de la venta en inventario central
-            }catch(e){
-              console.error('Error revertiendo inventario central al eliminar venta', e);
-            }
-
-            const saleId = (sale.id != null) ? sale.id : key;
-            finPromise = deleteFinanzasEntriesForSalePOS(saleId).catch(err=>{
-              console.error('Error eliminando asientos contables vinculados a la venta', err);
-            });
-          }
-
-          finPromise.then(()=>{
-            const delReq = store.delete(key);
-            delReq.onsuccess = ()=>resolve();
-            delReq.onerror = ()=>reject(delReq.error);
-          });
-        };
-        getReq.onerror = ()=>{
-          const delReq = store.delete(key);
-          delReq.onsuccess = ()=>resolve();
-          delReq.onerror = ()=>reject(delReq.error);
-        };
-      }catch(e){
-        console.error('Error en del(sales,key)', e);
-        resolve();
+function del(name, key){
+  // Borrado robusto (especialmente para 'sales'):
+  // - Evita TransactionInactiveError (no dejamos una tx abierta esperando promesas externas)
+  // - Nunca "resuelve en silencio" si no pudo borrar
+  // - Devuelve { ok:true, warnings:[] } cuando aplica
+  return new Promise((resolve, reject) => {
+    try{
+      if (name !== 'sales'){
+        const store = tx(name,'readwrite');
+        const r = store.delete(key);
+        r.onsuccess = ()=>resolve({ok:true, warnings:[]});
+        r.onerror = ()=>reject(r.error);
+        return;
       }
-    } else {
-      const store = tx(name,'readwrite');
-      const r = store.delete(key);
-      r.onsuccess = ()=>resolve();
-      r.onerror = ()=>reject(r.error);
+
+      // helpers locales
+      const idbGet = (storeName, k) => new Promise((res, rej) => {
+        try{
+          const st = tx(storeName);
+          const r = st.get(k);
+          r.onsuccess = ()=>res(r.result);
+          r.onerror = ()=>rej(r.error);
+        }catch(err){ rej(err); }
+      });
+
+      const idbDelete = (storeName, k) => new Promise((res, rej) => {
+        try{
+          const t = db.transaction([storeName], 'readwrite');
+          const st = t.objectStore(storeName);
+          try{ st.delete(k); } catch (err){ rej(err); return; }
+          t.oncomplete = ()=>res();
+          t.onerror = (e)=>rej(t.error || e.target?.error || new Error('Error eliminando registro en ' + storeName));
+          t.onabort = (e)=>rej(t.error || e.target?.error || new Error('Transacción abortada eliminando registro en ' + storeName));
+        }catch(err){ rej(err); }
+      });
+
+      (async ()=>{
+        const warnings = [];
+
+        // 1) Traer la venta (fuera de cualquier tx de borrado)
+        const sale = await idbGet('sales', key);
+
+        if (!sale){
+          // Si no existe, intentamos borrar de todas formas (por si el key es string/number mismatch),
+          // y reportamos que ya estaba ausente.
+          try{
+            await idbDelete('sales', key);
+          }catch(err){
+            throw err;
+          }
+          return resolve({ok:true, warnings: ['La venta no se encontró (posible ya estaba eliminada).']});
+        }
+
+        // 2) Borrar la venta primero (objetivo principal). Si falla, no hacemos side-effects.
+        await idbDelete('sales', key);
+
+        // 2.1) Verificación rápida (mejor error que "parece que borró")
+        try{
+          const still = await idbGet('sales', key);
+          if (still){
+            throw new Error('La venta no se pudo eliminar (el registro sigue existiendo).');
+          }
+        }catch(verErr){
+          // Si falla la verificación por lectura, no bloqueamos: solo advertimos.
+          console.warn('No se pudo verificar el borrado de la venta', verErr);
+        }
+
+        // 3) Side-effects (no bloquean el borrado): revertir inventario central + borrar asientos en Finanzas
+        try{
+          applyFinishedFromSalePOS(sale, -1);
+        }catch(e){
+          console.error('Error revertiendo inventario central al eliminar venta', e);
+          warnings.push('No se pudo revertir inventario central (la venta sí se eliminó).');
+        }
+
+        try{
+          const saleId = (sale.id != null) ? sale.id : key;
+          await Promise.resolve(deleteFinanzasEntriesForSalePOS(saleId));
+        }catch(e){
+          console.error('Error eliminando asientos contables vinculados a la venta', e);
+          warnings.push('No se pudieron eliminar asientos en Finanzas (la venta sí se eliminó).');
+        }
+
+        resolve({ok:true, warnings});
+      })().catch(err=>{
+        console.error('Error en del("sales")', err);
+        reject(err);
+      });
+    }catch(err){
+      console.error('Error general en del()', err);
+      reject(err);
     }
   });
 }
+
 
 async function setMeta(key, value){ 
   return put('meta', {id:key, value});
@@ -772,6 +824,22 @@ const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 function fmt(n){ return (n||0).toLocaleString('es-NI', {minimumFractionDigits:2, maximumFractionDigits:2}); }
 function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'), 1800); }
+
+function humanizeError(err){
+  if (!err) return 'Error desconocido.';
+  if (typeof err === 'string') return err;
+  const name = err.name || '';
+  const msg = err.message || String(err);
+
+  if (name === 'TransactionInactiveError') return 'La transacción de la base de datos se cerró antes de tiempo. Recarga el POS y vuelve a intentar.';
+  if (name === 'QuotaExceededError') return 'El navegador se quedó sin espacio para guardar datos (QuotaExceeded). Libera espacio o prueba otro navegador.';
+  if (name === 'InvalidStateError') return 'El navegador no permitió la operación en este estado (InvalidState). Cierra otras pestañas del POS y recarga.';
+  if (name === 'NotFoundError') return 'No se encontró el registro/almacén en la base de datos (NotFound).';
+  if (name === 'DataError') return 'Dato inválido para la base de datos (DataError).';
+
+  return msg;
+}
+
 
 function setOfflineBar(){ const ob=$('#offlineBar'); if (!ob) return; ob.style.display = navigator.onLine?'none':'block'; }
 window.addEventListener('online', setOfflineBar);
@@ -2026,11 +2094,14 @@ async function init(){
     }
     const last = filtered.sort((a,b)=> a.id - b.id)[filtered.length - 1];
     if (!confirm('¿Eliminar la última venta registrada?')) return;
-    await del('sales', last.id);
+    const delRes = await del('sales', last.id);
     await renderDay();
     await renderSummary();
     await refreshSaleStockLabel();
     await renderInventario();
+    if (delRes && delRes.warnings && delRes.warnings.length){
+      alert('Venta eliminada, pero con avisos:\n\n- ' + delRes.warnings.join('\n- '));
+    }
     toast('Venta eliminada');
   });
 
@@ -2038,39 +2109,47 @@ async function init(){
   $('#tbl-day').addEventListener('click', async (e)=>{
     const btn = e.target.closest('button.del-sale');
     if (!btn) return;
+
     const rawId = btn.dataset.id;
-    const id = parseInt(rawId, 10);
-    if (!id && id !== 0) return;
+    const id = Number(rawId);
+
+    if (!Number.isFinite(id)){
+      alert('No pude identificar la venta a eliminar (id inválido). Recarga el POS y vuelve a intentar.');
+      return;
+    }
+
     if (!confirm('¿Eliminar esta venta?')) return;
-    try {
-      await del('sales', id);
-    } catch (err) {
-      console.error('Error usando del("sales") para borrar, se intentará borrado directo', err);
-      try {
-        const store = tx('sales','readwrite');
-        await new Promise((resolve, reject) => {
-          const r = store.delete(id);
-          r.onsuccess = () => resolve();
-          r.onerror = () => reject(r.error);
-        });
-      } catch (err2) {
-        console.error('Error en borrado directo de la venta', err2);
-        alert('No se pudo eliminar la venta. Revisa la consola para más detalles.');
-        return;
+
+    const prevText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Eliminando…';
+
+    try{
+      const delRes = await del('sales', id);
+
+      // Refrescar UI
+      try{
+        await renderDay();
+        await renderSummary();
+        await refreshSaleStockLabel();
+        await renderInventario();
+      }catch(uiErr){
+        console.error('Error refrescando UI después de eliminar venta', uiErr);
       }
+
+      if (delRes && delRes.warnings && delRes.warnings.length){
+        alert('Venta eliminada, pero con avisos:\n\n- ' + delRes.warnings.join('\n- '));
+      }
+
+      toast('Venta eliminada');
+    }catch(err){
+      console.error('Error eliminando la venta', err);
+      alert('No se pudo eliminar la venta.\n\nDetalle: ' + humanizeError(err));
+    }finally{
+      btn.disabled = false;
+      btn.textContent = prevText || 'Eliminar';
     }
-    try {
-      await renderDay();
-      await renderSummary();
-      await refreshSaleStockLabel();
-      await renderInventario();
-    } catch (uiErr) {
-      console.error('Error refrescando UI después de eliminar venta', uiErr);
-    }
-    toast('Venta eliminada');
   });
-
-
   // Stepper
   $('#qty-minus').addEventListener('click', ()=>{ const v = Math.max(1, parseInt($('#sale-qty').value||'1',10) - 1); $('#sale-qty').value = v; recomputeTotal(); });
   $('#qty-plus').addEventListener('click', ()=>{ const v = Math.max(1, parseInt($('#sale-qty').value||'1',10) + 1); $('#sale-qty').value = v; recomputeTotal(); });
