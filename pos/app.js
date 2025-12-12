@@ -1949,9 +1949,59 @@ async function init(){
   $('#sale-payment').addEventListener('change', ()=>{ const isCred = $('#sale-payment').value==='credito'; $('#sale-customer').disabled = !isCred; if (!isCred) $('#sale-customer').value=''; });
   $('#sale-date').addEventListener('change', renderDay);
   $('#btn-add').addEventListener('click', addSale);
-  $('#btn-add-sticky').addEventListener('click', addSale);
-  $('#btn-undo').addEventListener('click', async()=>{ const curId = await getMeta('currentEventId'); if (!curId) return; const d=$('#sale-date').value; const items = await new Promise((res,rej)=>{ const r=tx('sales').index('by_date').getAll(d); r.onsuccess=()=>res(r.result||[]); r.onerror=()=>rej(r.error); }); const filtered = items.filter(s=>s.eventId===curId); if (!filtered.length) return; const last = filtered.sort((a,b)=>a.id-b.id)[filtered.length-1]; await del('sales', last.id); await renderDay(); await renderSummary(); await refreshSaleStockLabel(); await renderInventario(); toast('Venta eliminada'); });
-  $('#tbl-day').addEventListener('click', async (e)=>{ const btn = e.target.closest('.del-sale'); if (!btn) return; const id = parseInt(btn.dataset.id,10); if (!confirm('¿Eliminar esta venta?')) return; await del('sales', id); await renderDay(); await renderSummary(); await refreshSaleStockLabel(); await renderInventario(); toast('Venta eliminada'); });
+  const stickyBtn = $('#btn-add-sticky');
+  if (stickyBtn) {
+    stickyBtn.addEventListener('click', addSale);
+  }
+
+  // Deshacer última venta del día para el evento activo
+  $('#btn-undo').addEventListener('click', async ()=>{
+    const curId = await getMeta('currentEventId');
+    if (!curId) {
+      alert('No hay evento activo.');
+      return;
+    }
+    const d = $('#sale-date').value;
+    const items = await new Promise((res, rej)=>{
+      try {
+        const r = tx('sales').index('by_date').getAll(d);
+        r.onsuccess = ()=> res(r.result || []);
+        r.onerror = ()=> rej(r.error);
+      } catch (e) {
+        console.error('Error leyendo ventas para deshacer', e);
+        res([]);
+      }
+    });
+    const filtered = items.filter(s => s.eventId === curId);
+    if (!filtered.length) {
+      alert('No hay ventas para deshacer en este día.');
+      return;
+    }
+    const last = filtered.sort((a,b)=> a.id - b.id)[filtered.length - 1];
+    if (!confirm('¿Eliminar la última venta registrada?')) return;
+    await del('sales', last.id);
+    await renderDay();
+    await renderSummary();
+    await refreshSaleStockLabel();
+    await renderInventario();
+    toast('Venta eliminada');
+  });
+
+  // Eliminar una venta específica desde la tabla
+  $('#tbl-day').addEventListener('click', async (e)=>{
+    const btn = e.target.closest('button.del-sale');
+    if (!btn) return;
+    const id = parseInt(btn.dataset.id, 10);
+    if (!id) return;
+    if (!confirm('¿Eliminar esta venta?')) return;
+    await del('sales', id);
+    await renderDay();
+    await renderSummary();
+    await refreshSaleStockLabel();
+    await renderInventario();
+    toast('Venta eliminada');
+  });
+
 
   // Stepper
   $('#qty-minus').addEventListener('click', ()=>{ const v = Math.max(1, parseInt($('#sale-qty').value||'1',10) - 1); $('#sale-qty').value = v; recomputeTotal(); });
