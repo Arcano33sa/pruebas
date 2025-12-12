@@ -1807,10 +1807,29 @@ async function restoreSeed(){
 
 // Init & bindings
 async function init(){
+  // Paso 1: abrir base de datos POS
   try{
     await openDB();
-    await ensureDefaults();   // migra + resiembra
+  }catch(err){
+    alert('No se pudo abrir la base de datos del POS. Revisa permisos de almacenamiento del navegador.');
+    console.error('INIT openDB ERROR', err);
+    return;
+  }
 
+  // Helper para que cada paso falle de forma aislada sin tumbar todo el POS
+  const runStep = async (name, fn) => {
+    try{
+      await fn();
+    }catch(err){
+      console.error('INIT step error en ' + name, err);
+    }
+  };
+
+  // Paso 2: defaults y migraciones
+  await runStep('ensureDefaults', ensureDefaults);
+
+  // Paso 3: preparar fecha por defecto
+  try{
     const dateInput = document.getElementById('sale-date');
     if (dateInput && !dateInput.value){
       const now = new Date();
@@ -1819,26 +1838,39 @@ async function init(){
       const d = String(now.getDate()).padStart(2,'0');
       dateInput.value = `${y}-${m}-${d}`;
     }
-
-    await refreshEventUI();
-    await refreshProductSelect();
-    await renderDay();
-    await renderSummary();
-    await renderProductos();
-    await renderEventos();
-    await renderInventario();
-    await renderCajaChica();
-    await updateSellEnabled();
-  }catch(err){ 
-    alert('Error inicializando base de datos');
-    console.error('INIT ERROR', err);
+  }catch(err){
+    console.error('INIT step error al configurar fecha por defecto', err);
   }
-  setOfflineBar();
-  bindCajaChicaEvents();
 
+  // Paso 4: refrescar vistas principales
+  await runStep('refreshEventUI', refreshEventUI);
+  await runStep('refreshProductSelect', refreshProductSelect);
+  await runStep('renderDay', renderDay);
+  await runStep('renderSummary', renderSummary);
+  await runStep('renderProductos', renderProductos);
+  await runStep('renderEventos', renderEventos);
+  await runStep('renderInventario', renderInventario);
+  await runStep('renderCajaChica', renderCajaChica);
+  await runStep('updateSellEnabled', updateSellEnabled);
+
+  // Paso 5: barra offline y eventos de Caja Chica
+  try{
+    setOfflineBar();
+  }catch(err){
+    console.error('INIT step error en setOfflineBar', err);
+  }
+
+  try{
+    bindCajaChicaEvents();
+  }catch(err){
+    console.error('INIT step error en bindCajaChicaEvents', err);
+  }
+
+  // Los listeners de la UI principal se mantienen igual
   document.querySelector('.tabbar').addEventListener('click', (e)=>{ const b = e.target.closest('button'); if (!b) return; setTab(b.dataset.tab); });
+}
 
-  // Vender tab
+// Vender tab
   $('#sale-event').addEventListener('change', async()=>{ 
     const val = $('#sale-event').value;
     if (val === '') { await setMeta('currentEventId', null); }
