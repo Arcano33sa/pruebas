@@ -1082,6 +1082,24 @@ async function refreshEventUI(){
 
   const status = $('#event-status');
   const cur = evs.find(e=> current && e.id == current);
+
+  // Mantener por defecto el último Evento Maestro (grupo) trabajado.
+  // Si el evento activo tiene grupo, lo tomamos como "último" automáticamente.
+  try{
+    const gCur = (cur && cur.groupName) ? String(cur.groupName).trim() : '';
+    if (gCur){
+      const hidden = new Set(getHiddenGroups());
+      if (!hidden.has(gCur)){
+        setLastGroupName(gCur);
+        const gs = $('#event-group-select');
+        if (gs && Array.from(gs.options).some(o=>o.value===gCur)){
+          gs.value = gCur;
+        }
+      }
+    }
+  }catch(e){
+    console.warn('No se pudo sincronizar grupo desde el evento activo', e);
+  }
   if (cur && cur.closedAt) {
     status.style.display='block';
     status.textContent = `Evento cerrado el ${new Date(cur.closedAt).toLocaleString()}. Puedes reabrirlo o crear/activar otro.`;
@@ -1973,16 +1991,56 @@ async function init(){
   });
 
   const groupSelect = $('#event-group-select');
+  const groupNewInput = $('#event-group-new');
+
+  // Helper: recordar el último grupo usado (Evento Maestro)
+  function rememberGroup(name){
+    const g = (name || '').trim();
+    if (g && g !== '__new__'){
+      setLastGroupName(g);
+    }
+  }
+
   if (groupSelect) {
     groupSelect.addEventListener('change', ()=>{
+      const v = (groupSelect.value || '').trim();
+
+      // Persistir selección de grupo para que quede por defecto la próxima vez.
+      if (v && v !== '__new__') {
+        rememberGroup(v);
+      }
+
       const newInput = $('#event-group-new');
       if (!newInput) return;
-      if (groupSelect.value === '__new__') {
+
+      if (v === '__new__') {
         newInput.style.display = 'inline-block';
+
+        // Si el último grupo guardado no está en la lista, úsalo como sugerencia.
+        const last = getLastGroupName();
+        if (last && !Array.from(groupSelect.options).some(o=>o.value===last)) {
+          newInput.value = last;
+        }
+
         newInput.focus();
       } else {
         newInput.style.display = 'none';
         newInput.value = '';
+      }
+    });
+  }
+
+  // Si el usuario escribe un grupo nuevo, también lo recordamos.
+  if (groupNewInput) {
+    const saveTyped = ()=>{
+      const t = (groupNewInput.value || '').trim();
+      if (t) setLastGroupName(t);
+    };
+    groupNewInput.addEventListener('blur', saveTyped);
+    groupNewInput.addEventListener('keydown', (ev)=>{
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        saveTyped();
       }
     });
   }
