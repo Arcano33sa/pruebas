@@ -1867,10 +1867,18 @@ async function init(){
   }
 
   // Los listeners de la UI principal se mantienen igual
-  document.querySelector('.tabbar').addEventListener('click', (e)=>{ const b = e.target.closest('button'); if (!b) return; setTab(b.dataset.tab); });
-}
+  const tabbar = document.querySelector('.tabbar');
+  if (tabbar) {
+    tabbar.addEventListener('click', (e)=>{
+      const b = e.target.closest('button');
+      if (!b) return;
+      const tab = b.dataset.tab;
+      if (tab) setTab(tab);
+    });
+  }
 
-// Vender tab
+  // Vender tab
+
   $('#sale-event').addEventListener('change', async()=>{ 
     const val = $('#sale-event').value;
     if (val === '') { await setMeta('currentEventId', null); }
