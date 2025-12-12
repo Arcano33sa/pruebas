@@ -3,7 +3,7 @@
 
 (function(){
   const DB_NAME = 'a33-pos';
-  const DB_VER = 20;
+  const DB_VER = 22;
   const RECETAS_KEY = 'arcano33_recetas_v1';
 
   let db = null;
