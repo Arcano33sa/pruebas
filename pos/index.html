@@ -38,9 +38,19 @@
         </div>
 
 <div class="row">
-  <input id="event-group" placeholder="Evento maestro / Grupo (opcional)">
+  <label>Evento maestro / Grupo</label>
 </div>
-<small class="muted">Usa el mismo nombre de grupo para todos los días del mismo evento maestro.</small>
+<div class="row">
+  <select id="event-group-select">
+    <option value="">— Selecciona grupo —</option>
+    <option value="__new__">+ Crear nuevo grupo</option>
+  </select>
+  <input id="event-group-new" placeholder="Nombre de nuevo grupo" style="display:none">
+</div>
+<div class="row">
+  <button type="button" id="btn-manage-groups" class="btn-link">Gestionar grupos</button>
+</div>
+<small class="muted">Usa el mismo nombre de grupo para todos los días del mismo evento maestro. Puedes ocultar grupos antiguos desde “Gestionar grupos”.</small>
 
         <div class="row">
           <button id="btn-add-event" class="btn-primary">+ Crear y activar evento</button>

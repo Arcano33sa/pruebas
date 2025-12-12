@@ -154,3 +154,17 @@ small.muted{color:var(--muted)}
 .petty-final h3{
   margin-top:0;
 }
+
+
+.btn-link {
+  background: none;
+  border: none;
+  padding: 4px 0;
+  color: #e0b300;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.btn-link:hover {
+  color: #ffd85e;
+}

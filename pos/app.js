@@ -407,6 +407,46 @@ async function getMeta(key){
   return row ? row.value : null;
 }
 
+const LAST_GROUP_KEY = 'a33_pos_lastGroupName';
+const HIDDEN_GROUPS_KEY = 'a33_pos_hiddenGroups';
+
+function getLastGroupName() {
+  try {
+    return localStorage.getItem(LAST_GROUP_KEY) || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+function setLastGroupName(name) {
+  try {
+    localStorage.setItem(LAST_GROUP_KEY, name || '');
+  } catch (e) {
+    console.warn('No se pudo guardar último grupo usado', e);
+  }
+}
+
+function getHiddenGroups() {
+  try {
+    const raw = localStorage.getItem(HIDDEN_GROUPS_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    console.warn('No se pudieron leer grupos ocultos', e);
+    return [];
+  }
+}
+
+function setHiddenGroups(list) {
+  try {
+    const clean = Array.from(new Set((list || []).filter(Boolean)));
+    localStorage.setItem(HIDDEN_GROUPS_KEY, JSON.stringify(clean));
+  } catch (e) {
+    console.warn('No se pudieron guardar grupos ocultos', e);
+  }
+}
+
 // --- Caja Chica: helpers y denominaciones
 const NIO_DENOMS = [1,5,10,20,50,100,200,500,1000];
 const USD_DENOMS = [1,5,10,20,50,100];
@@ -906,8 +946,60 @@ function setTab(name){
 }
 
 // Event UI
+function refreshGroupSelectFromEvents(evs) {
+  const sel = $('#event-group-select');
+  if (!sel) return;
+
+  const hidden = new Set(getHiddenGroups());
+  const groups = [];
+
+  for (const ev of evs) {
+    const g = (ev.groupName || '').trim();
+    if (!g) continue;
+    if (hidden.has(g)) continue;
+    if (!groups.includes(g)) groups.push(g);
+  }
+
+  sel.innerHTML = '';
+
+  const optEmpty = document.createElement('option');
+  optEmpty.value = '';
+  optEmpty.textContent = '— Selecciona grupo —';
+  sel.appendChild(optEmpty);
+
+  for (const g of groups) {
+    const o = document.createElement('option');
+    o.value = g;
+    o.textContent = g;
+    sel.appendChild(o);
+  }
+
+  const optNew = document.createElement('option');
+  optNew.value = '__new__';
+  optNew.textContent = '+ Crear nuevo grupo';
+  sel.appendChild(optNew);
+
+  const last = getLastGroupName();
+  if (last && groups.includes(last)) {
+    sel.value = last;
+  } else {
+    sel.value = '';
+  }
+
+  const newInput = $('#event-group-new');
+  if (newInput) {
+    if (sel.value === '__new__') {
+      newInput.style.display = 'inline-block';
+    } else {
+      newInput.style.display = 'none';
+      newInput.value = '';
+    }
+  }
+}
+
 async function refreshEventUI(){
   const evs = await getAll('events');
+  refreshGroupSelectFromEvents(evs);
   const sel = $('#sale-event');
   const current = await getMeta('currentEventId');
 
@@ -1755,7 +1847,96 @@ async function init(){
     await refreshSaleStockLabel(); 
     await renderDay();
   });
-  $('#btn-add-event').addEventListener('click', async()=>{ const name = ($('#new-event').value||'').trim(); const groupInput = $('#event-group'); const groupName = groupInput ? groupInput.value.trim() : ''; if (!name) { alert('Escribe un nombre de evento'); return; } const id = await put('events', {name, groupName, createdAt:new Date().toISOString()}); await setMeta('currentEventId', id); $('#new-event').value=''; await refreshEventUI(); await renderEventos(); await renderInventario(); await renderDay(); toast('Evento creado'); });
+
+  const groupSelect = $('#event-group-select');
+  if (groupSelect) {
+    groupSelect.addEventListener('change', ()=>{
+      const newInput = $('#event-group-new');
+      if (!newInput) return;
+      if (groupSelect.value === '__new__') {
+        newInput.style.display = 'inline-block';
+        newInput.focus();
+      } else {
+        newInput.style.display = 'none';
+        newInput.value = '';
+      }
+    });
+  }
+
+  const btnManageGroups = $('#btn-manage-groups');
+  if (btnManageGroups) {
+    btnManageGroups.addEventListener('click', async ()=>{
+      const evs = await getAll('events');
+      const hidden = new Set(getHiddenGroups());
+      const allGroups = [];
+      for (const ev of evs) {
+        const g = (ev.groupName || '').trim();
+        if (!g) continue;
+        if (!allGroups.includes(g)) allGroups.push(g);
+      }
+      const visible = allGroups.filter(g => !hidden.has(g));
+      if (!visible.length) {
+        alert('No hay grupos disponibles para gestionar.');
+        return;
+      }
+      const msg = 'Grupos actuales:\n' + visible.map((g,i)=> `${i+1}. ${g}`).join('\n') +
+                  '\n\nEscribe el número del grupo que deseas ocultar:';
+      const choice = prompt(msg);
+      if (!choice) return;
+      const idxNum = parseInt(choice, 10);
+      if (!idxNum || idxNum < 1 || idxNum > visible.length) {
+        alert('Selección no válida');
+        return;
+      }
+      hidden.add(visible[idxNum-1]);
+      setHiddenGroups(Array.from(hidden));
+      await refreshEventUI();
+      alert('Grupo ocultado. Ya no aparecerá para nuevos eventos, pero sigue existiendo en el historial.');
+    });
+  }
+  $('#btn-add-event').addEventListener('click', async()=>{
+  const name = ($('#new-event').value || '').trim();
+  const groupSelect = $('#event-group-select');
+  const groupNew = $('#event-group-new');
+  let groupName = '';
+
+  if (groupSelect) {
+    const v = groupSelect.value;
+    if (v === '__new__') {
+      if (groupNew) {
+        groupName = (groupNew.value || '').trim();
+      }
+    } else if (v && v !== '__new__') {
+      groupName = v.trim();
+    }
+  }
+
+  if (!name) {
+    alert('Escribe un nombre de evento');
+    return;
+  }
+
+  const id = await put('events', {name, groupName, createdAt:new Date().toISOString()});
+  await setMeta('currentEventId', id);
+  $('#new-event').value = '';
+
+  if (groupNew) {
+    groupNew.value = '';
+    if (groupSelect && groupSelect.value === '__new__') {
+      groupSelect.value = groupName || '';
+    }
+  }
+
+  if (groupName) {
+    setLastGroupName(groupName);
+  }
+
+  await refreshEventUI();
+  await renderEventos();
+  await renderInventario();
+  await renderDay();
+  toast('Evento creado');
+});
   $('#btn-close-event').addEventListener('click', async()=>{ const id = parseInt($('#sale-event').value||'0',10); const current = await getMeta('currentEventId'); const useId = id || current; if (!useId) return alert('Selecciona un evento'); await closeEvent(parseInt(useId,10)); });
   $('#btn-reopen-event').addEventListener('click', async()=>{ const val = $('#sale-event').value; const id = parseInt(val||'0',10); if (!id) return alert('Selecciona un evento cerrado'); await reopenEvent(id); });
 
