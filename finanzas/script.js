@@ -1672,21 +1672,56 @@ async function guardarMovimientoManual() {
 
 /* ---------- Tabs y eventos UI ---------- */
 
-function setupTabs() {
+function setActiveFinView(view) {
   const buttons = document.querySelectorAll('.fin-tab-btn');
+  let target = null;
+
   buttons.forEach(btn => {
-    btn.addEventListener('click', () => {
-      const view = btn.dataset.view;
-      document.querySelectorAll('.fin-tab-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      document.querySelectorAll('.fin-view').forEach(sec => {
-        sec.classList.toggle('active', sec.id === `view-${view}`);
-      });
-    });
+    if (btn.dataset.view === view) {
+      target = btn;
+    }
+  });
+
+  // Si no se encuentra una vista válida, usar la primera como fallback
+  if (!target && buttons.length > 0) {
+    target = buttons[0];
+    view = target.dataset.view;
+  }
+
+  buttons.forEach(btn => {
+    btn.classList.toggle('active', btn === target);
+  });
+
+  document.querySelectorAll('.fin-view').forEach(sec => {
+    sec.classList.toggle('active', sec.id === `view-${view}`);
   });
 }
 
-function setupEstadosSubtabs() {
+function setupTabs() {
+  const buttons = document.querySelectorAll('.fin-tab-btn');
+
+  buttons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const view = btn.dataset.view;
+      setActiveFinView(view);
+      // Actualizar hash para que si el usuario regresa, mantenga la pestaña
+      if (view) {
+        window.location.hash = `tab=${view}`;
+      }
+    });
+  });
+
+  // Vista inicial según hash de la URL (#tab=tablero, #tab=diario, #tab=estados)
+  let initialView = 'tablero';
+  if (window.location.hash && window.location.hash.startsWith('#tab=')) {
+    const v = window.location.hash.slice(5).trim();
+    if (v) {
+      initialView = v;
+    }
+  }
+
+  setActiveFinView(initialView);
+}function setupEstadosSubtabs() {
   const btns = document.querySelectorAll('.fin-subtab-btn');
   btns.forEach(btn => {
     btn.addEventListener('click', () => {
