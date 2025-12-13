@@ -1458,8 +1458,8 @@ function updateEventFilters(entries) {
     } else {
       sel.value = 'ALL';
     }
-
-
+  });
+}
 
 function updateSupplierSelects(data) {
   const suppliers = (data && Array.isArray(data.suppliers)) ? [...data.suppliers] : [];
@@ -1534,9 +1534,6 @@ function updateSupplierSelects(data) {
       repSel.value = 'ALL';
     }
   }
-}
-
-  });
 }
 
 function fillCuentaSelect(data) {
@@ -2593,7 +2590,9 @@ async function initFinanzas() {
     await refreshAllFin();
   } catch (err) {
     console.error('Error inicializando Finanzas A33', err);
-    const detalle = err && (err.name || err.message) ? `\n\nDetalle: ${err.name || err.message}` : '';
+    const n = err && err.name ? String(err.name) : '';
+    const m = err && err.message ? String(err.message) : '';
+    const detalle = (n || m) ? `\n\nDetalle: ${n}${m ? `: ${m}` : ''}` : '';
     alert('No se pudo inicializar el módulo de Finanzas.' + detalle);
   }
 }
