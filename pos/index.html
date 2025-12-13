@@ -129,6 +129,55 @@
       <button id="btn-undo" class="btn-warn">↩︎ Deshacer última</button>
     </div>
 
+    <div class="card" id="cup-block">
+      <h3>Venta por vaso</h3>
+
+      <div class="row">
+        <div><strong>Vasos disponibles: <span id="cup-available">0</span></strong></div>
+        <div style="text-align:right"><strong>Galones fraccionados: <span id="cup-gallons">0</span></strong></div>
+      </div>
+
+      <div class="row3">
+        <div>
+          <label>Galones a fraccionar</label>
+          <input id="cup-fraction-gallons" type="number" inputmode="numeric" step="1" min="1" value="1">
+        </div>
+        <div>
+          <label>Vasos por galón</label>
+          <input id="cup-yield" type="number" inputmode="numeric" step="1" min="1" value="22">
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <button id="btn-fraction" class="btn-primary">Fraccionar</button>
+        </div>
+      </div>
+
+      <div class="row3">
+        <div>
+          <label>Cantidad de vasos</label>
+          <input id="cup-qty" type="number" inputmode="numeric" step="1" min="1" value="1">
+        </div>
+        <div>
+          <label>Precio por vaso (C$)</label>
+          <input id="cup-price" type="number" inputmode="decimal" step="0.01" min="0" value="0">
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <div class="row" style="grid-template-columns:1fr 1fr; gap:8px">
+            <button id="btn-sell-cups" class="btn-ok">Vender vasos</button>
+            <button id="btn-courtesy-cups" class="btn-warn">Registrar cortesía</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="info" style="margin-top:10px">
+        <div><b>Vasos creados:</b> <span id="cup-created">0</span> · <b>Vendidos:</b> <span id="cup-sold">0</span> · <b>Cortesía:</b> <span id="cup-courtesy">0</span> · <b>Restantes:</b> <span id="cup-remaining">0</span></div>
+        <div><b>Remanente exacto:</b> <span id="cup-remnant">0</span> ml</div>
+      </div>
+
+      <small class="muted">Nota: esto controla porciones vendibles (vasos de sangría). No es inventario de vasos plásticos.</small>
+    </div>
+
     <div class="card">
       <div class="row">
         <div><strong>Listado del día</strong></div>
