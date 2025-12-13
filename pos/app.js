@@ -799,7 +799,8 @@ function getCostoUnitarioProducto(productName) {
 
 // Defaults (SKUs Arcano 33)
 const SEED = [
-  {name:'Vaso', price:100, manageStock:false, active:true},
+  // "Vaso" aquí es una PORCIÓN vendible (Venta por vaso), no un producto del selector.
+  {name:'Vaso', price:100, manageStock:false, active:true, internalType:'cup_portion'},
   {name:'Pulso 250ml', price:120, manageStock:true, active:true},
   {name:'Media 375ml', price:150, manageStock:true, active:true},
   {name:'Djeba 750ml', price:300, manageStock:true, active:true},
@@ -819,6 +820,7 @@ async function seedMissingDefaults(force=false){
         existing.active = true;
         if (!existing.price || existing.price <= 0) existing.price = s.price;
         if (typeof existing.manageStock === 'undefined') existing.manageStock = s.manageStock;
+        if (s.internalType) existing.internalType = s.internalType;
         await put('products', existing);
       } else {
         await put('products', {...s});
@@ -929,14 +931,26 @@ async function renderProductos(){
   await renderProductChips();
 }
 
+// Productos internos/virtuales del POS que NO deben aparecer en selector ni inventario.
+// Nota: "Vaso" aquí representa porciones de sangría (Venta por vaso), no un producto vendible del selector.
+async function getHiddenProductIdsPOS(){
+  const hidden = new Set();
+  try{
+    const vaso = await getVasoProductPOS();
+    if (vaso && vaso.id != null) hidden.add(vaso.id);
+  }catch(e){}
+  return hidden;
+}
+
 // Chips de productos (todos los activos)
 async function renderProductChips(){
   const chips = $('#product-chips'); if (!chips) return;
   chips.innerHTML='';
-  let list = (await getAll('products')).filter(p=>p.active!==false);
+  const hiddenIds = await getHiddenProductIdsPOS();
+  let list = (await getAll('products')).filter(p=>p.active!==false && !hiddenIds.has(p.id));
 
   // Orden con prioridad de Arcano 33
-  const priority = ['vaso','pulso','media','djeba','litro','galon','galón','galon 3800','galón 3800'];
+  const priority = ['pulso','media','djeba','litro','galon','galón','galon 3800','galón 3800'];
   list.sort((a,b)=>{
     const ia = priority.findIndex(x=>normName(a.name).includes(x)); 
     const ib = priority.findIndex(x=>normName(b.name).includes(x));
@@ -1141,7 +1155,9 @@ async function refreshEventUI(){
 
 // Product select + stock label
 async function refreshProductSelect(){
-  const list = await getAll('products');
+  const hiddenIds = await getHiddenProductIdsPOS();
+  const all = await getAll('products');
+  const list = all.filter(p => !hiddenIds.has(p.id));
   const sel = $('#sale-product');
   if (!sel) return;
   sel.innerHTML = '';
@@ -1151,7 +1167,7 @@ async function refreshProductSelect(){
     opt.textContent = `${p.name} (C${fmt(p.price)})${p.active===false?' [inactivo]':''}`;
     sel.appendChild(opt);
   }
-  const first = list[0];
+  const first = list[0] || all[0];
   if (first){ 
     sel.value = first.id; 
     $('#sale-price').value = first.price; 
@@ -1228,7 +1244,10 @@ async function getEventByIdPOS(eventId){
 
 async function getVasoProductPOS(){
   const prods = await getAll('products');
-  return prods.find(p => normName(p.name) === 'vaso') || prods.find(p => normName(p.name).includes('vaso')) || null;
+  // Prioridad: producto marcado como interno para "Venta por vaso"
+  return prods.find(p => p && p.internalType === 'cup_portion')
+    || prods.find(p => normName(p.name) === 'vaso')
+    || null;
 }
 
 function fmtMl(value){
@@ -1429,7 +1448,14 @@ async function sellCupsPOS(isCourtesy){
   const customer = (payment === 'credito') ? (document.getElementById('sale-customer')?.value || '').trim() : '';
   if (payment === 'credito' && !customer){ alert('Ingresa el nombre del cliente (crédito)'); return; }
 
-  const vasoProd = await getVasoProductPOS();
+  let vasoProd = await getVasoProductPOS();
+  // Si alguien borró el producto interno "Vaso", lo recreamos (sin exponerlo en el selector)
+  if (!vasoProd){
+    try{
+      const newId = await put('products', {name:'Vaso', price:100, manageStock:false, active:false, internalType:'cup_portion'});
+      vasoProd = {id: newId, price:100, manageStock:false, active:false, internalType:'cup_portion'};
+    }catch(e){}
+  }
   const productId = vasoProd ? vasoProd.id : 0;
 
   const unitPrice = isCourtesy ? 0 : parseFloat(document.getElementById('cup-price')?.value || '0');
@@ -1628,8 +1654,9 @@ async function renderInventario(){
   }
 
   const prods = await getAll('products');
-
+  const hiddenIds = await getHiddenProductIdsPOS();
   for (const p of prods){
+    if (hiddenIds.has(p.id)) continue;
     const st = await computeStock(evId, p.id);
     const init = await getInventoryInit(evId, p.id);
     const disabled = (p.manageStock===false) ? 'disabled' : '';
