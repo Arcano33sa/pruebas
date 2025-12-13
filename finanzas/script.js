@@ -5,7 +5,9 @@
 // + Flujo de Caja (Caja + Banco) por periodo.
 
 const FIN_DB_NAME = 'finanzasDB';
-const FIN_DB_VERSION = 2;
+// IMPORTANTE: subir versión cuando se agregan stores/nuevas estructuras.
+// v3 agrega el store `suppliers` para Proveedores (sin romper data existente).
+const FIN_DB_VERSION = 3;
 const CENTRAL_EVENT = 'CENTRAL';
 
 let finDB = null;
@@ -24,6 +26,12 @@ function openFinDB() {
     if (finDB) return resolve(finDB);
 
     const req = indexedDB.open(FIN_DB_NAME, FIN_DB_VERSION);
+
+    // Si hay otra pestaña con la DB abierta en versión vieja, el upgrade puede quedar bloqueado.
+    req.onblocked = () => {
+      console.warn('IndexedDB upgrade bloqueado: otra pestaña mantiene una conexión abierta.');
+      alert('Finanzas necesita actualizar su base de datos, pero está bloqueado por otra pestaña.\n\nCierra otras pestañas/ventanas de la Suite A33 y recarga.');
+    };
 
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
@@ -44,10 +52,18 @@ function openFinDB() {
       if (!db.objectStoreNames.contains('suppliers')) {
         db.createObjectStore('suppliers', { keyPath: 'id', autoIncrement: true });
       }
-};
+    };
 
     req.onsuccess = () => {
       finDB = req.result;
+
+      // Si otra pestaña sube la versión, esta conexión debe cerrarse.
+      finDB.onversionchange = () => {
+        try { finDB.close(); } catch (e) {}
+        finDB = null;
+        alert('Se detectó una actualización de Finanzas en otra pestaña.\nCierra esta pestaña y vuelve a abrir Finanzas.');
+      };
+
       resolve(finDB);
     };
     req.onerror = () => reject(req.error);
@@ -2577,7 +2593,8 @@ async function initFinanzas() {
     await refreshAllFin();
   } catch (err) {
     console.error('Error inicializando Finanzas A33', err);
-    alert('No se pudo inicializar el módulo de Finanzas.');
+    const detalle = err && (err.name || err.message) ? `\n\nDetalle: ${err.name || err.message}` : '';
+    alert('No se pudo inicializar el módulo de Finanzas.' + detalle);
   }
 }
 
