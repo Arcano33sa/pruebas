@@ -265,6 +265,19 @@
     <p><span id="pc-event-info" class="info-strong">Evento activo: —</span></p>
     <p id="pc-no-event-note" class="disabled-note" style="display:none">Activa un evento en la pestaña Vender para usar Caja Chica.</p>
 
+    <div class="row" id="pc-day-row">
+      <div>
+        <label>Día operativo</label>
+        <input id="pc-day" type="date">
+        <small class="muted">Caja Chica se guarda por día dentro del mismo evento (saldo inicial, movimientos y arqueo final).</small>
+      </div>
+      <div style="text-align:right">
+        <label>&nbsp;</label>
+        <button id="pc-btn-use-prev" class="btn-primary" type="button" style="display:none">Usar cierre anterior</button>
+        <div id="pc-prev-note" class="muted" style="margin-top:6px"></div>
+      </div>
+    </div>
+
     <div id="pc-main" class="pc-main">
       <div class="row petty-summary">
         <div class="card">

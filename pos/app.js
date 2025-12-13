@@ -541,59 +541,110 @@ function normalizePettySection(section){
   };
 }
 
+
 async function getPettyCash(eventId){
   if (eventId == null) return null;
   if (!db) await openDB();
 
-  return new Promise((resolve, reject)=>{
+  return new Promise((resolve)=>{
     try{
       const store = tx('pettyCash','readonly');
       const req = store.get(eventId);
       req.onsuccess = ()=>{
-        let pc = req.result;
-        if (!pc){
-          pc = {
-            eventId,
-            initial: normalizePettySection(null),
-            movements: [],
-            finalCount: null
-          };
-        } else {
-          pc.initial = normalizePettySection(pc.initial);
-          if (!Array.isArray(pc.movements)) pc.movements = [];
-          pc.finalCount = pc.finalCount ? normalizePettySection(pc.finalCount) : null;
-        }
+        const pc = coercePettyCashRecord(eventId, req.result);
         resolve(pc);
       };
-      req.onerror = ()=>reject(req.error);
+      req.onerror = ()=>{
+        console.warn('Error leyendo pettyCash', req.error);
+        resolve(coercePettyCashRecord(eventId, null));
+      };
     }catch(err){
       console.error('Error getPettyCash', err);
-      resolve({
-        eventId,
-        initial: normalizePettySection(null),
-        movements: [],
-        finalCount: null
-      });
+      resolve(coercePettyCashRecord(eventId, null));
     }
   });
+}
+
+function coercePettyCashRecord(eventId, raw){
+  const base = { eventId, version: 2, days: {} };
+  if (!raw || typeof raw !== 'object') return base;
+
+  // Esquema nuevo
+  if (raw.days && typeof raw.days === 'object'){
+    const pc = { eventId, version: 2, days: {} };
+    for (const k in raw.days){
+      if (!raw.days[k]) continue;
+      const dayKey = safeYMD(k);
+      pc.days[dayKey] = normalizePettyDay(raw.days[k]);
+    }
+    return pc;
+  }
+
+  // Esquema legado (una sola caja por evento)
+  const legacyInitial = normalizePettySection(raw.initial || null);
+  const legacyMovs = Array.isArray(raw.movements) ? raw.movements.slice() : [];
+  const legacyFinal = raw.finalCount ? normalizePettySection(raw.finalCount) : null;
+
+  const guessedDay = guessPettyDayKey({ initial: legacyInitial, movements: legacyMovs, finalCount: legacyFinal });
+  base.days[guessedDay] = {
+    initial: legacyInitial,
+    movements: legacyMovs,
+    finalCount: legacyFinal
+  };
+
+  return base;
+}
+
+function normalizePettyDay(day){
+  const initial = day && day.initial ? normalizePettySection(day.initial) : normalizePettySection(null);
+  const movements = Array.isArray(day && day.movements) ? day.movements.slice() : [];
+  const finalCount = (day && day.finalCount) ? normalizePettySection(day.finalCount) : null;
+  return { initial, movements, finalCount };
+}
+
+function safeYMD(s){
+  if (typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  return todayYMD();
+}
+
+function guessPettyDayKey(obj){
+  const tryIso = (iso)=>{
+    if (!iso || typeof iso !== 'string') return null;
+    const m = iso.match(/^(\d{4}-\d{2}-\d{2})/);
+    return m ? m[1] : null;
+  };
+  const f = obj && obj.finalCount && obj.finalCount.savedAt ? tryIso(obj.finalCount.savedAt) : null;
+  if (f) return f;
+  const i = obj && obj.initial && obj.initial.savedAt ? tryIso(obj.initial.savedAt) : null;
+  if (i) return i;
+  if (obj && Array.isArray(obj.movements)){
+    const mm = obj.movements.find(x => x && typeof x.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(x.date));
+    if (mm) return mm.date;
+  }
+  return todayYMD();
 }
 
 async function savePettyCash(pc){
   if (!pc || pc.eventId == null) return;
   if (!db) await openDB();
 
-  return new Promise((resolve, reject)=>{
+  return new Promise((resolve)=>{
     try{
       const store = tx('pettyCash','readwrite');
-      const cleaned = {
-        eventId: pc.eventId,
-        initial: pc.initial ? normalizePettySection(pc.initial) : normalizePettySection(null),
-        movements: Array.isArray(pc.movements) ? pc.movements.slice() : [],
-        finalCount: pc.finalCount ? normalizePettySection(pc.finalCount) : null
-      };
+      const cleaned = { eventId: pc.eventId, version: 2, days: {} };
+
+      const days = pc.days && typeof pc.days === 'object' ? pc.days : {};
+      for (const k in days){
+        const dayKey = safeYMD(k);
+        cleaned.days[dayKey] = normalizePettyDay(days[k]);
+      }
+
       const req = store.put(cleaned);
       req.onsuccess = ()=>resolve();
-      req.onerror = ()=>reject(req.error);
+      req.onerror = ()=>{
+        console.error('Error guardando pettyCash', req.error);
+        resolve();
+      };
     }catch(err){
       console.error('Error savePettyCash', err);
       resolve();
@@ -601,63 +652,220 @@ async function savePettyCash(pc){
   });
 }
 
-function computePettyCashSummary(pc){
+function ensurePcDay(pc, dayKey){
+  if (!pc) return null;
+  if (!pc.days || typeof pc.days !== 'object') pc.days = {};
+  const dk = safeYMD(dayKey);
+  if (!pc.days[dk]){
+    pc.days[dk] = { initial: normalizePettySection(null), movements: [], finalCount: null };
+  } else {
+    pc.days[dk] = normalizePettyDay(pc.days[dk]);
+  }
+  return pc.days[dk];
+}
+
+function listPcDayKeys(pc){
+  if (!pc || !pc.days || typeof pc.days !== 'object') return [];
+  const keys = Object.keys(pc.days).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k));
+  keys.sort();
+  return keys;
+}
+
+function findPrevDayWithFinal(pc, dayKey){
+  const dk = safeYMD(dayKey);
+
+  // 1) Ayer literal
+  const y = ymdPrev(dk);
+  const dy = pc && pc.days ? pc.days[y] : null;
+  if (dy && dy.finalCount && dy.finalCount.savedAt) return y;
+
+  // 2) Último día anterior con final
+  const keys = listPcDayKeys(pc).filter(k => k < dk);
+  for (let i = keys.length - 1; i >= 0; i--){
+    const k = keys[i];
+    const d = pc.days[k];
+    if (d && d.finalCount && d.finalCount.savedAt) return k;
+  }
+  return null;
+}
+
+function hasAnyPettyMovements(pc){
+  if (!pc) return false;
+  if (pc.days && typeof pc.days === 'object'){
+    for (const k in pc.days){
+      const d = pc.days[k];
+      if (d && Array.isArray(d.movements) && d.movements.length) return true;
+    }
+    return false;
+  }
+  return Array.isArray(pc.movements) && pc.movements.length > 0;
+}
+
+function hasAnyPettyFinal(pc){
+  if (!pc) return false;
+  if (pc.days && typeof pc.days === 'object'){
+    for (const k in pc.days){
+      const d = pc.days[k];
+      if (d && d.finalCount && d.finalCount.savedAt) return true;
+    }
+    return false;
+  }
+  return !!(pc.finalCount && pc.finalCount.savedAt);
+}
+
+function computePettyCashSummary(pc, dayKey){
   const base = {
     nio: { initial:0, entradas:0, salidas:0, teorico:0, final:null, diferencia:null },
     usd: { initial:0, entradas:0, salidas:0, teorico:0, final:null, diferencia:null }
   };
   if (!pc) return base;
 
-  const initial = pc.initial ? normalizePettySection(pc.initial) : normalizePettySection(null);
-  const finalCount = pc.finalCount ? normalizePettySection(pc.finalCount) : null;
+  // Fallback legado (por si algún registro viejo se cuela)
+  if (!pc.days || typeof pc.days !== 'object'){
+    const initial = pc.initial ? normalizePettySection(pc.initial) : normalizePettySection(null);
+    const finalCount = pc.finalCount ? normalizePettySection(pc.finalCount) : null;
 
-  const res = {
-    nio: {
-      initial: initial.totalNio || 0,
-      entradas: 0,
-      salidas: 0,
-      teorico: 0,
-      final: finalCount ? (finalCount.totalNio || 0) : null,
-      diferencia: null
-    },
-    usd: {
-      initial: initial.totalUsd || 0,
-      entradas: 0,
-      salidas: 0,
-      teorico: 0,
-      final: finalCount ? (finalCount.totalUsd || 0) : null,
-      diferencia: null
+    const res = {
+      nio: { initial: initial.totalNio || 0, entradas: 0, salidas: 0, teorico: 0, final: finalCount ? (finalCount.totalNio || 0) : null, diferencia: null },
+      usd: { initial: initial.totalUsd || 0, entradas: 0, salidas: 0, teorico: 0, final: finalCount ? (finalCount.totalUsd || 0) : null, diferencia: null }
+    };
+
+    if (Array.isArray(pc.movements)){
+      for (const m of pc.movements){
+        if (!m || typeof m.amount === 'undefined') continue;
+        const amt = Number(m.amount) || 0;
+        if (!amt) continue;
+
+        const target = (m.currency === 'NIO') ? res.nio : (m.currency === 'USD') ? res.usd : null;
+        if (!target) continue;
+
+        if (m.type === 'entrada') target.entradas += amt;
+        else if (m.type === 'salida') target.salidas += amt;
+      }
     }
-  };
 
-  if (Array.isArray(pc.movements)){
-    for (const m of pc.movements){
-      if (!m || typeof m.amount === 'undefined') continue;
-      const amt = Number(m.amount) || 0;
-      if (!amt) continue;
+    res.nio.teorico = res.nio.initial + res.nio.entradas - res.nio.salidas;
+    res.usd.teorico = res.usd.initial + res.usd.entradas - res.usd.salidas;
 
-      const isNio = m.currency === 'NIO';
-      const isUsd = m.currency === 'USD';
-      if (!isNio && !isUsd) continue;
+    if (res.nio.final != null) res.nio.diferencia = res.nio.final - res.nio.teorico;
+    if (res.usd.final != null) res.usd.diferencia = res.usd.final - res.usd.teorico;
 
-      const target = isNio ? res.nio : res.usd;
-      if (m.type === 'entrada') target.entradas += amt;
-      else if (m.type === 'salida') target.salidas += amt;
+    return res;
+  }
+
+  // Resumen por día
+  if (dayKey){
+    const day = ensurePcDay(pc, dayKey);
+    const initial = day.initial ? normalizePettySection(day.initial) : normalizePettySection(null);
+    const finalCount = day.finalCount ? normalizePettySection(day.finalCount) : null;
+
+    const res = {
+      nio: { initial: initial.totalNio || 0, entradas: 0, salidas: 0, teorico: 0, final: finalCount ? (finalCount.totalNio || 0) : null, diferencia: null },
+      usd: { initial: initial.totalUsd || 0, entradas: 0, salidas: 0, teorico: 0, final: finalCount ? (finalCount.totalUsd || 0) : null, diferencia: null }
+    };
+
+    if (Array.isArray(day.movements)){
+      for (const m of day.movements){
+        if (!m || typeof m.amount === 'undefined') continue;
+        const amt = Number(m.amount) || 0;
+        if (!amt) continue;
+
+        const target = (m.currency === 'NIO') ? res.nio : (m.currency === 'USD') ? res.usd : null;
+        if (!target) continue;
+
+        if (m.type === 'entrada') target.entradas += amt;
+        else if (m.type === 'salida') target.salidas += amt;
+      }
+    }
+
+    res.nio.teorico = res.nio.initial + res.nio.entradas - res.nio.salidas;
+    res.usd.teorico = res.usd.initial + res.usd.entradas - res.usd.salidas;
+
+    if (res.nio.final != null) res.nio.diferencia = res.nio.final - res.nio.teorico;
+    if (res.usd.final != null) res.usd.diferencia = res.usd.final - res.usd.teorico;
+
+    return res;
+  }
+
+  // Resumen del evento: inicial del primer día, movimientos acumulados, final del último día con arqueo
+  const keys = listPcDayKeys(pc);
+  if (!keys.length) return base;
+
+  // Inicial: primer día con savedAt o el primer día existente
+  let firstKey = keys[0];
+  for (const k of keys){
+    const d = pc.days[k];
+    if (d && d.initial && d.initial.savedAt){
+      firstKey = k;
+      break;
     }
   }
+  const firstDay = ensurePcDay(pc, firstKey);
+  const initSec = firstDay.initial ? normalizePettySection(firstDay.initial) : normalizePettySection(null);
+
+  // Final: último día con arqueo final guardado
+  let lastFinalKey = null;
+  for (let i = keys.length - 1; i >= 0; i--){
+    const k = keys[i];
+    const d = pc.days[k];
+    if (d && d.finalCount && d.finalCount.savedAt){
+      lastFinalKey = k;
+      break;
+    }
+  }
+  const finSec = lastFinalKey ? normalizePettySection(ensurePcDay(pc, lastFinalKey).finalCount) : null;
+
+  let entradasNio = 0, salidasNio = 0, entradasUsd = 0, salidasUsd = 0;
+  for (const k of keys){
+    const day = ensurePcDay(pc, k);
+    if (!Array.isArray(day.movements)) continue;
+    for (const m of day.movements){
+      const amt = Number(m.amount) || 0;
+      if (!amt) continue;
+      if (m.currency === 'NIO'){
+        if (m.type === 'entrada') entradasNio += amt;
+        else if (m.type === 'salida') salidasNio += amt;
+      } else if (m.currency === 'USD'){
+        if (m.type === 'entrada') entradasUsd += amt;
+        else if (m.type === 'salida') salidasUsd += amt;
+      }
+    }
+  }
+
+  const res = {
+    nio: { initial: initSec.totalNio || 0, entradas: entradasNio, salidas: salidasNio, teorico: 0, final: finSec ? (finSec.totalNio || 0) : null, diferencia: null },
+    usd: { initial: initSec.totalUsd || 0, entradas: entradasUsd, salidas: salidasUsd, teorico: 0, final: finSec ? (finSec.totalUsd || 0) : null, diferencia: null }
+  };
 
   res.nio.teorico = res.nio.initial + res.nio.entradas - res.nio.salidas;
   res.usd.teorico = res.usd.initial + res.usd.entradas - res.usd.salidas;
 
-  if (res.nio.final != null){
-    res.nio.diferencia = res.nio.final - res.nio.teorico;
-  }
-  if (res.usd.final != null){
-    res.usd.diferencia = res.usd.final - res.usd.teorico;
-  }
+  if (res.nio.final != null) res.nio.diferencia = res.nio.final - res.nio.teorico;
+  if (res.usd.final != null) res.usd.diferencia = res.usd.final - res.usd.teorico;
 
   return res;
 }
+
+function ymdFromDate(dt){
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth()+1).padStart(2,'0');
+  const d = String(dt.getDate()).padStart(2,'0');
+  return `${y}-${m}-${d}`;
+}
+function todayYMD(){
+  return ymdFromDate(new Date());
+}
+function dateFromYMD(ymd){
+  const parts = (ymd || '').split('-').map(Number);
+  if (parts.length !== 3 || parts.some(n=>!Number.isFinite(n))) return new Date();
+  return new Date(parts[0], parts[1]-1, parts[2]);
+}
+function ymdPrev(ymd){
+  const dt = dateFromYMD(ymd);
+  dt.setDate(dt.getDate() - 1);
+  return ymdFromDate(dt);
+}
+
 
 // Normalizar nombres
 function normName(s){ return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim(); }
@@ -2123,9 +2331,7 @@ async function exportEventExcel(eventId){
 
   const pc = await getPettyCash(eventId);
   const summary = computePettyCashSummary(pc || null);
-  const init = pc && pc.initial ? normalizePettySection(pc.initial) : normalizePettySection(null);
-  const fin  = pc && pc.finalCount ? normalizePettySection(pc.finalCount) : normalizePettySection(null);
-  const movs = pc && Array.isArray(pc.movements) ? pc.movements.slice() : [];
+  const dayKeys = listPcDayKeys(pc);
 
   // --- Hoja 1: Resumen del evento ---
   const resumenRows = [];
@@ -2176,64 +2382,100 @@ async function exportEventExcel(eventId){
   // --- Hoja 2: CajaChica_Detalle ---
   const detRows = [];
 
-  // Saldo inicial C$
-  detRows.push(['Saldo inicial C$']);
-  detRows.push(['Denominación','Cantidad','Subtotal C$']);
-  for (const d of NIO_DENOMS){
-    const qty = init.nio[String(d)] || 0;
-    const sub = d * qty;
-    detRows.push([d, qty, sub]);
-  }
-  detRows.push(['', '', '']);
-  detRows.push(['Total inicial C$', '', init.totalNio || 0]);
-
+  detRows.push(['Caja Chica - Detalle por día']);
+  detRows.push(['Evento', ev.name || '']);
+  detRows.push(['ID', ev.id]);
+  detRows.push(['Generado', new Date().toLocaleString()]);
   detRows.push([]);
-  // Saldo inicial US$
-  detRows.push(['Saldo inicial US$']);
-  detRows.push(['Denominación','Cantidad','Subtotal US$']);
-  for (const d of USD_DENOMS){
-    const qty = init.usd[String(d)] || 0;
-    const sub = d * qty;
-    detRows.push([d, qty, sub]);
-  }
-  detRows.push(['', '', '']);
-  detRows.push(['Total inicial US$', '', init.totalUsd || 0]);
-  detRows.push(['Fecha/hora saldo inicial', init.savedAt || '']);
 
-  detRows.push([]);
-  // Movimientos
-  detRows.push(['Movimientos de Caja Chica']);
-  detRows.push(['Fecha','Tipo','Moneda','Monto','Descripción']);
-  for (const m of movs){
-    const tipoText = m.type === 'salida' ? 'Salida' : 'Entrada';
-    const monedaText = m.currency === 'USD' ? 'US$' : 'C$';
-    detRows.push([m.date || '', tipoText, monedaText, m.amount || 0, m.description || '']);
-  }
+  if (!dayKeys.length){
+    detRows.push(['Sin registros de Caja Chica para este evento.']);
+  } else {
+    for (const dk of dayKeys){
+      const day = ensurePcDay(pc, dk);
+      const init = day && day.initial ? normalizePettySection(day.initial) : normalizePettySection(null);
+      const fin  = day && day.finalCount ? normalizePettySection(day.finalCount) : normalizePettySection(null);
+      const movs = (day && Array.isArray(day.movements)) ? day.movements : [];
 
-  detRows.push([]);
-  // Arqueo final C$
-  detRows.push(['Arqueo final C$']);
-  detRows.push(['Denominación','Cantidad','Subtotal C$']);
-  for (const d of NIO_DENOMS){
-    const qty = fin.nio[String(d)] || 0;
-    const sub = d * qty;
-    detRows.push([d, qty, sub]);
-  }
-  detRows.push(['', '', '']);
-  detRows.push(['Total final C$', '', fin.totalNio || 0]);
+      detRows.push(['Día', dk]);
+      detRows.push([]);
 
-  detRows.push([]);
-  // Arqueo final US$
-  detRows.push(['Arqueo final US$']);
-  detRows.push(['Denominación','Cantidad','Subtotal US$']);
-  for (const d of USD_DENOMS){
-    const qty = fin.usd[String(d)] || 0;
-    const sub = d * qty;
-    detRows.push([d, qty, sub]);
+      // Saldo inicial C$
+      detRows.push(['Saldo inicial C$']);
+      detRows.push(['Denominación','Cantidad','Subtotal C$']);
+      for (const d of NIO_DENOMS){
+        const qty = init.nio[String(d)] || 0;
+        const sub = d * qty;
+        detRows.push([d, qty, sub]);
+      }
+      detRows.push(['', '', '']);
+      detRows.push(['Total inicial C$', '', init.totalNio || 0]);
+
+      detRows.push([]);
+      // Saldo inicial US$
+      detRows.push(['Saldo inicial US$']);
+      detRows.push(['Denominación','Cantidad','Subtotal US$']);
+      for (const d of USD_DENOMS){
+        const qty = init.usd[String(d)] || 0;
+        const sub = d * qty;
+        detRows.push([d, qty, sub]);
+      }
+      detRows.push(['', '', '']);
+      detRows.push(['Total inicial US$', '', init.totalUsd || 0]);
+      detRows.push(['Fecha/hora saldo inicial', init.savedAt || '']);
+
+      detRows.push([]);
+      // Movimientos
+      detRows.push(['Movimientos']);
+      detRows.push(['Tipo','Moneda','Monto','Descripción']);
+      if (!movs.length){
+        detRows.push(['(sin movimientos)','','','']);
+      } else {
+        for (const m of movs){
+          const tipoText = m.type === 'salida' ? 'Salida' : 'Entrada';
+          const monedaText = m.currency === 'USD' ? 'US$' : 'C$';
+          detRows.push([tipoText, monedaText, m.amount || 0, m.description || '']);
+        }
+      }
+
+      detRows.push([]);
+      // Arqueo final C$
+      detRows.push(['Arqueo final C$']);
+      detRows.push(['Denominación','Cantidad','Subtotal C$']);
+      for (const d of NIO_DENOMS){
+        const qty = fin.nio[String(d)] || 0;
+        const sub = d * qty;
+        detRows.push([d, qty, sub]);
+      }
+      detRows.push(['', '', '']);
+      detRows.push(['Total final C$', '', fin.totalNio || 0]);
+
+      detRows.push([]);
+      // Arqueo final US$
+      detRows.push(['Arqueo final US$']);
+      detRows.push(['Denominación','Cantidad','Subtotal US$']);
+      for (const d of USD_DENOMS){
+        const qty = fin.usd[String(d)] || 0;
+        const sub = d * qty;
+        detRows.push([d, qty, sub]);
+      }
+      detRows.push(['', '', '']);
+      detRows.push(['Total final US$', '', fin.totalUsd || 0]);
+      detRows.push(['Fecha/hora arqueo final', fin.savedAt || '']);
+
+      detRows.push([]);
+      // Resumen del día
+      const sumDay = computePettyCashSummary(pc, dk);
+      detRows.push(['Resumen del día - C$']);
+      detRows.push(['Inicial', sumDay.nio.initial, 'Entradas', sumDay.nio.entradas, 'Salidas', sumDay.nio.salidas, 'Teórico', sumDay.nio.teorico, 'Final', sumDay.nio.final != null ? sumDay.nio.final : '', 'Dif', sumDay.nio.diferencia != null ? sumDay.nio.diferencia : '' ]);
+      detRows.push(['Resumen del día - US$']);
+      detRows.push(['Inicial', sumDay.usd.initial, 'Entradas', sumDay.usd.entradas, 'Salidas', sumDay.usd.salidas, 'Teórico', sumDay.usd.teorico, 'Final', sumDay.usd.final != null ? sumDay.usd.final : '', 'Dif', sumDay.usd.diferencia != null ? sumDay.usd.diferencia : '' ]);
+
+      detRows.push([]);
+      detRows.push(['---']);
+      detRows.push([]);
+    }
   }
-  detRows.push(['', '', '']);
-  detRows.push(['Total final US$', '', fin.totalUsd || 0]);
-  detRows.push(['Fecha/hora arqueo final', fin.savedAt || '']);
 
   const wsCaja = XLSX.utils.aoa_to_sheet(detRows);
   XLSX.utils.book_append_sheet(wb, wsCaja, 'CajaChica_Detalle');
@@ -2862,10 +3104,53 @@ async function addSale(){
   toast('Venta agregada');
 }
 
+
+function getSelectedPcDay(){
+  const inp = document.getElementById('pc-day');
+  const today = todayYMD();
+  if (inp && !inp.value) inp.value = today;
+  const val = (inp && inp.value) ? inp.value : today;
+  return safeYMD(val);
+}
+
+function setPrevCierreUI(pc, dayKey){
+  const btn = document.getElementById('pc-btn-use-prev');
+  const note = document.getElementById('pc-prev-note');
+  if (!btn || !note) return;
+
+  btn.style.display = 'none';
+  note.textContent = '';
+
+  if (!pc || !pc.days) return;
+
+  const day = ensurePcDay(pc, dayKey);
+  const hasInit = !!(day && day.initial && day.initial.savedAt);
+  const prevKey = findPrevDayWithFinal(pc, dayKey);
+
+  if (!hasInit && prevKey){
+    btn.style.display = 'inline-block';
+    note.textContent = `Disponible: cierre del ${prevKey}`;
+  } else if (hasInit){
+    note.textContent = 'Saldo inicial guardado para este día.';
+  } else {
+    note.textContent = 'No hay un cierre anterior disponible.';
+  }
+}
+
 async function renderCajaChica(){
   const main = document.getElementById('pc-main');
   const note = document.getElementById('pc-no-event-note');
   const lbl = document.getElementById('pc-event-info');
+  const dayInput = document.getElementById('pc-day');
+
+  if (dayInput){
+    const today = todayYMD();
+    if (dayInput.dataset.manual !== '1'){
+      dayInput.value = today;
+    }
+    if (!dayInput.value) dayInput.value = today;
+  }
+
   if (!main || !note || !lbl) return;
 
   const evId = await getMeta('currentEventId');
@@ -2876,26 +3161,44 @@ async function renderCajaChica(){
     lbl.textContent = 'Evento activo: —';
     note.style.display = 'block';
     main.classList.add('disabled');
-    updatePettySummaryUI(null);
+    updatePettySummaryUI(null, null);
     resetPettyInitialInputs();
     resetPettyFinalInputs();
-    renderPettyMovements(null);
+    renderPettyMovements(null, null);
+    setPrevCierreUI(null, null);
+
+    const movDate = document.getElementById('pc-mov-date');
+    if (movDate){
+      movDate.value = (dayInput && dayInput.value) ? dayInput.value : todayYMD();
+      movDate.disabled = true;
+    }
     return;
   }
 
-  lbl.textContent = 'Evento activo: ' + ev.name;
+  const dayKey = getSelectedPcDay();
+  lbl.textContent = 'Evento activo: ' + ev.name + ' · Día: ' + dayKey;
   note.style.display = 'none';
   main.classList.remove('disabled');
 
   const pc = await getPettyCash(evId);
-  updatePettySummaryUI(pc);
-  fillPettyInitialFromPc(pc);
-  fillPettyFinalFromPc(pc);
-  renderPettyMovements(pc);
+  ensurePcDay(pc, dayKey);
+
+  // Mantener el campo de fecha de movimientos sincronizado con el día operativo
+  const movDate = document.getElementById('pc-mov-date');
+  if (movDate){
+    movDate.value = dayKey;
+    movDate.disabled = true;
+  }
+
+  updatePettySummaryUI(pc, dayKey);
+  fillPettyInitialFromPc(pc, dayKey);
+  fillPettyFinalFromPc(pc, dayKey);
+  renderPettyMovements(pc, dayKey);
+  setPrevCierreUI(pc, dayKey);
 }
 
-function updatePettySummaryUI(pc){
-  const sum = computePettyCashSummary(pc || null);
+function updatePettySummaryUI(pc, dayKey){
+  const sum = computePettyCashSummary(pc || null, dayKey || null);
 
   const setVal = (id, value, allowDash) => {
     const el = document.getElementById(id);
@@ -2968,10 +3271,11 @@ function resetPettyFinalInputs(){
   if (tu) tu.textContent = '0.00';
 }
 
-function fillPettyInitialFromPc(pc){
+function fillPettyInitialFromPc(pc, dayKey){
   resetPettyInitialInputs();
-  if (!pc || !pc.initial) return;
-  const init = normalizePettySection(pc.initial);
+  if (!pc) return;
+  const day = dayKey ? ensurePcDay(pc, dayKey) : null;
+  const init = day && day.initial ? normalizePettySection(day.initial) : normalizePettySection(null);
 
   NIO_DENOMS.forEach(d=>{
     const key = String(d);
@@ -2999,10 +3303,11 @@ function fillPettyInitialFromPc(pc){
   if (tu) tu.textContent = fmt(init.totalUsd || 0);
 }
 
-function fillPettyFinalFromPc(pc){
+function fillPettyFinalFromPc(pc, dayKey){
   resetPettyFinalInputs();
-  if (!pc || !pc.finalCount) return;
-  const fin = normalizePettySection(pc.finalCount);
+  if (!pc) return;
+  const day = dayKey ? ensurePcDay(pc, dayKey) : null;
+  const fin = (day && day.finalCount) ? normalizePettySection(day.finalCount) : normalizePettySection(null);
 
   NIO_DENOMS.forEach(d=>{
     const key = String(d);
@@ -3098,7 +3403,10 @@ async function onSavePettyInitial(){
     alert('Debes activar un evento en la pestaña Vender antes de guardar Caja Chica.');
     return;
   }
+
+  const dayKey = getSelectedPcDay();
   const pc = await getPettyCash(evId);
+  const day = ensurePcDay(pc, dayKey);
 
   const nio = {};
   const usd = {};
@@ -3117,15 +3425,16 @@ async function onSavePettyInitial(){
     usd[String(d)] = qty;
   });
 
-  pc.initial = normalizePettySection({
+  day.initial = normalizePettySection({
     nio,
     usd,
     savedAt: new Date().toISOString()
   });
 
   await savePettyCash(pc);
-  updatePettySummaryUI(pc);
-  fillPettyInitialFromPc(pc);
+  updatePettySummaryUI(pc, dayKey);
+  fillPettyInitialFromPc(pc, dayKey);
+  setPrevCierreUI(pc, dayKey);
   toast('Saldo inicial de Caja Chica guardado');
 }
 
@@ -3135,7 +3444,10 @@ async function onSavePettyFinal(){
     alert('Debes activar un evento en la pestaña Vender antes de guardar el arqueo final.');
     return;
   }
+
+  const dayKey = getSelectedPcDay();
   const pc = await getPettyCash(evId);
+  const day = ensurePcDay(pc, dayKey);
 
   const nio = {};
   const usd = {};
@@ -3154,40 +3466,66 @@ async function onSavePettyFinal(){
     usd[String(d)] = qty;
   });
 
-  pc.finalCount = normalizePettySection({
+  day.finalCount = normalizePettySection({
     nio,
     usd,
     savedAt: new Date().toISOString()
   });
 
   await savePettyCash(pc);
-  updatePettySummaryUI(pc);
-  fillPettyFinalFromPc(pc);
+  updatePettySummaryUI(pc, dayKey);
+  fillPettyFinalFromPc(pc, dayKey);
+  setPrevCierreUI(pc, dayKey);
   toast('Arqueo final de Caja Chica guardado');
 }
 
-function renderPettyMovements(pc){
+function renderPettyMovements(pc, dayKey){
   const tbody = document.getElementById('pc-mov-tbody');
   if (!tbody) return;
   tbody.innerHTML = '';
 
-  if (!pc || !Array.isArray(pc.movements) || pc.movements.length === 0){
+  if (!pc){
     return;
   }
 
-  for (const m of pc.movements){
+  const dk = dayKey || getSelectedPcDay();
+  const day = ensurePcDay(pc, dk);
+  const movs = Array.isArray(day.movements) ? day.movements : [];
+  if (!movs.length) return;
+
+  for (const m of movs){
     const tr = document.createElement('tr');
-    const tipoText = m.type === 'entrada' ? 'Entrada' : 'Salida';
-    const currencyText = m.currency === 'USD' ? 'US$' : 'C$';
-    const desc = m.description || '';
-    tr.innerHTML = `
-      <td>${m.date || ''}</td>
-      <td>${tipoText}</td>
-      <td>${currencyText}</td>
-      <td>${fmt(Number(m.amount||0))}</td>
-      <td>${desc.replace ? desc.replace(/</g,'&lt;').replace(/>/g,'&gt;') : desc}</td>
-      <td><button class="btn-small btn-danger" data-movid="${m.id}">Eliminar</button></td>
-    `;
+
+    const tdDate = document.createElement('td');
+    tdDate.textContent = m.date || dk;
+
+    const tdType = document.createElement('td');
+    tdType.textContent = (m.type === 'salida') ? 'Salida' : 'Entrada';
+
+    const tdCur = document.createElement('td');
+    tdCur.textContent = (m.currency === 'USD') ? 'US$' : 'C$';
+
+    const tdAmt = document.createElement('td');
+    tdAmt.textContent = fmt(Number(m.amount || 0));
+
+    const tdDesc = document.createElement('td');
+    tdDesc.textContent = m.description || '';
+
+    const tdAct = document.createElement('td');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn small danger';
+    btn.textContent = 'Eliminar';
+    btn.addEventListener('click', ()=> onDeletePettyMovement(m.id));
+    tdAct.appendChild(btn);
+
+    tr.appendChild(tdDate);
+    tr.appendChild(tdType);
+    tr.appendChild(tdCur);
+    tr.appendChild(tdAmt);
+    tr.appendChild(tdDesc);
+    tr.appendChild(tdAct);
+
     tbody.appendChild(tr);
   }
 }
@@ -3199,19 +3537,13 @@ async function onAddPettyMovement(){
     return;
   }
 
-  const dateInput = document.getElementById('pc-mov-date');
+  const dayKey = getSelectedPcDay();
+
   const typeSel = document.getElementById('pc-mov-type');
   const curSel  = document.getElementById('pc-mov-currency');
   const amtInput = document.getElementById('pc-mov-amount');
   const descInput = document.getElementById('pc-mov-desc');
 
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth()+1).padStart(2,'0');
-  const d = String(now.getDate()).padStart(2,'0');
-  const todayStr = `${y}-${m}-${d}`;
-
-  const date = (dateInput && dateInput.value) ? dateInput.value : todayStr;
   const type = typeSel ? typeSel.value : 'entrada';
   const currency = curSel ? curSel.value : 'NIO';
   const rawAmt = amtInput ? Number(amtInput.value || 0) : 0;
@@ -3232,13 +3564,14 @@ async function onAddPettyMovement(){
   }
 
   const pc = await getPettyCash(evId);
-  if (!Array.isArray(pc.movements)) pc.movements = [];
+  const day = ensurePcDay(pc, dayKey);
+  if (!Array.isArray(day.movements)) day.movements = [];
 
-  const newId = pc.movements.length ? Math.max(...pc.movements.map(m=>m.id||0)) + 1 : 1;
+  const newId = day.movements.length ? Math.max(...day.movements.map(m=>m.id||0)) + 1 : 1;
 
-  pc.movements.push({
+  day.movements.push({
     id: newId,
-    date,
+    date: dayKey,
     type,
     currency,
     amount,
@@ -3246,8 +3579,8 @@ async function onAddPettyMovement(){
   });
 
   await savePettyCash(pc);
-  updatePettySummaryUI(pc);
-  renderPettyMovements(pc);
+  updatePettySummaryUI(pc, dayKey);
+  renderPettyMovements(pc, dayKey);
 
   if (amtInput) amtInput.value = '0.00';
   if (descInput) descInput.value = '';
@@ -3256,12 +3589,56 @@ async function onAddPettyMovement(){
 async function onDeletePettyMovement(id){
   const evId = await getMeta('currentEventId');
   if (!evId) return;
+
+  const dayKey = getSelectedPcDay();
   const pc = await getPettyCash(evId);
-  if (!Array.isArray(pc.movements)) pc.movements = [];
-  pc.movements = pc.movements.filter(m => m.id !== id);
+  const day = ensurePcDay(pc, dayKey);
+
+  if (!Array.isArray(day.movements)) day.movements = [];
+  day.movements = day.movements.filter(m => m.id !== id);
+
   await savePettyCash(pc);
-  updatePettySummaryUI(pc);
-  renderPettyMovements(pc);
+  updatePettySummaryUI(pc, dayKey);
+  renderPettyMovements(pc, dayKey);
+}
+
+async function onUsePrevCierre(){
+  const evId = await getMeta('currentEventId');
+  if (!evId){
+    alert('Debes activar un evento en la pestaña Vender antes de usar el cierre anterior.');
+    return;
+  }
+
+  const dayKey = getSelectedPcDay();
+  const pc = await getPettyCash(evId);
+  const prevKey = findPrevDayWithFinal(pc, dayKey);
+
+  if (!prevKey){
+    alert('No hay un cierre anterior disponible para precargar.');
+    return;
+  }
+
+  const prevDay = ensurePcDay(pc, prevKey);
+  if (!prevDay || !prevDay.finalCount){
+    alert('El día anterior no tiene arqueo final guardado.');
+    return;
+  }
+
+  const curDay = ensurePcDay(pc, dayKey);
+
+  // Copiar denominaciones del final del día anterior al saldo inicial del día actual
+  const fin = normalizePettySection(prevDay.finalCount);
+  curDay.initial = normalizePettySection({
+    nio: { ...fin.nio },
+    usd: { ...fin.usd },
+    savedAt: new Date().toISOString()
+  });
+
+  await savePettyCash(pc);
+  updatePettySummaryUI(pc, dayKey);
+  fillPettyInitialFromPc(pc, dayKey);
+  setPrevCierreUI(pc, dayKey);
+  toast('Saldo inicial precargado desde el cierre anterior');
 }
 
 function bindCajaChicaEvents(){
@@ -3325,6 +3702,27 @@ function bindCajaChicaEvents(){
       onDeletePettyMovement(id);
     });
   }
+
+  // Día operativo (Caja Chica por día)
+  const dayInput = document.getElementById('pc-day');
+  if (dayInput){
+    dayInput.dataset.manual = '0';
+    dayInput.value = todayYMD();
+    dayInput.addEventListener('change', ()=>{
+      dayInput.dataset.manual = '1';
+      renderCajaChica();
+    });
+  }
+
+  // Precargar saldo inicial desde el cierre anterior
+  const btnPrev = document.getElementById('pc-btn-use-prev');
+  if (btnPrev){
+    btnPrev.addEventListener('click', (e)=>{
+      e.preventDefault();
+      onUsePrevCierre();
+    });
+  }
+
 }
 
 
@@ -3343,9 +3741,9 @@ async function findMissingCajaChicaCierres(selectedEvents, salesGrupo){
 
     const pc = await getPettyCash(ev.id);
     const hasSales = (salesCount.get(ev.id) || 0) > 0;
-    const hasMov = !!(pc && Array.isArray(pc.movements) && pc.movements.length > 0);
+    const hasMov = hasAnyPettyMovements(pc);
     const isClosed = !!ev.closedAt;
-    const hasFinal = !!(pc && pc.finalCount && pc.finalCount.savedAt);
+    const hasFinal = hasAnyPettyFinal(pc);
 
     // Aviso solo si hubo actividad (ventas o movimientos) o si el evento ya fue cerrado,
     // y aún no existe arqueo final guardado.
