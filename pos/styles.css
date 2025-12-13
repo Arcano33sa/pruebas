@@ -155,6 +155,17 @@ small.muted{color:var(--muted)}
   margin-top:0;
 }
 
+.pc-history-actions{
+  display:flex;
+  gap:8px;
+  justify-content:flex-end;
+  flex-wrap:wrap;
+}
+
+.pc-history-actions button{
+  width:auto;
+}
+
 
 .btn-link {
   background: none;

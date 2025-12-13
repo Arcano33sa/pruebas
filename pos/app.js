@@ -3113,6 +3113,202 @@ function getSelectedPcDay(){
   return safeYMD(val);
 }
 
+// --- Caja Chica: histórico (solo lectura)
+let pettyHistoryMode = false;
+let pettyHistoryDayKey = null;   // día que se está visualizando
+let pettyReturnDayKey = null;    // día objetivo (día operativo que estaba seleccionado antes)
+
+function isPettyHistoryMode(){
+  return pettyHistoryMode === true;
+}
+
+function getClosedPcDayKeys(pc){
+  if (!pc || !pc.days || typeof pc.days !== 'object') return [];
+  const keys = listPcDayKeys(pc);
+  return keys.filter(k => {
+    const d = pc.days[k];
+    return !!(d && d.finalCount && d.finalCount.savedAt);
+  });
+}
+
+function setPettyReadOnly(isReadOnly){
+  const lockAll = (sel) => {
+    document.querySelectorAll(sel).forEach(el => { el.disabled = !!isReadOnly; });
+  };
+
+  lockAll('#pc-table-nio input[type="number"], #pc-table-usd input[type="number"], #pc-table-fnio input[type="number"], #pc-table-fusd input[type="number"]');
+
+  [
+    'pc-btn-save-initial','pc-btn-clear-initial',
+    'pc-btn-save-final','pc-btn-clear-final',
+    'pc-mov-type','pc-mov-currency','pc-mov-amount','pc-mov-desc','pc-mov-add'
+  ].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !!isReadOnly;
+  });
+}
+
+function enterPettyHistoryMode(historyDay){
+  const dayInput = document.getElementById('pc-day');
+  if (!dayInput) return;
+
+  // Guardar el día objetivo (operativo) solo la primera vez
+  if (!pettyHistoryMode){
+    pettyReturnDayKey = getSelectedPcDay();
+  }
+
+  pettyHistoryDayKey = safeYMD(historyDay);
+  pettyHistoryMode = true;
+
+  dayInput.dataset.manual = '1';
+  dayInput.value = pettyHistoryDayKey;
+  dayInput.disabled = true;
+}
+
+function exitPettyHistoryMode(){
+  const dayInput = document.getElementById('pc-day');
+  const sel = document.getElementById('pc-history-select');
+  const backTo = pettyReturnDayKey || todayYMD();
+
+  pettyHistoryMode = false;
+  pettyHistoryDayKey = null;
+  pettyReturnDayKey = null;
+
+  if (sel) sel.value = '';
+  if (dayInput){
+    dayInput.disabled = false;
+    dayInput.dataset.manual = '1';
+    dayInput.value = backTo;
+  }
+
+  renderCajaChica();
+}
+
+function renderPettyHistoryControls(pc){
+  const sel = document.getElementById('pc-history-select');
+  const hint = document.getElementById('pc-history-hint');
+  const note = document.getElementById('pc-history-note');
+  const banner = document.getElementById('pc-history-banner');
+  const btnBack = document.getElementById('pc-history-back');
+  const btnUse = document.getElementById('pc-history-use');
+
+  if (!sel) return;
+
+  const closed = getClosedPcDayKeys(pc);
+  const prevVal = sel.value;
+  sel.innerHTML = '<option value="">— Ver un día cerrado —</option>' + closed.map(k=>`<option value="${k}">${k}</option>`).join('');
+
+  if (isPettyHistoryMode() && pettyHistoryDayKey){
+    sel.value = pettyHistoryDayKey;
+  } else if (prevVal && closed.includes(prevVal)){
+    sel.value = prevVal;
+  } else {
+    sel.value = '';
+  }
+
+  if (hint){
+    hint.textContent = closed.length ? `Cierres guardados: ${closed.length}` : 'Aún no hay cierres guardados en este evento.';
+  }
+
+  if (btnBack) btnBack.style.display = isPettyHistoryMode() ? 'inline-block' : 'none';
+  if (btnUse) btnUse.style.display = isPettyHistoryMode() ? 'inline-block' : 'none';
+
+  if (isPettyHistoryMode()){
+    const from = pettyHistoryDayKey || '';
+    const target = pettyReturnDayKey || '';
+    if (banner){
+      banner.style.display = 'block';
+      banner.textContent = `Vista histórica (solo lectura): ${from}. Día objetivo: ${target}.`;
+    }
+    if (btnUse){
+      btnUse.textContent = target ? `Usar cierre del ${from} como inicio del ${target}` : 'Usar este cierre como inicio';
+    }
+    if (note){
+      note.textContent = 'Nota: en histórico no se puede editar. Usa “Volver al día operativo” para registrar cambios.';
+    }
+  } else {
+    if (banner){
+      banner.style.display = 'none';
+      banner.textContent = '';
+    }
+    if (note) note.textContent = '';
+  }
+}
+
+async function onSelectPettyHistoryDay(){
+  const sel = document.getElementById('pc-history-select');
+  if (!sel) return;
+  const val = sel.value || '';
+
+  if (!val){
+    if (isPettyHistoryMode()) exitPettyHistoryMode();
+    return;
+  }
+
+  const evId = await getMeta('currentEventId');
+  if (!evId){
+    alert('Activa un evento antes de ver el histórico de Caja Chica.');
+    sel.value = '';
+    return;
+  }
+
+  enterPettyHistoryMode(val);
+  await renderCajaChica();
+}
+
+async function onUseHistoryFinalAsInitial(){
+  if (!isPettyHistoryMode() || !pettyHistoryDayKey || !pettyReturnDayKey){
+    alert('Selecciona un día cerrado en el histórico primero.');
+    return;
+  }
+
+  const evId = await getMeta('currentEventId');
+  if (!evId){
+    alert('Activa un evento antes de copiar cierres.');
+    return;
+  }
+
+  const from = pettyHistoryDayKey;
+  const target = pettyReturnDayKey;
+  const ok = confirm(`¿Copiar el cierre del ${from} como saldo inicial del ${target}?\n\nEsto reemplazará el saldo inicial actual del ${target}.`);
+  if (!ok) return;
+
+  const pc = await getPettyCash(evId);
+  const src = ensurePcDay(pc, from);
+  if (!src || !src.finalCount || !src.finalCount.savedAt){
+    alert('Ese día no tiene arqueo final guardado.');
+    return;
+  }
+
+  const dest = ensurePcDay(pc, target);
+  const fin = normalizePettySection(src.finalCount);
+  dest.initial = normalizePettySection({
+    nio: { ...fin.nio },
+    usd: { ...fin.usd },
+    savedAt: new Date().toISOString()
+  });
+
+  await savePettyCash(pc);
+
+  // Volver al día operativo (objetivo) y renderizar
+  const dayInput = document.getElementById('pc-day');
+  pettyHistoryMode = false;
+  pettyHistoryDayKey = null;
+  const backTo = target;
+  pettyReturnDayKey = null;
+
+  if (dayInput){
+    dayInput.disabled = false;
+    dayInput.dataset.manual = '1';
+    dayInput.value = backTo;
+  }
+  const sel = document.getElementById('pc-history-select');
+  if (sel) sel.value = '';
+
+  await renderCajaChica();
+  toast('Saldo inicial precargado desde un cierre histórico');
+}
+
 function setPrevCierreUI(pc, dayKey){
   const btn = document.getElementById('pc-btn-use-prev');
   const note = document.getElementById('pc-prev-note');
@@ -3164,8 +3360,10 @@ async function renderCajaChica(){
     updatePettySummaryUI(null, null);
     resetPettyInitialInputs();
     resetPettyFinalInputs();
-    renderPettyMovements(null, null);
+    renderPettyMovements(null, null, true);
     setPrevCierreUI(null, null);
+    renderPettyHistoryControls(null);
+    setPettyReadOnly(false);
 
     const movDate = document.getElementById('pc-mov-date');
     if (movDate){
@@ -3176,7 +3374,8 @@ async function renderCajaChica(){
   }
 
   const dayKey = getSelectedPcDay();
-  lbl.textContent = 'Evento activo: ' + ev.name + ' · Día: ' + dayKey;
+  const hist = isPettyHistoryMode();
+  lbl.textContent = 'Evento activo: ' + ev.name + ' · ' + (hist ? ('Histórico: ' + dayKey) : ('Día: ' + dayKey));
   note.style.display = 'none';
   main.classList.remove('disabled');
 
@@ -3193,8 +3392,14 @@ async function renderCajaChica(){
   updatePettySummaryUI(pc, dayKey);
   fillPettyInitialFromPc(pc, dayKey);
   fillPettyFinalFromPc(pc, dayKey);
-  renderPettyMovements(pc, dayKey);
-  setPrevCierreUI(pc, dayKey);
+  renderPettyMovements(pc, dayKey, hist);
+  if (!hist){
+    setPrevCierreUI(pc, dayKey);
+  } else {
+    setPrevCierreUI(null, null);
+  }
+  renderPettyHistoryControls(pc);
+  setPettyReadOnly(hist);
 }
 
 function updatePettySummaryUI(pc, dayKey){
@@ -3398,6 +3603,10 @@ function recalcPettyFinalTotalsFromInputs(){
 }
 
 async function onSavePettyInitial(){
+  if (isPettyHistoryMode()){
+    alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
+    return;
+  }
   const evId = await getMeta('currentEventId');
   if (!evId){
     alert('Debes activar un evento en la pestaña Vender antes de guardar Caja Chica.');
@@ -3439,6 +3648,10 @@ async function onSavePettyInitial(){
 }
 
 async function onSavePettyFinal(){
+  if (isPettyHistoryMode()){
+    alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
+    return;
+  }
   const evId = await getMeta('currentEventId');
   if (!evId){
     alert('Debes activar un evento en la pestaña Vender antes de guardar el arqueo final.');
@@ -3479,7 +3692,7 @@ async function onSavePettyFinal(){
   toast('Arqueo final de Caja Chica guardado');
 }
 
-function renderPettyMovements(pc, dayKey){
+function renderPettyMovements(pc, dayKey, readOnly){
   const tbody = document.getElementById('pc-mov-tbody');
   if (!tbody) return;
   tbody.innerHTML = '';
@@ -3512,12 +3725,14 @@ function renderPettyMovements(pc, dayKey){
     tdDesc.textContent = m.description || '';
 
     const tdAct = document.createElement('td');
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'btn small danger';
-    btn.textContent = 'Eliminar';
-    btn.addEventListener('click', ()=> onDeletePettyMovement(m.id));
-    tdAct.appendChild(btn);
+    if (!readOnly){
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn small danger';
+      btn.textContent = 'Eliminar';
+      btn.addEventListener('click', ()=> onDeletePettyMovement(m.id));
+      tdAct.appendChild(btn);
+    }
 
     tr.appendChild(tdDate);
     tr.appendChild(tdType);
@@ -3531,6 +3746,10 @@ function renderPettyMovements(pc, dayKey){
 }
 
 async function onAddPettyMovement(){
+  if (isPettyHistoryMode()){
+    alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
+    return;
+  }
   const evId = await getMeta('currentEventId');
   if (!evId){
     alert('Debes activar un evento en la pestaña Vender antes de registrar movimientos de Caja Chica.');
@@ -3580,13 +3799,17 @@ async function onAddPettyMovement(){
 
   await savePettyCash(pc);
   updatePettySummaryUI(pc, dayKey);
-  renderPettyMovements(pc, dayKey);
+  renderPettyMovements(pc, dayKey, false);
 
   if (amtInput) amtInput.value = '0.00';
   if (descInput) descInput.value = '';
 }
 
 async function onDeletePettyMovement(id){
+  if (isPettyHistoryMode()){
+    alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
+    return;
+  }
   const evId = await getMeta('currentEventId');
   if (!evId) return;
 
@@ -3599,10 +3822,14 @@ async function onDeletePettyMovement(id){
 
   await savePettyCash(pc);
   updatePettySummaryUI(pc, dayKey);
-  renderPettyMovements(pc, dayKey);
+  renderPettyMovements(pc, dayKey, false);
 }
 
 async function onUsePrevCierre(){
+  if (isPettyHistoryMode()){
+    alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
+    return;
+  }
   const evId = await getMeta('currentEventId');
   if (!evId){
     alert('Debes activar un evento en la pestaña Vender antes de usar el cierre anterior.');
@@ -3720,6 +3947,30 @@ function bindCajaChicaEvents(){
     btnPrev.addEventListener('click', (e)=>{
       e.preventDefault();
       onUsePrevCierre();
+    });
+  }
+
+  // Histórico (solo lectura) de cierres por evento
+  const histSel = document.getElementById('pc-history-select');
+  if (histSel){
+    histSel.addEventListener('change', ()=>{
+      onSelectPettyHistoryDay().catch(err=>console.error(err));
+    });
+  }
+
+  const histBack = document.getElementById('pc-history-back');
+  if (histBack){
+    histBack.addEventListener('click', (e)=>{
+      e.preventDefault();
+      exitPettyHistoryMode();
+    });
+  }
+
+  const histUse = document.getElementById('pc-history-use');
+  if (histUse){
+    histUse.addEventListener('click', (e)=>{
+      e.preventDefault();
+      onUseHistoryFinalAsInitial().catch(err=>console.error(err));
     });
   }
 

@@ -278,6 +278,26 @@
       </div>
     </div>
 
+    <div class="row" id="pc-history-row">
+      <div>
+        <label>Histórico (cierres guardados · solo lectura)</label>
+        <select id="pc-history-select">
+          <option value="">— Ver un día cerrado —</option>
+        </select>
+        <small id="pc-history-hint" class="muted"></small>
+      </div>
+      <div style="text-align:right">
+        <label>&nbsp;</label>
+        <div class="pc-history-actions">
+          <button id="pc-history-back" class="btn-warn" type="button" style="display:none">Volver al día operativo</button>
+          <button id="pc-history-use" class="btn-primary" type="button" style="display:none">Usar este cierre como inicio</button>
+        </div>
+        <div id="pc-history-note" class="muted" style="margin-top:6px"></div>
+      </div>
+    </div>
+
+    <div id="pc-history-banner" class="warn" style="display:none"></div>
+
     <div id="pc-main" class="pc-main">
       <div class="row petty-summary">
         <div class="card">
