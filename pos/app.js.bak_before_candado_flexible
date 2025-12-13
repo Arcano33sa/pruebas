@@ -3492,7 +3492,6 @@ async function computeCierreTotalGrupo(){
   let html = '';
   html += `<div><strong>Grupo:</strong> ${data.groupLabel}</div>`;
   html += `<div><strong>Eventos incluidos:</strong> ${data.eventos.length}</div>`;
-
   const missingCaja = (data.pettyWarnings && Array.isArray(data.pettyWarnings.missingFinalEvents)) ? data.pettyWarnings.missingFinalEvents : [];
   if (missingCaja.length){
     const items = missingCaja.map(e=>{
@@ -3549,8 +3548,13 @@ async function exportCierreTotalGrupoExcel(){
 
   const missingCaja = (data.pettyWarnings && Array.isArray(data.pettyWarnings.missingFinalEvents)) ? data.pettyWarnings.missingFinalEvents : [];
   if (missingCaja.length){
-    const lines = missingCaja.map(e => `- ${(e.name || ('Evento #' + e.id))}`).join('\n');
-    const ok = confirm(`Aviso: faltan cierres diarios (arqueo final) de Caja Chica en ${missingCaja.length} evento(s) del grupo:\n\n${lines}\n\n¿Deseas exportar el Cierre Total de todas formas?`);
+    const lines = missingCaja.map(e => `- ${(e.name || ('Evento #'+e.id))}`).join('
+');
+    const ok = confirm(`Aviso: faltan cierres diarios (arqueo final) de Caja Chica en ${missingCaja.length} evento(s) del grupo:
+
+${lines}
+
+¿Deseas exportar el Cierre Total de todas formas?`);
     if (!ok) return;
   }
 

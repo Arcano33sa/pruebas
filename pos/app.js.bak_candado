@@ -3328,40 +3328,6 @@ function bindCajaChicaEvents(){
 }
 
 
-
-
-async function findMissingCajaChicaCierres(selectedEvents, salesGrupo){
-  const salesCount = new Map();
-  for (const s of (salesGrupo || [])){
-    if (!s || s.eventId == null) continue;
-    salesCount.set(s.eventId, (salesCount.get(s.eventId) || 0) + 1);
-  }
-
-  const missing = [];
-  for (const ev of (selectedEvents || [])){
-    if (!ev) continue;
-
-    const pc = await getPettyCash(ev.id);
-    const hasSales = (salesCount.get(ev.id) || 0) > 0;
-    const hasMov = !!(pc && Array.isArray(pc.movements) && pc.movements.length > 0);
-    const isClosed = !!ev.closedAt;
-    const hasFinal = !!(pc && pc.finalCount && pc.finalCount.savedAt);
-
-    // Aviso solo si hubo actividad (ventas o movimientos) o si el evento ya fue cerrado,
-    // y aún no existe arqueo final guardado.
-    if ((hasSales || hasMov || isClosed) && !hasFinal){
-      missing.push({
-        id: ev.id,
-        name: ev.name || '',
-        closedAt: ev.closedAt || '',
-        hasSales,
-        hasMov
-      });
-    }
-  }
-  return missing;
-}
-
 async function getCierreTotalGrupoData(){
   const groupSelect = $('#filtro-grupo');
   if (!groupSelect){
@@ -3402,8 +3368,7 @@ async function getCierreTotalGrupoData(){
     cortesiasUnid: 0,
     devolUnid: 0,
     devolMonto: 0,
-    presentaciones: [],
-    pettyWarnings: { missingFinalEvents: [] }
+    presentaciones: []
   };
 
   if (!salesGrupo.length){
@@ -3414,7 +3379,6 @@ async function getCierreTotalGrupoData(){
       closedAt: ev.closedAt || '',
       total: 0
     }));
-    data.pettyWarnings.missingFinalEvents = await findMissingCajaChicaCierres(selectedEvents, salesGrupo);
     return data;
   }
 
@@ -3470,8 +3434,6 @@ async function getCierreTotalGrupoData(){
     monto: info.monto
   }));
 
-  data.pettyWarnings.missingFinalEvents = await findMissingCajaChicaCierres(selectedEvents, salesGrupo);
-
   return data;
 }
 
@@ -3492,20 +3454,6 @@ async function computeCierreTotalGrupo(){
   let html = '';
   html += `<div><strong>Grupo:</strong> ${data.groupLabel}</div>`;
   html += `<div><strong>Eventos incluidos:</strong> ${data.eventos.length}</div>`;
-
-  const missingCaja = (data.pettyWarnings && Array.isArray(data.pettyWarnings.missingFinalEvents)) ? data.pettyWarnings.missingFinalEvents : [];
-  if (missingCaja.length){
-    const items = missingCaja.map(e=>{
-      const flags = [];
-      if (e.hasSales) flags.push('ventas');
-      if (e.hasMov) flags.push('movimientos');
-      if (e.closedAt) flags.push('cerrado');
-      const why = flags.length ? ` (${flags.join(', ')})` : '';
-      return `<li>${(e.name || ('Evento #' + e.id))}${why}</li>`;
-    }).join('');
-    html += `<div class="warn"><strong>⚠️ Aviso:</strong> faltan cierres diarios (arqueo final) de Caja Chica en ${missingCaja.length} evento(s) del grupo. Puedes continuar, pero el cierre total quedará sin esa confirmación.<ul>${items}</ul></div>`;
-  }
-
   html += `<div><strong>Ventas totales del grupo:</strong> C$ ${fmt(data.totalGrupo)}</div>`;
   html += '<hr>';
   html += '<div><strong>Por forma de pago:</strong></div>';
@@ -3546,14 +3494,6 @@ async function computeCierreTotalGrupo(){
 async function exportCierreTotalGrupoExcel(){
   const data = await getCierreTotalGrupoData();
   if (!data) return;
-
-  const missingCaja = (data.pettyWarnings && Array.isArray(data.pettyWarnings.missingFinalEvents)) ? data.pettyWarnings.missingFinalEvents : [];
-  if (missingCaja.length){
-    const lines = missingCaja.map(e => `- ${(e.name || ('Evento #' + e.id))}`).join('\n');
-    const ok = confirm(`Aviso: faltan cierres diarios (arqueo final) de Caja Chica en ${missingCaja.length} evento(s) del grupo:\n\n${lines}\n\n¿Deseas exportar el Cierre Total de todas formas?`);
-    if (!ok) return;
-  }
-
 
   if (typeof XLSX === 'undefined'){
     alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Revisa tu conexión a internet.');
