@@ -39,6 +39,8 @@
       <button type="button" class="fin-tab-btn active" data-view="tablero">Tablero Finanzas</button>
       <button type="button" class="fin-tab-btn" data-view="diario">Diario y Ajustes</button>
       <button type="button" class="fin-tab-btn" data-view="estados">Estados Financieros</button>
+      <button type="button" class="fin-tab-btn" data-view="compras">Compras a Proveedor</button>
+      <button type="button" class="fin-tab-btn" data-view="proveedores">Proveedores</button>
     </div>
   </nav>
 </header>
@@ -150,6 +152,11 @@
               <option value="POS">POS</option>
             </select>
           </label>
+
+          <label>
+            Proveedor
+            <select id="filtro-proveedor"></select>
+          </label>
         </div>
 
         <form id="form-movimiento" class="fin-form">
@@ -222,6 +229,7 @@
                 <th>Descripción</th>
                 <th>Tipo</th>
                 <th>Evento</th>
+                <th>Proveedor</th>
                 <th>Origen</th>
                 <th>Debe</th>
                 <th>Haber</th>
@@ -237,6 +245,198 @@
           Exportar Diario a Excel
         </button>
       </section>
+
+      
+<!-- COMPRAS A PROVEEDOR -->
+<section id="view-compras" class="fin-view">
+  <header class="fin-section-header">
+    <h2>Compras a Proveedor</h2>
+    <p>Registra compras pagadas (sin deudas) y consulta un reporte rápido por proveedor.</p>
+  </header>
+
+  <form id="form-compra" class="fin-form">
+    <div class="fin-form-row">
+      <label class="fin-form-grow">
+        Proveedor
+        <select id="compra-proveedor"></select>
+      </label>
+
+      <label>
+        Fecha
+        <input type="date" id="compra-fecha">
+      </label>
+
+      <label>
+        Tipo de compra
+        <select id="compra-tipo">
+          <option value="inventory">Compra a Inventario (Insumos)</option>
+          <option value="expense">Gasto inmediato</option>
+        </select>
+      </label>
+
+      <label>
+        Pago
+        <select id="compra-medio">
+          <option value="cash">Caja</option>
+          <option value="bank">Banco</option>
+        </select>
+      </label>
+
+      <label>
+        Monto
+        <input type="number" id="compra-monto" step="0.01" min="0">
+      </label>
+    </div>
+
+    <div class="fin-form-row">
+      <label class="fin-form-grow">
+        Cuenta DEBE
+        <select id="compra-cuenta-debe"></select>
+      </label>
+
+      <label class="fin-form-grow">
+        Cuenta HABER
+        <select id="compra-cuenta-haber"></select>
+      </label>
+    </div>
+
+    <div class="fin-form-row">
+      <label class="fin-form-grow">
+        Descripción / concepto
+        <input type="text" id="compra-descripcion" placeholder="Ej: Vino tinto, vodka, jugo, etc.">
+      </label>
+
+      <label class="fin-form-grow">
+        Referencia (factura/recibo)
+        <input type="text" id="compra-referencia" placeholder="Opcional">
+      </label>
+
+      <button type="button" id="compra-guardar" class="btn-primary">
+        Guardar compra
+      </button>
+    </div>
+
+    <p class="fin-help">
+      Aquí no existe “Proveedores por pagar”. Toda compra queda registrada como pagada al momento.
+      Se guarda bajo <strong>General/Central</strong> (sin evento).
+    </p>
+  </form>
+
+  <section class="fin-subsection">
+    <header class="fin-section-header fin-section-header--sub">
+      <h3>Reporte rápido: Compras por Proveedor</h3>
+      <p>Filtra por mes o por rango de fechas. Totales por proveedor y desglose por método de pago.</p>
+    </header>
+
+    <div class="fin-filters-row fin-filters-row--compact">
+      <label>
+        Modo de periodo
+        <select id="compras-modo">
+          <option value="mes">Por mes</option>
+          <option value="rango">Por rango</option>
+        </select>
+      </label>
+
+      <div id="compras-filtros-mes" class="fin-inline-group">
+        <label>
+          Mes
+          <select id="compras-mes"></select>
+        </label>
+        <label>
+          Año
+          <select id="compras-anio"></select>
+        </label>
+      </div>
+
+      <div id="compras-filtros-rango" class="fin-inline-group hidden">
+        <label>
+          Desde
+          <input type="date" id="compras-desde">
+        </label>
+        <label>
+          Hasta
+          <input type="date" id="compras-hasta">
+        </label>
+      </div>
+
+      <label>
+        Proveedor
+        <select id="compras-proveedor"></select>
+      </label>
+    </div>
+
+    <div class="fin-table-wrapper">
+      <table class="fin-table">
+        <thead>
+          <tr>
+            <th>Proveedor</th>
+            <th># compras</th>
+            <th>Total</th>
+            <th>Caja</th>
+            <th>Banco</th>
+          </tr>
+        </thead>
+        <tbody id="compras-tbody"></tbody>
+      </table>
+    </div>
+
+    <p id="compras-ayuda" class="fin-help"></p>
+  </section>
+</section>
+
+<!-- PROVEEDORES -->
+<section id="view-proveedores" class="fin-view">
+  <header class="fin-section-header">
+    <h2>Proveedores</h2>
+    <p>Catálogo simple de proveedores. Sirve para filtrar el Diario y el reporte de compras.</p>
+  </header>
+
+  <form id="form-proveedor" class="fin-form">
+    <input type="hidden" id="prov-id">
+
+    <div class="fin-form-row">
+      <label class="fin-form-grow">
+        Nombre (obligatorio)
+        <input type="text" id="prov-nombre" placeholder="Ej: Global Brand">
+      </label>
+
+      <label>
+        Teléfono
+        <input type="text" id="prov-telefono" placeholder="Opcional">
+      </label>
+    </div>
+
+    <div class="fin-form-row">
+      <label class="fin-form-grow">
+        Nota
+        <input type="text" id="prov-nota" placeholder="Opcional">
+      </label>
+
+      <div class="fin-actions">
+        <button type="button" id="prov-guardar" class="btn-primary">Guardar proveedor</button>
+        <button type="button" id="prov-cancelar" class="btn-ghost hidden">Cancelar</button>
+      </div>
+    </div>
+
+    <p class="fin-help">
+      Tip: aunque borres un proveedor del catálogo, las compras históricas se quedan con el nombre guardado en el asiento.
+    </p>
+  </form>
+
+  <div class="fin-table-wrapper">
+    <table class="fin-table">
+      <thead>
+        <tr>
+          <th>Nombre</th>
+          <th>Teléfono</th>
+          <th>Nota</th>
+          <th>Acciones</th>
+        </tr>
+      </thead>
+      <tbody id="proveedores-tbody"></tbody>
+    </table>
+  </div>
+</section>
 
       <!-- ESTADOS FINANCIEROS -->
       <section id="view-estados" class="fin-view">

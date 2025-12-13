@@ -5,7 +5,9 @@
 // + Flujo de Caja (Caja + Banco) por periodo.
 
 const FIN_DB_NAME = 'finanzasDB';
-const FIN_DB_VERSION = 1;
+const FIN_DB_VERSION = 2;
+const CENTRAL_EVENT = 'CENTRAL';
+
 let finDB = null;
 let finCachedData = null; // {accounts, accountsMap, entries, lines, linesByEntry}
 
@@ -37,7 +39,12 @@ function openFinDB() {
       if (!db.objectStoreNames.contains('journalLines')) {
         db.createObjectStore('journalLines', { keyPath: 'id', autoIncrement: true });
       }
-    };
+    
+
+      if (!db.objectStoreNames.contains('suppliers')) {
+        db.createObjectStore('suppliers', { keyPath: 'id', autoIncrement: true });
+      }
+};
 
     req.onsuccess = () => {
       finDB = req.result;
@@ -75,6 +82,15 @@ function finPut(storeName, val) {
     const store = finTx(storeName, 'readwrite');
     const req = store.put(val);
     req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function finDelete(storeName, key) {
+  return new Promise((resolve, reject) => {
+    const store = finTx(storeName, 'readwrite');
+    const req = store.delete(key);
+    req.onsuccess = () => resolve(true);
     req.onerror = () => reject(req.error);
   });
 }
@@ -285,6 +301,34 @@ function normStr(s) {
     .trim();
 }
 
+
+function isCentralEventName(ev) {
+  const v = (ev || '').toString().trim().toUpperCase();
+  return v === 'CENTRAL' || v === 'GENERAL';
+}
+
+function displayEventLabel(ev) {
+  if (!ev) return '';
+  return isCentralEventName(ev) ? 'General/Central' : ev;
+}
+
+function normalizeEventForPurchases() {
+  return CENTRAL_EVENT;
+}
+
+function getSupplierLabelFromEntry(entry, data) {
+  if (!entry) return '—';
+  const name = (entry.supplierName || '').toString().trim();
+  if (name) return name;
+  const id = entry.supplierId;
+  if (id != null && data && data.suppliersMap) {
+    const s = data.suppliersMap.get(Number(id));
+    if (s && s.nombre) return s.nombre;
+  }
+  return '—';
+}
+
+
 /* ---------- Carga y estructura de datos ---------- */
 
 async function getAllFinData() {
@@ -295,19 +339,32 @@ async function getAllFinData() {
     finGetAll('journalLines')
   ]);
 
-  const accountsMap = new Map();
+  let suppliers = [];
+  try {
+    suppliers = await finGetAll('suppliers');
+  } catch (err) {
+    suppliers = [];
+  }
+
+const accountsMap = new Map();
   for (const acc of accounts) {
     accountsMap.set(String(acc.code), acc);
   }
 
-  const linesByEntry = new Map();
+  
+
+  const suppliersMap = new Map();
+  for (const s of suppliers) {
+    suppliersMap.set(Number(s.id), s);
+  }
+const linesByEntry = new Map();
   for (const ln of lines) {
     const idEntry = ln.idEntry;
     if (!linesByEntry.has(idEntry)) linesByEntry.set(idEntry, []);
     linesByEntry.get(idEntry).push(ln);
   }
 
-  return { accounts, accountsMap, entries, lines, linesByEntry };
+  return { accounts, accountsMap, entries, lines, linesByEntry, suppliers, suppliersMap };
 }
 
 function buildEventList(entries) {
@@ -988,6 +1045,7 @@ async function exportDiarioExcel() {
   const tipoFilter = ($('#filtro-tipo')?.value) || 'todos';
   const eventoFilter = ($('#filtro-evento-diario')?.value) || 'ALL';
   const origenFilter = ($('#filtro-origen')?.value) || 'todos';
+  const proveedorFilter = (document.getElementById('filtro-proveedor')?.value) || 'todos';
 
   const { entries, linesByEntry } = data;
 
@@ -999,7 +1057,7 @@ async function exportDiarioExcel() {
   });
 
   const rows = [];
-  rows.push(['Fecha', 'Descripción', 'Tipo', 'Evento', 'Origen', 'Debe total', 'Haber total']);
+  rows.push(['Fecha', 'Descripción', 'Tipo', 'Evento', 'Proveedor', 'Pago', 'Referencia', 'Origen', 'Debe total', 'Haber total']);
 
   for (const e of sorted) {
     const tipo = e.tipoMovimiento || 'otro';
@@ -1010,6 +1068,16 @@ async function exportDiarioExcel() {
 
     if (!matchEvent(e, eventoFilter)) continue;
 
+    const sid = (e.supplierId != null) ? String(e.supplierId) : '';
+    const hasSupplier = !!sid || !!(e.supplierName || '').toString().trim();
+    if (proveedorFilter !== 'todos') {
+      if (proveedorFilter === 'NONE') {
+        if (hasSupplier) continue;
+      } else {
+        if (!sid || sid !== proveedorFilter) continue;
+      }
+    }
+
     const lines = linesByEntry.get(e.id) || [];
     let totalDebe = 0;
     let totalHaber = 0;
@@ -1018,11 +1086,19 @@ async function exportDiarioExcel() {
       totalHaber += Number(ln.haber || 0);
     }
 
+    const supplierLabel = getSupplierLabelFromEntry(e, data);
+    const ref = (e.reference || '').toString().trim();
+    const pm = (e.paymentMethod || '').toString().trim();
+    const pmLabel = pm === 'bank' ? 'Banco' : (pm === 'cash' ? 'Caja' : (pm ? pm : '—'));
+
     rows.push([
       e.fecha || e.date || '',
       e.descripcion || '',
       tipo,
-      (e.evento || '').trim() || '—',
+      displayEventLabel((e.evento || '').trim()) || '—',
+      supplierLabel,
+      pmLabel,
+      ref,
       origen,
       Number(totalDebe.toFixed(2)),
       Number(totalHaber.toFixed(2))
@@ -1233,11 +1309,14 @@ function fillMonthYearSelects() {
 
   const tabMes = $('#tab-mes');
   const erMes = $('#er-mes');
+  const comprasMes = $('#compras-mes');
   const tabAnio = $('#tab-anio');
   const erAnio = $('#er-anio');
+  const comprasAnio = $('#compras-anio');
 
   if (tabMes) tabMes.innerHTML = '';
   if (erMes) erMes.innerHTML = '';
+  if (comprasMes) comprasMes.innerHTML = '';
 
   months.forEach((m, idx) => {
     if (tabMes) {
@@ -1252,6 +1331,12 @@ function fillMonthYearSelects() {
       opt.textContent = monthNames[idx];
       erMes.appendChild(opt);
     }
+    if (comprasMes) {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = monthNames[idx];
+      comprasMes.appendChild(opt);
+    }
   });
 
   // Años: desde currentYear - 2 hasta currentYear + 1
@@ -1260,6 +1345,7 @@ function fillMonthYearSelects() {
 
   if (tabAnio) tabAnio.innerHTML = '';
   if (erAnio) erAnio.innerHTML = '';
+  if (comprasAnio) comprasAnio.innerHTML = '';
 
   years.forEach(y => {
     if (tabAnio) {
@@ -1274,12 +1360,20 @@ function fillMonthYearSelects() {
       opt.textContent = y;
       erAnio.appendChild(opt);
     }
+    if (comprasAnio) {
+      const opt = document.createElement('option');
+      opt.value = y;
+      opt.textContent = y;
+      comprasAnio.appendChild(opt);
+    }
   });
 
   if (tabMes) tabMes.value = pad2(currentMonth);
   if (erMes) erMes.value = pad2(currentMonth);
+  if (comprasMes) comprasMes.value = pad2(currentMonth);
   if (tabAnio) tabAnio.value = String(currentYear);
   if (erAnio) erAnio.value = String(currentYear);
+  if (comprasAnio) comprasAnio.value = String(currentYear);
 
   const bgFecha = $('#bg-fecha');
   if (bgFecha && !bgFecha.value) {
@@ -1294,9 +1388,22 @@ function fillMonthYearSelects() {
     erHasta.value = end;
   }
 
+  const comprasDesde = $('#compras-desde');
+  const comprasHasta = $('#compras-hasta');
+  if (comprasDesde && comprasHasta) {
+    const { start, end } = monthRange(currentYear, currentMonth);
+    comprasDesde.value = start;
+    comprasHasta.value = end;
+  }
+
   const movFecha = $('#mov-fecha');
   if (movFecha && !movFecha.value) {
     movFecha.value = todayStr();
+  }
+
+  const compraFecha = $('#compra-fecha');
+  if (compraFecha && !compraFecha.value) {
+    compraFecha.value = todayStr();
   }
 }
 
@@ -1326,7 +1433,7 @@ function updateEventFilters(entries) {
     eventos.forEach(ev => {
       const opt = document.createElement('option');
       opt.value = ev;
-      opt.textContent = ev;
+      opt.textContent = displayEventLabel(ev) || ev;
       sel.appendChild(opt);
     });
 
@@ -1335,6 +1442,84 @@ function updateEventFilters(entries) {
     } else {
       sel.value = 'ALL';
     }
+
+
+
+function updateSupplierSelects(data) {
+  const suppliers = (data && Array.isArray(data.suppliers)) ? [...data.suppliers] : [];
+  suppliers.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '', 'es'));
+
+  // Diario: filtro proveedor
+  const diarioSel = document.getElementById('filtro-proveedor');
+  if (diarioSel) {
+    const prev = diarioSel.value;
+    diarioSel.innerHTML = '';
+
+    const optAll = document.createElement('option');
+    optAll.value = 'todos';
+    optAll.textContent = 'Todos';
+    diarioSel.appendChild(optAll);
+
+    const optNone = document.createElement('option');
+    optNone.value = 'NONE';
+    optNone.textContent = 'Sin proveedor';
+    diarioSel.appendChild(optNone);
+
+    for (const s of suppliers) {
+      const opt = document.createElement('option');
+      opt.value = String(s.id);
+      opt.textContent = s.nombre || `Proveedor ${s.id}`;
+      diarioSel.appendChild(opt);
+    }
+
+    if (prev && Array.from(diarioSel.options).some(o => o.value === prev)) {
+      diarioSel.value = prev;
+    } else {
+      diarioSel.value = 'todos';
+    }
+  }
+
+  // Compras: selector proveedor (form) + selector reporte
+  const compraSel = document.getElementById('compra-proveedor');
+  if (compraSel) {
+    const prev = compraSel.value;
+    compraSel.innerHTML = '<option value="">Seleccione proveedor…</option>';
+    for (const s of suppliers) {
+      const opt = document.createElement('option');
+      opt.value = String(s.id);
+      opt.textContent = s.nombre || `Proveedor ${s.id}`;
+      compraSel.appendChild(opt);
+    }
+    if (prev && Array.from(compraSel.options).some(o => o.value === prev)) {
+      compraSel.value = prev;
+    }
+  }
+
+  const repSel = document.getElementById('compras-proveedor');
+  if (repSel) {
+    const prev = repSel.value;
+    repSel.innerHTML = '';
+
+    const optAll = document.createElement('option');
+    optAll.value = 'ALL';
+    optAll.textContent = 'Todos';
+    repSel.appendChild(optAll);
+
+    for (const s of suppliers) {
+      const opt = document.createElement('option');
+      opt.value = String(s.id);
+      opt.textContent = s.nombre || `Proveedor ${s.id}`;
+      repSel.appendChild(opt);
+    }
+
+    if (prev && Array.from(repSel.options).some(o => o.value === prev)) {
+      repSel.value = prev;
+    } else {
+      repSel.value = 'ALL';
+    }
+  }
+}
+
   });
 }
 
@@ -1423,6 +1608,7 @@ function renderDiario(data) {
   const tipoFilter = ($('#filtro-tipo')?.value) || 'todos';
   const eventoFilter = ($('#filtro-evento-diario')?.value) || 'ALL';
   const origenFilter = ($('#filtro-origen')?.value) || 'todos';
+  const proveedorFilter = (document.getElementById('filtro-proveedor')?.value) || 'todos';
 
   const { entries, linesByEntry } = data;
 
@@ -1441,6 +1627,16 @@ function renderDiario(data) {
     if (!matchEvent(e, eventoFilter)) continue;
     if (origenFilter !== 'todos' && origen !== origenFilter) continue;
 
+    const sid = (e.supplierId != null) ? String(e.supplierId) : '';
+    const hasSupplier = !!sid || !!(e.supplierName || '').toString().trim();
+    if (proveedorFilter !== 'todos') {
+      if (proveedorFilter === 'NONE') {
+        if (hasSupplier) continue;
+      } else {
+        if (!sid || sid !== proveedorFilter) continue;
+      }
+    }
+
     const lines = linesByEntry.get(e.id) || [];
     let totalDebe = 0;
     let totalHaber = 0;
@@ -1454,7 +1650,8 @@ function renderDiario(data) {
       <td>${e.fecha || e.date || ''}</td>
       <td>${e.descripcion || ''}</td>
       <td>${tipoMov}</td>
-      <td>${(e.evento || '').trim() || '—'}</td>
+      <td>${displayEventLabel((e.evento || '').trim()) || '—'}</td>
+      <td>${getSupplierLabelFromEntry(e, data)}</td>
       <td>${origen}</td>
       <td class="num">C$ ${fmtCurrency(totalDebe)}</td>
       <td class="num">C$ ${fmtCurrency(totalHaber)}</td>
@@ -1475,15 +1672,23 @@ function openDetalleModal(entryId) {
   const tbody = $('#detalle-tbody');
   if (!modal || !meta || !tbody) return;
 
-  meta.innerHTML = `
-    <p><strong>Fecha:</strong> ${entry.fecha || entry.date || ''}</p>
-    <p><strong>Descripción:</strong> ${entry.descripcion || ''}</p>
-    <p><strong>Tipo:</strong> ${entry.tipoMovimiento || ''}</p>
-    <p><strong>Evento:</strong> ${(entry.evento || '').trim() || '—'}</p>
-    <p><strong>Origen:</strong> ${entry.origen || 'Manual'}</p>
-  `;
+  const supplierLabel = getSupplierLabelFromEntry(entry, finCachedData);
+const ref = (entry.reference || '').toString().trim();
+const pm = (entry.paymentMethod || '').toString().trim();
+const pmLabel = pm === 'bank' ? 'Banco' : (pm === 'cash' ? 'Caja' : (pm ? pm : '—'));
 
-  tbody.innerHTML = '';
+meta.innerHTML = `
+  <p><strong>Fecha:</strong> ${entry.fecha || entry.date || ''}</p>
+  <p><strong>Descripción:</strong> ${entry.descripcion || ''}</p>
+  <p><strong>Tipo:</strong> ${entry.tipoMovimiento || ''}</p>
+  <p><strong>Evento:</strong> ${displayEventLabel((entry.evento || '').trim()) || '—'}</p>
+  <p><strong>Proveedor:</strong> ${supplierLabel}</p>
+  <p><strong>Pago:</strong> ${pmLabel}</p>
+  <p><strong>Referencia:</strong> ${ref || '—'}</p>
+  <p><strong>Origen:</strong> ${entry.origen || 'Manual'}</p>
+`;
+
+tbody.innerHTML = '';
   const lines = linesByEntry.get(entry.id) || [];
   for (const ln of lines) {
     const acc = accountsMap.get(String(ln.accountCode));
@@ -1670,6 +1875,453 @@ async function guardarMovimientoManual() {
   await refreshAllFin();
 }
 
+/* ---------- Proveedores (CRUD) ---------- */
+
+function renderProveedores(data) {
+  const tbody = document.getElementById('proveedores-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  const suppliers = (data && Array.isArray(data.suppliers)) ? [...data.suppliers] : [];
+  suppliers.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '', 'es'));
+
+  if (!suppliers.length) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="4">Sin proveedores. Crea el primero arriba.</td>`;
+    tbody.appendChild(tr);
+    return;
+  }
+
+  for (const s of suppliers) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${(s.nombre || '').toString()}</td>
+      <td>${(s.telefono || '').toString() || '—'}</td>
+      <td>${(s.nota || '').toString() || '—'}</td>
+      <td class="fin-actions-cell">
+        <button type="button" class="btn-small prov-editar" data-id="${s.id}">Editar</button>
+        <button type="button" class="btn-danger prov-borrar" data-id="${s.id}">Eliminar</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+function resetProveedorForm() {
+  const id = document.getElementById('prov-id');
+  const nombre = document.getElementById('prov-nombre');
+  const tel = document.getElementById('prov-telefono');
+  const nota = document.getElementById('prov-nota');
+  const cancelar = document.getElementById('prov-cancelar');
+
+  if (id) id.value = '';
+  if (nombre) nombre.value = '';
+  if (tel) tel.value = '';
+  if (nota) nota.value = '';
+  if (cancelar) cancelar.classList.add('hidden');
+}
+
+async function guardarProveedor() {
+  if (!finCachedData) await refreshAllFin();
+
+  const idEl = document.getElementById('prov-id');
+  const nombreEl = document.getElementById('prov-nombre');
+  const telEl = document.getElementById('prov-telefono');
+  const notaEl = document.getElementById('prov-nota');
+
+  const id = idEl && idEl.value ? Number(idEl.value) : null;
+  const nombre = (nombreEl?.value || '').trim();
+  const telefono = (telEl?.value || '').trim();
+  const nota = (notaEl?.value || '').trim();
+
+  if (!nombre) {
+    alert('El nombre del proveedor es obligatorio.');
+    return;
+  }
+
+  await openFinDB();
+
+  if (id) {
+    await finPut('suppliers', { id, nombre, telefono, nota });
+    showToast('Proveedor actualizado');
+  } else {
+    await finAdd('suppliers', { nombre, telefono, nota });
+    showToast('Proveedor creado');
+  }
+
+  resetProveedorForm();
+  await refreshAllFin();
+}
+
+async function eliminarProveedor(id) {
+  if (!id) return;
+  const ok = confirm('¿Eliminar este proveedor? (Las compras históricas se mantienen.)');
+  if (!ok) return;
+
+  await openFinDB();
+  await finDelete('suppliers', Number(id));
+  showToast('Proveedor eliminado');
+  await refreshAllFin();
+}
+
+function setupProveedoresUI() {
+  const btnGuardar = document.getElementById('prov-guardar');
+  const btnCancelar = document.getElementById('prov-cancelar');
+  const tbody = document.getElementById('proveedores-tbody');
+
+  if (btnGuardar) {
+    btnGuardar.addEventListener('click', () => {
+      guardarProveedor().catch(err => {
+        console.error('Error guardando proveedor', err);
+        alert('No se pudo guardar el proveedor.');
+      });
+    });
+  }
+
+  if (btnCancelar) {
+    btnCancelar.addEventListener('click', () => {
+      resetProveedorForm();
+    });
+  }
+
+  if (tbody) {
+    tbody.addEventListener('click', (e) => {
+      const editBtn = e.target.closest('.prov-editar');
+      const delBtn = e.target.closest('.prov-borrar');
+
+      if (editBtn && finCachedData) {
+        const id = Number(editBtn.dataset.id || '0');
+        const s = finCachedData.suppliers.find(x => Number(x.id) === id);
+        if (!s) return;
+
+        document.getElementById('prov-id').value = String(s.id);
+        document.getElementById('prov-nombre').value = s.nombre || '';
+        document.getElementById('prov-telefono').value = s.telefono || '';
+        document.getElementById('prov-nota').value = s.nota || '';
+        const cancelar = document.getElementById('prov-cancelar');
+        if (cancelar) cancelar.classList.remove('hidden');
+        return;
+      }
+
+      if (delBtn) {
+        const id = Number(delBtn.dataset.id || '0');
+        eliminarProveedor(id).catch(err => {
+          console.error('Error eliminando proveedor', err);
+          alert('No se pudo eliminar el proveedor.');
+        });
+      }
+    });
+  }
+}
+
+/* ---------- Compras pagadas a proveedor (wizard) ---------- */
+
+function findAccountByCode(data, code) {
+  if (!data || !Array.isArray(data.accounts)) return null;
+  return data.accounts.find(a => String(a.code) === String(code)) || null;
+}
+
+function fillCompraCuentaDebe(data) {
+  const sel = document.getElementById('compra-cuenta-debe');
+  if (!sel || !data) return;
+
+  const tipoCompra = document.getElementById('compra-tipo')?.value || 'inventory';
+  const cuentas = [...data.accounts].sort((a, b) => String(a.code).localeCompare(String(b.code)));
+
+  sel.innerHTML = '<option value="">Seleccione cuenta…</option>';
+
+  for (const acc of cuentas) {
+    const tipo = getTipoCuenta(acc);
+    const code = String(acc.code);
+    const nombre = acc.nombre || acc.name || `Cuenta ${acc.code}`;
+
+    let permitido = false;
+    if (tipoCompra === 'inventory') {
+      // Inventarios: preferimos 14xx y nombres con inventario
+      permitido = (tipo === 'activo' && (code.startsWith('14') || normStr(nombre).includes('inventario')));
+    } else {
+      // Gasto inmediato: gastos y costos
+      permitido = (tipo === 'gasto' || tipo === 'costo');
+    }
+
+    if (!permitido) continue;
+
+    const opt = document.createElement('option');
+    opt.value = code;
+    opt.textContent = `${code} – ${nombre}`;
+    sel.appendChild(opt);
+  }
+
+  // Defaults
+  const defaultCode = (tipoCompra === 'inventory') ? '1400' : '6100';
+  if (Array.from(sel.options).some(o => o.value === defaultCode)) {
+    sel.value = defaultCode;
+  } else if (sel.options.length > 1) {
+    sel.selectedIndex = 1;
+  }
+}
+
+function fillCompraCuentaHaber(data) {
+  const sel = document.getElementById('compra-cuenta-haber');
+  if (!sel || !data) return;
+
+  const pm = document.getElementById('compra-medio')?.value || 'cash';
+  const cuentas = [...data.accounts].sort((a, b) => String(a.code).localeCompare(String(b.code)));
+
+  sel.innerHTML = '<option value="">Seleccione cuenta…</option>';
+
+  for (const acc of cuentas) {
+    const tipo = getTipoCuenta(acc);
+    const code = String(acc.code);
+    const nombre = acc.nombre || acc.name || `Cuenta ${acc.code}`;
+
+    // Permitimos activos, pero priorizamos caja/banco
+    if (tipo !== 'activo') continue;
+
+    const opt = document.createElement('option');
+    opt.value = code;
+    opt.textContent = `${code} – ${nombre}`;
+    sel.appendChild(opt);
+  }
+
+  const defaultCode = (pm === 'bank') ? '1200' : '1100';
+  if (Array.from(sel.options).some(o => o.value === defaultCode)) {
+    sel.value = defaultCode;
+  } else if (sel.options.length > 1) {
+    sel.selectedIndex = 1;
+  }
+}
+
+async function guardarCompraProveedor() {
+  if (!finCachedData) await refreshAllFin();
+
+  const supplierIdStr = document.getElementById('compra-proveedor')?.value || '';
+  const fecha = document.getElementById('compra-fecha')?.value || todayStr();
+  const tipoCompra = document.getElementById('compra-tipo')?.value || 'inventory';
+  const pm = document.getElementById('compra-medio')?.value || 'cash';
+  const montoRaw = document.getElementById('compra-monto')?.value || '0';
+  const debeCode = document.getElementById('compra-cuenta-debe')?.value || '';
+  const haberCode = document.getElementById('compra-cuenta-haber')?.value || '';
+  const desc = (document.getElementById('compra-descripcion')?.value || '').trim();
+  const ref = (document.getElementById('compra-referencia')?.value || '').trim();
+
+  const monto = parseFloat(montoRaw.replace(',', '.'));
+
+  if (!supplierIdStr) {
+    alert('Selecciona un proveedor.');
+    return;
+  }
+  const supplierId = Number(supplierIdStr);
+  const supplierObj = finCachedData.suppliersMap ? finCachedData.suppliersMap.get(supplierId) : null;
+  const supplierName = (supplierObj && supplierObj.nombre) ? supplierObj.nombre : `Proveedor ${supplierId}`;
+
+  if (!fecha) {
+    alert('Ingresa la fecha.');
+    return;
+  }
+  if (!(monto > 0)) {
+    alert('El monto debe ser mayor que cero.');
+    return;
+  }
+  if (!debeCode) {
+    alert('Selecciona la cuenta DEBE.');
+    return;
+  }
+  if (!haberCode) {
+    alert('Selecciona la cuenta HABER.');
+    return;
+  }
+
+  const entry = {
+    fecha,
+    descripcion: desc || `Compra a proveedor: ${supplierName}`,
+    tipoMovimiento: 'egreso',
+    evento: normalizeEventForPurchases(),
+    origen: 'Manual',
+    origenId: null,
+    totalDebe: monto,
+    totalHaber: monto,
+
+    // Metadata compras
+    entryType: 'purchase',
+    purchaseKind: tipoCompra,
+    supplierId,
+    supplierName,
+    paymentMethod: pm,
+    reference: ref
+  };
+
+  await openFinDB();
+  const entryId = await finAdd('journalEntries', entry);
+
+  await finAdd('journalLines', {
+    idEntry: entryId,
+    accountCode: String(debeCode),
+    debe: monto,
+    haber: 0
+  });
+  await finAdd('journalLines', {
+    idEntry: entryId,
+    accountCode: String(haberCode),
+    debe: 0,
+    haber: monto
+  });
+
+  // Limpieza parcial
+  const montoEl = document.getElementById('compra-monto');
+  const descEl = document.getElementById('compra-descripcion');
+  const refEl = document.getElementById('compra-referencia');
+  if (montoEl) montoEl.value = '';
+  if (descEl) descEl.value = '';
+  if (refEl) refEl.value = '';
+
+  showToast('Compra guardada');
+  await refreshAllFin();
+}
+
+function getComprasPeriodo() {
+  const modo = document.getElementById('compras-modo')?.value || 'mes';
+
+  if (modo === 'mes') {
+    const mes = document.getElementById('compras-mes')?.value || pad2(new Date().getMonth() + 1);
+    const anio = document.getElementById('compras-anio')?.value || String(new Date().getFullYear());
+    const { start, end } = monthRange(Number(anio), Number(mes));
+    return { desde: start, hasta: end, modo: 'mes' };
+  }
+
+  let desde = document.getElementById('compras-desde')?.value || todayStr();
+  let hasta = document.getElementById('compras-hasta')?.value || desde;
+  if (hasta < desde) {
+    const tmp = desde;
+    desde = hasta;
+    hasta = tmp;
+  }
+  return { desde, hasta, modo: 'rango' };
+}
+
+function renderComprasPorProveedor(data) {
+  const tbody = document.getElementById('compras-tbody');
+  const ayuda = document.getElementById('compras-ayuda');
+  if (!tbody) return;
+
+  tbody.innerHTML = '';
+
+  const periodo = getComprasPeriodo();
+  const supplierFilter = document.getElementById('compras-proveedor')?.value || 'ALL';
+
+  const entries = (data && Array.isArray(data.entries)) ? data.entries : [];
+  const purchases = entries.filter(e => (e && e.entryType === 'purchase'));
+
+  const inRange = purchases.filter(e => {
+    const f = e.fecha || e.date || '';
+    if (periodo.desde && f < periodo.desde) return false;
+    if (periodo.hasta && f > periodo.hasta) return false;
+    if (supplierFilter !== 'ALL') {
+      return String(e.supplierId || '') === String(supplierFilter);
+    }
+    return true;
+  });
+
+  if (!inRange.length) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="5">Sin compras registradas en el periodo seleccionado.</td>`;
+    tbody.appendChild(tr);
+    if (ayuda) ayuda.textContent = '';
+    return;
+  }
+
+  const map = new Map(); // supplierId -> agg
+  for (const e of inRange) {
+    const key = String(e.supplierId || '');
+    const name = getSupplierLabelFromEntry(e, data);
+    if (!map.has(key)) {
+      map.set(key, { supplierId: key, supplier: name, count: 0, total: 0, cash: 0, bank: 0 });
+    }
+    const b = map.get(key);
+    const amt = Number(e.totalDebe || e.totalHaber || 0);
+    b.count += 1;
+    b.total += amt;
+
+    const pm = (e.paymentMethod || '').toString().trim();
+    if (pm === 'bank') b.bank += amt;
+    else b.cash += amt;
+  }
+
+  const rows = Array.from(map.values()).sort((a, b) => a.supplier.localeCompare(b.supplier, 'es'));
+
+  for (const r of rows) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${r.supplier}</td>
+      <td class="num">${r.count}</td>
+      <td class="num">C$ ${fmtCurrency(r.total)}</td>
+      <td class="num">C$ ${fmtCurrency(r.cash)}</td>
+      <td class="num">C$ ${fmtCurrency(r.bank)}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+
+  const totalAll = rows.reduce((s, r) => s + r.total, 0);
+  const cntAll = rows.reduce((s, r) => s + r.count, 0);
+  if (ayuda) {
+    ayuda.textContent = `Periodo: ${periodo.desde} → ${periodo.hasta} · Compras: ${cntAll} · Total: C$ ${fmtCurrency(totalAll)}`;
+  }
+}
+
+function setupComprasUI() {
+  // Toggle modo periodo reporte
+  const modoSel = document.getElementById('compras-modo');
+  const contMes = document.getElementById('compras-filtros-mes');
+  const contRango = document.getElementById('compras-filtros-rango');
+
+  const updateModo = () => {
+    const modo = modoSel?.value || 'mes';
+    if (modo === 'mes') {
+      contMes?.classList.remove('hidden');
+      contRango?.classList.add('hidden');
+    } else {
+      contMes?.classList.add('hidden');
+      contRango?.classList.remove('hidden');
+    }
+  };
+
+  if (modoSel) {
+    modoSel.addEventListener('change', () => {
+      updateModo();
+      if (finCachedData) renderComprasPorProveedor(finCachedData);
+    });
+    updateModo();
+  }
+
+  ['compras-mes', 'compras-anio', 'compras-desde', 'compras-hasta', 'compras-proveedor'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', () => {
+      if (finCachedData) renderComprasPorProveedor(finCachedData);
+    });
+  });
+
+  // Form compra
+  const btnGuardar = document.getElementById('compra-guardar');
+  if (btnGuardar) {
+    btnGuardar.addEventListener('click', () => {
+      guardarCompraProveedor().catch(err => {
+        console.error('Error guardando compra proveedor', err);
+        alert('No se pudo guardar la compra.');
+      });
+    });
+  }
+
+  // Change handlers for accounts
+  const tipoSel = document.getElementById('compra-tipo');
+  const pmSel = document.getElementById('compra-medio');
+  if (tipoSel) tipoSel.addEventListener('change', () => {
+    if (finCachedData) fillCompraCuentaDebe(finCachedData);
+  });
+  if (pmSel) pmSel.addEventListener('change', () => {
+    if (finCachedData) fillCompraCuentaHaber(finCachedData);
+  });
+}
+
 /* ---------- Tabs y eventos UI ---------- */
 
 function setActiveFinView(view) {
@@ -1775,7 +2427,7 @@ function setupFilterListeners() {
   });
 
   // Diario
-  ['filtro-tipo', 'filtro-evento-diario', 'filtro-origen'].forEach(id => {
+  ['filtro-tipo', 'filtro-evento-diario', 'filtro-proveedor', 'filtro-origen'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('change', () => {
       if (finCachedData) renderDiario(finCachedData);
@@ -1848,9 +2500,14 @@ async function refreshAllFin() {
   finCachedData = await getAllFinData();
   const data = finCachedData;
   updateEventFilters(data.entries);
+  updateSupplierSelects(data);
   fillCuentaSelect(data);
+  fillCompraCuentaDebe(data);
+  fillCompraCuentaHaber(data);
   renderTablero(data);
   renderDiario(data);
+  renderComprasPorProveedor(data);
+  renderProveedores(data);
   renderEstadoResultados(data);
   renderBalanceGeneral(data);
   renderRentabilidadPresentacion(data);
@@ -1914,6 +2571,8 @@ async function initFinanzas() {
     setupEstadosSubtabs();
     setupModoERToggle();
     setupFilterListeners();
+    setupProveedoresUI();
+    setupComprasUI();
     setupExportButtons();
     await refreshAllFin();
   } catch (err) {
