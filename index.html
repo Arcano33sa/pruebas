@@ -549,13 +549,7 @@
 
     // --- Respaldo manual (Exportar / Importar) ---
     const BACKUP_APP_NAME = 'Suite A33';
-    const SUITE_LS_PREFIXES = ['arcano33_', 'a33_', 'suite_a33_'];
-
-    // Versiones esperadas (para evitar importar respaldos "más nuevos" que rompan el open() por downgrade)
-    const EXPECTED_DB_VERSIONS = {
-      'a33-pos': 22,
-      'finanzasDB': 1
-    };
+    const SUITE_LS_PREFIXES = ['arcano33_', 'a33_', 'suite_a33_']; 
 
     function isSuiteLocalStorageKey(key){
       if (!key) return false;
@@ -930,6 +924,28 @@
       return { dbSnapshots, lsKeys, estimatedBytes, exportedAt: obj?.meta?.exportedAt, appName: obj?.meta?.appName };
     }
 
+    async function buildDbVersionWarnings(backupObj){
+      const warnings = [];
+      const bVersions = backupObj?.meta?.dbVersions || {};
+      const dbNames = Object.keys(backupObj?.data?.indexedDB || {});
+      for (const dbName of dbNames){
+        const b = bVersions?.[dbName];
+        if (typeof b !== 'number') continue;
+        try{
+          const db = await openExistingDB(dbName);
+          const c = db.version;
+          try{ db.close(); }catch(_){}
+          if (typeof c === 'number' && b !== c){
+            warnings.push(`${dbName}: respaldo v${b} / este navegador v${c}`);
+          }
+        }catch(_){
+          // Si no existe o no se puede abrir, no advertimos: se creará al importar.
+        }
+      }
+      return warnings;
+    }
+
+
     function getSuiteLocalStorageKeysInThisBrowser(){
       const keys = [];
       for (let i = 0; i < localStorage.length; i++){
@@ -1028,27 +1044,8 @@
       }
 
       try{ db.close(); }catch(_){}
-    }
-
-    function checkImportCompatibility(obj){
-      const problems = [];
-      const versions = obj?.meta?.dbVersions || {};
-      for (const [dbName, expected] of Object.entries(EXPECTED_DB_VERSIONS)){
-        const v = versions?.[dbName];
-        if (typeof v === 'number' && v > expected){
-          problems.push(`El respaldo es más nuevo: ${dbName} v${v} > v${expected}`);
-        }
-      }
-      return problems;
-    }
-
-    async function performImport(obj){
-      // 1) Validar compatibilidad
-      const incompat = checkImportCompatibility(obj);
-      if (incompat.length){
-        throw new Error(incompat.join(' · '));
-      }
-
+    } 
+    async function performImport(obj){ 
       const dbPayload = obj?.data?.indexedDB || {};
       const dbVersions = obj?.meta?.dbVersions || {};
       const dbSchemas = obj?.meta?.dbSchemas || {};
@@ -1296,20 +1293,17 @@
             const v = validateBackupStructure(obj);
             if (!v.ok) throw new Error(v.reason);
 
-            const incompat = checkImportCompatibility(obj);
             const sum = summarizeBackupObject(obj);
 
-            const warnings = [];
-            if (incompat.length){
-              warnings.push('Incompatibilidad de versión');
-            }
+            // Comparar versiones del respaldo vs las DB existentes en ESTE navegador (solo advertencia, no bloqueo)
+            const warnings = await buildDbVersionWarnings(obj);
 
             const summaryHtml = buildSummaryHtmlFromSnapshot({
               dbSnapshots: sum.dbSnapshots,
               lsKeys: sum.lsKeys,
               exportedAt: sum.exportedAt,
               estimatedBytes: sum.estimatedBytes,
-              warnings: incompat.length ? incompat : [],
+              warnings: warnings,
               appName: sum.appName
             }) + `
               <hr>
@@ -1320,12 +1314,7 @@
               title: 'Resumen del archivo',
               bodyHtml: summaryHtml,
               primaryText: 'Importar y reemplazar',
-              onPrimary: async () => {
-                if (incompat.length){
-                  alert('Este respaldo parece ser de una versión MÁS NUEVA de la Suite. Para evitar romper la base de datos, la importación se bloqueó.\n\nActualiza la Suite en este dispositivo e intenta de nuevo.');
-                  return;
-                }
-                if (!confirm('Esto reemplazará TODOS los datos actuales de la Suite A33 en este navegador. ¿Importar y reemplazar?')) return;
+              onPrimary: async () => {if (!confirm('Esto reemplazará TODOS los datos actuales de la Suite A33 en este navegador. ¿Importar y reemplazar?')) return;
 
                 showModal({
                   title: 'Importando...',
