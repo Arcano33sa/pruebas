@@ -1,6 +1,6 @@
 // --- IndexedDB helpers POS
 const DB_NAME = 'a33-pos';
-const DB_VER = 22; // schema estable
+const DB_VER = 23; // schema estable (+ banks)
 let db;
 
 // --- Finanzas: conexión a finanzasDB para asientos automáticos
@@ -40,6 +40,16 @@ function openDB() {
       }
       if (!d.objectStoreNames.contains('pettyCash')) {
         d.createObjectStore('pettyCash', { keyPath: 'eventId' });
+      }
+
+      // Catálogo de bancos (para transferencias)
+      if (!d.objectStoreNames.contains('banks')) {
+        const b = d.createObjectStore('banks', { keyPath: 'id', autoIncrement: true });
+        try { b.createIndex('by_name', 'name', { unique: false }); } catch {}
+        try { b.createIndex('by_active', 'isActive', { unique: false }); } catch {}
+      } else {
+        try { e.target.transaction.objectStore('banks').createIndex('by_name', 'name'); } catch {}
+        try { e.target.transaction.objectStore('banks').createIndex('by_active', 'isActive'); } catch {}
       }
     };
     req.onsuccess = () => { db = req.result; resolve(db); };
@@ -1109,6 +1119,135 @@ async function ensureDefaults(){
     const evs = await getAll('events');
     if (evs.length) await setMeta('currentEventId', evs[0].id);
   }
+
+  // Bancos (catálogo para transferencias)
+  await ensureBanksDefaults();
+}
+
+// --- Bancos (transferencias)
+const BANKS_SEED = ['BAC', 'BANPRO', 'Lafise', 'BDF'];
+
+function normBankName(name){
+  return String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+async function getAllBanksSafe(){
+  try{ return await getAll('banks'); }catch(e){ return []; }
+}
+
+async function ensureBanksDefaults(){
+  try{
+    let banks = await getAllBanksSafe();
+    if (!banks.length){
+      const now = new Date().toISOString();
+      for (const name of BANKS_SEED){
+        await put('banks', { name, isActive: true, createdAt: now });
+      }
+      banks = await getAllBanksSafe();
+    }
+
+    // Migración suave de campos
+    for (const b of banks){
+      if (!b) continue;
+      let changed = false;
+      if (typeof b.isActive === 'undefined'){ b.isActive = true; changed = true; }
+      if (!b.createdAt){ b.createdAt = new Date().toISOString(); changed = true; }
+      if (changed) await put('banks', b);
+    }
+  }catch(err){
+    console.error('No se pudo inicializar catálogo de bancos', err);
+  }
+}
+
+function getSaleBankLabel(sale, bankMap){
+  if (!sale || (sale.payment || '') !== 'transferencia') return '';
+  let name = (sale.bankName || '').trim();
+  const bid = sale.bankId;
+  if (!name && bid != null && bankMap && bankMap.has(Number(bid))){
+    name = String(bankMap.get(Number(bid)) || '').trim();
+  }
+  return name || 'Sin banco';
+}
+
+async function refreshSaleBankSelect(){
+  const row = document.getElementById('sale-bank-row');
+  const sel = document.getElementById('sale-bank');
+  const note = document.getElementById('sale-bank-note');
+  if (!row || !sel) return;
+
+  const payment = document.getElementById('sale-payment')?.value || 'efectivo';
+  if (payment !== 'transferencia'){
+    row.style.display = 'none';
+    sel.value = '';
+    if (note) note.textContent = '';
+    return;
+  }
+
+  row.style.display = 'block';
+  const banks = (await getAllBanksSafe()).filter(b => b && b.isActive !== false);
+  banks.sort((a,b)=> String(a.name||'').localeCompare(String(b.name||''), 'es-NI', { sensitivity:'base' }));
+
+  // Mantener selección si aún existe
+  const prev = sel.value;
+
+  sel.innerHTML = '';
+  const opt0 = document.createElement('option');
+  opt0.value = '';
+  opt0.textContent = '— Selecciona banco —';
+  sel.appendChild(opt0);
+  for (const b of banks){
+    const o = document.createElement('option');
+    o.value = String(b.id);
+    o.textContent = b.name;
+    sel.appendChild(o);
+  }
+  if (prev) sel.value = prev;
+
+  if (!banks.length){
+    if (note) note.textContent = 'No hay bancos activos. Agregá uno en Productos.';
+  } else {
+    if (note) note.textContent = '';
+  }
+}
+
+async function renderBancos(){
+  const wrap = document.getElementById('banks-list');
+  if (!wrap) return;
+  const banks = await getAllBanksSafe();
+  if (!banks.length){
+    wrap.innerHTML = '<div class="warn">No hay bancos. Agrega al menos uno para usar Transferencias.</div>';
+    return;
+  }
+  const rows = banks.slice().sort((a,b)=>{
+    const aa = (a && a.isActive !== false) ? 0 : 1;
+    const bb = (b && b.isActive !== false) ? 0 : 1;
+    if (aa !== bb) return aa - bb;
+    return String(a.name||'').localeCompare(String(b.name||''), 'es-NI', { sensitivity:'base' });
+  });
+
+  let html = '<table class="table small"><thead><tr><th>Banco</th><th>Estado</th><th></th></tr></thead><tbody>';
+  for (const b of rows){
+    const active = b && b.isActive !== false;
+    const estado = active ? 'Activo' : 'Inactivo';
+    const btnTxt = active ? 'Desactivar' : 'Activar';
+    const btnClass = active ? 'btn-warn' : 'btn-ok';
+    html += `<tr>
+      <td>${escapeHtml(b.name||'')}</td>
+      <td>${estado}</td>
+      <td><button class="${btnClass} btn-mini btn-toggle-bank" data-id="${b.id}">${btnTxt}</button></td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
+function escapeHtml(str){
+  return String(str||'')
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#039;');
 }
 
 // Productos
@@ -1137,6 +1276,9 @@ async function renderProductos(){
     wrap.appendChild(row);
   }
   await renderProductChips();
+
+  // Bancos (gestión en pestaña Productos)
+  await renderBancos();
 }
 
 // Productos internos/virtuales del POS que NO deben aparecer en selector ni inventario.
@@ -1237,6 +1379,24 @@ document.addEventListener('click', async (e)=>{
     await renderProductos(); await refreshProductSelect(); await renderInventario();
     toast('Producto eliminado');
   }
+});
+
+// Delegación de eventos para Bancos
+document.addEventListener('click', async (e)=>{
+  const tBtn = e.target.closest('.btn-toggle-bank');
+  if (!tBtn) return;
+  const id = parseInt(tBtn.dataset.id || '0', 10);
+  if (!id) return;
+
+  const banks = await getAllBanksSafe();
+  const b = banks.find(x => Number(x.id) === id);
+  if (!b) return;
+  const currentlyActive = (b.isActive !== false);
+  b.isActive = !currentlyActive;
+  await put('banks', b);
+  await renderBancos();
+  await refreshSaleBankSelect();
+  toast('Banco actualizado');
 });
 
 // Tabs
@@ -1656,6 +1816,27 @@ async function sellCupsPOS(isCourtesy){
   const customer = (payment === 'credito') ? (document.getElementById('sale-customer')?.value || '').trim() : '';
   if (payment === 'credito' && !customer){ alert('Ingresa el nombre del cliente (crédito)'); return; }
 
+  // Banco (obligatorio si es Transferencia)
+  let bankId = null;
+  let bankName = '';
+  if (payment === 'transferencia'){
+    const activeBanks = (await getAllBanksSafe()).filter(b => b && b.isActive !== false);
+    if (!activeBanks.length){
+      alert('No hay bancos activos. Agregá uno en Productos.');
+      return;
+    }
+    const sel = document.getElementById('sale-bank');
+    const raw = sel ? String(sel.value || '').trim() : '';
+    const id = parseInt(raw || '0', 10);
+    if (!id){
+      alert('Selecciona el banco para la transferencia.');
+      return;
+    }
+    const found = activeBanks.find(b => Number(b.id) === id);
+    bankId = id;
+    bankName = (found && found.name) ? String(found.name) : '';
+  }
+
   let vasoProd = await getVasoProductPOS();
   // Si alguien borró el producto interno "Vaso", lo recreamos (sin exponerlo en el selector)
   if (!vasoProd){
@@ -1689,6 +1870,8 @@ async function sellCupsPOS(isCourtesy){
     qty,
     discount: 0,
     payment,
+    bankId: (payment === 'transferencia') ? bankId : null,
+    bankName: (payment === 'transferencia') ? bankName : null,
     courtesy: !!isCourtesy,
     isCourtesy: !!isCourtesy,
     isReturn: false,
@@ -1948,6 +2131,11 @@ async function renderDay(){
       return; 
     }
     const allSales = await getAll('sales');
+    const banks = await getAllBanksSafe();
+    const bankMap = new Map();
+    for (const b of banks){
+      if (b && b.id != null) bankMap.set(Number(b.id), b.name || '');
+    }
     const filtered = allSales.filter(s => s.eventId === curId && s.date === d);
     let total = 0;
     filtered.sort((a,b)=> (a.id||0) - (b.id||0));
@@ -1958,7 +2146,7 @@ async function renderDay(){
         : (s.payment==='transferencia' ? 'pay-tr' : 'pay-cr');
       const payTxt = s.payment==='efectivo'
         ? 'Efec'
-        : (s.payment==='transferencia' ? 'Trans' : 'Cred');
+        : (s.payment==='transferencia' ? (`Transferencia · ${getSaleBankLabel(s, bankMap)}`) : 'Cred');
       const tr = document.createElement('tr');
       tr.innerHTML = `<td>${s.time||''}</td>
         <td>${s.productName}</td>
@@ -1987,6 +2175,13 @@ async function renderDay(){
 async function renderSummary(){
   const sales = await getAll('sales');
   const events = await getAll('events');
+
+  const banks = await getAllBanksSafe();
+  const bankMap = new Map();
+  for (const b of banks){
+    if (b && b.id != null) bankMap.set(Number(b.id), b.name || '');
+  }
+  const transferByBank = new Map();
   let grand = 0;
   let grandCost = 0;
   let grandProfit = 0;
@@ -2004,6 +2199,15 @@ async function renderSummary(){
     byProd.set(s.productName,(byProd.get(s.productName)||0)+total);
     byPay.set(s.payment||'efectivo',(byPay.get(s.payment||'efectivo')||0)+total);
     byEvent.set(s.eventName||'General',(byEvent.get(s.eventName||'General')||0)+total);
+
+    // Transferencias por banco
+    if ((s.payment || '') === 'transferencia'){
+      const label = getSaleBankLabel(s, bankMap);
+      const cur = transferByBank.get(label) || { total: 0, count: 0 };
+      cur.total += total;
+      cur.count += 1;
+      transferByBank.set(label, cur);
+    }
 
     // Costo y utilidad aproximada (solo ventas/no cortesías)
     if (!s.courtesy) {
@@ -2070,6 +2274,25 @@ async function renderSummary(){
 
   const tbPay=$('#tbl-por-pago tbody'); tbPay.innerHTML='';
   [...byPay.entries()].sort((a,b)=>a[0].localeCompare(b[0])).forEach(([k,v])=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; tbPay.appendChild(tr); });
+
+  // Tabla: Transferencias por banco (Resumen)
+  const tbBank = document.querySelector('#tbl-transfer-bank tbody');
+  if (tbBank){
+    tbBank.innerHTML = '';
+    if (transferByBank.size){
+      const entries = Array.from(transferByBank.entries())
+        .sort((a,b)=> (Number((b[1]||{}).total||0) - Number((a[1]||{}).total||0)));
+      for (const [label, obj] of entries){
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${label}</td><td>${fmt(Number(obj.total||0))}</td><td>${obj.count||0}</td>`;
+        tbBank.appendChild(tr);
+      }
+    } else {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td colspan="3" class="muted">(sin transferencias)</td>`;
+      tbBank.appendChild(tr);
+    }
+  }
 }
 
 // CSV helpers
@@ -2205,6 +2428,9 @@ async function openEventView(eventId){
   const ev = events.find(e=>e.id===eventId);
   if (!ev) return;
   const sales = (await getAll('sales')).filter(s=>s.eventId===eventId);
+  const banks = await getAllBanksSafe();
+  const bankMap = new Map();
+  for (const b of banks){ if (b && b.id != null) bankMap.set(Number(b.id), b.name || ''); }
 
   $('#ev-title').textContent = `Evento: ${ev.name}`;
   $('#ev-meta').innerHTML = `<div><b>Estado:</b> ${ev.closedAt?'Cerrado':'Abierto'}</div>
@@ -2242,7 +2468,10 @@ async function openEventView(eventId){
 
   const tb = $('#ev-sales tbody'); tb.innerHTML='';
   sales.sort((a,b)=>a.id-b.id).forEach(s=>{
-    const tr=document.createElement('tr'); tr.innerHTML = `<td>${s.id}</td><td>${s.date}</td><td>${s.time||''}</td><td>${s.productName}</td><td>${s.qty}</td><td>${fmt(s.unitPrice)}</td><td>${fmt(s.discount||0)}</td><td>${fmt(s.total)}</td><td>${s.payment}</td><td>${s.courtesy?'✓':''}</td><td>${s.isReturn?'✓':''}</td><td>${s.customer||''}</td><td>${s.courtesyTo||''}</td><td>${s.notes||''}</td>`;
+    const payLabel = (s.payment === 'transferencia')
+      ? (`Transferencia · ${getSaleBankLabel(s, bankMap)}`)
+      : (s.payment || '');
+    const tr=document.createElement('tr'); tr.innerHTML = `<td>${s.id}</td><td>${s.date}</td><td>${s.time||''}</td><td>${s.productName}</td><td>${s.qty}</td><td>${fmt(s.unitPrice)}</td><td>${fmt(s.discount||0)}</td><td>${fmt(s.total)}</td><td>${payLabel}</td><td>${s.courtesy?'✓':''}</td><td>${s.isReturn?'✓':''}</td><td>${s.customer||''}</td><td>${s.courtesyTo||''}</td><td>${s.notes||''}</td>`;
     tb.appendChild(tr);
   });
 
@@ -2254,9 +2483,14 @@ async function exportEventSalesCSV(eventId){
   const events = await getAll('events');
   const ev = events.find(e=>e.id===eventId);
   const sales = (await getAll('sales')).filter(s=>s.eventId===eventId);
-  const rows = [['id','fecha','hora','producto','cant','PU','desc_C$','total','pago','cortesia','devolucion','cliente','cortesia_a','notas']];
+  const banks = await getAllBanksSafe();
+  const bankMap = new Map();
+  for (const b of banks){ if (b && b.id != null) bankMap.set(Number(b.id), b.name || ''); }
+
+  const rows = [['id','fecha','hora','producto','cant','PU','desc_C$','total','pago','banco','cortesia','devolucion','cliente','cortesia_a','notas']];
   for (const s of sales){
-    rows.push([s.id, s.date, s.time||'', s.productName, s.qty, s.unitPrice, (s.discount||0), s.total, (s.payment||''), s.courtesy?1:0, s.isReturn?1:0, s.customer||'', s.courtesyTo||'', s.notes||'']);
+    const bank = (s.payment === 'transferencia') ? getSaleBankLabel(s, bankMap) : '';
+    rows.push([s.id, s.date, s.time||'', s.productName, s.qty, s.unitPrice, (s.discount||0), s.total, (s.payment||''), bank, s.courtesy?1:0, s.isReturn?1:0, s.customer||'', s.courtesyTo||'', s.notes||'']);
   }
   const safeName = (ev?ev.name:'evento').replace(/[^a-z0-9_\- ]/gi,'_');
   downloadExcel(`ventas_${safeName}.xlsx`, 'Ventas', rows);
@@ -2283,6 +2517,20 @@ async function generateCorteCSV(eventId){
   const ev = events.find(e=>e.id===eventId);
   if (!ev){ alert('Evento no encontrado'); return; }
   const sales = (await getAll('sales')).filter(s=>s.eventId===eventId);
+  const banks = await getAllBanksSafe();
+  const bankMap = new Map();
+  for (const b of banks){ if (b && b.id != null) bankMap.set(Number(b.id), b.name || ''); }
+
+  // Transferencias por banco
+  const transferByBank = new Map();
+  for (const s of sales){
+    if ((s.payment || '') !== 'transferencia') continue;
+    const label = getSaleBankLabel(s, bankMap);
+    const cur = transferByBank.get(label) || { total: 0, count: 0 };
+    cur.total += Number(s.total || 0);
+    cur.count += 1;
+    transferByBank.set(label, cur);
+  }
   const sum = buildCorteSummaryRows(ev.name, sales);
   const rows = [];
   rows.push(['Corte de evento', ev.name]);
@@ -2293,6 +2541,16 @@ async function generateCorteCSV(eventId){
   rows.push(['Transferencia', sum.trans.toFixed(2)]);
   rows.push(['Crédito', sum.credito.toFixed(2)]);
   rows.push(['Cobrado (sin crédito)', sum.cobrado.toFixed(2)]);
+  if (transferByBank.size){
+    rows.push([]);
+    rows.push(['Transferencias por banco']);
+    rows.push(['Banco','Total C$','Transacciones']);
+    const entries = Array.from(transferByBank.entries())
+      .sort((a,b)=> (b[1].total || 0) - (a[1].total || 0));
+    for (const [label, obj] of entries){
+      rows.push([label, (obj.total || 0).toFixed(2), obj.count || 0]);
+    }
+  }
   rows.push([]);
   rows.push(['Ajustes']);
   rows.push(['Descuentos aplicados (C$)', sum.descuentos.toFixed(2)]);
@@ -2305,9 +2563,10 @@ async function generateCorteCSV(eventId){
   rows.push(['Neto cobrado', sum.neto.toFixed(2)]);
   rows.push([]);
   rows.push(['Detalle de ventas']);
-  rows.push(['id','fecha','hora','producto','cant','PU','desc_C$','total','pago','cortesia','devolucion','cliente','cortesia_a','notas']);
+  rows.push(['id','fecha','hora','producto','cant','PU','desc_C$','total','pago','banco','cortesia','devolucion','cliente','cortesia_a','notas']);
   for (const s of sales){
-    rows.push([s.id, s.date, s.time||'', s.productName, s.qty, s.unitPrice, (s.discount||0), s.total, (s.payment||''), s.courtesy?1:0, s.isReturn?1:0, s.customer||'', s.courtesyTo||'', s.notes||'']);
+    const bank = (s.payment === 'transferencia') ? getSaleBankLabel(s, bankMap) : '';
+    rows.push([s.id, s.date, s.time||'', s.productName, s.qty, s.unitPrice, (s.discount||0), s.total, (s.payment||''), bank, s.courtesy?1:0, s.isReturn?1:0, s.customer||'', s.courtesyTo||'', s.notes||'']);
   }
   const safeName = ev.name.replace(/[^a-z0-9_\- ]/gi,'_');
   downloadExcel(`corte_${safeName}.xlsx`, 'Corte', rows);
@@ -2328,6 +2587,19 @@ async function exportEventExcel(eventId){
 
   const allSales = await getAll('sales');
   const sales = allSales.filter(s=>s.eventId===eventId);
+
+  const banks = await getAllBanksSafe();
+  const bankMap = new Map();
+  for (const b of banks){ if (b && b.id != null) bankMap.set(Number(b.id), b.name || ''); }
+  const transferByBank = new Map();
+  for (const s of sales){
+    if ((s.payment || '') !== 'transferencia') continue;
+    const label = getSaleBankLabel(s, bankMap);
+    const cur = transferByBank.get(label) || { total: 0, count: 0 };
+    cur.total += Number(s.total || 0);
+    cur.count += 1;
+    transferByBank.set(label, cur);
+  }
 
   const pc = await getPettyCash(eventId);
   const summary = computePettyCashSummary(pc || null);
@@ -2356,6 +2628,17 @@ async function exportEventExcel(eventId){
   resumenRows.push(['Efectivo C$', byPay.efectivo || 0]);
   resumenRows.push(['Transferencia C$', byPay.transferencia || 0]);
   resumenRows.push(['Crédito C$', byPay.credito || 0]);
+
+  if (transferByBank.size){
+    resumenRows.push([]);
+    resumenRows.push(['Transferencias por banco']);
+    resumenRows.push(['Banco','Total C$','Transacciones']);
+    const entries = Array.from(transferByBank.entries())
+      .sort((a,b)=> (b[1].total || 0) - (a[1].total || 0));
+    for (const [label, obj] of entries){
+      resumenRows.push([label, (obj.total || 0), obj.count || 0]);
+    }
+  }
 
   resumenRows.push([]);
   resumenRows.push(['Caja Chica - C$']);
@@ -2482,7 +2765,7 @@ async function exportEventExcel(eventId){
 
   // --- Hoja 3 opcional: Ventas_Detalle ---
   const ventasRows = [];
-  ventasRows.push(['id','fecha','hora','producto','cantidad','PU_C$','descuento_C$','total_C$','pago','cortesia','devolucion','cliente','cortesia_a','notas']);
+  ventasRows.push(['id','fecha','hora','producto','cantidad','PU_C$','descuento_C$','total_C$','pago','banco','cortesia','devolucion','cliente','cortesia_a','notas']);
   for (const s of sales){
     ventasRows.push([
       s.id,
@@ -2494,6 +2777,7 @@ async function exportEventExcel(eventId){
       s.discount || 0,
       s.total || 0,
       s.payment || '',
+      (s.payment === 'transferencia') ? getSaleBankLabel(s, bankMap) : '',
       s.courtesy ? 1 : 0,
       s.isReturn ? 1 : 0,
       s.customer || '',
@@ -2604,6 +2888,7 @@ async function init(){
   // Paso 4: refrescar vistas principales
   await runStep('refreshEventUI', refreshEventUI);
   await runStep('refreshProductSelect', refreshProductSelect);
+  await runStep('refreshSaleBankSelect', refreshSaleBankSelect);
   await runStep('renderDay', renderDay);
   await runStep('refreshCupBlock', refreshCupBlock);
   await runStep('renderSummary', renderSummary);
@@ -2786,7 +3071,12 @@ async function init(){
   $('#sale-discount').addEventListener('input', recomputeTotal);
   $('#sale-courtesy').addEventListener('change', ()=>{ $('#sale-courtesy-to').disabled = !$('#sale-courtesy').checked; recomputeTotal(); });
   $('#sale-return').addEventListener('change', recomputeTotal);
-  $('#sale-payment').addEventListener('change', ()=>{ const isCred = $('#sale-payment').value==='credito'; $('#sale-customer').disabled = !isCred; if (!isCred) $('#sale-customer').value=''; });
+  $('#sale-payment').addEventListener('change', async ()=>{
+    const isCred = $('#sale-payment').value==='credito';
+    $('#sale-customer').disabled = !isCred;
+    if (!isCred) $('#sale-customer').value='';
+    await refreshSaleBankSelect();
+  });
   $('#sale-date').addEventListener('change', renderDay);
   $('#btn-add').addEventListener('click', addSale);
   const stickyBtn = $('#btn-add-sticky');
@@ -2883,6 +3173,41 @@ async function init(){
   // Productos: agregar + restaurar
   document.getElementById('btn-add-prod').onclick = async()=>{ const name = $('#new-name').value.trim(); const price = parseFloat($('#new-price').value||'0'); if (!name || !(price>0)) return alert('Nombre y precio'); try{ await put('products', {name, price, manageStock:true, active:true}); $('#new-name').value=''; $('#new-price').value=''; await renderProductos(); await refreshProductSelect(); await renderInventario(); toast('Producto agregado'); }catch(err){ alert('No se pudo agregar. ¿Nombre duplicado?'); } };
   document.getElementById('btn-restore-seed').onclick = restoreSeed;
+
+  // Bancos: agregar desde pestaña Productos
+  const addBankBtn = document.getElementById('btn-add-bank');
+  if (addBankBtn){
+    addBankBtn.onclick = async ()=>{
+      const input = document.getElementById('bank-new-name');
+      const raw = (input?.value || '').trim();
+      if (!raw){ alert('Nombre del banco'); return; }
+
+      const banks = await getAllBanksSafe();
+      const key = normBankName(raw);
+      const dup = banks.find(b => normBankName(b?.name) === key);
+      if (dup){
+        if (dup.isActive === false){
+          if (confirm('Ese banco ya existe pero está inactivo. ¿Activarlo?')){
+            dup.isActive = true;
+            await put('banks', dup);
+            if (input) input.value = '';
+            await renderBancos();
+            await refreshSaleBankSelect();
+            toast('Banco activado');
+          }
+          return;
+        }
+        alert('Ese banco ya existe.');
+        return;
+      }
+
+      await put('banks', { name: raw, isActive: true, createdAt: new Date().toISOString() });
+      if (input) input.value = '';
+      await renderBancos();
+      await refreshSaleBankSelect();
+      toast('Banco agregado');
+    };
+  }
 
   
 async function exportEventosExcel(){
@@ -3013,6 +3338,27 @@ async function addSale(){
   if (!date || !productId || !qty) { alert('Completa fecha, producto y cantidad'); return; }
   if (payment==='credito' && !customer){ alert('Ingresa el nombre del cliente (crédito)'); return; }
 
+  // Banco (obligatorio si es Transferencia)
+  let bankId = null;
+  let bankName = '';
+  if (payment === 'transferencia'){
+    const activeBanks = (await getAllBanksSafe()).filter(b => b && b.isActive !== false);
+    if (!activeBanks.length){
+      alert('No hay bancos activos. Agregá uno en Productos.');
+      return;
+    }
+    const sel = document.getElementById('sale-bank');
+    const raw = sel ? String(sel.value || '').trim() : '';
+    const id = parseInt(raw || '0', 10);
+    if (!id){
+      alert('Selecciona el banco para la transferencia.');
+      return;
+    }
+    const found = activeBanks.find(b => Number(b.id) === id);
+    bankId = id;
+    bankName = (found && found.name) ? String(found.name) : '';
+  }
+
   const events = await getAll('events');
   const event = events.find(e=>e.id===curId);
   if (!event || event.closedAt){ alert('Este evento está cerrado. Reábrelo o activa otro.'); return; }
@@ -3063,6 +3409,8 @@ async function addSale(){
     qty:finalQty,
     discount,
     payment,
+    bankId: (payment === 'transferencia') ? bankId : null,
+    bankName: (payment === 'transferencia') ? bankName : null,
     courtesy,
     isReturn,
     customer,
@@ -4048,6 +4396,7 @@ async function getCierreTotalGrupoData(){
     eventos: [],
     totalGrupo: 0,
     porPago: {},
+    transferByBank: [],
     cortesiasUnid: 0,
     devolUnid: 0,
     devolMonto: 0,
@@ -4074,6 +4423,14 @@ async function getCierreTotalGrupoData(){
 
   const presentacionesMap = new Map();
 
+  const banks = await getAllBanksSafe();
+  const bankMap = new Map();
+  for (const b of banks){
+    if (b && b.id != null) bankMap.set(Number(b.id), b.name || '');
+  }
+  const transferByBankMap = new Map();
+
+
   for (const s of salesGrupo){
     const t = s.total || 0;
     const qty = s.qty || 0;
@@ -4082,6 +4439,14 @@ async function getCierreTotalGrupoData(){
     data.totalGrupo += t;
     if (!data.porPago[pago]) data.porPago[pago] = 0;
     data.porPago[pago] += t;
+
+    if ((s.payment || '') === 'transferencia'){
+      const label = getSaleBankLabel(s, bankMap);
+      const cur = transferByBankMap.get(label) || { total: 0, count: 0 };
+      cur.total += Number(s.total || 0);
+      cur.count += 1;
+      transferByBankMap.set(label, cur);
+    }
 
     if (s.courtesy){
       data.cortesiasUnid += Math.abs(qty);
@@ -4112,6 +4477,10 @@ async function getCierreTotalGrupoData(){
     closedAt: ev.closedAt || '',
     total: totalsPorEvento.get(ev.id) || 0
   }));
+
+  data.transferByBank = Array.from(transferByBankMap.entries())
+    .map(([bank, obj]) => ({ bank, total: Number(obj.total || 0), count: obj.count || 0 }))
+    .sort((a,b)=> (b.total - a.total));
 
   data.presentaciones = Array.from(presentacionesMap.entries()).map(([name, info]) => ({
     name,
@@ -4174,6 +4543,16 @@ async function computeCierreTotalGrupo(){
     }
   }
   html += '</ul>';
+
+  if (data.transferByBank && Array.isArray(data.transferByBank) && data.transferByBank.length){
+    html += '<div><strong>Transferencias por banco:</strong></div>';
+    html += '<table class="table small"><thead><tr><th>Banco</th><th>Total C$</th><th>#</th></tr></thead><tbody>';
+    const entries = data.transferByBank.slice().sort((a,b)=> (Number(b.total||0) - Number(a.total||0)));
+    for (const it of entries){
+      html += `<tr><td>${it.bank}</td><td>C$ ${fmt(it.total||0)}</td><td>${it.count||0}</td></tr>`;
+    }
+    html += '</tbody></table>';
+  }
   html += `<div><strong>Cortesías (unidades):</strong> ${data.cortesiasUnid}</div>`;
   html += `<div><strong>Devoluciones:</strong> ${data.devolUnid} u. | C$ ${fmt(data.devolMonto)}</div>`;
 
@@ -4233,6 +4612,14 @@ async function exportCierreTotalGrupoExcel(){
     }
   }
   resumenRows.push([]);
+  if (data.transferByBank && Array.isArray(data.transferByBank) && data.transferByBank.length){
+    resumenRows.push(['Transferencias por banco']);
+    resumenRows.push(['Banco','Total C$','Transacciones']);
+    const entries = data.transferByBank.slice().sort((a,b)=> (Number(b.total||0) - Number(a.total||0)));
+    for (const it of entries){
+      resumenRows.push([it.bank, it.total || 0, it.count || 0]);
+    }
+  }
   resumenRows.push(['Cortesías (unidades)', data.cortesiasUnid]);
   resumenRows.push(['Devoluciones unidades', data.devolUnid]);
   resumenRows.push(['Devoluciones monto C$', data.devolMonto]);

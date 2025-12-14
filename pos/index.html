@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=3.18">
+<link rel="manifest" href="manifest.webmanifest?v=3.19">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=3.18">
+<link rel="stylesheet" href="styles.css?v=3.19">
 </head>
 <body>
 <header class="brandbar">
@@ -103,6 +103,16 @@
       <div>
         <label>Total (C$)</label>
         <input id="sale-total" type="number" inputmode="decimal" step="0.01" disabled>
+      </div>
+    </div>
+
+    <div class="row" id="sale-bank-row" style="display:none">
+      <div>
+        <label>Banco (solo Transferencia)</label>
+        <select id="sale-bank">
+          <option value="">— Selecciona banco —</option>
+        </select>
+        <small id="sale-bank-note" class="muted"></small>
       </div>
     </div>
 
@@ -519,6 +529,16 @@
         </table>
       </div>
     </div>
+
+    <div class="row">
+      <div class="card">
+        <h3>Transferencias por banco</h3>
+        <table id="tbl-transfer-bank">
+          <thead><tr><th>Banco</th><th>Total</th><th>#</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
   </section>
 
   <section id="tab-productos" class="tab card" style="display:none">
@@ -533,6 +553,16 @@
       <button id="btn-restore-seed" class="btn-warn">Restaurar productos base (A33)</button>
     </div>
     <div class="info"><small>Si por cualquier razón solo ves “Vaso”, usa el botón <b>Restaurar productos base (A33)</b>. No borra ventas.</small></div>
+
+    <div class="card">
+      <h3>Bancos</h3>
+      <div id="banks-list"></div>
+      <div class="row">
+        <input id="bank-new-name" placeholder="Nombre del banco">
+        <button id="btn-add-bank" class="btn-ok">+ Agregar banco</button>
+      </div>
+      <div class="info"><small>Consejo: mejor <b>desactivar</b> bancos en lugar de borrarlos, para que el historial no quede huérfano.</small></div>
+    </div>
   </section>
 
   <section id="tab-ayuda" class="tab card" style="display:none">
@@ -589,9 +619,9 @@
 </nav>
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="app.js?v=3.18"></script>
+<script src="app.js?v=3.19"></script>
 <script>
-  if ('serviceWorker' in navigator) { navigator.serviceWorker.register('./sw.js?v=3.18'); }
+  if ('serviceWorker' in navigator) { navigator.serviceWorker.register('./sw.js?v=3.19'); }
 </script>
 </body>
 </html>
