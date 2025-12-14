@@ -3,7 +3,10 @@
 
 (function(){
   const DB_NAME = 'a33-pos';
-  const DB_VER = 22;
+  // IMPORTANTE:
+  // Analítica solo lee el DB del POS. Para evitar errores cuando el POS sube la versión
+  // (por ejemplo al agregar stores nuevos como 'banks'), abrimos el DB SIN especificar versión.
+  // Si especificamos una versión menor a la existente, IndexedDB lanza VersionError.
   const RECETAS_KEY = 'arcano33_recetas_v1';
 
   let db = null;
@@ -67,7 +70,8 @@
       if (!('indexedDB' in window)) {
         return reject(new Error('IndexedDB no disponible'));
       }
-      const req = indexedDB.open(DB_NAME, DB_VER);
+      // Abrir sin versión = usa la versión actual existente (y evita VersionError si el POS ya migró).
+      const req = indexedDB.open(DB_NAME);
       req.onerror = () => reject(req.error || new Error('No se pudo abrir la base de datos'));
       req.onsuccess = () => {
         db = req.result;
