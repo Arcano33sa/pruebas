@@ -1,4 +1,4 @@
-const CACHE_NAME = "arcano33-lotes-v2";
+const CACHE_NAME = "arcano33-lotes-v3.20.1";
 const ASSETS = [
   "./",
   "./index.html",

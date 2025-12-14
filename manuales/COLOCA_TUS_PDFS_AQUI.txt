@@ -1,0 +1,6 @@
+Coloca en esta carpeta los PDFs oficiales de la Suite A33.
+
+- Manual compilado (ejemplo): "Manual de Usuario Suite A33 v3.20.1.pdf"
+- Manuales por módulo: "Inventario.pdf", "Calculadora.pdf", etc.
+
+Si cambias los nombres, ajusta el mapeo en /index.html (GUÍAS Y MANUALES).

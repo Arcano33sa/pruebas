@@ -333,6 +333,83 @@
       margin-top:0.35rem;
     }
 
+/* --- Respaldo y Guía --- */
+.guide-layout{
+  display:grid;
+  grid-template-columns: 1.55fr 1fr;
+  gap:1rem;
+  margin-top:0.75rem;
+  align-items:start;
+}
+.guide-left{
+  display:flex;
+  flex-direction:column;
+  gap:1rem;
+  min-width:0;
+}
+.card.static{
+  cursor:default;
+}
+.card.static:hover{
+  transform:none;
+  box-shadow:none;
+  border-color:rgba(178,141,56,0.45);
+}
+.card.static::before{
+  opacity:0 !important;
+}
+.guide-list{
+  margin-top:0.65rem;
+  display:flex;
+  flex-direction:column;
+  gap:0.5rem;
+}
+.guide-item{
+  width:100%;
+  text-align:left;
+  padding:0.55rem 0.7rem;
+  border-radius:14px;
+  border:1px solid rgba(255,255,255,0.14);
+  background:rgba(0,0,0,0.35);
+  color:var(--text);
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:0.75rem;
+  transition:transform 0.18s ease,border-color 0.18s ease,background 0.18s ease;
+  font-size:0.9rem;
+}
+.guide-item:hover{
+  transform:translateY(-1px);
+  border-color:rgba(221,191,100,0.65);
+  background:rgba(0,0,0,0.55);
+}
+.guide-item .left{
+  display:inline-flex;
+  align-items:center;
+  gap:0.55rem;
+  min-width:0;
+}
+.guide-item .label{
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.guide-item .arrow{
+  color:var(--accent);
+  font-size:0.9rem;
+  flex:0 0 auto;
+}
+.subgrid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+  gap:1rem;
+}
+@media (max-width:820px){
+  .guide-layout{ grid-template-columns:1fr; }
+}
+
 </style>
 </head>
 <body>
@@ -488,9 +565,55 @@
         </div>
       </section>
 
-      <section class="menu-section">
-        <h2 class="menu-title">Respaldo</h2>
-        <div class="grid">
+<section class="menu-section" id="section-backup-guide">
+  <h2 class="menu-title">RESPALDO Y GUÍA</h2>
+
+  <div class="guide-layout">
+    <div class="guide-left">
+      <article class="card static" id="card-guide-menu">
+        <div class="pill"><span>📘</span><span>Guía</span></div>
+        <h2>Guía por módulos</h2>
+        <p>Abre una guía rápida de cada módulo y descarga su PDF oficial.</p>
+
+        <div class="guide-list" aria-label="Guía por módulos">
+          <button class="guide-item" type="button" data-guide="inventario">
+            <span class="left"><span>📊</span><span class="label">Inventario</span></span>
+            <span class="arrow">→</span>
+          </button>
+          <button class="guide-item" type="button" data-guide="calculadora">
+            <span class="left"><span>🧪</span><span class="label">Calculadora</span></span>
+            <span class="arrow">→</span>
+          </button>
+          <button class="guide-item" type="button" data-guide="lotes">
+            <span class="left"><span>📦</span><span class="label">Control de Lotes</span></span>
+            <span class="arrow">→</span>
+          </button>
+          <button class="guide-item" type="button" data-guide="pos">
+            <span class="left"><span>🧾</span><span class="label">POS · Eventos</span></span>
+            <span class="arrow">→</span>
+          </button>
+          <button class="guide-item" type="button" data-guide="analitica">
+            <span class="left"><span>📈</span><span class="label">Analítica</span></span>
+            <span class="arrow">→</span>
+          </button>
+          <button class="guide-item" type="button" data-guide="planificacion">
+            <span class="left"><span>📅</span><span class="label">Planificación</span></span>
+            <span class="arrow">→</span>
+          </button>
+          <button class="guide-item" type="button" data-guide="finanzas">
+            <span class="left"><span>💰</span><span class="label">Finanzas</span></span>
+            <span class="arrow">→</span>
+          </button>
+          <button class="guide-item" type="button" data-guide="respaldo">
+            <span class="left"><span>💾</span><span class="label">Respaldo</span></span>
+            <span class="arrow">→</span>
+          </button>
+        </div>
+      </article>
+
+      <div>
+        <h3 class="menu-title" style="margin-top:0;">Respaldo manual</h3>
+        <div class="subgrid">
           <article class="card" id="card-export-backup">
             <div class="pill"><span>💾</span><span>Backup</span></div>
             <h2>Exportar Respaldo</h2>
@@ -511,7 +634,23 @@
             </div>
           </article>
         </div>
-      </section>
+      </div>
+    </div>
+
+    <article class="card static" id="card-suite-manual">
+      <div class="pill"><span>📕</span><span>Manual</span></div>
+      <h2>Manual de Usuario — Suite A33 (v3.20.1)</h2>
+      <p>Manual compilado oficial de la Suite A33. Incluye todos los módulos.</p>
+      <div class="footer-row">
+        <span>PDF compilado.</span>
+        <button class="link-btn secondary" id="btn-download-suite-manual"><span>Descargar Manual Compilado (PDF)</span> →</button>
+      </div>
+      <p class="hint">Se abre en una nueva pestaña. Si aún no cargaste los PDFs en <b>manuales/</b>, verás “PDF aún no disponible”.</p>
+    </article>
+  </div>
+</section>
+
+
 
     </main>
   </div>
@@ -810,6 +949,240 @@
       const modal = document.getElementById('backup-modal');
       modal.style.display = 'none';
     }
+
+
+// --- Guías y Manuales (PDFs) ---
+const MANUALES_BASE = 'manuales/';
+
+// Manual compilado (solo desde el panel derecho)
+const SUITE_MANUAL_CANDIDATES = [
+        `${MANUALES_BASE}00- Manual de Usuario Suite A33 v3.20.1.pdf`,
+`${MANUALES_BASE}Manual de Usuario Suite A33 v3.20.1.pdf`,
+  `${MANUALES_BASE}Manual de Usuario Suite A33 v3.20.1`,
+  `${MANUALES_BASE}Manual Suite A33 v3.20.1.pdf`
+];
+
+// PDFs por módulo (puedes ajustar los nombres según tus archivos reales)
+const GUIDE_PDF_CANDIDATES = {
+  inventario: [
+    `${MANUALES_BASE}01- Manual Inventario Suite A33 v3.20.1.pdf`,
+    `${MANUALES_BASE}Inventario.pdf`,
+    `${MANUALES_BASE}inventario.pdf`
+  ],
+  calculadora: [
+    `${MANUALES_BASE}02- Manual Calculadora de Producción Suite A33 v3.20.1.pdf`,
+    `${MANUALES_BASE}Calculadora.pdf`,
+    `${MANUALES_BASE}Calculadora de Producción.pdf`,
+    `${MANUALES_BASE}calculadora.pdf`
+  ],
+  lotes: [
+    `${MANUALES_BASE}03- Manual Control de Lotes Suite A33 v3.20.1.pdf`,
+    `${MANUALES_BASE}Control de Lotes.pdf`,
+    `${MANUALES_BASE}Lotes.pdf`,
+    `${MANUALES_BASE}control_de_lotes.pdf`
+  ],
+  pos: [
+    `${MANUALES_BASE}04- Manual POS Ventas Suite A33 v3.20.1.pdf`,
+    `${MANUALES_BASE}POS · Eventos.pdf`,
+    `${MANUALES_BASE}POS Eventos.pdf`,
+    `${MANUALES_BASE}POS - Eventos.pdf`,
+    `${MANUALES_BASE}POS.pdf`
+  ],
+  analitica: [
+    `${MANUALES_BASE}05- Manual Analitica Suite A33 v3.20.1.pdf`,
+    `${MANUALES_BASE}Analítica.pdf`,
+    `${MANUALES_BASE}Analitica.pdf`,
+    `${MANUALES_BASE}analitica.pdf`
+  ],
+  planificacion: [
+    `${MANUALES_BASE}06- Manual Planificador Suite A33 v3.20.1.pdf`,
+    `${MANUALES_BASE}Planificación.pdf`,
+    `${MANUALES_BASE}Planificacion.pdf`,
+    `${MANUALES_BASE}Planificación de Pedidos.pdf`,
+    `${MANUALES_BASE}Pedidos.pdf`
+  ],
+  finanzas: [
+    `${MANUALES_BASE}07- Manual Finanzas Suite A33 v3.20.1.pdf`,
+    `${MANUALES_BASE}Finanzas.pdf`,
+    `${MANUALES_BASE}finanzas.pdf`
+  ],
+  respaldo: [
+    `${MANUALES_BASE}08- Manual Respaldo Suite A33 v3.20.1.pdf`,
+    `${MANUALES_BASE}Respaldo.pdf`,
+    `${MANUALES_BASE}respaldo.pdf`
+  ]
+};
+
+// Guía breve (placeholder inicial)
+const GUIDE_CONTENT = {
+  inventario: {
+    title: 'Inventario',
+    intro: 'Controla insumos y presentaciones. Este módulo está pensado para mantener el stock central actualizado.',
+    topics: [
+      'Registrar entradas/salidas de insumos',
+      'Ajustes de inventario (correcciones)',
+      'Alertas internas y mínimos',
+      'Exportación / respaldo del módulo',
+      'Buenas prácticas de conteo'
+    ]
+  },
+  calculadora: {
+    title: 'Calculadora',
+    intro: 'Define producción por presentaciones y calcula materia prima, volumen final y costos base.',
+    topics: [
+      'Seleccionar cantidades por presentación',
+      'Materia prima requerida (vino, vodka, jugos, agua, etc.)',
+      'Costeo por lote / por unidad',
+      'Guardar parámetros y recetas',
+      'Exportar resultados'
+    ]
+  },
+  lotes: {
+    title: 'Control de Lotes',
+    intro: 'Registra lotes producidos para trazabilidad interna (fechas, volúmenes y presentaciones).',
+    topics: [
+      'Crear y editar lotes',
+      'Registrar fechas y volumen final',
+      'Asignar presentaciones al lote',
+      'Exportar historial',
+      'Buenas prácticas de identificación'
+    ]
+  },
+  pos: {
+    title: 'POS · Eventos',
+    intro: 'Registra ventas por evento, métodos de pago y cortesías. Funciona offline.',
+    topics: [
+      'Crear/seleccionar evento',
+      'Registrar ventas y descuentos',
+      'Cortesías y control interno',
+      'Cierre del día / del evento (según flujo)',
+      'Exportación a Excel'
+    ]
+  },
+  analitica: {
+    title: 'Analítica',
+    intro: 'Solo lectura. Analiza ventas del POS por evento/presentación y genera resúmenes.',
+    topics: [
+      'Resumen mensual',
+      'Comparativo por evento',
+      'Presentaciones y tendencias',
+      'Cortesías (si aplica)',
+      'Interpretación de métricas'
+    ]
+  },
+  planificacion: {
+    title: 'Planificación',
+    intro: 'Registra pedidos de clientes, totales y estado de entrega.',
+    topics: [
+      'Crear pedido y cliente',
+      'Totales y anticipo (si aplica)',
+      'Marcar entregado',
+      'Filtros y búsqueda',
+      'Exportación / reporte'
+    ]
+  },
+  finanzas: {
+    title: 'Finanzas',
+    intro: 'Mini contabilidad: Tablero, Diario/Ajustes y Estados Financieros.',
+    topics: [
+      'Tablero (resumen del mes)',
+      'Diario y Ajustes (doble partida)',
+      'Estados Financieros (ER / Balance)',
+      'Exportaciones en Excel',
+      'Criterios de registro'
+    ]
+  },
+  respaldo: {
+    title: 'Respaldo',
+    intro: 'Exporta e importa un respaldo manual para mover datos entre dispositivos (no es sincronización).',
+    topics: [
+      'Exportar respaldo (JSON)',
+      'Importar y reemplazar',
+      'Recomendaciones de seguridad',
+      'Compatibilidad de versiones',
+      'Buenas prácticas (Drive/OneDrive/iCloud)'
+    ]
+  }
+};
+
+async function checkFileExists(url){
+  const u = encodeURI(url);
+  try{
+    const res = await fetch(u, { method:'HEAD', cache:'no-store' });
+    if (res.ok) return true;
+    if (res.status === 405 || res.status === 501){
+      const res2 = await fetch(u, { method:'GET', headers:{ 'Range':'bytes=0-0' }, cache:'no-store' });
+      return res2.ok;
+    }
+    return false;
+  }catch(_){
+    try{
+      const res2 = await fetch(u, { method:'GET', headers:{ 'Range':'bytes=0-0' }, cache:'no-store' });
+      return res2.ok;
+    }catch(__){
+      return false;
+    }
+  }
+}
+
+async function resolveFirstAvailable(candidates){
+  const list = (Array.isArray(candidates) ? candidates : []).filter(Boolean);
+  for (const c of list){
+    if (await checkFileExists(c)) return c;
+  }
+  return null;
+}
+
+function openPdf(url){
+  const u = encodeURI(url);
+  window.open(u, '_blank', 'noopener');
+}
+
+function showPdfUnavailable(){
+  showModal({
+    title: 'PDF aún no disponible',
+    bodyHtml: '<div class="badge-warn">⚠️ PDF aún no disponible.</div><div class="small-note">Coloca el archivo en <b>manuales/</b> y revisa el mapeo (nombres esperados) en este mismo archivo.</div>',
+    primaryText: 'Cerrar',
+    onPrimary: hideModal,
+    disableCancel: true
+  });
+}
+
+function openGuideModule(key){
+  const data = GUIDE_CONTENT[key];
+  if (!data) return;
+
+  const topics = Array.isArray(data.topics) ? data.topics : [];
+  const topicsHtml = topics.length
+    ? topics.map(t => `<li>${escapeHtml(t)}</li>`).join('')
+    : '<li class="muted">Temario en construcción.</li>';
+
+  const body = `
+    <div class="muted">${escapeHtml(data.intro || '')}</div>
+    <hr>
+    <div><b>Temario rápido</b></div>
+    <ul>${topicsHtml}</ul>
+    <div class="small-note">Nota: el manual compilado solo se descarga desde el panel derecho de “RESPALDO Y GUÍA”.</div>
+  `;
+
+  showModal({
+    title: data.title,
+    bodyHtml: body,
+    primaryText: 'Descargar PDF de este módulo',
+    onPrimary: async () => {
+      const url = await resolveFirstAvailable(GUIDE_PDF_CANDIDATES[key] || []);
+      if (!url){
+        showPdfUnavailable();
+        return;
+      }
+      openPdf(url);
+      hideModal();
+    },
+    cancelText: 'Cerrar',
+    onCancel: hideModal
+  });
+}
+
 
     function downloadTextFile(filename, content){
       const blob = new Blob([content], { type: 'application/json' });
@@ -1359,6 +1732,28 @@
           }
         });
       }
+
+// --- RESPALDO Y GUÍA: Manuales PDF ---
+const suiteManualBtn = document.getElementById('btn-download-suite-manual');
+if (suiteManualBtn){
+  suiteManualBtn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const url = await resolveFirstAvailable(SUITE_MANUAL_CANDIDATES);
+    if (!url){
+      showPdfUnavailable();
+      return;
+    }
+    openPdf(url);
+  });
+}
+
+document.querySelectorAll('.guide-item[data-guide]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const key = btn.getAttribute('data-guide');
+    openGuideModule(key);
+  });
+});
+
 
     });
   </script>
