@@ -260,6 +260,79 @@
       color:var(--muted);
       margin:0 0 0.4rem;
     }
+
+    /* --- Respaldo (Backup) --- */
+    .modal-overlay{
+      position:fixed;
+      inset:0;
+      background:rgba(0,0,0,0.72);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:1.25rem;
+      z-index:50;
+      backdrop-filter:blur(6px);
+    }
+    .modal-card{
+      width:100%;
+      max-width:720px;
+      background:linear-gradient(145deg,#101010,#1c1414);
+      border-radius:20px;
+      padding:1.2rem 1.1rem 1.05rem;
+      border:1px solid rgba(221,191,100,0.45);
+      box-shadow:0 18px 40px rgba(0,0,0,0.9);
+    }
+    .modal-title{
+      font-size:1.05rem;
+      margin-bottom:0.35rem;
+    }
+    .modal-body{
+      font-size:0.85rem;
+      color:var(--text);
+      line-height:1.35;
+      max-height:60vh;
+      overflow:auto;
+      padding-right:0.2rem;
+    }
+    .modal-body .muted{ color:var(--muted); }
+    .modal-body hr{ border:none;border-top:1px solid rgba(255,255,255,0.12); margin:0.7rem 0; }
+    .modal-body ul{ margin:0.35rem 0 0.6rem 1.15rem; }
+    .modal-body li{ margin:0.15rem 0; }
+    .modal-actions{
+      display:flex;
+      gap:0.5rem;
+      margin-top:0.8rem;
+      justify-content:flex-end;
+      flex-wrap:wrap;
+    }
+    .badge-warn{
+      display:inline-flex;
+      align-items:center;
+      gap:0.35rem;
+      padding:0.18rem 0.55rem;
+      border-radius:999px;
+      border:1px solid rgba(176,0,32,0.75);
+      color:#ff8a80;
+      background:rgba(0,0,0,0.35);
+      font-size:0.75rem;
+      margin-top:0.35rem;
+    }
+    .kv{
+      display:grid;
+      grid-template-columns:150px 1fr;
+      gap:0.25rem 0.75rem;
+      margin-top:0.4rem;
+    }
+    .kv div{ padding:0.15rem 0; }
+    .kv .k{ color:var(--accent); font-size:0.78rem; letter-spacing:0.02em; }
+    .kv .v{ color:var(--text); font-size:0.85rem; word-break:break-word; }
+    .small-note{ font-size:0.75rem; color:var(--muted); margin-top:0.4rem; }
+    details summary{
+      cursor:pointer;
+      color:var(--accent);
+      margin-top:0.35rem;
+    }
+
 </style>
 </head>
 <body>
@@ -414,8 +487,50 @@
           </article>
         </div>
       </section>
+
+      <section class="menu-section">
+        <h2 class="menu-title">Respaldo</h2>
+        <div class="grid">
+          <article class="card" id="card-export-backup">
+            <div class="pill"><span>💾</span><span>Backup</span></div>
+            <h2>Exportar Respaldo</h2>
+            <p>Descarga un archivo JSON con todos los datos (IndexedDB + localStorage) para moverlo a otro dispositivo.</p>
+            <div class="footer-row">
+              <span>Manual (no sync).</span>
+              <button class="link-btn secondary"><span>Exportar</span> →</button>
+            </div>
+          </article>
+
+          <article class="card" id="card-import-backup">
+            <div class="pill"><span>📥</span><span>Backup</span></div>
+            <h2>Importar Respaldo</h2>
+            <p>Carga un respaldo previo y reemplaza todos los datos actuales de este navegador.</p>
+            <div class="footer-row">
+              <span>Reemplaza todo.</span>
+              <button class="link-btn secondary"><span>Importar</span> →</button>
+            </div>
+          </article>
+        </div>
+      </section>
+
     </main>
   </div>
+
+
+  <div class="modal-overlay" id="backup-modal" style="display:none;">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="backup-modal-title">
+      <h2 class="modal-title" id="backup-modal-title">Respaldo</h2>
+      <div class="modal-body" id="backup-modal-body"></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="backup-modal-cancel">Cancelar</button>
+        <button class="btn btn-ghost" id="backup-modal-secondary" style="display:none;">Secundario</button>
+        <button class="btn btn-primary" id="backup-modal-primary">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <input id="backup-file-input" type="file" accept="application/json" style="display:none;">
+
 
   <script>
     const PIN_KEY = 'suite_a33_pin';
@@ -431,6 +546,564 @@
       overlay.style.display = 'none';
       shell.style.display = 'block';
     }
+
+    // --- Respaldo manual (Exportar / Importar) ---
+    const BACKUP_APP_NAME = 'Suite A33';
+    const SUITE_LS_PREFIXES = ['arcano33_', 'a33_', 'suite_a33_'];
+
+    // Versiones esperadas (para evitar importar respaldos "más nuevos" que rompan el open() por downgrade)
+    const EXPECTED_DB_VERSIONS = {
+      'a33-pos': 22,
+      'finanzasDB': 1
+    };
+
+    function isSuiteLocalStorageKey(key){
+      if (!key) return false;
+      return SUITE_LS_PREFIXES.some(p => key.startsWith(p));
+    }
+
+    function isSuiteDbName(name){
+      if (!name) return false;
+      if (name === 'finanzasDB') return true;
+      const n = String(name).toLowerCase();
+      return n.includes('a33') || n.includes('arcano') || n.includes('finanzas');
+    }
+
+    function escapeHtml(str){
+      return String(str ?? '')
+        .replaceAll('&','&amp;')
+        .replaceAll('<','&lt;')
+        .replaceAll('>','&gt;')
+        .replaceAll('"','&quot;')
+        .replaceAll("'","&#039;");
+    }
+
+    function formatBytes(bytes){
+      const b = Number(bytes || 0);
+      if (!Number.isFinite(b) || b <= 0) return '0 B';
+      const units = ['B','KB','MB','GB'];
+      let v = b;
+      let i = 0;
+      while (v >= 1024 && i < units.length - 1){
+        v = v / 1024;
+        i++;
+      }
+      return `${v.toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
+    }
+
+    function reqToPromise(req){
+      return new Promise((resolve, reject) => {
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error || new Error('IndexedDB request error'));
+      });
+    }
+
+    function txDone(tx){
+      return new Promise((resolve, reject) => {
+        tx.oncomplete = () => resolve(true);
+        tx.onabort = () => reject(tx.error || new Error('Transacción abortada'));
+        tx.onerror = () => reject(tx.error || new Error('Error en transacción'));
+      });
+    }
+
+    async function safeListIndexedDBDatabases(){
+      if (indexedDB.databases){
+        try{
+          const list = await indexedDB.databases();
+          if (Array.isArray(list)) return list.filter(d => d && d.name);
+        }catch(e){}
+      }
+      // Fallback (navegadores sin indexedDB.databases)
+      return [
+        { name: 'a33-pos' },
+        { name: 'finanzasDB' }
+      ];
+    }
+
+    function openExistingDB(dbName){
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(dbName);
+        // Si no existe, esto intentaría crearlo: abortamos para NO mutar el navegador al solo "leer"
+        req.onupgradeneeded = (e) => {
+          try{ e.target.transaction.abort(); }catch(_){}
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error || new Error(`No se pudo abrir la base de datos: ${dbName}`));
+      });
+    }
+
+    async function getAllFromStore(store){
+      if (store.getAll){
+        return await reqToPromise(store.getAll());
+      }
+      // Fallback cursor
+      return await new Promise((resolve, reject) => {
+        const out = [];
+        const req = store.openCursor();
+        req.onerror = () => reject(req.error || new Error('Error leyendo cursor'));
+        req.onsuccess = (e) => {
+          const cursor = e.target.result;
+          if (cursor){
+            out.push(cursor.value);
+            cursor.continue();
+          } else {
+            resolve(out);
+          }
+        };
+      });
+    }
+
+    async function snapshotDatabase(dbName){
+      const db = await openExistingDB(dbName);
+      const snapshot = {
+        name: dbName,
+        version: db.version,
+        stores: {}
+      };
+
+      const storeNames = Array.from(db.objectStoreNames || []);
+      for (const storeName of storeNames){
+        const tx = db.transaction(storeName, 'readonly');
+        const store = tx.objectStore(storeName);
+
+        const schema = {
+          keyPath: store.keyPath ?? null,
+          autoIncrement: !!store.autoIncrement,
+          indices: []
+        };
+
+        try{
+          const indexNames = Array.from(store.indexNames || []);
+          for (const idxName of indexNames){
+            const idx = store.index(idxName);
+            schema.indices.push({
+              name: idxName,
+              keyPath: idx.keyPath ?? null,
+              unique: !!idx.unique,
+              multiEntry: !!idx.multiEntry
+            });
+          }
+        }catch(_){}
+
+        const records = await getAllFromStore(store);
+        await txDone(tx);
+
+        snapshot.stores[storeName] = {
+          count: Array.isArray(records) ? records.length : 0,
+          schema,
+          records: Array.isArray(records) ? records : []
+        };
+      }
+
+      try{ db.close(); }catch(_){}
+      return snapshot;
+    }
+
+    function getSuiteLocalStorageSnapshot(){
+      const out = {};
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++){
+        const k = localStorage.key(i);
+        if (!k) continue;
+        if (!isSuiteLocalStorageKey(k)) continue;
+        keys.push(k);
+        out[k] = localStorage.getItem(k);
+      }
+      keys.sort();
+      return { data: out, keys, count: keys.length };
+    }
+
+    function buildSummaryHtmlFromSnapshot({ dbSnapshots, lsKeys, exportedAt, estimatedBytes, warnings, appName }){
+      const totalDbRecords = dbSnapshots.reduce((acc, d) => {
+        const stores = Object.values(d.stores || {});
+        return acc + stores.reduce((a, s) => a + (Number(s.count) || 0), 0);
+      }, 0);
+
+      const dbHtml = dbSnapshots.length
+        ? dbSnapshots.map(d => {
+            const stores = Object.entries(d.stores || {});
+            const storeLines = stores.length
+              ? `<ul>${stores.map(([sn, s]) => `<li><b>${escapeHtml(sn)}</b>: ${Number(s.count)||0}</li>`).join('')}</ul>`
+              : `<div class="muted">Sin stores detectados.</div>`;
+            return `
+              <div style="margin-top:0.35rem;">
+                <div><b>${escapeHtml(d.name)}</b> <span class="muted">(versión ${escapeHtml(d.version)})</span></div>
+                ${storeLines}
+              </div>
+            `;
+          }).join('')
+        : `<div class="muted">No se detectaron bases de datos de la Suite en este navegador.</div>`;
+
+      const warnHtml = (warnings && warnings.length)
+        ? `<div class="badge-warn">⚠️ ${escapeHtml(warnings.join(' · '))}</div>`
+        : '';
+
+      const lsDetails = lsKeys && lsKeys.length
+        ? `<details><summary>Ver keys (${lsKeys.length})</summary><ul>${lsKeys.map(k => `<li>${escapeHtml(k)}</li>`).join('')}</ul></details>`
+        : `<div class="muted">0 keys</div>`;
+
+      const exportedAtPretty = exportedAt ? new Date(exportedAt).toLocaleString() : '';
+
+      return `
+        <div>
+          <div class="kv">
+            <div class="k">App</div><div class="v">${escapeHtml(appName || BACKUP_APP_NAME)}</div>
+            <div class="k">Fecha</div><div class="v">${escapeHtml(exportedAtPretty)}</div>
+            <div class="k">Registros</div><div class="v">${totalDbRecords}</div>
+            <div class="k">Keys localStorage</div><div class="v">${lsKeys ? lsKeys.length : 0}</div>
+            <div class="k">Tamaño aprox.</div><div class="v">${escapeHtml(formatBytes(estimatedBytes || 0))}</div>
+          </div>
+
+          ${warnHtml}
+
+          <hr>
+
+          <div><b>IndexedDB</b></div>
+          ${dbHtml}
+
+          <hr>
+
+          <div><b>localStorage (Suite)</b></div>
+          ${lsDetails}
+
+          <div class="small-note">Nota: este respaldo es manual (no sincroniza). Al importar, se reemplaza TODO lo de este navegador.</div>
+        </div>
+      `;
+    }
+
+    function showModal({ title, bodyHtml, primaryText, onPrimary, secondaryText, onSecondary, cancelText, onCancel, disableCancel, disablePrimary }){
+      const modal = document.getElementById('backup-modal');
+      const titleEl = document.getElementById('backup-modal-title');
+      const bodyEl = document.getElementById('backup-modal-body');
+      const btnCancel = document.getElementById('backup-modal-cancel');
+      const btnPrimary = document.getElementById('backup-modal-primary');
+      const btnSecondary = document.getElementById('backup-modal-secondary');
+
+      titleEl.textContent = title || 'Respaldo';
+      bodyEl.innerHTML = bodyHtml || '';
+
+      btnPrimary.textContent = primaryText || 'OK';
+      btnPrimary.style.display = disablePrimary ? 'none' : 'inline-flex';
+      btnPrimary.onclick = null;
+      btnPrimary.onclick = async () => {
+        if (typeof onPrimary === 'function') await onPrimary();
+      };
+
+      if (secondaryText && typeof onSecondary === 'function'){
+        btnSecondary.style.display = 'inline-flex';
+        btnSecondary.textContent = secondaryText;
+        btnSecondary.onclick = null;
+        btnSecondary.onclick = async () => {
+          await onSecondary();
+        };
+      } else {
+        btnSecondary.style.display = 'none';
+        btnSecondary.onclick = null;
+      }
+
+      btnCancel.textContent = cancelText || 'Cancelar';
+      btnCancel.style.display = disableCancel ? 'none' : 'inline-flex';
+      btnCancel.onclick = null;
+      btnCancel.onclick = () => {
+        if (typeof onCancel === 'function') onCancel();
+        hideModal();
+      };
+
+      modal.style.display = 'flex';
+    }
+
+    function hideModal(){
+      const modal = document.getElementById('backup-modal');
+      modal.style.display = 'none';
+    }
+
+    function downloadTextFile(filename, content){
+      const blob = new Blob([content], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function buildBackupFilename(){
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2,'0');
+      const stamp = `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+      return `suitea33-backup-${stamp}.json`;
+    }
+
+    async function buildFullBackup(){
+      const all = await safeListIndexedDBDatabases();
+      const suiteDbList = (Array.isArray(all) ? all : []).filter(d => d && d.name && isSuiteDbName(d.name));
+
+      const dbSnapshots = [];
+      const dataIndexedDB = {};
+      const dbVersions = {};
+      const dbSchemas = {};
+
+      for (const d of suiteDbList){
+        try{
+          const snap = await snapshotDatabase(d.name);
+          dbSnapshots.push(snap);
+
+          dataIndexedDB[d.name] = {};
+          dbSchemas[d.name] = {};
+          dbVersions[d.name] = snap.version;
+
+          for (const [storeName, s] of Object.entries(snap.stores || {})){
+            dataIndexedDB[d.name][storeName] = s.records || [];
+            dbSchemas[d.name][storeName] = s.schema || {};
+          }
+        }catch(e){
+          console.warn('No se pudo leer DB', d.name, e);
+        }
+      }
+
+      const lsSnap = getSuiteLocalStorageSnapshot();
+
+      const backup = {
+        meta: {
+          appName: BACKUP_APP_NAME,
+          exportedAt: new Date().toISOString(),
+          dbVersions,
+          dbSchemas
+        },
+        data: {
+          indexedDB: dataIndexedDB,
+          localStorage: lsSnap.data
+        }
+      };
+
+      const jsonString = JSON.stringify(backup, null, 2);
+      const estimatedBytes = new Blob([jsonString]).size;
+
+      return {
+        backup,
+        jsonString,
+        estimatedBytes,
+        dbSnapshots,
+        lsKeys: lsSnap.keys
+      };
+    }
+
+    function validateBackupStructure(obj){
+      if (!obj || typeof obj !== 'object') return { ok:false, reason:'Archivo inválido (no es un objeto JSON).' };
+      if (!obj.meta || typeof obj.meta !== 'object') return { ok:false, reason:'Falta meta.' };
+      if (!obj.data || typeof obj.data !== 'object') return { ok:false, reason:'Falta data.' };
+      if (obj.meta.appName !== BACKUP_APP_NAME) return { ok:false, reason:`appName inválido: se esperaba "${BACKUP_APP_NAME}".` };
+      if (!obj.data.indexedDB || typeof obj.data.indexedDB !== 'object') return { ok:false, reason:'Falta data.indexedDB.' };
+      if (!obj.data.localStorage || typeof obj.data.localStorage !== 'object') return { ok:false, reason:'Falta data.localStorage.' };
+      return { ok:true };
+    }
+
+    function summarizeBackupObject(obj){
+      const dbSnapshots = [];
+      const indexed = obj?.data?.indexedDB || {};
+      const versions = obj?.meta?.dbVersions || {};
+      const schemas = obj?.meta?.dbSchemas || {};
+
+      for (const [dbName, stores] of Object.entries(indexed)){
+        const snap = { name: dbName, version: versions?.[dbName] ?? '', stores: {} };
+        if (stores && typeof stores === 'object'){
+          for (const [storeName, records] of Object.entries(stores)){
+            const arr = Array.isArray(records) ? records : [];
+            snap.stores[storeName] = {
+              count: arr.length,
+              schema: (schemas?.[dbName]?.[storeName]) || {},
+              records: [] // no duplicar aquí
+            };
+          }
+        }
+        dbSnapshots.push(snap);
+      }
+
+      const lsKeys = Object.keys(obj?.data?.localStorage || {}).sort();
+      let estimatedBytes = 0;
+      try{
+        estimatedBytes = new Blob([JSON.stringify(obj)]).size;
+      }catch(_){}
+
+      return { dbSnapshots, lsKeys, estimatedBytes, exportedAt: obj?.meta?.exportedAt, appName: obj?.meta?.appName };
+    }
+
+    function getSuiteLocalStorageKeysInThisBrowser(){
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++){
+        const k = localStorage.key(i);
+        if (k && isSuiteLocalStorageKey(k)) keys.push(k);
+      }
+      return keys;
+    }
+
+    function deleteDatabase(dbName){
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.deleteDatabase(dbName);
+        req.onsuccess = () => resolve(true);
+        req.onerror = () => reject(req.error || new Error(`No se pudo borrar la DB: ${dbName}`));
+        req.onblocked = () => reject(new Error(`Bloqueado: cierra otras pestañas de la Suite y reintenta (DB: ${dbName}).`));
+      });
+    }
+
+    function openDBForRestore(dbName, version, schemaByStore){
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(dbName, Number(version) || 1);
+
+        req.onupgradeneeded = (e) => {
+          const db = e.target.result;
+
+          const stores = schemaByStore && typeof schemaByStore === 'object'
+            ? Object.entries(schemaByStore)
+            : [];
+
+          for (const [storeName, sch] of stores){
+            if (db.objectStoreNames.contains(storeName)) continue;
+
+            const keyPath = (sch && ('keyPath' in sch)) ? sch.keyPath : null;
+            const autoIncrement = !!(sch && sch.autoIncrement);
+
+            const opts = {};
+            if (keyPath) opts.keyPath = keyPath;
+            if (autoIncrement) opts.autoIncrement = true;
+
+            let os;
+            try{
+              os = db.createObjectStore(storeName, opts);
+            }catch(err){
+              // fallback súper defensivo
+              os = db.createObjectStore(storeName, { keyPath: 'id', autoIncrement: true });
+            }
+
+            try{
+              const indices = Array.isArray(sch?.indices) ? sch.indices : [];
+              for (const idx of indices){
+                if (!idx?.name) continue;
+                try{
+                  os.createIndex(idx.name, idx.keyPath, { unique: !!idx.unique, multiEntry: !!idx.multiEntry });
+                }catch(_){}
+              }
+            }catch(_){}
+          }
+        };
+
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error || new Error(`No se pudo abrir la DB para restaurar: ${dbName}`));
+      });
+    }
+
+    async function restoreDatabase(dbName, dbPayload, dbVersion, dbSchemas){
+      const schemaByStore = dbSchemas?.[dbName] || {};
+      const version = dbVersion?.[dbName] || 1;
+
+      const schemaAvailable = schemaByStore && typeof schemaByStore === 'object' && Object.keys(schemaByStore).length > 0;
+
+      // Si hay esquema: recreamos DB y stores con total seguridad.
+      // Si NO hay esquema: intentamos importar sobre una DB ya existente (sin crear / sin cambiar versión).
+      const db = schemaAvailable
+        ? await openDBForRestore(dbName, version, schemaByStore)
+        : await openExistingDB(dbName);
+
+      // Insertar registros por store
+      const stores = dbPayload && typeof dbPayload === 'object'
+        ? Object.entries(dbPayload)
+        : [];
+
+      for (const [storeName, records] of stores){
+        if (!db.objectStoreNames.contains(storeName)) continue;
+
+        const arr = Array.isArray(records) ? records : [];
+        const tx = db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+
+        // limpiar store antes de insertar
+        try{ store.clear(); }catch(_){}
+
+        for (const rec of arr){
+          try{ store.put(rec); }catch(_){}
+        }
+        await txDone(tx);
+      }
+
+      try{ db.close(); }catch(_){}
+    }
+
+    function checkImportCompatibility(obj){
+      const problems = [];
+      const versions = obj?.meta?.dbVersions || {};
+      for (const [dbName, expected] of Object.entries(EXPECTED_DB_VERSIONS)){
+        const v = versions?.[dbName];
+        if (typeof v === 'number' && v > expected){
+          problems.push(`El respaldo es más nuevo: ${dbName} v${v} > v${expected}`);
+        }
+      }
+      return problems;
+    }
+
+    async function performImport(obj){
+      // 1) Validar compatibilidad
+      const incompat = checkImportCompatibility(obj);
+      if (incompat.length){
+        throw new Error(incompat.join(' · '));
+      }
+
+      const dbPayload = obj?.data?.indexedDB || {};
+      const dbVersions = obj?.meta?.dbVersions || {};
+      const dbSchemas = obj?.meta?.dbSchemas || {};
+
+      // DBs del archivo que pertenecen a la Suite
+      const fileSuite = Object.keys(dbPayload || {}).filter(isSuiteDbName);
+
+      // DBs con esquema disponible (podemos borrar y recrear sin miedo)
+      const schemaSupported = new Set(
+        fileSuite.filter((dbName) => {
+          const sch = dbSchemas?.[dbName];
+          return sch && typeof sch === 'object' && Object.keys(sch).length > 0;
+        })
+      );
+
+      // 2) Detectar DBs actuales de la Suite y borrarlas (solo si hay esquema para recrear)
+      const current = await safeListIndexedDBDatabases();
+      const currentSuite = (Array.isArray(current) ? current : [])
+        .filter(d => d?.name && isSuiteDbName(d.name))
+        .map(d => d.name);
+
+      const toDelete = Array.from(new Set([...currentSuite, ...fileSuite]))
+        .filter(dbName => schemaSupported.has(dbName));
+
+      for (const dbName of toDelete){
+        try{
+          await deleteDatabase(dbName);
+        }catch(e){
+          // Si no existía, ok; si está bloqueado, es crítico
+          if (String(e?.message || '').toLowerCase().includes('bloqueado')){
+            throw e;
+          }
+        }
+      }
+
+      // 3) Restaurar DBs desde el archivo (con o sin esquema)
+      for (const dbName of fileSuite){
+        await restoreDatabase(dbName, dbPayload[dbName], dbVersions, dbSchemas);
+      }
+
+      // 4) Restaurar localStorage (solo keys Suite)
+      const currentLsKeys = getSuiteLocalStorageKeysInThisBrowser();
+      for (const k of currentLsKeys){
+        try{ localStorage.removeItem(k); }catch(_){}
+      }
+
+      const incoming = obj?.data?.localStorage || {};
+      for (const [k, v] of Object.entries(incoming)){
+        if (!isSuiteLocalStorageKey(k)) continue;
+        try{ localStorage.setItem(k, String(v ?? '')); }catch(_){}
+      }
+
+      return true;
+    }
+
 
     document.addEventListener('DOMContentLoaded', () => {
       const overlay = document.getElementById('lock-overlay');
@@ -522,6 +1195,182 @@
           if (href) window.location.href = href;
         });
       });
+
+      // --- Respaldo: Exportar / Importar ---
+      const exportCard = document.getElementById('card-export-backup');
+      const importCard = document.getElementById('card-import-backup');
+      const fileInput = document.getElementById('backup-file-input');
+
+      if (exportCard){
+        exportCard.addEventListener('click', async () => {
+          showModal({
+            title: 'Resumen del respaldo',
+            bodyHtml: '<div class="muted">Generando resumen...</div>',
+            primaryText: 'Cerrar',
+            onPrimary: hideModal,
+            cancelText: 'Cancelar',
+            onCancel: hideModal
+          });
+
+          try{
+            const { backup, jsonString, estimatedBytes, dbSnapshots, lsKeys } = await buildFullBackup();
+
+            const totalDbRecords = dbSnapshots.reduce((acc, d) => {
+              const stores = Object.values(d.stores || {});
+              return acc + stores.reduce((a, s) => a + (Number(s.count) || 0), 0);
+            }, 0);
+
+            const hasAnyData = totalDbRecords > 0 || (lsKeys && lsKeys.length > 0);
+
+            if (!hasAnyData){
+              showModal({
+                title: 'Resumen del respaldo',
+                bodyHtml: '<div class="badge-warn">⚠️ No hay datos para respaldar.</div>',
+                primaryText: 'Cerrar',
+                onPrimary: hideModal,
+                disableCancel: true
+              });
+              return;
+            }
+
+            const summaryHtml = buildSummaryHtmlFromSnapshot({
+              dbSnapshots,
+              lsKeys,
+              exportedAt: backup?.meta?.exportedAt,
+              estimatedBytes,
+              warnings: [],
+              appName: backup?.meta?.appName
+            });
+
+            showModal({
+              title: 'Resumen del respaldo',
+              bodyHtml: summaryHtml,
+              primaryText: 'Descargar respaldo',
+              onPrimary: async () => {
+                downloadTextFile(buildBackupFilename(), jsonString);
+                hideModal();
+              },
+              cancelText: 'Cancelar',
+              onCancel: hideModal
+            });
+          }catch(e){
+            showModal({
+              title: 'Error',
+              bodyHtml: `<div class="badge-warn">⚠️ ${escapeHtml(e?.message || e)}</div>`,
+              primaryText: 'Cerrar',
+              onPrimary: hideModal,
+              disableCancel: true
+            });
+          }
+        });
+      }
+
+      if (importCard && fileInput){
+        importCard.addEventListener('click', () => {
+          fileInput.value = '';
+          fileInput.click();
+        });
+
+        fileInput.addEventListener('change', async () => {
+          const file = fileInput.files && fileInput.files[0];
+          if (!file) return;
+
+          showModal({
+            title: 'Resumen del archivo',
+            bodyHtml: '<div class="muted">Leyendo archivo...</div>',
+            primaryText: 'Cerrar',
+            onPrimary: hideModal,
+            cancelText: 'Cancelar',
+            onCancel: hideModal
+          });
+
+          try{
+            const text = await file.text();
+            let obj;
+            try{
+              obj = JSON.parse(text);
+            }catch(_){
+              throw new Error('JSON inválido o corrupto.');
+            }
+
+            const v = validateBackupStructure(obj);
+            if (!v.ok) throw new Error(v.reason);
+
+            const incompat = checkImportCompatibility(obj);
+            const sum = summarizeBackupObject(obj);
+
+            const warnings = [];
+            if (incompat.length){
+              warnings.push('Incompatibilidad de versión');
+            }
+
+            const summaryHtml = buildSummaryHtmlFromSnapshot({
+              dbSnapshots: sum.dbSnapshots,
+              lsKeys: sum.lsKeys,
+              exportedAt: sum.exportedAt,
+              estimatedBytes: sum.estimatedBytes,
+              warnings: incompat.length ? incompat : [],
+              appName: sum.appName
+            }) + `
+              <hr>
+              <div class="badge-warn">⚠️ Esto reemplazará todos los datos actuales de este navegador.</div>
+            `;
+
+            showModal({
+              title: 'Resumen del archivo',
+              bodyHtml: summaryHtml,
+              primaryText: 'Importar y reemplazar',
+              onPrimary: async () => {
+                if (incompat.length){
+                  alert('Este respaldo parece ser de una versión MÁS NUEVA de la Suite. Para evitar romper la base de datos, la importación se bloqueó.\n\nActualiza la Suite en este dispositivo e intenta de nuevo.');
+                  return;
+                }
+                if (!confirm('Esto reemplazará TODOS los datos actuales de la Suite A33 en este navegador. ¿Importar y reemplazar?')) return;
+
+                showModal({
+                  title: 'Importando...',
+                  bodyHtml: '<div class="muted">Aplicando respaldo... No cierres esta pestaña.</div>',
+                  disableCancel: true,
+                  disablePrimary: true
+                });
+
+                try{
+                  await performImport(obj);
+
+                  showModal({
+                    title: 'Importación exitosa',
+                    bodyHtml: '<div>✅ Respaldo importado correctamente.</div><div class="small-note">Recomendado: recargar para que todos los módulos lean los nuevos datos.</div>',
+                    primaryText: 'Recargar ahora',
+                    onPrimary: () => location.reload(),
+                    cancelText: 'Más tarde',
+                    onCancel: hideModal
+                  });
+                }catch(err){
+                  showModal({
+                    title: 'Error de importación',
+                    bodyHtml: `<div class="badge-warn">⚠️ ${escapeHtml(err?.message || err)}</div><div class="small-note">Tip: cierra otras pestañas de la Suite y vuelve a intentar.</div>`,
+                    primaryText: 'Cerrar',
+                    onPrimary: hideModal,
+                    disableCancel: true
+                  });
+                }
+              },
+              cancelText: 'Cancelar',
+              onCancel: hideModal
+            });
+
+          }catch(e){
+            showModal({
+              title: 'Error',
+              bodyHtml: `<div class="badge-warn">⚠️ ${escapeHtml(e?.message || e)}</div>`,
+              primaryText: 'Cerrar',
+              onPrimary: hideModal,
+              disableCancel: true
+            });
+          }
+        });
+      }
+
     });
   </script>
 </body>
