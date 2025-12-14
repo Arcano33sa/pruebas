@@ -1125,7 +1125,9 @@ async function ensureDefaults(){
 }
 
 // --- Bancos (transferencias)
-const BANKS_SEED = ['BAC', 'BANPRO', 'Lafise', 'BDF'];
+// Seed base para catálogo de bancos (se pre-carga solo si el store está vacío)
+// Nota: mantener nombres en mayúsculas para consistencia visual y de reportes.
+const BANKS_SEED = ['BAC', 'BANPRO', 'LAFISE', 'BDF'];
 
 function normBankName(name){
   return String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -1146,12 +1148,17 @@ async function ensureBanksDefaults(){
       banks = await getAllBanksSafe();
     }
 
-    // Migración suave de campos
+    // Migración suave de campos + normalización mínima (sin romper historial)
     for (const b of banks){
       if (!b) continue;
       let changed = false;
       if (typeof b.isActive === 'undefined'){ b.isActive = true; changed = true; }
       if (!b.createdAt){ b.createdAt = new Date().toISOString(); changed = true; }
+      // Normalizar solo LAFISE a mayúsculas (para que quede consistente con los otros)
+      if (normBankName(b.name) === 'lafise' && String(b.name).trim() !== 'LAFISE'){
+        b.name = 'LAFISE';
+        changed = true;
+      }
       if (changed) await put('banks', b);
     }
   }catch(err){
