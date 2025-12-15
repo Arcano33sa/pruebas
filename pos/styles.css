@@ -1,7 +1,9 @@
 
 :root{--bg:#0f0f0f;--panel:#171717;--muted:#9a9a9a;--text:#f0f0f0;--accent:#ffd700;--ok:#1db954;--warn:#f0a31a;--danger:#e74c3c;--chip:#222;--chip-bd:#2d2d2d}
 *{box-sizing:border-box}
-html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:100%}
+/* Evita “sensación” de overflow horizontal por tablas/acciones que se estiran */
+body{overflow-x:hidden}
 /* Header compuesto */
 header.brandbar{position:sticky;top:0;background:#121212;border-bottom:1px solid #2a2a2a;padding:10px 14px;z-index:10;display:flex;align-items:center;gap:14px;min-height:72px}
 .brandwrap{display:flex;align-items:center;gap:10px}
@@ -17,21 +19,62 @@ header.brandbar{position:sticky;top:0;background:#121212;border-bottom:1px solid
   header.brandbar{flex-wrap:wrap}
   .app-title{order:3;width:100%;margin-top:6px}
 }
-.container{padding:12px 12px 80px}
+.container{padding:12px 12px 80px;width:100%;max-width:100%}
 .card{background:var(--panel);border:1px solid #2a2a2a;border-radius:14px;padding:14px;margin:12px 0}
 label{font-size:13px;color:var(--muted);display:block;margin:8px 0 6px}
 input,select,button,textarea{width:100%;padding:12px;border-radius:12px;border:1px solid #333;background:#141414;color:#f0f0f0;font-size:16px;line-height:1.2}
 input[type="date"]{padding:10px}
-.row{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:end}
-.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
-.row4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px}
+.row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:end}
+.row3{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);gap:12px}
+.row4{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);gap:12px}
+/* Permite que inputs/selects/botones dentro de grid/flex puedan encogerse sin desbordar */
+.row > *, .row3 > *, .row4 > *{min-width:0}
+
+/* Barra superior (Vender/Eventos): alinea y permite wrap en pantallas angostas */
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.topbar > *{flex:1 1 180px;min-width:0}
+.topbar > button:first-of-type{margin-left:auto; flex:0 0 auto}
+.topbar > button{flex:0 0 auto; width:auto}
+.topbar > select{min-width:180px}
+
+/* Tablas anchas: evita overflow del viewport y mantiene acciones visibles */
+.table-scroll{width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;position:relative}
+.table-scroll table{min-width:720px}
+@media (max-width:560px){
+  .table-scroll table{min-width:640px}
+}
+
+/* Columna de acciones sticky (botones rojos a la derecha siempre dentro del viewport) */
+#tbl-day, #tbl-eventos{border-collapse:separate; border-spacing:0}
+#tbl-day th:last-child, #tbl-day td:last-child,
+#tbl-eventos th:last-child, #tbl-eventos td:last-child{
+  position:sticky;
+  right:0;
+  background:var(--panel);
+  z-index:3;
+  box-shadow:-10px 0 10px rgba(0,0,0,.35);
+}
+#tbl-day thead th:last-child, #tbl-eventos thead th:last-child{z-index:4}
+
+/* Acciones dentro de tablas: que sean compactas y wrap sin empujar el ancho */
+.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.actions button{width:auto}
+.btn-mini{width:auto; padding:8px 10px; border-radius:10px; font-size:13px}
+
+@media (max-width:420px){
+  .container{padding-left:10px;padding-right:10px}
+  .topbar > *{flex-basis:140px}
+  .topbar > select{min-width:140px}
+  .actions button{font-size:12px;padding:8px 9px}
+  .btn-mini{font-size:12px;padding:7px 9px}
+}
 button{cursor:pointer}
 .btn-primary{background:var(--accent);color:#000;font-weight:700}
 .btn-ok{background:var(--ok);color:#000;font-weight:700}
 .btn-warn{background:var(--warn);color:#000;font-weight:700}
 .btn-danger{background:var(--danger);color:#fff;font-weight:700}
 .badge{display:inline-block;padding:4px 8px;border-radius:999px;background:#2a2a2a;color:var(--accent);font-weight:600}
-table{width:100%;border-collapse:collapse;margin-top:10px;overflow:auto}
+table{width:100%;border-collapse:collapse;margin-top:10px}
 th,td{border-bottom:1px solid #2a2a2a;padding:10px;text-align:left;font-size:14px;white-space:nowrap}
 tfoot td{font-weight:700}
 .tabbar{position:fixed;bottom:0;left:0;right:0;background:#121212;border-top:1px solid #2a2a2a;display:grid;grid-template-columns:repeat(7,1fr);gap:0;z-index:11}

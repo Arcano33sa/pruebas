@@ -193,6 +193,7 @@
         <div><strong>Listado del día</strong></div>
         <div style="text-align:right"><strong>Total día: C$ <span id="day-total">0</span></strong></div>
       </div>
+      <div class="table-scroll">
       <table id="tbl-day" class="compact">
         <thead>
           <tr>
@@ -201,6 +202,7 @@
         </thead>
         <tbody></tbody>
       </table>
+      </div>
     </div>
   </section>
 
@@ -230,7 +232,7 @@
 
   <section id="tab-eventos" class="tab card" style="display:none">
     <h2>Eventos e historial</h2>
-    <div class="row">
+    <div class="topbar">
       <select id="filtro-eventos">
         <option value="todos" selected>Mostrar: Todos</option>
         <option value="abiertos">Solo abiertos</option>
@@ -242,10 +244,12 @@
       <button id="btn-exportar-eventos" class="btn-primary">Exportar lista (Excel)</button>
       <button id="btn-exportar-evento-excel" class="btn-ok">Exportar evento activo (Excel)</button>
     </div>
+    <div class="table-scroll">
     <table id="tbl-eventos">
       <thead><tr><th>Evento</th><th>Grupo</th><th>Estado</th><th>Creado</th><th>Cerrado</th><th>Total</th><th>Acciones</th></tr></thead>
       <tbody></tbody>
     </table>
+    </div>
     <div id="cierre-total-card" class="card inner">
       <h3>Cierre Total por grupo</h3>
       <p class="muted">Selecciona un grupo arriba y genera un corte consolidado de todos sus eventos diarios.</p>
