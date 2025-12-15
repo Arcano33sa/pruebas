@@ -2019,6 +2019,7 @@ async function importFromLoteToInventory(){
     return;
   }
   const stamp = new Date().toISOString();
+  const cargaId = 'lc-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,7);
   const map = [
     { field: 'pulso', name: 'Pulso 250ml' },
     { field: 'media', name: 'Media 375ml' },
@@ -2039,6 +2040,7 @@ async function importFromLoteToInventory(){
       source: 'lote',
       loteCodigo: (lote.codigo || ''),
       loteId: (lote.id != null ? lote.id : null),
+      loteCargaId: cargaId,
       time: stamp,
       notes: 'Reposición (lote ' + (lote.codigo || '') + ')'
     });
@@ -2063,35 +2065,75 @@ async function renderLotesCargadosEvento(eventId){
     .filter(e => e && e.type === 'restock' && (e.loteCodigo || e.source === 'lote'))
     .sort((a,b)=> (b.time||'').localeCompare(a.time||''));
 
-  if (badge) badge.textContent = String(rows.length || 0);
-
   const prods = await getAll('products');
   const pMap = new Map((prods||[]).map(p => [p.id, p]));
 
-  if (!rows.length){
+  const norm = s => (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+  function presKeyFromName(name){
+    const n = norm(name);
+    if (!n) return '';
+    if (n.includes('pulso') && n.includes('250')) return 'P';
+    if (n.includes('media') && n.includes('375')) return 'M';
+    if (n.includes('djeba') && n.includes('750')) return 'D';
+    if (n.includes('litro') && n.includes('1000')) return 'L';
+    if (n.includes('galon') && n.includes('3800')) return 'G';
+    // fallback por palabra (por si el nombre no incluye ml)
+    if (n.includes('pulso')) return 'P';
+    if (n.includes('media')) return 'M';
+    if (n.includes('djeba')) return 'D';
+    if (n.includes('litro')) return 'L';
+    if (n.includes('galon')) return 'G';
+    return '';
+  }
+
+  // Agrupar: 1 fila por cada "carga" de lote
+  const groups = new Map();
+  for (const it of rows){
+    const loteCodigo = (it.loteCodigo || '').toString().trim();
+    const time = (it.time || '').toString();
+    const gKey = it.loteCargaId
+      ? String(it.loteCargaId)
+      : ((loteCodigo || '—') + '|' + (time || ''));
+    let g = groups.get(gKey);
+    if (!g){
+      g = { loteCodigo: loteCodigo || '—', time: time || '', P:0, M:0, D:0, L:0, G:0 };
+      groups.set(gKey, g);
+    }
+    if ((g.loteCodigo === '—' || !g.loteCodigo) && loteCodigo) g.loteCodigo = loteCodigo;
+    if (!g.time && time) g.time = time;
+
+    const p = pMap.get(it.productId);
+    const key = presKeyFromName(p ? (p.name || '') : '');
+    const qty = Number(it.qty) || 0;
+    if (key) g[key] = (Number(g[key]) || 0) + qty;
+  }
+
+  const out = Array.from(groups.values()).sort((a,b)=> (b.time||'').localeCompare(a.time||''));
+  if (badge) badge.textContent = String(out.length || 0);
+
+  if (!out.length){
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="4"><small class="muted">No hay lotes cargados en este evento.</small></td>';
+    tr.innerHTML = '<td colspan="7"><small class="muted">No hay lotes cargados en este evento.</small></td>';
     tbody.appendChild(tr);
     return;
   }
 
-  for (const it of rows){
-    const p = pMap.get(it.productId);
-    const prodName = p ? (p.name || '') : ('Producto #' + (it.productId ?? ''));
-    const dt = it.time ? new Date(it.time).toLocaleString('es-NI') : '';
-    const loteLabel = (it.loteCodigo || '').toString();
-    const qty = Number(it.qty) || 0;
-
+  for (const g of out){
+    const dt = g.time ? new Date(g.time).toLocaleString('es-NI') : '';
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${escapeHtml(loteLabel || '—')}</td>
-      <td>${escapeHtml(prodName || '—')}</td>
-      <td>${qty}</td>
+      <td>${escapeHtml((g.loteCodigo || '—').toString())}</td>
       <td>${escapeHtml(dt || '')}</td>
+      <td>${Number(g.P)||0}</td>
+      <td>${Number(g.M)||0}</td>
+      <td>${Number(g.D)||0}</td>
+      <td>${Number(g.L)||0}</td>
+      <td>${Number(g.G)||0}</td>
     `;
     tbody.appendChild(tr);
   }
 }
+
 
 // Inventario UI
 async function renderInventario(){
@@ -2110,7 +2152,7 @@ async function renderInventario(){
     // Limpia el bloque informativo de lotes para evitar datos viejos
     const ltBody = $('#tbl-lotes-evento tbody');
     const badge = $('#lotes-count');
-    if (ltBody) ltBody.innerHTML = '<tr><td colspan="4"><small class="muted">No hay eventos.</small></td></tr>';
+    if (ltBody) ltBody.innerHTML = '<tr><td colspan="7"><small class="muted">No hay eventos.</small></td></tr>';
     if (badge) badge.textContent = '0';
 
     const tr = document.createElement('tr');

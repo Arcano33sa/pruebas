@@ -235,4 +235,8 @@ small.muted{color:var(--muted)}
 .lotes-block-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .lotes-block .badge{margin-left:8px}
 #tbl-lotes-evento th,#tbl-lotes-evento td{white-space:nowrap}
-#tbl-lotes-evento td:nth-child(3){font-variant-numeric:tabular-nums}
+#tbl-lotes-evento th:nth-child(n+3),
+#tbl-lotes-evento td:nth-child(n+3){
+  text-align:center;
+  font-variant-numeric:tabular-nums;
+}
