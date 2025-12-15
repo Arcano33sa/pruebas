@@ -1570,7 +1570,15 @@ async function refreshSaleStockLabel(){
 async function getInventoryEntries(eventId){ const all = await getAll('inventory'); return all.filter(i=>i.eventId===eventId); }
 async function getInventoryInit(eventId, productId){ const list = (await getInventoryEntries(eventId)).filter(i=>i.productId===productId && i.type==='init'); return list.length ? list.sort((a,b)=> (a.id-b.id))[list.length-1] : null; }
 async function setInitialStock(eventId, productId, qty){ let init = await getInventoryInit(eventId, productId); if (init){ init.qty = qty; init.time = new Date().toISOString(); await put('inventory', init); } else { await put('inventory', {eventId, productId, type:'init', qty, notes:'Inicial', time:new Date().toISOString()}); } }
-async function addRestock(eventId, productId, qty){ if (qty<=0) throw new Error('Reposición debe ser > 0'); await put('inventory', {eventId, productId, type:'restock', qty, notes:'Reposición', time:new Date().toISOString()}); }
+async function addRestock(eventId, productId, qty, extra){
+  if (qty<=0) throw new Error('Reposición debe ser > 0');
+  const row = {eventId, productId, type:'restock', qty, notes:'Reposición', time:new Date().toISOString()};
+  if (extra && typeof extra === 'object') {
+    try { Object.assign(row, extra); } catch {}
+  }
+  await put('inventory', row);
+}
+
 async function addAdjust(eventId, productId, qty, notes){ if (!qty) throw new Error('Ajuste no puede ser 0'); await put('inventory', {eventId, productId, type:'adjust', qty, notes: notes||'Ajuste', time:new Date().toISOString()}); }
 async function computeStock(eventId, productId){ const inv = await getInventoryEntries(eventId); const ledger = inv.filter(i=>i.productId===productId).reduce((a,b)=>a+(b.qty||0),0); const sales = (await getAll('sales')).filter(s=>s.eventId===eventId && s.productId===productId).reduce((a,b)=>a+(b.qty||0),0); return ledger - sales; }
 
@@ -2010,6 +2018,7 @@ async function importFromLoteToInventory(){
     alert('No se encontró un lote con ese código.');
     return;
   }
+  const stamp = new Date().toISOString();
   const map = [
     { field: 'pulso', name: 'Pulso 250ml' },
     { field: 'media', name: 'Media 375ml' },
@@ -2026,12 +2035,62 @@ async function importFromLoteToInventory(){
     if (!(qty > 0)) continue;
     const prod = products.find(p => norm(p.name) === norm(m.name));
     if (!prod) continue;
-    await addRestock(evId, prod.id, qty);
+    await addRestock(evId, prod.id, qty, {
+      source: 'lote',
+      loteCodigo: (lote.codigo || ''),
+      loteId: (lote.id != null ? lote.id : null),
+      time: stamp,
+      notes: 'Reposición (lote ' + (lote.codigo || '') + ')'
+    });
     total += qty;
   }
   await renderInventario();
   await refreshSaleStockLabel();
   alert('Se agregó inventario desde el lote "' + (lote.codigo || '') + '" al evento seleccionado.');
+}
+
+
+// Lotes cargados en este evento (solo informativo)
+async function renderLotesCargadosEvento(eventId){
+  const tbody = $('#tbl-lotes-evento tbody');
+  const badge = $('#lotes-count');
+  if (!tbody) return;
+
+  tbody.innerHTML = '';
+
+  const entries = await getInventoryEntries(eventId);
+  const rows = (entries || [])
+    .filter(e => e && e.type === 'restock' && (e.loteCodigo || e.source === 'lote'))
+    .sort((a,b)=> (b.time||'').localeCompare(a.time||''));
+
+  if (badge) badge.textContent = String(rows.length || 0);
+
+  const prods = await getAll('products');
+  const pMap = new Map((prods||[]).map(p => [p.id, p]));
+
+  if (!rows.length){
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="4"><small class="muted">No hay lotes cargados en este evento.</small></td>';
+    tbody.appendChild(tr);
+    return;
+  }
+
+  for (const it of rows){
+    const p = pMap.get(it.productId);
+    const prodName = p ? (p.name || '') : ('Producto #' + (it.productId ?? ''));
+    const dt = it.time ? new Date(it.time).toLocaleString('es-NI') : '';
+    const loteLabel = (it.loteCodigo || '').toString();
+    const qty = Number(it.qty) || 0;
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(loteLabel || '—')}</td>
+      <td>${escapeHtml(prodName || '—')}</td>
+      <td>${qty}</td>
+      <td>${escapeHtml(dt || '')}</td>
+    `;
+    tbody.appendChild(tr);
+  }
 }
 
 // Inventario UI
@@ -2048,8 +2107,20 @@ async function renderInventario(){
     if (evSel && evId) invSel.value = evId;
   }
   if (!evId){
-    const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="8">No hay eventos. Crea uno en la pestaña Vender.</td>'; tbody.appendChild(tr); return;
+    // Limpia el bloque informativo de lotes para evitar datos viejos
+    const ltBody = $('#tbl-lotes-evento tbody');
+    const badge = $('#lotes-count');
+    if (ltBody) ltBody.innerHTML = '<tr><td colspan="4"><small class="muted">No hay eventos.</small></td></tr>';
+    if (badge) badge.textContent = '0';
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="8">No hay eventos. Crea uno en la pestaña Vender.</td>';
+    tbody.appendChild(tr);
+    return;
   }
+
+  // Bloque informativo: lotes cargados en este evento
+  await renderLotesCargadosEvento(evId);
 
   const prods = await getAll('products');
   const hiddenIds = await getHiddenProductIdsPOS();

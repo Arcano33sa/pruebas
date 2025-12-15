@@ -222,3 +222,17 @@ small.muted{color:var(--muted)}
 .btn-link:hover {
   color: #ffd85e;
 }
+
+
+/* Lotes cargados en evento (POS > Inventario) */
+.lotes-block{
+  margin-top:10px;
+  padding:12px;
+  border-radius:12px;
+  border:1px solid #2a2a2a;
+  background:#121212;
+}
+.lotes-block-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.lotes-block .badge{margin-left:8px}
+#tbl-lotes-evento th,#tbl-lotes-evento td{white-space:nowrap}
+#tbl-lotes-evento td:nth-child(3){font-variant-numeric:tabular-nums}

@@ -219,6 +219,28 @@
         <button id="btn-inv-from-lote" class="btn-ok" type="button">Agregar desde lote</button>
       </div>
     </div>
+    <div id="lotes-evento-block" class="lotes-block">
+      <div class="lotes-block-head">
+        <div>
+          <h3 style="margin:0">Lotes cargados en este evento <span class="badge" id="lotes-count">0</span></h3>
+          <small class="muted">Se registra cuando usas “Agregar desde lote”.</small>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table id="tbl-lotes-evento" class="compact">
+          <thead>
+            <tr>
+              <th>Código/Nombre</th>
+              <th>Producto / Presentación</th>
+              <th>Cantidad</th>
+              <th>Fecha/Hora</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
     <table id="tbl-inv">
       <thead>
         <tr>
