@@ -1,18 +1,19 @@
-Coloca aquí los PDFs oficiales de la Suite A33.
+Coloca aquí los PDFs oficiales de la Suite A33 (carpeta /manuales/).
 
-Nombres esperados (según el mapeo en /index.html):
+IMPORTANTE
+- Esta versión acepta VARIOS nombres por cada PDF (ver candidates en el arreglo MANUALS dentro de /index.html).
+- En Vercel los nombres son sensibles a mayúsculas/minúsculas: el nombre debe coincidir EXACTAMENTE.
 
-1) Manual compilado:
+Nombres recomendados (canon):
 - Manual de Usuario Suite A33 v3.20.1.pdf
+- Manual Inventario Suite A33 v3.20.1.pdf
+- Manual Calculadora de Producción Suite A33 v3.20.1.pdf
+- Manual Control de Lotes Suite A33 v3.20.1.pdf
+- Manual POS · Eventos Suite A33 v3.20.1.pdf
+- Manual Analítica Suite A33 v3.20.1.pdf
+- Manual Planificación Suite A33 v3.20.1.pdf
+- Manual Finanzas Suite A33 v3.20.1.pdf
+- Manual Respaldo Suite A33 v3.20.1.pdf
 
-2) Manuales por módulo:
-- Inventario.pdf
-- Calculadora.pdf
-- Control de Lotes.pdf
-- POS Eventos.pdf
-- Analitica.pdf
-- Planificacion.pdf
-- Finanzas.pdf
-- Respaldo.pdf
-
-Si tus PDFs tienen otros nombres, edita el mapa MANUALS en /index.html.
+Si tus PDFs tienen otros nombres (por ejemplo con prefijos tipo "01-"), ya hay varios nombres alternos incluidos.
+Si aún así no coincide, edita el arreglo MANUALS (candidates) dentro de /index.html.

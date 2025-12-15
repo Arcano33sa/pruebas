@@ -365,6 +365,22 @@
       margin-top:0.4rem;
     }
 
+    .manual-actions{
+      display:flex;
+      gap:0.35rem;
+      align-items:center;
+    }
+    a.link-btn{
+      text-decoration:none;
+    }
+    a.link-btn:visited{
+      color:inherit;
+    }
+    .disabled-link{
+      opacity:0.6;
+      cursor:not-allowed;
+    }
+
 </style>
 </head>
 <body>
@@ -1221,63 +1237,198 @@
         else showHome(false);
       });
 
+      
       // --- Manuales: mapeo de PDFs (carpeta /manuales/) ---
       // Si cambias nombres de archivos, edita SOLO este mapa.
+      // NOTA: cada módulo acepta varios nombres (candidatos) para evitar bloqueos por diferencias de nombre.
       const MANUALS = [
         {
           key: 'compilado',
           icon: '📘',
           title: 'Manual de Usuario — Suite A33 (v3.20.1)',
           desc: 'Manual compilado (completo).',
-          path: 'manuales/Manual de Usuario Suite A33 v3.20.1.pdf'
+          candidates: [
+            'manuales/Manual de Usuario Suite A33 v3.20.1.pdf',
+            'manuales/Manual de Usuario Suite A33 (v3.20.1).pdf',
+            'manuales/00- Manual de Usuario Suite A33 v3.20.1.pdf',
+            'manuales/00- Manual de Usuario Suite A33 (v3.20.1).pdf',
+            'manuales/Manual Suite A33 v3.20.1.pdf',
+            'manuales/Manual de Usuario Suite A33 v3.20.1.PDF'
+          ]
         },
-        { key:'inventario', icon:'📊', title:'Inventario', desc:'Guía del módulo Inventario.', path:'manuales/Inventario.pdf' },
-        { key:'calculadora', icon:'🧪', title:'Calculadora de Producción', desc:'Guía de recetas y producción.', path:'manuales/Calculadora.pdf' },
-        { key:'lotes', icon:'📦', title:'Control de Lotes', desc:'Guía de registro y exportación de lotes.', path:'manuales/Control de Lotes.pdf' },
-        { key:'pos', icon:'🧾', title:'POS · Eventos', desc:'Guía de ventas y eventos.', path:'manuales/POS Eventos.pdf' },
-        { key:'analitica', icon:'📈', title:'Analítica', desc:'Guía de lectura y reportes.', path:'manuales/Analitica.pdf' },
-        { key:'planificacion', icon:'📅', title:'Planificación', desc:'Guía del planificador de pedidos.', path:'manuales/Planificacion.pdf' },
-        { key:'finanzas', icon:'💰', title:'Finanzas', desc:'Guía del módulo Finanzas.', path:'manuales/Finanzas.pdf' },
-        { key:'respaldo', icon:'💾', title:'Respaldo', desc:'Guía de exportar/importar respaldo.', path:'manuales/Respaldo.pdf' },
+        {
+          key:'inventario', icon:'📊', title:'Inventario', desc:'Guía del módulo Inventario.',
+          candidates:[
+            'manuales/Manual Inventario Suite A33 v3.20.1.pdf',
+            'manuales/01- Manual Inventario Suite A33 v3.20.1.pdf',
+            'manuales/Inventario.pdf',
+            'manuales/Manual Inventario.pdf',
+            'manuales/Manual Inventario Suite A33 v3.20.1.PDF'
+          ]
+        },
+        {
+          key:'calculadora', icon:'🧪', title:'Calculadora de Producción', desc:'Guía de recetas y producción.',
+          candidates:[
+            'manuales/Manual Calculadora de Producción Suite A33 v3.20.1.pdf',
+            'manuales/02- Manual Calculadora de Producción Suite A33 v3.20.1.pdf',
+            'manuales/Manual Calculadora de Produccion Suite A33 v3.20.1.pdf',
+            'manuales/02- Manual Calculadora de Produccion Suite A33 v3.20.1.pdf',
+            'manuales/Calculadora.pdf',
+            'manuales/Manual Calculadora.pdf',
+            'manuales/Manual Calculadora de Producción Suite A33 v3.20.1.PDF'
+          ]
+        },
+        {
+          key:'lotes', icon:'📦', title:'Control de Lotes', desc:'Guía de registro y exportación de lotes.',
+          candidates:[
+            'manuales/Manual Control de Lotes Suite A33 v3.20.1.pdf',
+            'manuales/03- Manual Control de Lotes Suite A33 v3.20.1.pdf',
+            'manuales/Control de Lotes.pdf',
+            'manuales/Manual Lotes.pdf',
+            'manuales/Manual Control de Lotes Suite A33 v3.20.1.PDF'
+          ]
+        },
+        {
+          key:'pos', icon:'🧾', title:'POS · Eventos', desc:'Guía de ventas y eventos.',
+          candidates:[
+            'manuales/Manual POS · Eventos Suite A33 v3.20.1.pdf',
+            'manuales/Manual POS Eventos Suite A33 v3.20.1.pdf',
+            'manuales/Manual POS Ventas Suite A33 v3.20.1.pdf',
+            'manuales/04- Manual POS Ventas Suite A33 v3.20.1.pdf',
+            'manuales/POS Eventos.pdf',
+            'manuales/POS.pdf',
+            'manuales/Manual POS · Eventos Suite A33 v3.20.1.PDF'
+          ]
+        },
+        {
+          key:'analitica', icon:'📈', title:'Analítica', desc:'Guía de lectura y reportes.',
+          candidates:[
+            'manuales/Manual Analítica Suite A33 v3.20.1.pdf',
+            'manuales/Manual Analitica Suite A33 v3.20.1.pdf',
+            'manuales/05- Manual Analitica Suite A33 v3.20.1.pdf',
+            'manuales/Analitica.pdf',
+            'manuales/Manual Analítica Suite A33 v3.20.1.PDF'
+          ]
+        },
+        {
+          key:'planificacion', icon:'📅', title:'Planificación', desc:'Guía del planificador de pedidos.',
+          candidates:[
+            'manuales/Manual Planificación Suite A33 v3.20.1.pdf',
+            'manuales/Manual Planificacion Suite A33 v3.20.1.pdf',
+            'manuales/Manual Planificador Suite A33 v3.20.1.pdf',
+            'manuales/06- Manual Planificador Suite A33 v3.20.1.pdf',
+            'manuales/Planificacion.pdf',
+            'manuales/Manual Planificación Suite A33 v3.20.1.PDF'
+          ]
+        },
+        {
+          key:'finanzas', icon:'💰', title:'Finanzas', desc:'Guía del módulo Finanzas.',
+          candidates:[
+            'manuales/Manual Finanzas Suite A33 v3.20.1.pdf',
+            'manuales/07- Manual Finanzas Suite A33 v3.20.1.pdf',
+            'manuales/Finanzas.pdf',
+            'manuales/Manual Finanzas Suite A33 v3.20.1.PDF'
+          ]
+        },
+        {
+          key:'respaldo', icon:'💾', title:'Respaldo', desc:'Guía de exportar/importar respaldo.',
+          candidates:[
+            'manuales/Manual Respaldo Suite A33 v3.20.1.pdf',
+            'manuales/08- Manual Respaldo Suite A33 v3.20.1.pdf',
+            'manuales/Respaldo.pdf',
+            'manuales/Manual Respaldo.pdf',
+            'manuales/Manual Respaldo Suite A33 v3.20.1.PDF'
+          ]
+        },
       ];
 
-      // cache de disponibilidad (true/false/null=desconocido)
-      const manualAvailability = new Map();
+      // resolved path cache: string=ok, false=no existe, null=no verificado (ej. sin conexión o sin soporte HEAD)
+      const manualResolvedPath = new Map();
 
       async function headExists(url){
         try{
           const res = await fetch(url, { method:'HEAD', cache:'no-store' });
           if (res.ok) return true;
           if (res.status === 404) return false;
-          return null;
+          return null; // otros códigos (405, 403, etc.)
         }catch(_){
           return null;
         }
       }
 
+      async function resolveFirstExisting(candidates){
+        let unknown = false;
+        for (const p of candidates){
+          const v = await headExists(p);
+          if (v === true) return p;
+          if (v === null) unknown = true;
+        }
+        return unknown ? null : false;
+      }
+
       async function computeAvailability(){
         for (const m of MANUALS){
-          if (!m.path){
-            manualAvailability.set(m.key, false);
+          const c = Array.isArray(m.candidates) ? m.candidates.filter(Boolean) : [];
+          if (!c.length){
+            manualResolvedPath.set(m.key, false);
             continue;
           }
-          const v = await headExists(m.path);
-          manualAvailability.set(m.key, v);
+          const resolved = await resolveFirstExisting(c);
+          manualResolvedPath.set(m.key, resolved);
         }
       }
 
-      function openPdf(path){
-        if (!path){
-          showModal({
-            title:'PDF aún no disponible',
-            bodyHtml:'<div class="badge-warn">⚠️ PDF aún no disponible.</div>',
-            primaryText:'Cerrar',
-            onPrimary: hideModal,
-            disableCancel:true
-          });
-          return;
-        }
-        window.open(path, '_blank', 'noopener');
+      function firstCandidate(meta){
+        const c = Array.isArray(meta?.candidates) ? meta.candidates : [];
+        return c[0] || '';
+      }
+
+      function getUsablePath(meta){
+        const resolved = manualResolvedPath.get(meta.key);
+        if (typeof resolved === 'string') return resolved;
+        // si no se pudo verificar, igual dejamos intentar con el primer candidato
+        return firstCandidate(meta);
+      }
+
+      function showPdfMissing(meta){
+        const candidates = Array.isArray(meta?.candidates) ? meta.candidates : [];
+        const list = candidates.length
+          ? `<div class="small-note" style="margin-top:0.35rem;">Nombres aceptados (colócalo en <b>manuales/</b>):</div>
+             <ul style="margin:0.35rem 0 0 1.1rem; color: var(--muted);">
+               ${candidates.map(p => `<li><code>${escapeHtml(p.replace(/^manuales\//,''))}</code></li>`).join('')}
+             </ul>`
+          : '';
+
+        showModal({
+          title:'PDF aún no disponible',
+          bodyHtml:`<div class="badge-warn">⚠️ No se encontró el PDF para <b>${escapeHtml(meta?.title || 'este módulo')}</b>.</div>
+                   <div class="small-note" style="margin-top:0.4rem;">Revisá que el archivo exista y que el nombre coincida exactamente.</div>
+                   ${list}`,
+          primaryText:'Cerrar',
+          onPrimary: hideModal,
+          disableCancel:true
+        });
+      }
+
+      function openInNewTab(url){
+        if (!url) return;
+        const a = document.createElement('a');
+        a.href = url;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+
+      function forceDownload(url){
+        if (!url) return;
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = '';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
       }
 
       let manualsRendered = false;
@@ -1297,7 +1448,10 @@
                 <p>${safeDesc}</p>
                 <div class="footer-row">
                   <span class="manual-status" style="color:var(--muted);">Verificando...</span>
-                  <button class="link-btn secondary manual-open-btn"><span>Abrir</span> →</button>
+                  <div class="manual-actions">
+                    <a class="link-btn secondary manual-open-link" href="#" target="_blank" rel="noopener"><span>Abrir</span> →</a>
+                    <a class="link-btn secondary manual-download-link" href="#" download><span>Descargar</span> ↓</a>
+                  </div>
                 </div>
               </article>
             `;
@@ -1307,52 +1461,94 @@
           grid.querySelectorAll('.card[data-manual-key]').forEach(card => {
             const key = card.getAttribute('data-manual-key');
             const meta = MANUALS.find(x => x.key === key);
-            const btn = card.querySelector('.manual-open-btn');
+            const openLink = card.querySelector('.manual-open-link');
+            const dlLink = card.querySelector('.manual-download-link');
 
+            // Click en tarjeta = abrir
             card.addEventListener('click', () => {
-              const isDisabled = card.classList.contains('disabled');
-              if (isDisabled) return;
-              if (meta) openPdf(meta.path);
+              if (!meta) return;
+              const resolved = manualResolvedPath.get(meta.key);
+              if (resolved === false){
+                showPdfMissing(meta);
+                return;
+              }
+              openInNewTab(getUsablePath(meta));
             });
 
-            if (btn){
-              btn.addEventListener('click', (e) => {
+            if (openLink){
+              openLink.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const isDisabled = card.classList.contains('disabled');
-                if (isDisabled) return;
-                if (meta) openPdf(meta.path);
+                if (!meta) return;
+                const resolved = manualResolvedPath.get(meta.key);
+                if (resolved === false){
+                  e.preventDefault();
+                  showPdfMissing(meta);
+                  return;
+                }
+                // dejar que el <a> haga su trabajo con href ya configurado
+              });
+            }
+
+            if (dlLink){
+              dlLink.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (!meta) return;
+                const resolved = manualResolvedPath.get(meta.key);
+                if (resolved === false){
+                  e.preventDefault();
+                  showPdfMissing(meta);
+                  return;
+                }
+                // forzar descarga (si el navegador lo respeta)
+                e.preventDefault();
+                forceDownload(getUsablePath(meta));
               });
             }
           });
         }
 
+        // aplicar estado (disponible / no disponible / no verificado) y configurar hrefs
         grid.querySelectorAll('.card[data-manual-key]').forEach(card => {
           const key = card.getAttribute('data-manual-key');
           const statusEl = card.querySelector('.manual-status');
-          const btn = card.querySelector('.manual-open-btn');
+          const openLink = card.querySelector('.manual-open-link');
+          const dlLink = card.querySelector('.manual-download-link');
           const meta = MANUALS.find(x => x.key === key);
+          if (!meta) return;
 
-          const avail = manualAvailability.has(key) ? manualAvailability.get(key) : null;
+          const resolved = manualResolvedPath.has(key) ? manualResolvedPath.get(key) : null;
+          const usable = getUsablePath(meta);
 
-          if (!meta?.path){
-            card.classList.add('disabled');
-            if (statusEl) statusEl.textContent = 'No configurado';
-            if (btn) btn.disabled = true;
-            return;
-          }
-
-          if (avail === false){
-            card.classList.add('disabled');
-            if (statusEl) statusEl.textContent = 'PDF aún no disponible';
-            if (btn) btn.disabled = true;
-            return;
-          }
-
+          // Por defecto quitamos estado "disabled" a la tarjeta (para que no se vea bloqueada)
           card.classList.remove('disabled');
-          if (statusEl) statusEl.textContent = (avail === true) ? 'Disponible' : 'Sin conexión (no verificado)';
-          if (btn) btn.disabled = false;
+
+          // Configurar href para abrir
+          if (openLink){
+            openLink.href = usable || '#';
+            openLink.classList.remove('disabled-link');
+          }
+          if (dlLink){
+            dlLink.href = usable || '#';
+            dlLink.classList.remove('disabled-link');
+          }
+
+          if (resolved === false){
+            if (statusEl) statusEl.textContent = 'PDF aún no disponible';
+            if (openLink) openLink.classList.add('disabled-link');
+            if (dlLink) dlLink.classList.add('disabled-link');
+            return;
+          }
+
+          if (typeof resolved === 'string'){
+            if (statusEl) statusEl.textContent = 'Disponible';
+            return;
+          }
+
+          // null o desconocido: permitir intentar con el primer candidato
+          if (statusEl) statusEl.textContent = 'No verificado (igual podés intentar)';
         });
       }
+
 const overlay = document.getElementById('lock-overlay');
       const setup = document.getElementById('lock-setup');
       const unlock = document.getElementById('lock-unlock');
