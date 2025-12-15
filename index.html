@@ -381,6 +381,76 @@
       cursor:not-allowed;
     }
 
+
+
+    /* --- Visor interno de PDFs (evita quedar atrapado en iPad/PWA) --- */
+    body.pdf-open{ overflow:hidden; }
+    .pdf-overlay{
+      position:fixed;
+      inset:0;
+      background:rgba(0,0,0,0.78);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:0.85rem;
+      z-index:60;
+      backdrop-filter:blur(6px);
+    }
+    .pdf-card{
+      width:100%;
+      max-width:980px;
+      height:min(86vh,900px);
+      background:linear-gradient(145deg,#0f0f0f,#1a1414);
+      border-radius:20px;
+      border:1px solid rgba(221,191,100,0.45);
+      box-shadow:0 18px 40px rgba(0,0,0,0.92);
+      overflow:hidden;
+      display:flex;
+      flex-direction:column;
+    }
+    .pdf-topbar{
+      display:flex;
+      align-items:flex-start;
+      gap:0.6rem;
+      padding:0.75rem 0.75rem 0.6rem;
+      border-bottom:1px solid rgba(255,255,255,0.10);
+      background:rgba(0,0,0,0.35);
+    }
+    .pdf-topbar-mid{ flex:1; min-width:0; }
+    .pdf-title{
+      font-size:0.95rem;
+      letter-spacing:0.02em;
+      margin-top:0.1rem;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    .pdf-ios-hint{
+      margin-top:0.35rem;
+      font-size:0.75rem;
+      color:var(--muted);
+      line-height:1.25;
+    }
+    .pdf-topbar-actions{
+      display:flex;
+      gap:0.45rem;
+      align-items:center;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+    }
+    .pdf-body{ flex:1; background:#0b0b0b; }
+    #pdf-frame{
+      width:100%;
+      height:100%;
+      border:0;
+      background:#0b0b0b;
+    }
+    @media (max-width:600px){
+      .pdf-card{ height:92vh; }
+      .pdf-topbar{ flex-direction:column; align-items:stretch; }
+      .pdf-topbar-actions{ justify-content:flex-start; }
+    }
+
 </style>
 </head>
 <body>
@@ -609,6 +679,30 @@
         <button class="btn btn-ghost" id="backup-modal-cancel">Cancelar</button>
         <button class="btn btn-ghost" id="backup-modal-secondary" style="display:none;">Secundario</button>
         <button class="btn btn-primary" id="backup-modal-primary">OK</button>
+      </div>
+    </div>
+  </div>
+
+  
+
+  <!-- Visor interno de PDF (para volver sin quedar atrapado en iPad) -->
+  <div class="pdf-overlay" id="pdf-viewer" style="display:none;">
+    <div class="pdf-card" role="dialog" aria-modal="true" aria-labelledby="pdf-title">
+      <div class="pdf-topbar">
+        <button class="btn btn-ghost" id="pdf-close">✕ Cerrar</button>
+        <div class="pdf-topbar-mid">
+          <div class="pdf-title" id="pdf-title">Manual</div>
+          <div class="pdf-ios-hint" id="pdf-ios-hint" style="display:none;">
+            En iPad (modo app), si el PDF no carga aquí, usa <b>Abrir afuera</b> para verlo en Safari y luego regresa a la Suite.
+          </div>
+        </div>
+        <div class="pdf-topbar-actions">
+          <a class="btn btn-ghost" id="pdf-open-external" href="#" target="_blank" rel="noopener">Abrir afuera</a>
+          <button class="btn btn-primary" id="pdf-download-btn">Descargar</button>
+        </div>
+      </div>
+      <div class="pdf-body">
+        <iframe id="pdf-frame" title="PDF" src="about:blank"></iframe>
       </div>
     </div>
   </div>
@@ -1483,6 +1577,98 @@
         a.remove();
       }
 
+
+      // --- Visor interno de PDF (para volver sin quedar atrapado en iPad) ---
+      function isIOSDevice(){
+        return /iPad|iPhone|iPod/.test(navigator.userAgent || '');
+      }
+      function isStandaloneMode(){
+        try{
+          if (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) return true;
+        }catch(_){ }
+        try{
+          if (window.navigator && window.navigator.standalone) return true;
+        }catch(_){ }
+        return false;
+      }
+
+      const pdfOverlay = document.getElementById('pdf-viewer');
+      const pdfFrame = document.getElementById('pdf-frame');
+      const pdfTitleEl = document.getElementById('pdf-title');
+      const pdfHintEl = document.getElementById('pdf-ios-hint');
+      const pdfOpenExternal = document.getElementById('pdf-open-external');
+      const pdfDownloadBtn = document.getElementById('pdf-download-btn');
+      const pdfCloseBtn = document.getElementById('pdf-close');
+
+      function closePdfViewer(){
+        if (!pdfOverlay) return;
+        pdfOverlay.style.display = 'none';
+        document.body.classList.remove('pdf-open');
+        try{ if (pdfFrame) pdfFrame.src = 'about:blank'; }catch(_){ }
+        try{ pdfOverlay.removeAttribute('data-current-url'); }catch(_){ }
+      }
+
+      function openPdfViewer(meta){
+        if (!meta) return;
+        const resolved = manualResolvedPath.get(meta.key);
+        if (resolved === false){
+          showPdfMissing(meta);
+          return;
+        }
+        const url = getUsablePath(meta);
+        if (!url){
+          showPdfMissing(meta);
+          return;
+        }
+
+        // Si por alguna razón no existe el overlay, fallback a abrir afuera
+        if (!pdfOverlay){
+          openInNewTab(url);
+          return;
+        }
+
+        try{ pdfOverlay.setAttribute('data-current-url', url); }catch(_){ }
+        if (pdfTitleEl) pdfTitleEl.textContent = meta.title || 'Manual';
+        if (pdfOpenExternal) pdfOpenExternal.href = url;
+
+        if (pdfHintEl){
+          const show = isIOSDevice() && isStandaloneMode();
+          pdfHintEl.style.display = show ? 'block' : 'none';
+        }
+
+        // Intentar render inline en el iframe. Si iOS decide abrirlo externo, igual queda el botón "Abrir afuera".
+        if (pdfFrame){
+          try{ pdfFrame.src = url; }catch(_){ }
+        }
+
+        pdfOverlay.style.display = 'flex';
+        document.body.classList.add('pdf-open');
+      }
+
+      if (pdfCloseBtn){
+        pdfCloseBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          closePdfViewer();
+        });
+      }
+
+      if (pdfDownloadBtn){
+        pdfDownloadBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          if (!pdfOverlay) return;
+          const url = pdfOverlay.getAttribute('data-current-url') || '';
+          if (!url) return;
+          forceDownload(url);
+        });
+      }
+
+      if (pdfOverlay){
+        pdfOverlay.addEventListener('click', (e) => {
+          // cerrar solo si das click en el fondo, no en la tarjeta
+          if (e.target === pdfOverlay) closePdfViewer();
+        });
+      }
+
       let manualsRendered = false;
 
       function renderManualCards(){
@@ -1501,8 +1687,8 @@
                 <div class="footer-row">
                   <span class="manual-status" style="color:var(--muted);">Verificando...</span>
                   <div class="manual-actions">
-                    <a class="link-btn secondary manual-open-link" href="#" target="_blank" rel="noopener"><span>Abrir</span> →</a>
-                    <a class="link-btn secondary manual-download-link" href="#" download><span>Descargar</span> ↓</a>
+                    <button class="link-btn secondary manual-view-btn" type="button"><span>Ver</span> →</button>
+                    <button class="link-btn secondary manual-download-btn" type="button"><span>Descargar</span> ↓</button>
                   </div>
                 </div>
               </article>
@@ -1513,8 +1699,8 @@
           grid.querySelectorAll('.card[data-manual-key]').forEach(card => {
             const key = card.getAttribute('data-manual-key');
             const meta = MANUALS.find(x => x.key === key);
-            const openLink = card.querySelector('.manual-open-link');
-            const dlLink = card.querySelector('.manual-download-link');
+            const viewBtn = card.querySelector('.manual-view-btn');
+            const dlBtn = card.querySelector('.manual-download-btn');
 
             // Click en tarjeta = abrir
             card.addEventListener('click', () => {
@@ -1524,11 +1710,11 @@
                 showPdfMissing(meta);
                 return;
               }
-              openInNewTab(getUsablePath(meta));
+              openPdfViewer(meta);
             });
 
-            if (openLink){
-              openLink.addEventListener('click', (e) => {
+            if (viewBtn){
+              viewBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 if (!meta) return;
                 const resolved = manualResolvedPath.get(meta.key);
@@ -1537,12 +1723,12 @@
                   showPdfMissing(meta);
                   return;
                 }
-                // dejar que el <a> haga su trabajo con href ya configurado
+                openPdfViewer(meta);
               });
             }
 
-            if (dlLink){
-              dlLink.addEventListener('click', (e) => {
+            if (dlBtn){
+              dlBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 if (!meta) return;
                 const resolved = manualResolvedPath.get(meta.key);
@@ -1563,8 +1749,8 @@
         grid.querySelectorAll('.card[data-manual-key]').forEach(card => {
           const key = card.getAttribute('data-manual-key');
           const statusEl = card.querySelector('.manual-status');
-          const openLink = card.querySelector('.manual-open-link');
-          const dlLink = card.querySelector('.manual-download-link');
+          const viewBtn = card.querySelector('.manual-view-btn');
+          const dlBtn = card.querySelector('.manual-download-btn');
           const meta = MANUALS.find(x => x.key === key);
           if (!meta) return;
 
@@ -1573,21 +1759,12 @@
 
           // Por defecto quitamos estado "disabled" a la tarjeta (para que no se vea bloqueada)
           card.classList.remove('disabled');
-
-          // Configurar href para abrir
-          if (openLink){
-            openLink.href = usable || '#';
-            openLink.classList.remove('disabled-link');
-          }
-          if (dlLink){
-            dlLink.href = usable || '#';
-            dlLink.classList.remove('disabled-link');
-          }
-
+          if (viewBtn) viewBtn.classList.remove('disabled-link');
+          if (dlBtn) dlBtn.classList.remove('disabled-link');
           if (resolved === false){
             if (statusEl) statusEl.textContent = 'PDF aún no disponible';
-            if (openLink) openLink.classList.add('disabled-link');
-            if (dlLink) dlLink.classList.add('disabled-link');
+            if (viewBtn) viewBtn.classList.add('disabled-link');
+            if (dlBtn) dlBtn.classList.add('disabled-link');
             return;
           }
 
