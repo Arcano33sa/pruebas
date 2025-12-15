@@ -1345,6 +1345,21 @@
       // resolved path cache: string=ok, false=no existe, null=no verificado (ej. sin conexión o sin soporte HEAD)
       const manualResolvedPath = new Map();
 
+      // --- Manifest opcional ---
+      // Si existe /manuales/manifest.json, la app usa esos nombres EXACTOS.
+      // Esto evita el clásico: “el PDF existe pero se llama distinto”.
+      // Formato esperado (valores = nombre de archivo dentro de /manuales/):
+      // {
+      //   "compilado": "00- Manual de Usuario Suite A33 v3.20.1.pdf",
+      //   "inventario": "01- Manual Inventario Suite A33 v3.20.1.pdf",
+      //   "calculadora": "02- Manual Calculadora de Producción Suite A33 v3.20.1.pdf",
+      //   "lotes": "03- Manual Control de Lotes Suite A33 v3.20.1.pdf",
+      //   "pos": "04- Manual POS Ventas Suite A33 v3.20.1.pdf",
+      //   "analitica": "05- Manual Analitica Suite A33 v3.20.1.pdf",
+      //   "planificacion": "06- Manual Planificador Suite A33 v3.20.1.pdf",
+      //   "finanzas": "07- Manual Finanzas Suite A33 v3.20.1.pdf",
+      //   "respaldo": "08- Manual Respaldo Suite A33 v3.20.1.pdf"
+      // }
       async function headExists(url){
         try{
           const res = await fetch(url, { method:'HEAD', cache:'no-store' });
@@ -1364,6 +1379,43 @@
           if (v === null) unknown = true;
         }
         return unknown ? null : false;
+      }
+
+      async function loadManualManifest(){
+        try{
+          const res = await fetch('manuales/manifest.json', { cache:'no-store' });
+          if (!res.ok) return false;
+          const data = await res.json();
+          if (!data || typeof data !== 'object') return false;
+
+          for (const m of MANUALS){
+            const raw = data[m.key];
+            const add = [];
+            if (typeof raw === 'string' && raw.trim()) add.push(raw.trim());
+            if (Array.isArray(raw)){
+              raw.forEach(x => { if (typeof x === 'string' && x.trim()) add.push(x.trim()); });
+            }
+            if (!add.length) continue;
+
+            const normalized = add
+              .map(x => x.replace(/^\/*manuales\//i, '').replace(/^\/*/,'').trim())
+              .filter(Boolean)
+              .map(x => `manuales/${x}`);
+
+            const existing = Array.isArray(m.candidates) ? m.candidates : [];
+            // Poner primero lo definido en el manifest, luego lo demás (sin duplicados)
+            const merged = [];
+            for (const p of [...normalized, ...existing]){
+              if (!p || merged.includes(p)) continue;
+              merged.push(p);
+            }
+            m.candidates = merged;
+          }
+
+          return true;
+        }catch(_){
+          return false;
+        }
       }
 
       async function computeAvailability(){
@@ -1653,7 +1705,10 @@ const overlay = document.getElementById('lock-overlay');
       }
 
       // Preparar disponibilidad de PDFs (sin bloquear si estás offline)
-      computeAvailability().then(() => renderManualCards()).catch(() => renderManualCards());
+      loadManualManifest()
+        .then(() => computeAvailability())
+        .then(() => renderManualCards())
+        .catch(() => renderManualCards());
 
       // Si se entra con hash #manuales, abrir manuales
       if (window.location.hash === '#manuales'){
