@@ -609,7 +609,16 @@ function normalizePettyDay(day){
   const initial = day && day.initial ? normalizePettySection(day.initial) : normalizePettySection(null);
   const movements = Array.isArray(day && day.movements) ? day.movements.slice() : [];
   const finalCount = (day && day.finalCount) ? normalizePettySection(day.finalCount) : null;
-  return { initial, movements, finalCount };
+  const fxRate = normalizeFxRate(day ? day.fxRate : null);
+  return { initial, movements, finalCount, fxRate };
+}
+
+function normalizeFxRate(v){
+  if (v == null) return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  // Guardar con precisión razonable (hasta 4 decimales)
+  return Math.round(n * 10000) / 10000;
 }
 
 function safeYMD(s){
@@ -667,7 +676,7 @@ function ensurePcDay(pc, dayKey){
   if (!pc.days || typeof pc.days !== 'object') pc.days = {};
   const dk = safeYMD(dayKey);
   if (!pc.days[dk]){
-    pc.days[dk] = { initial: normalizePettySection(null), movements: [], finalCount: null };
+    pc.days[dk] = { initial: normalizePettySection(null), movements: [], finalCount: null, fxRate: null };
   } else {
     pc.days[dk] = normalizePettyDay(pc.days[dk]);
   }
@@ -3609,6 +3618,7 @@ function setPettyReadOnly(isReadOnly){
   [
     'pc-btn-save-initial','pc-btn-clear-initial',
     'pc-btn-save-final','pc-btn-clear-final',
+    'pc-fx-rate',
     'pc-mov-type','pc-mov-currency','pc-mov-amount','pc-mov-desc','pc-mov-add'
   ].forEach(id => {
     const el = document.getElementById(id);
@@ -3826,6 +3836,7 @@ async function renderCajaChica(){
     note.style.display = 'block';
     main.classList.add('disabled');
     updatePettySummaryUI(null, null);
+    resetPettyFxRateInput();
     resetPettyInitialInputs();
     resetPettyFinalInputs();
     renderPettyMovements(null, null, true);
@@ -3850,6 +3861,9 @@ async function renderCajaChica(){
   const pc = await getPettyCash(evId);
   ensurePcDay(pc, dayKey);
 
+  // Tipo de cambio (T/C) por día
+  fillPettyFxRateFromPc(pc, dayKey);
+
   // Mantener el campo de fecha de movimientos sincronizado con el día operativo
   const movDate = document.getElementById('pc-mov-date');
   if (movDate){
@@ -3858,6 +3872,7 @@ async function renderCajaChica(){
   }
 
   updatePettySummaryUI(pc, dayKey);
+  fillPettyFxRateFromPc(pc, dayKey);
   fillPettyInitialFromPc(pc, dayKey);
   fillPettyFinalFromPc(pc, dayKey);
   renderPettyMovements(pc, dayKey, hist);
@@ -3896,6 +3911,50 @@ function updatePettySummaryUI(pc, dayKey){
   setVal('pc-usd-teorico', sum.usd.teorico);
   setVal('pc-usd-final', sum.usd.final, true);
   setVal('pc-usd-diferencia', sum.usd.diferencia, true);
+}
+
+function resetPettyFxRateInput(){
+  const el = document.getElementById('pc-fx-rate');
+  if (el) el.value = '';
+}
+
+function fillPettyFxRateFromPc(pc, dayKey){
+  const el = document.getElementById('pc-fx-rate');
+  if (!el) return;
+  if (!pc || !dayKey){
+    el.value = '';
+    return;
+  }
+  const day = ensurePcDay(pc, dayKey);
+  const fx = normalizeFxRate(day ? day.fxRate : null);
+  el.value = fx ? String(fx) : '';
+}
+
+async function onSavePettyFxRate(){
+  if (isPettyHistoryMode()){
+    alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
+    return;
+  }
+  const evId = await getMeta('currentEventId');
+  if (!evId){
+    alert('Debes activar un evento antes de guardar el tipo de cambio (T/C).');
+    return;
+  }
+
+  const input = document.getElementById('pc-fx-rate');
+  if (!input) return;
+
+  const dayKey = getSelectedPcDay();
+  const pc = await getPettyCash(evId);
+  const day = ensurePcDay(pc, dayKey);
+
+  const fx = normalizeFxRate((input.value || '').trim());
+  day.fxRate = fx;
+
+  await savePettyCash(pc);
+  // Normalizar el input (limpiar si quedó inválido)
+  input.value = fx ? String(fx) : '';
+  toast(fx ? 'T/C guardado' : 'T/C eliminado');
 }
 
 function resetPettyInitialInputs(){
@@ -4346,6 +4405,14 @@ function bindCajaChicaEvents(){
   inputsFinal.forEach(inp=>{
     inp.addEventListener('input', recalcPettyFinalTotalsFromInputs);
   });
+
+  // Tipo de cambio (T/C) por día
+  const fxInput = document.getElementById('pc-fx-rate');
+  if (fxInput){
+    fxInput.addEventListener('change', ()=>{
+      onSavePettyFxRate().catch(err=>console.error(err));
+    });
+  }
 
   const btnSaveInit = document.getElementById('pc-btn-save-initial');
   if (btnSaveInit){

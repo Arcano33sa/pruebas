@@ -338,6 +338,17 @@
     <div id="pc-history-banner" class="warn" style="display:none"></div>
 
     <div id="pc-main" class="pc-main">
+      <div class="card" id="pc-fx-card" style="margin-top:0">
+        <h3 style="margin-top:0">Tipo de cambio del día</h3>
+        <div class="row" style="grid-template-columns:minmax(0,1fr)">
+          <div>
+            <label for="pc-fx-rate">T/C:</label>
+            <input id="pc-fx-rate" type="number" inputmode="decimal" step="0.01" min="0" placeholder="C$ por 1 US$">
+            <small class="muted">C$ que equivalen a 1 dólar (por día). Solo Caja Chica.</small>
+          </div>
+        </div>
+      </div>
+
       <div class="row petty-summary">
         <div class="card">
           <h3>Córdobas (C$)</h3>
