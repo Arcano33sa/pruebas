@@ -338,17 +338,6 @@
     <div id="pc-history-banner" class="warn" style="display:none"></div>
 
     <div id="pc-main" class="pc-main">
-      <div class="card" id="pc-fx-card" style="margin-top:0">
-        <h3 style="margin-top:0">Tipo de cambio del día</h3>
-        <div class="row" style="grid-template-columns:minmax(0,1fr)">
-          <div>
-            <label for="pc-fx-rate">T/C:</label>
-            <input id="pc-fx-rate" type="number" inputmode="decimal" step="0.01" min="0" placeholder="C$ por 1 US$">
-            <small class="muted">C$ que equivalen a 1 dólar (por día). Solo Caja Chica.</small>
-          </div>
-        </div>
-      </div>
-
       <div class="row petty-summary">
         <div class="card">
           <h3>Córdobas (C$)</h3>
@@ -357,6 +346,7 @@
               <tr><th>Saldo inicial</th><td>C$ <span id="pc-nio-inicial">0.00</span></td></tr>
               <tr><th>Entradas</th><td>C$ <span id="pc-nio-entradas">0.00</span></td></tr>
               <tr><th>Salidas</th><td>C$ <span id="pc-nio-salidas">0.00</span></td></tr>
+              <tr><th>Ventas en efectivo</th><td>C$ <span id="pc-nio-ventas">0.00</span></td></tr>
               <tr><th>Saldo teórico</th><td>C$ <span id="pc-nio-teorico">0.00</span></td></tr>
               <tr><th>Saldo final contado</th><td>C$ <span id="pc-nio-final">—</span></td></tr>
               <tr><th>Diferencia</th><td>C$ <span id="pc-nio-diferencia">—</span></td></tr>
@@ -528,6 +518,58 @@
           <button id="pc-btn-save-final" class="btn-ok">Guardar arqueo final</button>
           <button id="pc-btn-clear-final" class="btn-warn">Limpiar</button>
         </div>
+      </div>
+
+      <div class="card petty-cierre">
+        <h3>Cierre definitivo del día</h3>
+        <div class="row">
+          <div class="col">
+            <label><b>T/C:</b></label>
+            <input id="pc-fx-rate" type="number" inputmode="decimal" step="0.01" min="0" placeholder="T/C: (C$ por 1 US$)">
+            <small class="muted">C$ por 1 US$. Se requiere solo si hubo USD en Caja Chica hoy.</small>
+          </div>
+          <div class="col" style="min-width:160px">
+            <label>&nbsp;</label>
+            <button id="pc-btn-save-fx" class="btn-primary" type="button">Guardar T/C</button>
+          </div>
+        </div>
+
+        <div id="pc-close-status" class="info" style="margin-top:8px"></div>
+        <div id="pc-close-blocker" class="warn" style="display:none; margin-top:8px"></div>
+
+        <div class="row" style="margin-top:10px">
+          <div class="petty-block">
+            <h4>Ajuste de arqueo C$</h4>
+            <div class="row" style="gap:8px">
+              <input id="pc-adj-nio-reason" type="text" placeholder="Motivo (obligatorio)">
+              <input id="pc-adj-nio-note" type="text" placeholder="Nota (opcional)">
+            </div>
+            <div class="row" style="gap:8px">
+              <button id="pc-btn-adj-nio" class="btn-ok" type="button">Registrar ajuste C$</button>
+              <button id="pc-btn-clear-adj-nio" class="btn-link" type="button">Quitar ajuste</button>
+            </div>
+            <div id="pc-adj-nio-status" class="muted"></div>
+          </div>
+
+          <div class="petty-block">
+            <h4>Ajuste de arqueo US$</h4>
+            <div class="row" style="gap:8px">
+              <input id="pc-adj-usd-reason" type="text" placeholder="Motivo (obligatorio)">
+              <input id="pc-adj-usd-note" type="text" placeholder="Nota (opcional)">
+            </div>
+            <div class="row" style="gap:8px">
+              <button id="pc-btn-adj-usd" class="btn-ok" type="button">Registrar ajuste US$</button>
+              <button id="pc-btn-clear-adj-usd" class="btn-link" type="button">Quitar ajuste</button>
+            </div>
+            <div id="pc-adj-usd-status" class="muted"></div>
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:10px">
+          <button id="pc-btn-close-day" class="btn-ok" type="button">Cierre definitivo del día</button>
+          <button id="pc-btn-reopen-day" class="btn-warn" type="button" style="display:none">Reabrir día</button>
+        </div>
+        <small class="muted">Regla: si existe diferencia entre el efectivo contado y el esperado, debes registrar movimientos faltantes o un ajuste de arqueo antes de poder cerrar.</small>
       </div>
 </div>
   </section>

@@ -609,16 +609,42 @@ function normalizePettyDay(day){
   const initial = day && day.initial ? normalizePettySection(day.initial) : normalizePettySection(null);
   const movements = Array.isArray(day && day.movements) ? day.movements.slice() : [];
   const finalCount = (day && day.finalCount) ? normalizePettySection(day.finalCount) : null;
-  const fxRate = normalizeFxRate(day ? day.fxRate : null);
-  return { initial, movements, finalCount, fxRate };
+
+  const fxRaw = (day && day.fxRate != null) ? Number(day.fxRate) : NaN;
+  const fxRate = (Number.isFinite(fxRaw) && fxRaw > 0) ? fxRaw : null;
+
+  const closedAt = (day && typeof day.closedAt === 'string' && day.closedAt.trim()) ? day.closedAt : null;
+
+  const arqueoAdjust = normalizeArqueoAdjust(day && day.arqueoAdjust);
+
+  return { initial, movements, finalCount, fxRate, closedAt, arqueoAdjust };
 }
 
-function normalizeFxRate(v){
-  if (v == null) return null;
-  const n = Number(v);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  // Guardar con precisión razonable (hasta 4 decimales)
-  return Math.round(n * 10000) / 10000;
+function round2(n){
+  const x = Number(n);
+  if (!Number.isFinite(x)) return 0;
+  return Math.round(x * 100) / 100;
+}
+
+function moneyEquals(a, b){
+  return Math.round(Number(a || 0) * 100) === Math.round(Number(b || 0) * 100);
+}
+
+function normalizeArqueoAdjust(adj){
+  const out = { NIO: null, USD: null };
+  const one = (a)=>{
+    if (!a || typeof a !== 'object') return null;
+    const amt = Number(a.amount);
+    if (!Number.isFinite(amt) || Math.abs(amt) < 0.005) return null;
+    const reason = (a.reason || '').toString().trim();
+    if (!reason) return null;
+    const note = (a.note || '').toString().trim();
+    const createdAt = (typeof a.createdAt === 'string' && a.createdAt.trim()) ? a.createdAt : null;
+    return { amount: round2(amt), reason, note, createdAt };
+  };
+  out.NIO = one(adj && adj.NIO);
+  out.USD = one(adj && adj.USD);
+  return out;
 }
 
 function safeYMD(s){
@@ -676,9 +702,17 @@ function ensurePcDay(pc, dayKey){
   if (!pc.days || typeof pc.days !== 'object') pc.days = {};
   const dk = safeYMD(dayKey);
   if (!pc.days[dk]){
-    pc.days[dk] = { initial: normalizePettySection(null), movements: [], finalCount: null, fxRate: null };
+    pc.days[dk] = {
+      initial: normalizePettySection(null),
+      movements: [],
+      finalCount: null,
+      fxRate: null,
+      closedAt: null,
+      arqueoAdjust: { NIO: null, USD: null }
+    };
   } else {
     pc.days[dk] = normalizePettyDay(pc.days[dk]);
+    if (!pc.days[dk].arqueoAdjust) pc.days[dk].arqueoAdjust = { NIO: null, USD: null };
   }
   return pc.days[dk];
 }
@@ -732,12 +766,16 @@ function hasAnyPettyFinal(pc){
   return !!(pc.finalCount && pc.finalCount.savedAt);
 }
 
-function computePettyCashSummary(pc, dayKey){
+function computePettyCashSummary(pc, dayKey, opts){
   const base = {
-    nio: { initial:0, entradas:0, salidas:0, teorico:0, final:null, diferencia:null },
+    nio: { initial:0, entradas:0, salidas:0, ventasEfectivo:0, teorico:0, final:null, diferencia:null },
     usd: { initial:0, entradas:0, salidas:0, teorico:0, final:null, diferencia:null }
   };
+  opts = opts || {};
   if (!pc) return base;
+
+  const cashSalesDay = Number(opts.cashSalesNio || 0);
+  const cashSalesTotal = Number(opts.cashSalesNioTotal || 0);
 
   // Fallback legado (por si algún registro viejo se cuela)
   if (!pc.days || typeof pc.days !== 'object'){
@@ -745,7 +783,7 @@ function computePettyCashSummary(pc, dayKey){
     const finalCount = pc.finalCount ? normalizePettySection(pc.finalCount) : null;
 
     const res = {
-      nio: { initial: initial.totalNio || 0, entradas: 0, salidas: 0, teorico: 0, final: finalCount ? (finalCount.totalNio || 0) : null, diferencia: null },
+      nio: { initial: initial.totalNio || 0, entradas: 0, salidas: 0, ventasEfectivo: cashSalesTotal, teorico: 0, final: finalCount ? (finalCount.totalNio || 0) : null, diferencia: null },
       usd: { initial: initial.totalUsd || 0, entradas: 0, salidas: 0, teorico: 0, final: finalCount ? (finalCount.totalUsd || 0) : null, diferencia: null }
     };
 
@@ -763,7 +801,7 @@ function computePettyCashSummary(pc, dayKey){
       }
     }
 
-    res.nio.teorico = res.nio.initial + res.nio.entradas - res.nio.salidas;
+    res.nio.teorico = res.nio.initial + res.nio.entradas - res.nio.salidas + (res.nio.ventasEfectivo || 0);
     res.usd.teorico = res.usd.initial + res.usd.entradas - res.usd.salidas;
 
     if (res.nio.final != null) res.nio.diferencia = res.nio.final - res.nio.teorico;
@@ -779,7 +817,7 @@ function computePettyCashSummary(pc, dayKey){
     const finalCount = day.finalCount ? normalizePettySection(day.finalCount) : null;
 
     const res = {
-      nio: { initial: initial.totalNio || 0, entradas: 0, salidas: 0, teorico: 0, final: finalCount ? (finalCount.totalNio || 0) : null, diferencia: null },
+      nio: { initial: initial.totalNio || 0, entradas: 0, salidas: 0, ventasEfectivo: cashSalesDay, teorico: 0, final: finalCount ? (finalCount.totalNio || 0) : null, diferencia: null },
       usd: { initial: initial.totalUsd || 0, entradas: 0, salidas: 0, teorico: 0, final: finalCount ? (finalCount.totalUsd || 0) : null, diferencia: null }
     };
 
@@ -797,7 +835,7 @@ function computePettyCashSummary(pc, dayKey){
       }
     }
 
-    res.nio.teorico = res.nio.initial + res.nio.entradas - res.nio.salidas;
+    res.nio.teorico = res.nio.initial + res.nio.entradas - res.nio.salidas + (res.nio.ventasEfectivo || 0);
     res.usd.teorico = res.usd.initial + res.usd.entradas - res.usd.salidas;
 
     if (res.nio.final != null) res.nio.diferencia = res.nio.final - res.nio.teorico;
@@ -852,11 +890,11 @@ function computePettyCashSummary(pc, dayKey){
   }
 
   const res = {
-    nio: { initial: initSec.totalNio || 0, entradas: entradasNio, salidas: salidasNio, teorico: 0, final: finSec ? (finSec.totalNio || 0) : null, diferencia: null },
+    nio: { initial: initSec.totalNio || 0, entradas: entradasNio, salidas: salidasNio, ventasEfectivo: cashSalesTotal, teorico: 0, final: finSec ? (finSec.totalNio || 0) : null, diferencia: null },
     usd: { initial: initSec.totalUsd || 0, entradas: entradasUsd, salidas: salidasUsd, teorico: 0, final: finSec ? (finSec.totalUsd || 0) : null, diferencia: null }
   };
 
-  res.nio.teorico = res.nio.initial + res.nio.entradas - res.nio.salidas;
+  res.nio.teorico = res.nio.initial + res.nio.entradas - res.nio.salidas + (res.nio.ventasEfectivo || 0);
   res.usd.teorico = res.usd.initial + res.usd.entradas - res.usd.salidas;
 
   if (res.nio.final != null) res.nio.diferencia = res.nio.final - res.nio.teorico;
@@ -2927,6 +2965,67 @@ async function closeEvent(eventId){
   const ev = events.find(e=>e.id===eventId);
   if (!ev){ alert('Evento no encontrado'); return; }
   if (ev.closedAt){ alert('Este evento ya está cerrado.'); return; }
+
+  // Guard: impedir cierre si faltan cierres definitivos de Caja Chica por día (cuando aplica)
+  try{
+    const pc = await getPettyCash(eventId);
+
+    // Ventas en efectivo por día (C$)
+    const allSales = await getAll('sales');
+    const cashByDay = new Map();
+    for (const s of (allSales || [])){
+      if (!s || s.eventId !== eventId) continue;
+      if ((s.payment || '') !== 'efectivo') continue;
+      const dk = (typeof s.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s.date)) ? s.date : null;
+      if (!dk) continue;
+      const prev = cashByDay.get(dk) || 0;
+      cashByDay.set(dk, round2(prev + Number(s.total || 0)));
+    }
+
+    // Días a exigir cierre: días con actividad de Caja Chica o con ventas en efectivo
+    const daySet = new Set();
+    const pcKeys = listPcDayKeys(pc);
+    for (const k of pcKeys){
+      const d = pc.days ? pc.days[k] : null;
+      if (hasPettyDayActivity(d)) daySet.add(k);
+    }
+    for (const k of cashByDay.keys()) daySet.add(k);
+
+    if (daySet.size){
+      const pending = [];
+      const sorted = Array.from(daySet).sort();
+
+      for (const dayKey of sorted){
+        const cashSalesNio = cashByDay.get(dayKey) || 0;
+        const day = ensurePcDay(pc, dayKey);
+        const check = await getPettyCloseCheck(eventId, pc, dayKey, cashSalesNio);
+
+        if (!day.closedAt){
+          pending.push({ dayKey, reason: 'Falta Cierre definitivo del día.' });
+          continue;
+        }
+
+        // Si por alguna razón hay errores aún estando cerrado, bloquear cierre del evento
+        if (check.errors && check.errors.length){
+          pending.push({ dayKey, reason: check.errors[0] });
+        }
+      }
+
+      if (pending.length){
+        const lines = pending.slice(0, 25).map(p => `- ${p.dayKey}: ${p.reason}`).join('\n');
+        const more = pending.length > 25 ? `\n... y ${pending.length - 25} más.` : '';
+        alert(
+          'No se puede cerrar el evento porque faltan cierres definitivos de Caja Chica:\n\n' +
+          lines + more +
+          '\n\nVe a Caja Chica y realiza “Cierre definitivo del día”.'
+        );
+        return;
+      }
+    }
+  }catch(err){
+    console.error('closeEvent guard Caja Chica error', err);
+  }
+
   await generateCorteCSV(eventId);
   ev.closedAt = new Date().toISOString();
   await put('events', ev);
@@ -3590,6 +3689,361 @@ function getSelectedPcDay(){
   return safeYMD(val);
 }
 
+
+
+// --- Caja Chica: validación de cierre definitivo + ventas en efectivo
+async function getCashSalesNioForDay(eventId, dayKey){
+  if (!eventId || !dayKey) return 0;
+  const allSales = await getAll('sales');
+  let sum = 0;
+  for (const s of (allSales || [])){
+    if (!s || s.eventId !== eventId) continue;
+    if ((s.payment || '') !== 'efectivo') continue;
+    if ((s.date || '') !== dayKey) continue;
+    sum += Number(s.total || 0);
+  }
+  return round2(sum);
+}
+
+function hasPettyDayActivity(day){
+  if (!day) return false;
+  if (day.initial && day.initial.savedAt) return true;
+  if (day.finalCount && day.finalCount.savedAt) return true;
+  if (Array.isArray(day.movements) && day.movements.length) return true;
+  if (day.fxRate != null) return true;
+  if (day.arqueoAdjust && (day.arqueoAdjust.NIO || day.arqueoAdjust.USD)) return true;
+  return false;
+}
+
+function hasUsdActivity(day, sum){
+  if (!day) return false;
+  const eps = 0.005;
+  if (sum){
+    if (Math.abs(Number(sum.usd.initial || 0)) > eps) return true;
+    if (Math.abs(Number(sum.usd.entradas || 0)) > eps) return true;
+    if (Math.abs(Number(sum.usd.salidas || 0)) > eps) return true;
+    if (sum.usd.final != null && Math.abs(Number(sum.usd.final || 0)) > eps) return true;
+  }
+  if (day.fxRate != null) return true;
+  if (day.arqueoAdjust && day.arqueoAdjust.USD) return true;
+  if (Array.isArray(day.movements) && day.movements.some(m => m && m.currency === 'USD' && Math.abs(Number(m.amount || 0)) > eps)) return true;
+  return false;
+}
+
+function adjustMatches(adj, diff){
+  if (!adj) return false;
+  return moneyEquals(adj.amount, diff);
+}
+
+function diffLabel(diff, sym){
+  const v = round2(diff || 0);
+  const sign = v > 0 ? '+' : '';
+  const txt = `${sign}${fmt(v)}`;
+  return sym ? `${sym} ${txt}` : txt;
+}
+
+function diffKind(diff){
+  const v = round2(diff || 0);
+  if (moneyEquals(v, 0)) return '';
+  return v > 0 ? 'Sobrante' : 'Faltante';
+}
+
+async function getPettyCloseCheck(eventId, pc, dayKey, cashSalesNio){
+  const day = ensurePcDay(pc, dayKey);
+  const sum = computePettyCashSummary(pc, dayKey, { cashSalesNio: Number(cashSalesNio || 0) });
+
+  const diffNio = (sum.nio.final != null) ? round2(sum.nio.final - sum.nio.teorico) : null;
+  const diffUsd = (sum.usd.final != null) ? round2(sum.usd.final - sum.usd.teorico) : null;
+
+  const usdActive = hasUsdActivity(day, sum);
+
+  const errors = [];
+  const warnings = [];
+
+  if (!day.finalCount || !day.finalCount.savedAt){
+    errors.push('Falta guardar el arqueo final.');
+  }
+
+  if (usdActive && !(day.fxRate && day.fxRate > 0)){
+    errors.push('Falta guardar el T/C del día (C$ por 1 US$) porque hubo USD en Caja Chica.');
+  }
+
+  if (diffNio != null && !moneyEquals(diffNio, 0)){
+    const adj = day.arqueoAdjust ? day.arqueoAdjust.NIO : null;
+    if (!adjustMatches(adj, diffNio)){
+      errors.push(`Hay diferencia en C$ (${diffKind(diffNio)} ${diffLabel(diffNio,'C$')}). Registra movimientos faltantes o un ajuste de arqueo igual a la diferencia.`);
+    }
+  } else {
+    const adj = day.arqueoAdjust ? day.arqueoAdjust.NIO : null;
+    if (adj) warnings.push('Hay un ajuste C$ guardado pero no hay diferencia actual. (Puedes quitarlo si no aplica).');
+  }
+
+  if (diffUsd != null && !moneyEquals(diffUsd, 0)){
+    const adj = day.arqueoAdjust ? day.arqueoAdjust.USD : null;
+    if (!adjustMatches(adj, diffUsd)){
+      errors.push(`Hay diferencia en US$ (${diffKind(diffUsd)} ${diffLabel(diffUsd,'US$')}). Registra movimientos faltantes o un ajuste de arqueo igual a la diferencia.`);
+    }
+  } else {
+    const adj = day.arqueoAdjust ? day.arqueoAdjust.USD : null;
+    if (adj) warnings.push('Hay un ajuste US$ guardado pero no hay diferencia actual. (Puedes quitarlo si no aplica).');
+  }
+
+  return { day, sum, diffNio, diffUsd, usdActive, errors, warnings, canClose: errors.length === 0 };
+}
+
+function setPettyCloseUIEmpty(){
+  const status = document.getElementById('pc-close-status');
+  const blocker = document.getElementById('pc-close-blocker');
+  const fx = document.getElementById('pc-fx-rate');
+  const adjN = document.getElementById('pc-adj-nio-status');
+  const adjU = document.getElementById('pc-adj-usd-status');
+  if (status) status.textContent = '';
+  if (blocker){ blocker.style.display = 'none'; blocker.textContent = ''; }
+  if (fx) fx.value = '';
+  if (adjN) adjN.textContent = '';
+  if (adjU) adjU.textContent = '';
+  const btnRe = document.getElementById('pc-btn-reopen-day');
+  if (btnRe) btnRe.style.display = 'none';
+}
+
+function renderPettyCloseUI(check, isHistory){
+  const status = document.getElementById('pc-close-status');
+  const blocker = document.getElementById('pc-close-blocker');
+  const fx = document.getElementById('pc-fx-rate');
+  const btnClose = document.getElementById('pc-btn-close-day');
+  const btnReopen = document.getElementById('pc-btn-reopen-day');
+
+  const day = check.day;
+  const sum = check.sum;
+
+  if (fx){
+    fx.value = (day.fxRate && day.fxRate > 0) ? String(day.fxRate) : '';
+    fx.disabled = isHistory || !!day.closedAt;
+  }
+
+  const fmtIso = (iso)=>{
+    try{ return new Date(iso).toLocaleString(); }catch(e){ return iso || ''; }
+  };
+
+  if (status){
+    if (day.closedAt){
+      status.innerHTML = `<b>Estado:</b> Cerrado el ${fmtIso(day.closedAt)}.`;
+    } else {
+      status.innerHTML = `<b>Estado:</b> Abierto. <span class="muted">Esperado hoy: C$ ${fmt(sum.nio.teorico)} (incluye ventas efectivo C$ ${fmt(sum.nio.ventasEfectivo || 0)}) · US$ ${fmt(sum.usd.teorico)}</span>`;
+    }
+  }
+
+  if (blocker){
+    if (check.errors.length){
+      blocker.style.display = 'block';
+      blocker.innerHTML = '<b>No se puede cerrar:</b><ul style="margin:6px 0 0 18px">' + check.errors.map(e=>`<li>${e}</li>`).join('') + '</ul>';
+    } else if (check.warnings.length){
+      blocker.style.display = 'block';
+      blocker.innerHTML = '<b>Avisos:</b><ul style="margin:6px 0 0 18px">' + check.warnings.map(e=>`<li>${e}</li>`).join('') + '</ul>';
+    } else {
+      blocker.style.display = 'none';
+      blocker.textContent = '';
+    }
+  }
+
+  const adjN = document.getElementById('pc-adj-nio-status');
+  if (adjN){
+    const d = check.diffNio;
+    const adj = day.arqueoAdjust ? day.arqueoAdjust.NIO : null;
+    const diffTxt = (d == null) ? '—' : `${diffKind(d)} ${diffLabel(d,'C$')}`;
+    const adjTxt = adj ? (`Ajuste: ${diffLabel(adj.amount,'C$')} · Motivo: ${adj.reason}${adj.note ? (' · ' + adj.note) : ''}`) : 'Ajuste: (no registrado)';
+    adjN.textContent = `Diferencia actual: ${diffTxt}. ${adjTxt}.`;
+  }
+
+  const adjU = document.getElementById('pc-adj-usd-status');
+  if (adjU){
+    const d = check.diffUsd;
+    const adj = day.arqueoAdjust ? day.arqueoAdjust.USD : null;
+    const diffTxt = (d == null) ? '—' : `${diffKind(d)} ${diffLabel(d,'US$')}`;
+    const adjTxt = adj ? (`Ajuste: ${diffLabel(adj.amount,'US$')} · Motivo: ${adj.reason}${adj.note ? (' · ' + adj.note) : ''}`) : 'Ajuste: (no registrado)';
+    adjU.textContent = `Diferencia actual: ${diffTxt}. ${adjTxt}.`;
+  }
+
+  if (btnClose){
+    btnClose.disabled = isHistory || !!day.closedAt || !check.canClose;
+  }
+
+  if (btnReopen){
+    btnReopen.style.display = (!isHistory && !!day.closedAt) ? 'inline-block' : 'none';
+    btnReopen.disabled = isHistory ? true : false;
+  }
+}
+
+async function onSavePettyFxRate(){
+  if (isPettyHistoryMode()){
+    alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
+    return;
+  }
+  const evId = await getMeta('currentEventId');
+  if (!evId){
+    alert('Debes activar un evento antes de guardar el T/C.');
+    return;
+  }
+  const dayKey = getSelectedPcDay();
+  const pc = await getPettyCash(evId);
+  const day = ensurePcDay(pc, dayKey);
+  if (day.closedAt){
+    alert('Este día está cerrado. Reábrelo para editar.');
+    return;
+  }
+
+  const fx = document.getElementById('pc-fx-rate');
+  const raw = fx ? Number(fx.value || 0) : 0;
+  const rate = (Number.isFinite(raw) && raw > 0) ? raw : null;
+
+  day.fxRate = rate;
+  await savePettyCash(pc);
+  await renderCajaChica();
+  toast('T/C guardado');
+}
+
+async function onRegisterArqueoAdjust(currency){
+  if (isPettyHistoryMode()){
+    alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
+    return;
+  }
+  const evId = await getMeta('currentEventId');
+  if (!evId){
+    alert('Debes activar un evento antes de registrar ajuste.');
+    return;
+  }
+  const dayKey = getSelectedPcDay();
+  const pc = await getPettyCash(evId);
+  const day = ensurePcDay(pc, dayKey);
+  if (day.closedAt){
+    alert('Este día está cerrado. Reábrelo para editar.');
+    return;
+  }
+
+  const cashSales = await getCashSalesNioForDay(evId, dayKey);
+  const check = await getPettyCloseCheck(evId, pc, dayKey, cashSales);
+
+  const isNio = currency === 'NIO';
+  const diff = isNio ? check.diffNio : check.diffUsd;
+
+  if (diff == null){
+    alert('Primero guarda el arqueo final para poder calcular la diferencia.');
+    return;
+  }
+  if (moneyEquals(diff, 0)){
+    alert('No hay diferencia actual para ajustar.');
+    return;
+  }
+
+  const reasonEl = document.getElementById(isNio ? 'pc-adj-nio-reason' : 'pc-adj-usd-reason');
+  const noteEl = document.getElementById(isNio ? 'pc-adj-nio-note' : 'pc-adj-usd-note');
+  const reason = reasonEl ? (reasonEl.value || '').trim() : '';
+  const note = noteEl ? (noteEl.value || '').trim() : '';
+  if (!reason){
+    alert('Debes ingresar un motivo para el ajuste.');
+    return;
+  }
+
+  if (!day.arqueoAdjust) day.arqueoAdjust = { NIO: null, USD: null };
+  day.arqueoAdjust[isNio ? 'NIO' : 'USD'] = {
+    amount: round2(diff),
+    reason,
+    note,
+    createdAt: new Date().toISOString()
+  };
+
+  await savePettyCash(pc);
+  await renderCajaChica();
+  toast('Ajuste de arqueo registrado');
+}
+
+async function onClearArqueoAdjust(currency){
+  if (isPettyHistoryMode()){
+    alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
+    return;
+  }
+  const evId = await getMeta('currentEventId');
+  if (!evId) return;
+  const dayKey = getSelectedPcDay();
+  const pc = await getPettyCash(evId);
+  const day = ensurePcDay(pc, dayKey);
+  if (day.closedAt){
+    alert('Este día está cerrado. Reábrelo para editar.');
+    return;
+  }
+
+  if (!day.arqueoAdjust) day.arqueoAdjust = { NIO: null, USD: null };
+  if (currency === 'NIO') day.arqueoAdjust.NIO = null;
+  if (currency === 'USD') day.arqueoAdjust.USD = null;
+
+  await savePettyCash(pc);
+  await renderCajaChica();
+  toast('Ajuste removido');
+}
+
+async function onClosePettyDay(){
+  if (isPettyHistoryMode()){
+    alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
+    return;
+  }
+  const evId = await getMeta('currentEventId');
+  if (!evId){
+    alert('Debes activar un evento antes de cerrar el día.');
+    return;
+  }
+  const dayKey = getSelectedPcDay();
+  const pc = await getPettyCash(evId);
+  const day = ensurePcDay(pc, dayKey);
+  if (day.closedAt){
+    alert('Este día ya está cerrado.');
+    return;
+  }
+
+  const cashSales = await getCashSalesNioForDay(evId, dayKey);
+  const check = await getPettyCloseCheck(evId, pc, dayKey, cashSales);
+
+  if (!check.canClose){
+    alert('No se puede cerrar:\n\n- ' + check.errors.join('\n- '));
+    await renderCajaChica();
+    return;
+  }
+
+  const ok = confirm(`¿Cerrar definitivamente el día ${dayKey}?
+
+Esto bloqueará edición de Caja Chica para este día.`);
+  if (!ok) return;
+
+  day.closedAt = new Date().toISOString();
+  await savePettyCash(pc);
+  await renderCajaChica();
+  toast('Día cerrado definitivamente');
+}
+
+async function onReopenPettyDay(){
+  if (isPettyHistoryMode()){
+    alert('Estás en Vista histórica (solo lectura).');
+    return;
+  }
+  const evId = await getMeta('currentEventId');
+  if (!evId) return;
+  const dayKey = getSelectedPcDay();
+  const pc = await getPettyCash(evId);
+  const day = ensurePcDay(pc, dayKey);
+  if (!day.closedAt){
+    alert('Este día no está cerrado.');
+    return;
+  }
+  const ok = confirm(`¿Reabrir el día ${dayKey}?
+
+Podrás editar Caja Chica y el cierre definitivo quedará removido.`);
+  if (!ok) return;
+
+  day.closedAt = null;
+  await savePettyCash(pc);
+  await renderCajaChica();
+  toast('Día reabierto');
+}
+
 // --- Caja Chica: histórico (solo lectura)
 let pettyHistoryMode = false;
 let pettyHistoryDayKey = null;   // día que se está visualizando
@@ -3608,7 +4062,7 @@ function getClosedPcDayKeys(pc){
   });
 }
 
-function setPettyReadOnly(isReadOnly){
+function setPettyReadOnly(isReadOnly, allowReopen){
   const lockAll = (sel) => {
     document.querySelectorAll(sel).forEach(el => { el.disabled = !!isReadOnly; });
   };
@@ -3618,12 +4072,20 @@ function setPettyReadOnly(isReadOnly){
   [
     'pc-btn-save-initial','pc-btn-clear-initial',
     'pc-btn-save-final','pc-btn-clear-final',
-    'pc-fx-rate',
-    'pc-mov-type','pc-mov-currency','pc-mov-amount','pc-mov-desc','pc-mov-add'
+    'pc-mov-type','pc-mov-currency','pc-mov-amount','pc-mov-desc','pc-mov-add',
+    'pc-fx-rate','pc-btn-save-fx',
+    'pc-btn-adj-nio','pc-btn-clear-adj-nio',
+    'pc-btn-adj-usd','pc-btn-clear-adj-usd',
+    'pc-btn-close-day','pc-btn-reopen-day'
   ].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = !!isReadOnly;
   });
+
+  if (allowReopen){
+    const reopen = document.getElementById('pc-btn-reopen-day');
+    if (reopen) reopen.disabled = false;
+  }
 }
 
 function enterPettyHistoryMode(historyDay){
@@ -3835,14 +4297,14 @@ async function renderCajaChica(){
     lbl.textContent = 'Evento activo: —';
     note.style.display = 'block';
     main.classList.add('disabled');
-    updatePettySummaryUI(null, null);
-    resetPettyFxRateInput();
+    updatePettySummaryUI(null, null, null);
     resetPettyInitialInputs();
     resetPettyFinalInputs();
     renderPettyMovements(null, null, true);
     setPrevCierreUI(null, null);
     renderPettyHistoryControls(null);
-    setPettyReadOnly(false);
+    setPettyCloseUIEmpty();
+    setPettyReadOnly(false, false);
 
     const movDate = document.getElementById('pc-mov-date');
     if (movDate){
@@ -3859,10 +4321,7 @@ async function renderCajaChica(){
   main.classList.remove('disabled');
 
   const pc = await getPettyCash(evId);
-  ensurePcDay(pc, dayKey);
-
-  // Tipo de cambio (T/C) por día
-  fillPettyFxRateFromPc(pc, dayKey);
+  const day = ensurePcDay(pc, dayKey);
 
   // Mantener el campo de fecha de movimientos sincronizado con el día operativo
   const movDate = document.getElementById('pc-mov-date');
@@ -3871,22 +4330,33 @@ async function renderCajaChica(){
     movDate.disabled = true;
   }
 
-  updatePettySummaryUI(pc, dayKey);
-  fillPettyFxRateFromPc(pc, dayKey);
+  // Ventas en efectivo (C$) del día (desde POS)
+  const cashSalesNio = await getCashSalesNioForDay(evId, dayKey);
+
+  updatePettySummaryUI(pc, dayKey, { cashSalesNio });
   fillPettyInitialFromPc(pc, dayKey);
   fillPettyFinalFromPc(pc, dayKey);
-  renderPettyMovements(pc, dayKey, hist);
+
+  const readOnlyDay = hist || !!day.closedAt;
+  renderPettyMovements(pc, dayKey, readOnlyDay);
+
   if (!hist){
     setPrevCierreUI(pc, dayKey);
   } else {
     setPrevCierreUI(null, null);
   }
+
   renderPettyHistoryControls(pc);
-  setPettyReadOnly(hist);
+
+  // Cierre definitivo
+  const check = await getPettyCloseCheck(evId, pc, dayKey, cashSalesNio);
+  renderPettyCloseUI(check, hist);
+
+  setPettyReadOnly(readOnlyDay, (!hist && !!day.closedAt));
 }
 
-function updatePettySummaryUI(pc, dayKey){
-  const sum = computePettyCashSummary(pc || null, dayKey || null);
+function updatePettySummaryUI(pc, dayKey, opts){
+  const sum = computePettyCashSummary(pc || null, dayKey || null, opts || null);
 
   const setVal = (id, value, allowDash) => {
     const el = document.getElementById(id);
@@ -3901,6 +4371,7 @@ function updatePettySummaryUI(pc, dayKey){
   setVal('pc-nio-inicial', sum.nio.initial);
   setVal('pc-nio-entradas', sum.nio.entradas);
   setVal('pc-nio-salidas', sum.nio.salidas);
+  setVal('pc-nio-ventas', sum.nio.ventasEfectivo || 0);
   setVal('pc-nio-teorico', sum.nio.teorico);
   setVal('pc-nio-final', sum.nio.final, true);
   setVal('pc-nio-diferencia', sum.nio.diferencia, true);
@@ -3911,50 +4382,6 @@ function updatePettySummaryUI(pc, dayKey){
   setVal('pc-usd-teorico', sum.usd.teorico);
   setVal('pc-usd-final', sum.usd.final, true);
   setVal('pc-usd-diferencia', sum.usd.diferencia, true);
-}
-
-function resetPettyFxRateInput(){
-  const el = document.getElementById('pc-fx-rate');
-  if (el) el.value = '';
-}
-
-function fillPettyFxRateFromPc(pc, dayKey){
-  const el = document.getElementById('pc-fx-rate');
-  if (!el) return;
-  if (!pc || !dayKey){
-    el.value = '';
-    return;
-  }
-  const day = ensurePcDay(pc, dayKey);
-  const fx = normalizeFxRate(day ? day.fxRate : null);
-  el.value = fx ? String(fx) : '';
-}
-
-async function onSavePettyFxRate(){
-  if (isPettyHistoryMode()){
-    alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
-    return;
-  }
-  const evId = await getMeta('currentEventId');
-  if (!evId){
-    alert('Debes activar un evento antes de guardar el tipo de cambio (T/C).');
-    return;
-  }
-
-  const input = document.getElementById('pc-fx-rate');
-  if (!input) return;
-
-  const dayKey = getSelectedPcDay();
-  const pc = await getPettyCash(evId);
-  const day = ensurePcDay(pc, dayKey);
-
-  const fx = normalizeFxRate((input.value || '').trim());
-  day.fxRate = fx;
-
-  await savePettyCash(pc);
-  // Normalizar el input (limpiar si quedó inválido)
-  input.value = fx ? String(fx) : '';
-  toast(fx ? 'T/C guardado' : 'T/C eliminado');
 }
 
 function resetPettyInitialInputs(){
@@ -4406,14 +4833,6 @@ function bindCajaChicaEvents(){
     inp.addEventListener('input', recalcPettyFinalTotalsFromInputs);
   });
 
-  // Tipo de cambio (T/C) por día
-  const fxInput = document.getElementById('pc-fx-rate');
-  if (fxInput){
-    fxInput.addEventListener('change', ()=>{
-      onSavePettyFxRate().catch(err=>console.error(err));
-    });
-  }
-
   const btnSaveInit = document.getElementById('pc-btn-save-initial');
   if (btnSaveInit){
     btnSaveInit.addEventListener('click', (e)=>{
@@ -4506,6 +4925,63 @@ function bindCajaChicaEvents(){
     histUse.addEventListener('click', (e)=>{
       e.preventDefault();
       onUseHistoryFinalAsInitial().catch(err=>console.error(err));
+    });
+  }
+
+  // Cierre definitivo (T/C + ajuste + candado)
+  const btnSaveFx = document.getElementById('pc-btn-save-fx');
+  if (btnSaveFx){
+    btnSaveFx.addEventListener('click', (e)=>{
+      e.preventDefault();
+      onSavePettyFxRate();
+    });
+  }
+
+  const btnAdjNio = document.getElementById('pc-btn-adj-nio');
+  if (btnAdjNio){
+    btnAdjNio.addEventListener('click', (e)=>{
+      e.preventDefault();
+      onRegisterArqueoAdjust('NIO');
+    });
+  }
+
+  const btnClrAdjNio = document.getElementById('pc-btn-clear-adj-nio');
+  if (btnClrAdjNio){
+    btnClrAdjNio.addEventListener('click', (e)=>{
+      e.preventDefault();
+      onClearArqueoAdjust('NIO');
+    });
+  }
+
+  const btnAdjUsd = document.getElementById('pc-btn-adj-usd');
+  if (btnAdjUsd){
+    btnAdjUsd.addEventListener('click', (e)=>{
+      e.preventDefault();
+      onRegisterArqueoAdjust('USD');
+    });
+  }
+
+  const btnClrAdjUsd = document.getElementById('pc-btn-clear-adj-usd');
+  if (btnClrAdjUsd){
+    btnClrAdjUsd.addEventListener('click', (e)=>{
+      e.preventDefault();
+      onClearArqueoAdjust('USD');
+    });
+  }
+
+  const btnCloseDay = document.getElementById('pc-btn-close-day');
+  if (btnCloseDay){
+    btnCloseDay.addEventListener('click', (e)=>{
+      e.preventDefault();
+      onClosePettyDay();
+    });
+  }
+
+  const btnReopenDay = document.getElementById('pc-btn-reopen-day');
+  if (btnReopenDay){
+    btnReopenDay.addEventListener('click', (e)=>{
+      e.preventDefault();
+      onReopenPettyDay();
     });
   }
 
