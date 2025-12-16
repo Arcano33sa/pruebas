@@ -57,15 +57,16 @@
           <button id="btn-close-event" class="btn-warn">Cerrar evento (Corte)</button>
           <button id="btn-reopen-event" class="btn-ok">Reabrir evento</button>
         </div>
-        <div class="row" id="pc-toggle-row" style="align-items:center; gap:12px; margin-top:6px">
-          <div class="pc-toggle">
-            <span class="pc-toggle-label">Caja Chica</span>
-            <label class="a33-switch" title="Activar/Desactivar Caja Chica para este evento">
-              <input type="checkbox" id="pc-event-toggle">
-              <span class="a33-slider"></span>
-            </label>
-          </div>
-        </div>
+	        <div class="row" style="grid-template-columns:1fr; align-items:center">
+	          <div class="petty-toggle-wrap">
+	            <span class="petty-toggle-title">Caja Chica</span>
+	            <label class="switch" title="Activar / desactivar Caja Chica para este evento">
+	              <input type="checkbox" id="pc-event-toggle">
+	              <span class="slider"></span>
+	            </label>
+	            <span id="pc-event-toggle-text" class="muted"></span>
+	          </div>
+	        </div>
         <div id="event-status" class="info" style="display:none"></div>
         <div id="no-active-note" class="disabled-note" style="display:none">Sin evento activo. Crea o selecciona uno para comenzar.</div>
       </div>
@@ -313,11 +314,10 @@
     <p><span id="pc-event-info" class="info-strong">Evento activo: —</span></p>
     <p id="pc-no-event-note" class="disabled-note" style="display:none">Activa un evento en la pestaña Vender para usar Caja Chica.</p>
 
-    <div id="pc-disabled-note" class="warn" style="display:none; margin-top:10px">
-      Caja Chica está desactivada para este evento.
-      <button id="pc-btn-enable" class="btn-ok" type="button" style="margin-left:8px">Activar</button>
+    <div id="pc-disabled-banner" class="warn" style="display:none">
+      Caja Chica está <b>desactivada</b> para este evento.
+      <button id="pc-btn-activate" class="btn-ok btn-inline" type="button">Activar Caja Chica</button>
     </div>
-
     <div class="row" id="pc-day-row">
       <div>
         <label>Día operativo</label>

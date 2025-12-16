@@ -114,6 +114,17 @@ small.muted{color:var(--muted)}
 .offline{position:fixed;top:72px;left:0;right:0;background:#2a2a2a;color:#ffd;display:none;padding:6px 10px;text-align:center;font-size:12px;z-index:10}
 .dim input,.dim select,.dim textarea,.dim button{opacity:.7}
 .disabled-note{margin-top:8px;font-size:13px;color:#ffd7a1}
+
+/* Toggle (Caja Chica por evento) */
+.petty-toggle-wrap{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.petty-toggle-title{font-weight:700;color:var(--text)}
+.switch{position:relative;display:inline-block;width:52px;height:28px}
+.switch input{opacity:0;width:0;height:0}
+.slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#d0d0d0;transition:.2s;border-radius:999px}
+.slider:before{position:absolute;content:"";height:22px;width:22px;left:3px;bottom:3px;background:white;transition:.2s;border-radius:50%}
+.switch input:checked + .slider{background:var(--ok)}
+.switch input:checked + .slider:before{transform:translateX(24px)}
+.btn-inline{width:auto;display:inline-block;padding:8px 12px;border-radius:12px;margin-left:10px}
 /* Modal */
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50;padding:20px}
 .modal .panel{background:#151515;border:1px solid #2a2a2a;border-radius:14px;max-width:1000px;width:100%;max-height:85vh;overflow:auto;padding:16px}
@@ -240,15 +251,3 @@ small.muted{color:var(--muted)}
   text-align:center;
   font-variant-numeric:tabular-nums;
 }
-
-
-/* --- Toggle Caja Chica (por evento) --- */
-.pc-toggle{ display:inline-flex; align-items:center; gap:10px; }
-.pc-toggle-label{ font-weight:700; }
-.a33-switch{ position:relative; display:inline-block; width:52px; height:28px; }
-.a33-switch input{ opacity:0; width:0; height:0; }
-.a33-slider{ position:absolute; inset:0; cursor:pointer; background:#d9d9d9; transition:0.2s; border-radius:999px; }
-.a33-slider:before{ content:''; position:absolute; height:22px; width:22px; left:3px; bottom:3px; background:#fff; transition:0.2s; border-radius:50%; }
-.a33-switch input:checked + .a33-slider{ background:#22c55e; }
-.a33-switch input:checked + .a33-slider:before{ transform: translateX(24px); }
-.a33-switch input:disabled + .a33-slider{ opacity:0.6; cursor:not-allowed; }

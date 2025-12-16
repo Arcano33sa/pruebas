@@ -1160,7 +1160,17 @@ async function ensureDefaults(){
   else await seedMissingDefaults(false);
 
   const events = await getAll('events');
-  if (!events.length){ for (const ev of DEFAULT_EVENTS) await put('events', {...ev, createdAt:new Date().toISOString()}); }
+  if (!events.length){
+    for (const ev of DEFAULT_EVENTS) await put('events', {...ev, pettyEnabled:false, createdAt:new Date().toISOString()});
+  } else {
+    // Asegurar campo “pettyEnabled” (Caja Chica por evento)
+    for (const ev of events){
+      if (typeof ev.pettyEnabled === 'undefined'){
+        ev.pettyEnabled = false;
+        await put('events', ev);
+      }
+    }
+  }
   const hasKey = (await getAll('meta')).some(m=>m.id==='currentEventId');
   if (!hasKey){
     const evs = await getAll('events');
@@ -1561,6 +1571,10 @@ async function refreshEventUI(){
   } else { status.style.display='none'; }
   $('#btn-reopen-event').style.display = (cur && cur.closedAt) ? 'inline-block' : 'none';
 
+  // Toggle de Caja Chica por evento + refresco de Caja Chica si la pestaña está activa
+  try{ await updatePettyToggleUI(cur); }catch(e){}
+  try{ await renderCajaChica(); }catch(e){}
+
   const invSel = $('#inv-event');
   if (invSel){
     invSel.innerHTML='';
@@ -1571,21 +1585,102 @@ async function refreshEventUI(){
     else if (evs.length) invSel.value = evs[0].id;
   }
 
-  // Toggle Caja Chica (por evento)
-  try{
-    const toggle = document.getElementById('pc-event-toggle');
-    if (!toggle){
-      // nada
-    } else {
-      const enabled = !!(cur && cur.pettyEnabled);
-      setPettyToggleUI(enabled, !cur);
-    }
-  }catch(e){
-    console.warn('No se pudo actualizar toggle de Caja Chica', e);
-  }
-
   await updateSellEnabled();
   await renderProductChips();
+  try{ await renderCajaChica(); }catch(e){}
+}
+
+// --- Caja Chica por evento (toggle + helpers)
+async function getEventByIdSafe(eventId){
+  const evs = await getAll('events');
+  return evs.find(e=>e.id===eventId) || null;
+}
+
+function eventPettyEnabled(ev){
+  return !!(ev && ev.pettyEnabled);
+}
+
+async function setEventPettyEnabled(eventId, enabled){
+  const ev = await getEventByIdSafe(eventId);
+  if (!ev) return;
+  ev.pettyEnabled = !!enabled;
+  await put('events', ev);
+}
+
+async function eventHasPettyActivity(eventId){
+  const pc = await getPettyCash(eventId);
+  if (!pc || !pc.days) return false;
+  const keys = Object.keys(pc.days);
+  for (const k of keys){
+    const day = pc.days[k];
+    if (!day) continue;
+    if (day.closedAt) return true;
+    if (hasPettyDayActivity(day)) return true;
+  }
+  return false;
+}
+
+async function updatePettyToggleUI(curEvent){
+  const t = document.getElementById('pc-event-toggle');
+  const lbl = document.getElementById('pc-event-toggle-text');
+  if (!t) return;
+  const hasEvent = !!curEvent;
+  const isClosed = !!(curEvent && curEvent.closedAt);
+  const enabled = hasEvent && !isClosed;
+  t.disabled = !enabled;
+  t.checked = enabled ? !!curEvent.pettyEnabled : false;
+  if (lbl){
+    if (!hasEvent) lbl.textContent = '—';
+    else if (isClosed) lbl.textContent = 'Evento cerrado';
+    else lbl.textContent = t.checked ? 'Activa' : 'Desactivada';
+  }
+}
+
+async function ensurePettyEnabledForEvent(eventId){
+  const ev = await getEventByIdSafe(eventId);
+  if (!ev) return false;
+  if (eventPettyEnabled(ev)) return true;
+  const ok = confirm('¿Deseas activar Caja Chica para este evento?\n\nSi la activas, el cierre del evento podrá exigir cierres diarios de Caja Chica cuando haya ventas en efectivo o movimientos.');
+  if (!ok) return false;
+  ev.pettyEnabled = true;
+  await put('events', ev);
+  try{ await updatePettyToggleUI(ev); }catch(e){}
+  toast('Caja Chica activada para este evento.');
+  return true;
+}
+
+async function onTogglePettyForCurrentEvent(){
+  const t = document.getElementById('pc-event-toggle');
+  if (!t) return;
+  const curId = await getMeta('currentEventId');
+  const ev = curId ? await getEventByIdSafe(curId) : null;
+  if (!ev || ev.closedAt){
+    t.checked = false;
+    await updatePettyToggleUI(ev);
+    return;
+  }
+  if (t.checked){
+    const ok = confirm('¿Confirmas que deseas ACTIVAR Caja Chica para este evento?');
+    if (!ok){ t.checked = false; await updatePettyToggleUI(ev); return; }
+    ev.pettyEnabled = true;
+    await put('events', ev);
+    toast('Caja Chica activada.');
+    await updatePettyToggleUI(ev);
+    try{ await renderCajaChica(); }catch(e){}
+  } else {
+    const hasActivity = await eventHasPettyActivity(ev.id);
+    if (hasActivity){
+      alert('No se puede desactivar Caja Chica porque este evento ya tiene registros guardados (movimientos o cierres).');
+      t.checked = true;
+      await updatePettyToggleUI(ev);
+      return;
+    }
+    ev.pettyEnabled = false;
+    await put('events', ev);
+    toast('Caja Chica desactivada.');
+    await updatePettyToggleUI(ev);
+    try{ await renderCajaChica(); }catch(e){}
+  }
 }
 
 // Product select + stock label
@@ -2488,6 +2583,7 @@ function downloadCSV(name, rows){
   const a = document.createElement('a'); a.href=url; a.download=name; a.click();
   setTimeout(()=>URL.revokeObjectURL(url),2000);
 
+}
 
 function downloadExcel(filename, sheetName, rows){
   if (typeof XLSX === 'undefined'){
@@ -2498,8 +2594,6 @@ function downloadExcel(filename, sheetName, rows){
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName || 'Hoja1');
   XLSX.writeFile(wb, filename);
-}
-
 }
 
 async function generateInventoryCSV(eventId){
@@ -2979,34 +3073,24 @@ async function closeEvent(eventId){
   if (!ev){ alert('Evento no encontrado'); return; }
   if (ev.closedAt){ alert('Este evento ya está cerrado.'); return; }
 
-  // Guard: Caja Chica solo obliga si fue ACTIVADA (o si ya hay actividad guardada por legado)
-  try{
-    const pc = await getPettyCash(eventId);
+  // Ventas en efectivo por día (C$)
+  const allSales = await getAll('sales');
+  const cashByDay = new Map();
+  for (const s of (allSales || [])){
+    if (!s || s.eventId !== eventId) continue;
+    if ((s.payment || '') !== 'efectivo') continue;
+    const dk = (typeof s.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s.date)) ? s.date : null;
+    if (!dk) continue;
+    const prev = cashByDay.get(dk) || 0;
+    cashByDay.set(dk, round2(prev + Number(s.total || 0)));
+  }
+  const totalCashSales = Array.from(cashByDay.values()).reduce((a,b)=>round2(a+Number(b||0)), 0);
 
-    // Ventas en efectivo por día (C$) — solo para advertencia / validación
-    const allSales = await getAll('sales');
-    const cashByDay = new Map();
-    for (const s of (allSales || [])){
-      if (!s || s.eventId !== eventId) continue;
-      if ((s.payment || '') !== 'efectivo') continue;
-      const dk = (typeof s.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s.date)) ? s.date : null;
-      if (!dk) continue;
-      const prev = cashByDay.get(dk) || 0;
-      cashByDay.set(dk, round2(prev + Number(s.total || 0)));
-    }
-
-    const legacyHasActivity = hasAnyPettyActivity(pc);
-    const pettyEnabled = !!(ev && ev.pettyEnabled) || legacyHasActivity;
-
-    // Si NO está habilitada Caja Chica, no forzamos cierres.
-    // Pero si hubo ventas en efectivo, avisamos y pedimos confirmación antes de cerrar.
-    if (!pettyEnabled){
-      if (cashByDay.size){
-        const ok = confirm('Hay ventas en efectivo en este evento, pero Caja Chica está desactivada.\n\n¿Deseas cerrar el evento sin Caja Chica?');
-        if (!ok) return;
-      }
-    } else {
-      // Días a exigir cierre: días con actividad de Caja Chica o con ventas en efectivo (si Caja Chica está activa)
+  // Guard (candado) SOLO si Caja Chica está activada en este evento
+  if (eventPettyEnabled(ev)){
+    try{
+      const pc = await getPettyCash(eventId);
+      // Días a exigir cierre: días con actividad de Caja Chica o con ventas en efectivo
       const daySet = new Set();
       const pcKeys = listPcDayKeys(pc);
       for (const k of pcKeys){
@@ -3028,7 +3112,7 @@ async function closeEvent(eventId){
             pending.push({ dayKey, reason: 'Falta Cierre definitivo del día.' });
             continue;
           }
-
+          // Si por alguna razón hay errores aún estando cerrado, bloquear cierre del evento
           if (check.errors && check.errors.length){
             pending.push({ dayKey, reason: check.errors[0] });
           }
@@ -3045,15 +3129,34 @@ async function closeEvent(eventId){
           return;
         }
       }
+    }catch(err){
+      console.error('closeEvent guard Caja Chica error', err);
     }
-  }catch(err){
-    console.error('closeEvent guard Caja Chica error', err);
+  } else {
+    // Si no se activó Caja Chica pero hubo ventas en efectivo, pedir confirmación
+    if (totalCashSales > 0){
+      const ok = confirm(
+        `Este evento tiene ventas en efectivo (C$${fmt(totalCashSales)}), pero Caja Chica está desactivada.\n\n¿Deseas cerrar el evento SIN Caja Chica?`
+      );
+      if (!ok) return;
+    }
   }
 
-  await generateCorteCSV(eventId);
+  // Corte (Excel). Si falla, permitir cerrar de todas formas.
+  try{
+    await generateCorteCSV(eventId);
+  } catch(err){
+    console.error('generateCorteCSV error', err);
+    const ok = confirm(
+      'No se pudo generar el Corte (Excel) por un error.\n\n¿Cerrar el evento de todas formas?\n(Podrás exportar después desde Eventos: “Exportar (Excel)” o “CSV Corte”.)'
+    );
+    if (!ok) return;
+  }
+
   ev.closedAt = new Date().toISOString();
   await put('events', ev);
-  await setMeta('currentEventId', null);
+  const curId = await getMeta('currentEventId');
+  if (curId === eventId) await setMeta('currentEventId', null);
   await refreshEventUI(); await renderEventos(); await renderDay(); await renderSummary();
   toast('Evento cerrado (sin borrar ventas)');
 }
@@ -3185,50 +3288,11 @@ async function init(){
     await renderDay();
   });
 
-  // Caja Chica: toggle por evento (con confirmación al activar)
+  // Toggle Caja Chica por evento
   const pcToggle = document.getElementById('pc-event-toggle');
   if (pcToggle){
-    pcToggle.addEventListener('change', async ()=>{
-      try{
-        if (pcToggle.dataset.updating === '1') return;
-        const evId = await getMeta('currentEventId');
-        if (!evId){
-          pcToggle.checked = false;
-          return alert('Activa un evento antes de habilitar Caja Chica.');
-        }
-
-        const ev = await getEventByIdPOS(evId);
-        const pc = await getPettyCash(evId);
-        const hasAct = hasAnyPettyActivity(pc);
-
-        if (pcToggle.checked){
-          // Activar (confirmación obligatoria)
-          if (ev && ev.pettyEnabled) return;
-          const ok = confirm('¿Activar Caja Chica para este evento?');
-          if (!ok){
-            pcToggle.checked = false;
-            return;
-          }
-          await setEventPettyEnabledPOS(evId, true);
-          toast('Caja Chica activada');
-          await refreshEventUI();
-          await renderCajaChica();
-          return;
-        }
-
-        // Desactivar: solo si NO hay actividad real guardada
-        if (hasAct){
-          pcToggle.checked = true;
-          alert('No se puede desactivar Caja Chica porque ya hay movimientos/arqueos guardados para este evento.');
-          return;
-        }
-        await setEventPettyEnabledPOS(evId, false);
-        toast('Caja Chica desactivada');
-        await refreshEventUI();
-        await renderCajaChica();
-      }catch(err){
-        console.error('Error toggle Caja Chica', err);
-      }
+    pcToggle.addEventListener('change', ()=>{
+      onTogglePettyForCurrentEvent().catch(err=>console.error(err));
     });
   }
 
@@ -3786,75 +3850,6 @@ function hasPettyDayActivity(day){
   return false;
 }
 
-
-function hasAnyPettyActivity(pc){
-  if (!pc) return false;
-  // Nuevo formato (pc.days)
-  if (pc.days && typeof pc.days === 'object'){
-    for (const k in pc.days){
-      try{
-        const d = pc.days[k];
-        if (hasPettyDayActivity(d)) return true;
-      }catch{}
-    }
-  }
-  // Fallback legado
-  if (hasAnyPettyMovements(pc)) return true;
-  if (hasAnyPettyFinal(pc)) return true;
-  return false;
-}
-
-async function getEventByIdPOS(eventId){
-  const evs = await getAll('events');
-  return (evs || []).find(e => e && e.id === eventId) || null;
-}
-
-async function setEventPettyEnabledPOS(eventId, enabled){
-  const ev = await getEventByIdPOS(eventId);
-  if (!ev) return null;
-  ev.pettyEnabled = !!enabled;
-  await put('events', ev);
-  return ev;
-}
-
-function setPettyToggleUI(enabled, disabled){
-  const t = document.getElementById('pc-event-toggle');
-  if (!t) return;
-  t.dataset.updating = '1';
-  t.checked = !!enabled;
-  t.disabled = !!disabled;
-  t.dataset.updating = '0';
-}
-
-async function ensurePettyEnabledForCurrentEvent(sourceLabel){
-  const evId = await getMeta('currentEventId');
-  if (!evId) return false;
-
-  const ev = await getEventByIdPOS(evId);
-  const pc = await getPettyCash(evId);
-
-  // Si es legado y ya hay actividad real, marcamos como activado sin pedir confirmación
-  if (ev && !ev.pettyEnabled && hasAnyPettyActivity(pc)) {
-    try{
-      ev.pettyEnabled = true;
-      await put('events', ev);
-    }catch{}
-    await refreshEventUI();
-    return true;
-  }
-
-  if (ev && ev.pettyEnabled) return true;
-
-  const ok = confirm('¿Activar Caja Chica para este evento?');
-  if (!ok) return false;
-
-  await setEventPettyEnabledPOS(evId, true);
-  await refreshEventUI();
-  await renderCajaChica();
-  toast('Caja Chica activada');
-  return true;
-}
-
 function hasUsdActivity(day, sum){
   if (!day) return false;
   const eps = 0.005;
@@ -4025,7 +4020,7 @@ async function onSavePettyFxRate(){
     return;
   }
 
-  if (!(await ensurePettyEnabledForCurrentEvent('onSavePettyFxRate'))) return;
+  if (!(await ensurePettyEnabledForEvent(evId))) return;
   const dayKey = getSelectedPcDay();
   const pc = await getPettyCash(evId);
   const day = ensurePcDay(pc, dayKey);
@@ -4055,7 +4050,7 @@ async function onRegisterArqueoAdjust(currency){
     return;
   }
 
-  if (!(await ensurePettyEnabledForCurrentEvent('onRegisterArqueoAdjust'))) return;
+  if (!(await ensurePettyEnabledForEvent(evId))) return;
   const dayKey = getSelectedPcDay();
   const pc = await getPettyCash(evId);
   const day = ensurePcDay(pc, dayKey);
@@ -4108,7 +4103,7 @@ async function onClearArqueoAdjust(currency){
   }
   const evId = await getMeta('currentEventId');
   if (!evId) return;
-  if (!(await ensurePettyEnabledForCurrentEvent('onClearArqueoAdjust'))) return;
+  if (!(await ensurePettyEnabledForEvent(evId))) return;
   const dayKey = getSelectedPcDay();
   const pc = await getPettyCash(evId);
   const day = ensurePcDay(pc, dayKey);
@@ -4137,8 +4132,7 @@ async function onClosePettyDay(){
     return;
   }
 
-  if (!(await ensurePettyEnabledForCurrentEvent('onClosePettyDay'))) return;
-
+  if (!(await ensurePettyEnabledForEvent(evId))) return;
   const dayKey = getSelectedPcDay();
   const pc = await getPettyCash(evId);
   const day = ensurePcDay(pc, dayKey);
@@ -4356,8 +4350,6 @@ async function onUseHistoryFinalAsInitial(){
     return;
   }
 
-  if (!(await ensurePettyEnabledForCurrentEvent('onReopenPettyDay'))) return;
-
   const from = pettyHistoryDayKey;
   const target = pettyReturnDayKey;
   const ok = confirm(`¿Copiar el cierre del ${from} como saldo inicial del ${target}?\n\nEsto reemplazará el saldo inicial actual del ${target}.`);
@@ -4446,8 +4438,6 @@ async function renderCajaChica(){
   if (!evId || !ev){
     lbl.textContent = 'Evento activo: —';
     note.style.display = 'block';
-    const dn = document.getElementById('pc-disabled-note');
-    if (dn) dn.style.display = 'none';
     main.classList.add('disabled');
     updatePettySummaryUI(null, null, null);
     resetPettyInitialInputs();
@@ -4466,30 +4456,12 @@ async function renderCajaChica(){
     return;
   }
 
-  const dayKey = getSelectedPcDay();
-  const hist = isPettyHistoryMode();
-  lbl.textContent = 'Evento activo: ' + ev.name + ' · ' + (hist ? ('Histórico: ' + dayKey) : ('Día: ' + dayKey));
-  note.style.display = 'none';
-
-  const disabledNote = document.getElementById('pc-disabled-note');
-  const pc = await getPettyCash(evId);
-  const legacyHasActivity = hasAnyPettyActivity(pc);
-
-  // Legado: si ya hay actividad real guardada, marcamos el evento como Caja Chica activa
-  if (legacyHasActivity && !ev.pettyEnabled){
-    try{
-      ev.pettyEnabled = true;
-      await put('events', ev);
-      await refreshEventUI();
-    }catch(e){
-      console.warn('No se pudo activar pettyEnabled por legado', e);
-    }
-  }
-
-  const pettyEnabled = !!ev.pettyEnabled || legacyHasActivity;
-  if (!pettyEnabled){
-    // Evento sin Caja Chica: no forzamos cierres y no permitimos registrar nada hasta activar
-    if (disabledNote) disabledNote.style.display = 'block';
+  // Caja Chica por evento: si está desactivada, no bloquear el evento ni exigir cierres.
+  const disabledBanner = document.getElementById('pc-disabled-banner');
+  if (!eventPettyEnabled(ev)){
+    if (disabledBanner) disabledBanner.style.display = 'block';
+    note.style.display = 'none';
+    lbl.textContent = 'Evento activo: ' + ev.name + ' · Caja Chica desactivada';
     main.classList.add('disabled');
     updatePettySummaryUI(null, null, null);
     resetPettyInitialInputs();
@@ -4498,14 +4470,24 @@ async function renderCajaChica(){
     setPrevCierreUI(null, null);
     renderPettyHistoryControls(null);
     setPettyCloseUIEmpty();
-    setPettyReadOnly(true, false);
-    return;
-  } else {
-    if (disabledNote) disabledNote.style.display = 'none';
-  }
+    setPettyReadOnly(false, false);
 
+    const movDate = document.getElementById('pc-mov-date');
+    if (movDate){
+      movDate.value = (dayInput && dayInput.value) ? dayInput.value : todayYMD();
+      movDate.disabled = true;
+    }
+    return;
+  }
+  if (disabledBanner) disabledBanner.style.display = 'none';
+
+  const dayKey = getSelectedPcDay();
+  const hist = isPettyHistoryMode();
+  lbl.textContent = 'Evento activo: ' + ev.name + ' · ' + (hist ? ('Histórico: ' + dayKey) : ('Día: ' + dayKey));
+  note.style.display = 'none';
   main.classList.remove('disabled');
 
+  const pc = await getPettyCash(evId);
   const day = ensurePcDay(pc, dayKey);
 
   // Mantener el campo de fecha de movimientos sincronizado con el día operativo
@@ -4751,7 +4733,8 @@ async function onSavePettyInitial(){
     alert('Debes activar un evento en la pestaña Vender antes de guardar Caja Chica.');
     return;
   }
-  if (!(await ensurePettyEnabledForCurrentEvent('save-initial'))) return;
+
+  if (!(await ensurePettyEnabledForEvent(evId))) return;
 
   const dayKey = getSelectedPcDay();
   const pc = await getPettyCash(evId);
@@ -4797,7 +4780,8 @@ async function onSavePettyFinal(){
     alert('Debes activar un evento en la pestaña Vender antes de guardar el arqueo final.');
     return;
   }
-  if (!(await ensurePettyEnabledForCurrentEvent('save-final'))) return;
+
+  if (!(await ensurePettyEnabledForEvent(evId))) return;
 
   const dayKey = getSelectedPcDay();
   const pc = await getPettyCash(evId);
@@ -4896,7 +4880,8 @@ async function onAddPettyMovement(){
     alert('Debes activar un evento en la pestaña Vender antes de registrar movimientos de Caja Chica.');
     return;
   }
-  if (!(await ensurePettyEnabledForCurrentEvent('add-movement'))) return;
+
+  if (!(await ensurePettyEnabledForEvent(evId))) return;
 
   const dayKey = getSelectedPcDay();
 
@@ -4978,8 +4963,6 @@ async function onUsePrevCierre(){
     return;
   }
 
-  if (!(await ensurePettyEnabledForCurrentEvent('onDeletePettyMovement'))) return;
-
   const dayKey = getSelectedPcDay();
   const pc = await getPettyCash(evId);
   const prevKey = findPrevDayWithFinal(pc, dayKey);
@@ -5013,6 +4996,18 @@ async function onUsePrevCierre(){
 }
 
 function bindCajaChicaEvents(){
+  // Activar Caja Chica por evento (si está desactivada)
+  const btnActivate = document.getElementById('pc-btn-activate');
+  if (btnActivate){
+    btnActivate.addEventListener('click', async (e)=>{
+      e.preventDefault();
+      const evId = await getMeta('currentEventId');
+      if (!evId) return;
+      const ok = await ensurePettyEnabledForEvent(evId);
+      if (ok) await renderCajaChica();
+    });
+  }
+
   const inputsInit = document.querySelectorAll('#pc-table-nio input[type="number"], #pc-table-usd input[type="number"]');
   inputsInit.forEach(inp=>{
     inp.addEventListener('input', recalcPettyInitialTotalsFromInputs);
@@ -5167,16 +5162,6 @@ function bindCajaChicaEvents(){
     });
   }
 
-
-  // Activar Caja Chica desde la pestaña Caja Chica (si está desactivada)
-  const btnEnable = document.getElementById('pc-btn-enable');
-  if (btnEnable){
-    btnEnable.addEventListener('click', async (e)=>{
-      e.preventDefault();
-      await ensurePettyEnabledForCurrentEvent('button');
-    });
-  }
-
   const btnReopenDay = document.getElementById('pc-btn-reopen-day');
   if (btnReopenDay){
     btnReopenDay.addEventListener('click', (e)=>{
@@ -5202,12 +5187,6 @@ async function findMissingCajaChicaCierres(selectedEvents, salesGrupo){
     if (!ev) continue;
 
     const pc = await getPettyCash(ev.id);
-    const legacyHasActivity = hasAnyPettyActivity(pc);
-    const pettyEnabled = !!ev.pettyEnabled || legacyHasActivity;
-    if (!pettyEnabled) {
-      // Caja Chica desactivada: no se exige arqueo final/avisos
-      continue;
-    }
     const hasSales = (salesCount.get(ev.id) || 0) > 0;
     const hasMov = hasAnyPettyMovements(pc);
     const isClosed = !!ev.closedAt;
