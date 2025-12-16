@@ -240,3 +240,15 @@ small.muted{color:var(--muted)}
   text-align:center;
   font-variant-numeric:tabular-nums;
 }
+
+
+/* --- Toggle Caja Chica (por evento) --- */
+.pc-toggle{ display:inline-flex; align-items:center; gap:10px; }
+.pc-toggle-label{ font-weight:700; }
+.a33-switch{ position:relative; display:inline-block; width:52px; height:28px; }
+.a33-switch input{ opacity:0; width:0; height:0; }
+.a33-slider{ position:absolute; inset:0; cursor:pointer; background:#d9d9d9; transition:0.2s; border-radius:999px; }
+.a33-slider:before{ content:''; position:absolute; height:22px; width:22px; left:3px; bottom:3px; background:#fff; transition:0.2s; border-radius:50%; }
+.a33-switch input:checked + .a33-slider{ background:#22c55e; }
+.a33-switch input:checked + .a33-slider:before{ transform: translateX(24px); }
+.a33-switch input:disabled + .a33-slider{ opacity:0.6; cursor:not-allowed; }
