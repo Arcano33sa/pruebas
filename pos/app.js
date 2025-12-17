@@ -3932,11 +3932,13 @@ function setPettyCloseUIEmpty(){
   const fx = document.getElementById('pc-fx-rate');
   const adjN = document.getElementById('pc-adj-nio-status');
   const adjU = document.getElementById('pc-adj-usd-status');
+  const rec = document.getElementById('pc-adj-records');
   if (status) status.textContent = '';
   if (blocker){ blocker.style.display = 'none'; blocker.textContent = ''; }
   if (fx) fx.value = '';
   if (adjN) adjN.textContent = '';
   if (adjU) adjU.textContent = '';
+  if (rec){ rec.style.display = 'none'; rec.innerHTML = ''; }
   const btnRe = document.getElementById('pc-btn-reopen-day');
   if (btnRe) btnRe.style.display = 'none';
 }
@@ -3991,6 +3993,7 @@ function renderPettyCloseUI(check, isHistory){
   }
 
   const adjU = document.getElementById('pc-adj-usd-status');
+  const rec = document.getElementById('pc-adj-records');
   if (adjU){
     const d = check.diffUsd;
     const adj = day.arqueoAdjust ? day.arqueoAdjust.USD : null;
@@ -3998,6 +4001,43 @@ function renderPettyCloseUI(check, isHistory){
     const adjTxt = adj ? (`Ajuste: ${diffLabel(adj.amount,'US$')} · Motivo: ${adj.reason}${adj.note ? (' · ' + adj.note) : ''}`) : 'Ajuste: (no registrado)';
     adjU.textContent = `Diferencia actual: ${diffTxt}. ${adjTxt}.`;
   }
+
+  // Mostrar registro de ajuste(s) solo cuando existan
+  if (rec){
+    const items = [];
+    const pushAdj = (sym, adj)=>{
+      if (!adj) return;
+      const when = (adj.createdAt) ? (()=>{ try{ return new Date(adj.createdAt).toLocaleString(); }catch(e){ return adj.createdAt; } })() : '';
+      const concept = escapeHtml(adj.reason || '');
+      const note = (adj.note || '').trim();
+      const conceptHtml = note ? `${concept} <span class="muted">· ${escapeHtml(note)}</span>` : concept;
+      items.push({
+        sym,
+        amt: diffLabel(adj.amount, sym),
+        conceptHtml,
+        when
+      });
+    };
+    if (day.arqueoAdjust && day.arqueoAdjust.NIO) pushAdj('C$', day.arqueoAdjust.NIO);
+    if (day.arqueoAdjust && day.arqueoAdjust.USD) pushAdj('US$', day.arqueoAdjust.USD);
+
+    if (items.length){
+      rec.style.display = 'block';
+      rec.innerHTML = `<div class="title">Ajuste registrado</div>` + items.map(i => (
+        `<div class="pc-adj-record">
+          <div class="left">
+            <div><b>${i.sym}</b> ${i.conceptHtml}</div>
+            <small class="muted">${escapeHtml(i.when)}</small>
+          </div>
+          <div class="amt">${escapeHtml(i.amt)}</div>
+        </div>`
+      )).join('');
+    } else {
+      rec.style.display = 'none';
+      rec.innerHTML = '';
+    }
+  }
+
 
   if (btnClose){
     btnClose.disabled = isHistory || !!day.closedAt || !check.canClose;

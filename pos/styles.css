@@ -251,3 +251,30 @@ small.muted{color:var(--muted)}
   text-align:center;
   font-variant-numeric:tabular-nums;
 }
+
+/* Caja Chica - Ajuste registrado */
+.pc-adj-records{
+  margin-top:10px;
+  border:1px solid #2a2a2a;
+  border-radius:14px;
+  padding:10px 12px;
+  background: rgba(255,255,255,0.02);
+}
+.pc-adj-records .title{
+  font-weight:800;
+  margin-bottom:6px;
+}
+.pc-adj-record{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  padding:6px 0;
+  border-top:1px dashed #2a2a2a;
+}
+.pc-adj-record:first-of-type{border-top:none;}
+.pc-adj-record .amt{
+  font-weight:800;
+  white-space:nowrap;
+}
+
