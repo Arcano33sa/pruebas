@@ -199,443 +199,240 @@
     </div>
 
     <div class="card">
+      <h3>Ventas del día</h3>
+      <div class="scroll">
+        <table id="sales-table">
+          <thead>
+            <tr>
+              <th>ID</th><th>Hora</th><th>Producto</th><th>Cant</th><th>PU</th><th>Desc</th><th>Total</th><th>Pago</th><th>C</th><th>Dev</th><th>Cliente</th><th>Cortesía a</th><th>Notas</th><th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
       <div class="row">
-        <div><strong>Listado del día</strong></div>
-        <div style="text-align:right"><strong>Total día: C$ <span id="day-total">0</span></strong></div>
+        <button id="btn-export-day" class="btn-primary">Exportar día (Excel)</button>
+        <button id="btn-clear-day" class="btn-danger">Eliminar ventas del día</button>
       </div>
-      <div class="table-scroll">
-      <table id="tbl-day" class="compact">
-        <thead>
-          <tr>
-            <th>Hora</th><th>Producto</th><th>Cant.</th><th>PU</th><th>Desc</th><th>Total</th><th>Pago</th><th>C</th><th>Dev</th><th>Cliente</th><th>Cortesía a</th><th></th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-      </div>
+      <small class="muted">Consejo: usa “Deshacer última” si solo te equivocaste en la última venta.</small>
     </div>
   </section>
 
   <section id="tab-inventario" class="tab card" style="display:none">
-    <h2>Inventario por evento</h2>
+    <h2>Inventario</h2>
     <div class="row">
       <div>
         <label>Evento</label>
-        <select id="inv-event"></select>
+        <select id="inv-event">
+          <option value="">— Selecciona evento —</option>
+        </select>
       </div>
-      <div class="row">
-        <button id="btn-inv-csv" class="btn-primary">CSV Inventario</button>
-        <button id="btn-inv-ref" class="btn-ok">Actualizar</button>
-        <button id="btn-inv-from-lote" class="btn-ok" type="button">Agregar desde lote</button>
+      <div>
+        <label>Buscar</label>
+        <input id="inv-search" placeholder="Buscar producto">
       </div>
     </div>
-    <div id="lotes-evento-block" class="lotes-block">
-      <div class="lotes-block-head">
-        <div>
-          <h3 style="margin:0">Lotes cargados en este evento <span class="badge" id="lotes-count">0</span></h3>
-          <small class="muted">Se registra cuando usas “Agregar desde lote”.</small>
-        </div>
-      </div>
-      <div class="table-scroll">
-        <table id="tbl-lotes-evento" class="compact">
-          <thead>
-            <tr>
-              <th>Código/Nombre</th>
-              <th>Fecha/Hora</th>
-              <th>P</th>
-              <th>M</th>
-              <th>D</th>
-              <th>L</th>
-              <th>G</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
+    <div id="inv-list"></div>
+
+    <div class="card">
+      <h3>Lotes cargados en este evento</h3>
+      <small class="muted">Aquí se muestra un resumen por lote del inventario que se cargó para este evento.</small>
+      <div id="event-lots-summary" class="lots-summary"></div>
     </div>
 
-    <table id="tbl-inv">
-      <thead>
-        <tr>
-          <th>Producto</th><th>Activo</th><th>Manejar</th><th>Inicial</th><th>Reposición</th><th>Ajuste ±</th><th>Stock</th><th>Acciones</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-    <div class="info"><small>“Manejar” desactiva inventario para productos que no se controlan aquí. Inicial se guarda por evento. Reposición y Ajuste crean movimientos fechados. <b>Nota:</b> la <i>Venta por vaso</i> se gestiona en el bloque “Venta por vaso” (no aparece en este inventario).</small></div>
+    <div class="row">
+      <button id="btn-load-from-lot" class="btn-primary">Agregar desde lote</button>
+      <button id="btn-inv-export" class="btn-primary">Exportar inventario (Excel)</button>
+    </div>
+
+    <div id="load-modal" class="modal">
+      <div class="panel">
+        <button id="load-close" class="close btn-warn">Cerrar</button>
+        <h3>Agregar desde lote</h3>
+        <div class="row">
+          <div>
+            <label>Selecciona lote</label>
+            <select id="lot-select"></select>
+            <small class="muted">Lee lotes desde el módulo Control de Lotes. Si no aparecen, crea lotes allá primero.</small>
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button id="btn-load-lot" class="btn-ok">Agregar a evento</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h4>Detalle del lote</h4>
+          <div id="lot-detail"></div>
+        </div>
+      </div>
+    </div>
   </section>
 
   <section id="tab-eventos" class="tab card" style="display:none">
-    <h2>Eventos e historial</h2>
-    <div class="topbar">
-      <select id="filtro-eventos">
-        <option value="todos" selected>Mostrar: Todos</option>
-        <option value="abiertos">Solo abiertos</option>
-        <option value="cerrados">Solo cerrados</option>
-      </select>
-      <select id="filtro-grupo">
-        <option value="">Grupos: Todos</option>
-      </select>
-      <button id="btn-exportar-eventos" class="btn-primary">Exportar lista (Excel)</button>
-      <button id="btn-exportar-evento-excel" class="btn-ok">Exportar evento activo (Excel)</button>
-    </div>
-    <div class="table-scroll">
-    <table id="tbl-eventos">
-      <thead><tr><th>Evento</th><th>Grupo</th><th>Estado</th><th>Creado</th><th>Cerrado</th><th>Total</th><th>Acciones</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    </div>
-    <div id="cierre-total-card" class="card inner">
-      <h3>Cierre Total por grupo</h3>
-      <p class="muted">Selecciona un grupo arriba y genera un corte consolidado de todos sus eventos diarios.</p>
-      <div class="row">
-        <button id="btn-cierre-total" class="btn-ok">Cierre Total del grupo</button>
-        <button id="btn-cierre-total-excel" class="btn-primary">Exportar Cierre Total (Excel)</button>
+    <h2>Eventos</h2>
+
+    <div class="row">
+      <div>
+        <label>Filtrar por grupo</label>
+        <select id="events-group-filter">
+          <option value="">— Todos —</option>
+        </select>
       </div>
-      <div id="cierre-total-resumen" class="summary"></div>
-      <div id="cierre-total-presentaciones" class="table-wrapper"></div>
-    </div>
-    <div id="cierre-caja-card" class="card inner">
-      <h3>Caja Chica · Cierre Total por grupo</h3>
-      <p class="muted">Usa este resumen para ver la caja chica consolidada de todos los días del mismo evento maestro.</p>
-      <div class="row">
-        <button id="btn-cierre-caja-grupo" class="btn-ok">Cierre Caja Chica del grupo</button>
-        <button id="btn-cierre-caja-excel" class="btn-primary">Exportar Caja Chica (Excel)</button>
+      <div>
+        <label>Buscar</label>
+        <input id="events-search" placeholder="Buscar evento...">
       </div>
-      <div id="cierre-caja-resumen" class="summary"></div>
-      <div id="cierre-caja-eventos" class="table-wrapper"></div>
+    </div>
+
+    <div id="events-list"></div>
+
+    <div class="info">
+      <small>
+        <b>Cierre Total</b>: suma todos los días de un evento maestro (grupo) y genera un reporte consolidado.
+        <br>
+        <b>Cerrar evento</b> (en Vender): cierra solo el día actual.
+      </small>
+    </div>
+
+    <div class="row">
+      <button id="btn-cierre-total" class="btn-primary">Cierre Total (por grupo)</button>
+      <button id="btn-export-events" class="btn-primary">Exportar eventos (Excel)</button>
+    </div>
+
+    <div id="cierre-total-modal" class="modal">
+      <div class="panel">
+        <button id="ct-close" class="close btn-warn">Cerrar</button>
+        <h3>Cierre Total (Evento maestro)</h3>
+
+        <div class="row">
+          <div>
+            <label>Grupo</label>
+            <select id="ct-group"></select>
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button id="btn-ct-generate" class="btn-ok">Generar cierre</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h4>Resumen</h4>
+          <div id="ct-summary"></div>
+        </div>
+
+        <div class="row">
+          <button id="btn-ct-export" class="btn-primary">Exportar (Excel)</button>
+        </div>
+      </div>
     </div>
   </section>
 
-  
   <section id="tab-caja" class="tab card" style="display:none">
     <h2>Caja Chica</h2>
 
-    <p><span id="pc-event-info" class="info-strong">Evento activo: —</span></p>
-    <p id="pc-no-event-note" class="disabled-note" style="display:none">Activa un evento en la pestaña Vender para usar Caja Chica.</p>
-
-    <div id="pc-disabled-banner" class="warn" style="display:none">
-      Caja Chica está <b>desactivada</b> para este evento.
-      <button id="pc-btn-activate" class="btn-ok btn-inline" type="button">Activar Caja Chica</button>
-    </div>
-    <div class="row" id="pc-day-row">
+    <div class="row">
       <div>
-        <label>Día operativo</label>
-        <input id="pc-day" type="date">
-        <small class="muted">Caja Chica se guarda por día dentro del mismo evento (saldo inicial, movimientos y arqueo final).</small>
-      </div>
-      <div style="text-align:right">
-        <label>&nbsp;</label>
-        <button id="pc-btn-use-prev" class="btn-primary" type="button" style="display:none">Usar cierre anterior</button>
-        <div id="pc-prev-note" class="muted" style="margin-top:6px"></div>
-      </div>
-    </div>
-
-    <div class="row" id="pc-history-row">
-      <div>
-        <label>Histórico (cierres guardados · solo lectura)</label>
-        <select id="pc-history-select">
-          <option value="">— Ver un día cerrado —</option>
+        <label>Evento</label>
+        <select id="pc-event">
+          <option value="">— Selecciona evento —</option>
         </select>
-        <small id="pc-history-hint" class="muted"></small>
+        <small class="muted">Caja Chica es por evento.</small>
       </div>
-      <div style="text-align:right">
-        <label>&nbsp;</label>
-        <div class="pc-history-actions">
-          <button id="pc-history-back" class="btn-warn" type="button" style="display:none">Volver al día operativo</button>
-          <button id="pc-history-use" class="btn-primary" type="button" style="display:none">Usar este cierre como inicio</button>
-        </div>
-        <div id="pc-history-note" class="muted" style="margin-top:6px"></div>
+      <div>
+        <label>Fecha</label>
+        <input id="pc-date" type="date">
       </div>
     </div>
 
-    <div id="pc-history-banner" class="warn" style="display:none"></div>
+    <div class="card">
+      <h3>Saldo inicial (detalle)</h3>
+      <div id="pc-opening-detail"></div>
+      <div class="row">
+        <button id="btn-pc-set-opening" class="btn-primary">Definir saldo inicial</button>
+      </div>
+    </div>
 
-    <div id="pc-main" class="pc-main">
-      <div class="row petty-summary">
-        <div class="card">
-          <h3>Córdobas (C$)</h3>
-          <table class="pc-table">
-            <tbody>
-              <tr><th>Saldo inicial</th><td>C$ <span id="pc-nio-inicial">0.00</span></td></tr>
-              <tr><th>Entradas</th><td>C$ <span id="pc-nio-entradas">0.00</span></td></tr>
-              <tr><th>Salidas</th><td>C$ <span id="pc-nio-salidas">0.00</span></td></tr>
-              <tr><th>Ventas en efectivo</th><td>C$ <span id="pc-nio-ventas">0.00</span></td></tr>
-              <tr><th>Saldo teórico</th><td>C$ <span id="pc-nio-teorico">0.00</span></td></tr>
-              <tr><th>Saldo final contado</th><td>C$ <span id="pc-nio-final">—</span></td></tr>
-              <tr><th>Diferencia</th><td>C$ <span id="pc-nio-diferencia">—</span></td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="card">
-          <h3>Dólares (US$)</h3>
-          <table class="pc-table">
-            <tbody>
-              <tr><th>Saldo inicial</th><td>US$ <span id="pc-usd-inicial">0.00</span></td></tr>
-              <tr><th>Entradas</th><td>US$ <span id="pc-usd-entradas">0.00</span></td></tr>
-              <tr><th>Salidas</th><td>US$ <span id="pc-usd-salidas">0.00</span></td></tr>
-              <tr><th>Saldo teórico</th><td>US$ <span id="pc-usd-teorico">0.00</span></td></tr>
-              <tr><th>Saldo final contado</th><td>US$ <span id="pc-usd-final">—</span></td></tr>
-              <tr><th>Diferencia</th><td>US$ <span id="pc-usd-diferencia">—</span></td></tr>
-            </tbody>
-          </table>
+    <div class="card">
+      <h3>Movimientos</h3>
+      <div class="row">
+        <select id="pc-move-type">
+          <option value="in">Ingreso</option>
+          <option value="out">Egreso</option>
+        </select>
+        <input id="pc-move-amount" type="number" inputmode="decimal" step="0.01" placeholder="Monto">
+      </div>
+      <input id="pc-move-note" placeholder="Descripción (opcional)">
+      <div class="row">
+        <button id="btn-pc-add-move" class="btn-ok">Agregar movimiento</button>
+      </div>
+      <div id="pc-moves-list"></div>
+    </div>
+
+    <div class="card">
+      <h3>Ventas en efectivo (del día)</h3>
+      <div id="pc-cash-sales"></div>
+      <small class="muted">Se calculan automáticamente desde el POS.</small>
+    </div>
+
+    <div class="card">
+      <h3>Cierre del día</h3>
+      <div id="pc-closing-detail"></div>
+      <div class="row">
+        <button id="btn-pc-close-day" class="btn-primary">Cerrar día (Caja Chica)</button>
+      </div>
+      <small class="muted">Cierre = saldo inicial + movimientos + ventas en efectivo del día.</small>
+    </div>
+
+    <div id="pc-opening-modal" class="modal">
+      <div class="panel">
+        <button id="pc-open-close" class="close btn-warn">Cerrar</button>
+        <h3>Definir saldo inicial (detalle)</h3>
+        <div id="pc-opening-form"></div>
+        <div class="row">
+          <button id="btn-pc-open-save" class="btn-ok">Guardar</button>
         </div>
       </div>
+    </div>
 
-      <div class="card petty-inicial">
-        <h3>Saldo inicial</h3>
+    <div id="pc-closing-modal" class="modal">
+      <div class="panel">
+        <button id="pc-close-close" class="close btn-warn">Cerrar</button>
+        <h3>Cerrar día (detalle)</h3>
+        <div id="pc-closing-form"></div>
         <div class="row">
-          <div class="petty-block">
-            <h4>Córdobas (C$)</h4>
-            <table class="pc-table" id="pc-table-nio">
-              <thead>
-                <tr><th>Denominación</th><th>Cantidad</th><th>Subtotal</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>C$ 1</td><td><input id="pc-nio-q-1" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-1">0.00</span></td></tr>
-                <tr><td>C$ 5</td><td><input id="pc-nio-q-5" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-5">0.00</span></td></tr>
-                <tr><td>C$ 10</td><td><input id="pc-nio-q-10" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-10">0.00</span></td></tr>
-                <tr><td>C$ 20</td><td><input id="pc-nio-q-20" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-20">0.00</span></td></tr>
-                <tr><td>C$ 50</td><td><input id="pc-nio-q-50" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-50">0.00</span></td></tr>
-                <tr><td>C$ 100</td><td><input id="pc-nio-q-100" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-100">0.00</span></td></tr>
-                <tr><td>C$ 200</td><td><input id="pc-nio-q-200" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-200">0.00</span></td></tr>
-                <tr><td>C$ 500</td><td><input id="pc-nio-q-500" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-500">0.00</span></td></tr>
-                <tr><td>C$ 1000</td><td><input id="pc-nio-q-1000" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-1000">0.00</span></td></tr>
-              </tbody>
-              <tfoot>
-                <tr><td colspan="2">Total inicial C$</td><td>C$ <span id="pc-nio-total">0.00</span></td></tr>
-              </tfoot>
-            </table>
-          </div>
-          <div class="petty-block">
-            <h4>Dólares (US$)</h4>
-            <table class="pc-table" id="pc-table-usd">
-              <thead>
-                <tr><th>Denominación</th><th>Cantidad</th><th>Subtotal</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>US$ 1</td><td><input id="pc-usd-q-1" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-1">0.00</span></td></tr>
-                <tr><td>US$ 5</td><td><input id="pc-usd-q-5" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-5">0.00</span></td></tr>
-                <tr><td>US$ 10</td><td><input id="pc-usd-q-10" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-10">0.00</span></td></tr>
-                <tr><td>US$ 20</td><td><input id="pc-usd-q-20" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-20">0.00</span></td></tr>
-                <tr><td>US$ 50</td><td><input id="pc-usd-q-50" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-50">0.00</span></td></tr>
-                <tr><td>US$ 100</td><td><input id="pc-usd-q-100" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-100">0.00</span></td></tr>
-              </tbody>
-              <tfoot>
-                <tr><td colspan="2">Total inicial US$</td><td>US$ <span id="pc-usd-total">0.00</span></td></tr>
-              </tfoot>
-            </table>
-          </div>
-        </div>
-        <div class="row">
-          <button id="pc-btn-save-initial" class="btn-ok">Guardar saldo inicial</button>
-          <button id="pc-btn-clear-initial" class="btn-warn">Limpiar</button>
+          <button id="btn-pc-close-save" class="btn-ok">Guardar cierre</button>
         </div>
       </div>
-
-      <div class="card petty-mov">
-        <h3>Movimientos de Caja Chica</h3>
-        <div class="row">
-          <div class="col">
-            <label for="pc-mov-date">Fecha</label>
-            <input id="pc-mov-date" type="date">
-          </div>
-          <div class="col">
-            <label for="pc-mov-type">Tipo</label>
-            <select id="pc-mov-type">
-              <option value="entrada">Entrada</option>
-              <option value="salida">Salida</option>
-            </select>
-          </div>
-          <div class="col">
-            <label for="pc-mov-currency">Moneda</label>
-            <select id="pc-mov-currency">
-              <option value="NIO">C$</option>
-              <option value="USD">US$</option>
-            </select>
-          </div>
-          <div class="col">
-            <label for="pc-mov-amount">Monto</label>
-            <input id="pc-mov-amount" type="number" min="0" step="0.01" value="0.00">
-          </div>
-          <div class="col">
-            <label for="pc-mov-desc">Descripción</label>
-            <input id="pc-mov-desc" type="text" placeholder="Detalle del movimiento">
-          </div>
-          <div class="col">
-            <button id="pc-mov-add" class="btn-ok">Agregar movimiento</button>
-          </div>
-        </div>
-
-        <table class="pc-table" id="pc-mov-table">
-          <thead>
-            <tr>
-              <th>Fecha</th>
-              <th>Tipo</th>
-              <th>Moneda</th>
-              <th>Monto</th>
-              <th>Descripción</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="pc-mov-tbody">
-          </tbody>
-        </table>
-      </div>
-    
-      <div class="card petty-final">
-        <h3>Arqueo final</h3>
-        <div class="row">
-          <div class="petty-block">
-            <h4>Córdobas (C$)</h4>
-            <table class="pc-table" id="pc-table-fnio">
-              <thead>
-                <tr><th>Denominación</th><th>Cantidad</th><th>Subtotal</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>C$ 1</td><td><input id="pc-fnio-q-1" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-1">0.00</span></td></tr>
-                <tr><td>C$ 5</td><td><input id="pc-fnio-q-5" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-5">0.00</span></td></tr>
-                <tr><td>C$ 10</td><td><input id="pc-fnio-q-10" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-10">0.00</span></td></tr>
-                <tr><td>C$ 20</td><td><input id="pc-fnio-q-20" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-20">0.00</span></td></tr>
-                <tr><td>C$ 50</td><td><input id="pc-fnio-q-50" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-50">0.00</span></td></tr>
-                <tr><td>C$ 100</td><td><input id="pc-fnio-q-100" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-100">0.00</span></td></tr>
-                <tr><td>C$ 200</td><td><input id="pc-fnio-q-200" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-200">0.00</span></td></tr>
-                <tr><td>C$ 500</td><td><input id="pc-fnio-q-500" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-500">0.00</span></td></tr>
-                <tr><td>C$ 1000</td><td><input id="pc-fnio-q-1000" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-1000">0.00</span></td></tr>
-              </tbody>
-              <tfoot>
-                <tr><td colspan="2">Total final C$</td><td>C$ <span id="pc-fnio-total">0.00</span></td></tr>
-              </tfoot>
-            </table>
-          </div>
-          <div class="petty-block">
-            <h4>Dólares (US$)</h4>
-            <table class="pc-table" id="pc-table-fusd">
-              <thead>
-                <tr><th>Denominación</th><th>Cantidad</th><th>Subtotal</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>US$ 1</td><td><input id="pc-fusd-q-1" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-1">0.00</span></td></tr>
-                <tr><td>US$ 5</td><td><input id="pc-fusd-q-5" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-5">0.00</span></td></tr>
-                <tr><td>US$ 10</td><td><input id="pc-fusd-q-10" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-10">0.00</span></td></tr>
-                <tr><td>US$ 20</td><td><input id="pc-fusd-q-20" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-20">0.00</span></td></tr>
-                <tr><td>US$ 50</td><td><input id="pc-fusd-q-50" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-50">0.00</span></td></tr>
-                <tr><td>US$ 100</td><td><input id="pc-fusd-q-100" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-100">0.00</span></td></tr>
-              </tbody>
-              <tfoot>
-                <tr><td colspan="2">Total final US$</td><td>US$ <span id="pc-fusd-total">0.00</span></td></tr>
-              </tfoot>
-            </table>
-          </div>
-        </div>
-        <div class="row">
-          <button id="pc-btn-save-final" class="btn-ok">Guardar arqueo final</button>
-          <button id="pc-btn-clear-final" class="btn-warn">Limpiar</button>
-        </div>
-      </div>
-
-      <div class="card petty-cierre">
-        <h3>Cierre definitivo del día</h3>
-        <div class="row">
-          <div class="col">
-            <label><b>T/C:</b></label>
-            <input id="pc-fx-rate" type="number" inputmode="decimal" step="0.01" min="0" placeholder="T/C: (C$ por 1 US$)">
-            <small class="muted">C$ por 1 US$. Se requiere solo si hubo USD en Caja Chica hoy.</small>
-          </div>
-          <div class="col" style="min-width:160px">
-            <label>&nbsp;</label>
-            <button id="pc-btn-save-fx" class="btn-primary" type="button">Guardar T/C</button>
-          </div>
-        </div>
-
-        <div id="pc-close-status" class="info" style="margin-top:8px"></div>
-        <div id="pc-close-blocker" class="warn" style="display:none; margin-top:8px"></div>
-
-        <div class="row" style="margin-top:10px">
-          <div class="petty-block">
-            <h4>Ajuste de arqueo C$</h4>
-            <div class="row" style="gap:8px">
-              <input id="pc-adj-nio-reason" type="text" placeholder="Motivo (obligatorio)">
-              <input id="pc-adj-nio-note" type="text" placeholder="Nota (opcional)">
-            </div>
-            <div class="row" style="gap:8px">
-              <button id="pc-btn-adj-nio" class="btn-ok" type="button">Registrar ajuste C$</button>
-              <button id="pc-btn-clear-adj-nio" class="btn-link" type="button">Quitar ajuste</button>
-            </div>
-            <div id="pc-adj-nio-status" class="muted"></div>
-          </div>
-
-          <div class="petty-block">
-            <h4>Ajuste de arqueo US$</h4>
-            <div class="row" style="gap:8px">
-              <input id="pc-adj-usd-reason" type="text" placeholder="Motivo (obligatorio)">
-              <input id="pc-adj-usd-note" type="text" placeholder="Nota (opcional)">
-            </div>
-            <div class="row" style="gap:8px">
-              <button id="pc-btn-adj-usd" class="btn-ok" type="button">Registrar ajuste US$</button>
-              <button id="pc-btn-clear-adj-usd" class="btn-link" type="button">Quitar ajuste</button>
-            </div>
-            <div id="pc-adj-usd-status" class="muted"></div>
-          </div>
-        </div>
-
-        <div id="pc-adj-records" class="pc-adj-records" style="display:none"></div>
-
-        <div class="row" style="margin-top:10px">
-          <button id="pc-btn-close-day" class="btn-ok" type="button">Cierre definitivo del día</button>
-          <button id="pc-btn-reopen-day" class="btn-warn" type="button" style="display:none">Reabrir día</button>
-        </div>
-        <small class="muted">Regla: si existe diferencia entre el efectivo contado y el esperado, debes registrar movimientos faltantes o un ajuste de arqueo antes de poder cerrar.</small>
-      </div>
-</div>
+    </div>
   </section>
 
-<section id="tab-resumen" class="tab card" style="display:none">
+  <section id="tab-resumen" class="tab card" style="display:none">
     <h2>Resumen</h2>
-    <div class="card">
-      <strong>Total general: C$ <span id="grand-total">0</span></strong>
-    </div>
-    <div class="row">
+
+    <div class="grid">
       <div class="card">
-        <h3>Por evento</h3>
-        <table id="tbl-por-evento">
-          <thead><tr><th>Evento</th><th>Total</th></tr></thead>
-          <tbody></tbody>
-        </table>
+        <h3>Ventas del día</h3>
+        <div id="sum-day"></div>
+        <small class="muted">Incluye cortesías y devoluciones.</small>
       </div>
       <div class="card">
-        <h3>Por día</h3>
-        <table id="tbl-por-dia">
-          <thead><tr><th>Fecha</th><th>Total</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-    <div class="row">
-      <div class="card">
-        <h3>Por producto</h3>
-        <table id="tbl-por-prod">
-          <thead><tr><th>Producto</th><th>Total</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <div class="card">
-        <h3>Por método de pago</h3>
-        <table id="tbl-por-pago">
-          <thead><tr><th>Método</th><th>Total</th></tr></thead>
-          <tbody></tbody>
-        </table>
+        <h3>Evento activo</h3>
+        <div id="sum-event"></div>
+        <small class="muted">Muestra totales del evento seleccionado en Vender.</small>
       </div>
     </div>
 
+    <div class="card">
+      <h3>Por producto (día)</h3>
+      <table id="sum-byprod">
+        <thead><tr><th>Producto</th><th>Cant</th><th>Total</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
     <div class="row">
-      <div class="card">
-        <h3>Transferencias por banco</h3>
-        <table id="tbl-transfer-bank">
-          <thead><tr><th>Banco</th><th>Total</th><th>#</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
+      <button id="btn-export-summary" class="btn-primary">Exportar resumen (Excel)</button>
     </div>
   </section>
 
@@ -651,6 +448,47 @@
       <button id="btn-restore-seed" class="btn-warn">Restaurar productos base (A33)</button>
     </div>
     <div class="info"><small>Si por cualquier razón solo ves “Vaso”, usa el botón <b>Restaurar productos base (A33)</b>. No borra ventas.</small></div>
+
+    <!-- ✨ Nuevo ítem (Extras / Otros productos) -->
+    <div class="card" id="extras-card">
+      <div class="row" style="align-items:center">
+        <div>
+          <h3 style="margin:0">Otros productos <span class="badge">✨</span></h3>
+          <small class="muted">Ítems ad-hoc para vender sin crearlos en Inventario central/Lotes. Viven solo en el POS (por evento + “Extras guardados”).</small>
+        </div>
+        <div style="text-align:right">
+          <button id="btn-extra-new" class="btn-primary" type="button">✨ Nuevo ítem</button>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Evento (extras)</label>
+          <select id="extras-event">
+            <option value="">— Selecciona evento —</option>
+          </select>
+          <small class="muted">Gestiona los extras del evento aquí. (No afecta el evento activo de venta.)</small>
+        </div>
+        <div>
+          <label>Extras guardados</label>
+          <select id="extras-templates-select">
+            <option value="">— Selecciona para usar —</option>
+          </select>
+          <small class="muted">Al seleccionar un template, se abre el editor prellenado (opción B).</small>
+        </div>
+      </div>
+
+      <div class="grid extras-grid">
+        <div class="card">
+          <h4>En este evento</h4>
+          <div id="extras-event-list" class="extras-list"></div>
+        </div>
+        <div class="card">
+          <h4>Extras guardados</h4>
+          <div id="extras-templates-list" class="extras-list"></div>
+        </div>
+      </div>
+    </div>
 
     <div class="card">
       <h3>Bancos</h3>
@@ -700,6 +538,65 @@
           <tbody></tbody>
         </table>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: ✨ Nuevo ítem / Extras -->
+<div id="extra-modal" class="modal">
+  <div class="panel">
+    <button id="extra-close" class="close btn-warn" type="button">Cerrar</button>
+    <h3 id="extra-modal-title">✨ Nuevo ítem</h3>
+
+    <input type="hidden" id="extra-state-mode" value="">
+    <input type="hidden" id="extra-state-eventId" value="">
+    <input type="hidden" id="extra-state-extraId" value="">
+    <input type="hidden" id="extra-state-templateId" value="">
+
+    <div class="row">
+      <div>
+        <label>Nombre</label>
+        <input id="extra-name" placeholder="ej. Escudilla charcutería">
+      </div>
+      <div>
+        <label>Precio (C$)</label>
+        <input id="extra-price" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0.00">
+      </div>
+      <div>
+        <label>Costo (C$)</label>
+        <input id="extra-cost" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0.00">
+      </div>
+    </div>
+
+    <div class="row" style="grid-template-columns:1fr 1fr; align-items:center">
+      <div>
+        <label class="flag"><input id="extra-active" type="checkbox" checked> Activo</label>
+        <label class="flag"><input id="extra-manage-stock" type="checkbox"> Controlar stock en este evento</label>
+      </div>
+
+      <div id="extra-stock-block" style="display:none">
+        <label>Stock actual</label>
+        <div class="row" style="grid-template-columns:1fr auto; gap:8px">
+          <input id="extra-stock" type="number" inputmode="numeric" step="1" min="0" value="0">
+          <button id="extra-restock" type="button" class="btn-ok">Agregar más stock</button>
+        </div>
+        <small class="muted">En 0 se bloquean ventas y cortesías. Alerta cuando queden 5.</small>
+      </div>
+    </div>
+
+    <div class="row" style="grid-template-columns:1fr 1fr; align-items:center">
+      <div>
+        <label class="flag"><input id="extra-save-template" type="checkbox"> Guardar/actualizar en “Extras guardados”</label>
+        <small class="muted">Guarda como template para reutilizar en otros eventos.</small>
+      </div>
+      <div style="text-align:right">
+        <button id="extra-delete" type="button" class="btn-danger">Eliminar</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="extra-save" type="button" class="btn-ok">Guardar</button>
+      <button id="extra-cancel" type="button" class="btn-warn">Cancelar</button>
     </div>
   </div>
 </div>
