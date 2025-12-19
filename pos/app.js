@@ -61,7 +61,7 @@ function openDB() {
 function openFinanzasDB() {
   return new Promise((resolve, reject) => {
     if (finDb) return resolve(finDb);
-    const req = indexedDB.open(FIN_DB_NAME, FIN_DB_VER);
+    const req = indexedDB.open(FIN_DB_NAME);
     req.onupgradeneeded = (e) => {
       const d = e.target.result;
       if (!d.objectStoreNames.contains('accounts')) {
