@@ -636,15 +636,11 @@ function normalizeArqueoAdjust(adj){
     if (!a || typeof a !== 'object') return null;
     const amt = Number(a.amount);
     if (!Number.isFinite(amt) || Math.abs(amt) < 0.005) return null;
-
-    // Compat: reason -> concept, note -> notes
-    const concept = (a.concept != null ? a.concept : (a.reason || '')).toString().trim();
-    if (!concept) return null;
-
-    const notes = (a.notes != null ? a.notes : (a.note || '')).toString().trim();
+    const reason = (a.reason || '').toString().trim();
+    if (!reason) return null;
+    const note = (a.note || '').toString().trim();
     const createdAt = (typeof a.createdAt === 'string' && a.createdAt.trim()) ? a.createdAt : null;
-
-    return { amount: round2(amt), concept, notes, createdAt };
+    return { amount: round2(amt), reason, note, createdAt };
   };
   out.NIO = one(adj && adj.NIO);
   out.USD = one(adj && adj.USD);
@@ -3171,23 +3167,6 @@ async function exportEventExcel(eventId){
       detRows.push(['Inicial', sumDay.usd.initial, 'Entradas', sumDay.usd.entradas, 'Salidas', sumDay.usd.salidas, 'Teórico', sumDay.usd.teorico, 'Final', sumDay.usd.final != null ? sumDay.usd.final : '', 'Dif', sumDay.usd.diferencia != null ? sumDay.usd.diferencia : '' ]);
 
       detRows.push([]);
-      // Ajuste de arqueo (si aplica)
-      detRows.push(['Ajuste de arqueo']);
-      detRows.push(['Moneda','AjusteMonto','AjusteConcepto','AjusteNotas','Creado']);
-      const adjN = day && day.arqueoAdjust ? day.arqueoAdjust.NIO : null;
-      const adjU = day && day.arqueoAdjust ? day.arqueoAdjust.USD : null;
-      if (adjN){
-        detRows.push(['C$', adjN.amount, adjN.concept, adjN.notes || '', adjN.createdAt || '']);
-      } else {
-        detRows.push(['C$', '', '', '', '']);
-      }
-      if (adjU){
-        detRows.push(['US$', adjU.amount, adjU.concept, adjU.notes || '', adjU.createdAt || '']);
-      } else {
-        detRows.push(['US$', '', '', '', '']);
-      }
-
-      detRows.push([]);
       detRows.push(['---']);
       detRows.push([]);
     }
@@ -3195,31 +3174,6 @@ async function exportEventExcel(eventId){
 
   const wsCaja = XLSX.utils.aoa_to_sheet(detRows);
   XLSX.utils.book_append_sheet(wb, wsCaja, 'CajaChica_Detalle');
-
-  // --- Hoja: CajaChica_Ajustes (solo ajustes registrados) ---
-  const adjRows = [];
-  adjRows.push(['dia','moneda','AjusteMonto','AjusteConcepto','AjusteNotas','AjusteResumen','creado']);
-  if (dayKeys && dayKeys.length){
-    for (const dk of dayKeys){
-      const day = ensurePcDay(pc, dk);
-      const aN = day && day.arqueoAdjust ? day.arqueoAdjust.NIO : null;
-      const aU = day && day.arqueoAdjust ? day.arqueoAdjust.USD : null;
-
-      if (aN){
-        const resumen = `Ajuste: ${formatAdjLine(aN.amount,'C$')} — Concepto: ${aN.concept}${aN.notes ? (' · ' + aN.notes) : ''}`;
-        adjRows.push([dk,'C$', aN.amount, aN.concept, aN.notes || '', resumen, aN.createdAt || '']);
-      }
-      if (aU){
-        const resumen = `Ajuste: ${formatAdjLine(aU.amount,'US$')} — Concepto: ${aU.concept}${aU.notes ? (' · ' + aU.notes) : ''}`;
-        adjRows.push([dk,'US$', aU.amount, aU.concept, aU.notes || '', resumen, aU.createdAt || '']);
-      }
-    }
-  }
-  if (adjRows.length === 1){
-    adjRows.push(['(sin ajustes)','', '', '', '', '', '']);
-  }
-  const wsAdj = XLSX.utils.aoa_to_sheet(adjRows);
-  XLSX.utils.book_append_sheet(wb, wsAdj, 'CajaChica_Ajustes');
 
   // --- Hoja 3 opcional: Ventas_Detalle ---
   const ventasRows = [];
@@ -4061,15 +4015,6 @@ function diffLabel(diff, sym){
   return sym ? `${sym} ${txt}` : txt;
 }
 
-function formatAdjLine(amount, sym){
-  const v = round2(amount || 0);
-  const sign = v > 0 ? '+' : (v < 0 ? '-' : '');
-  const abs = Math.abs(v);
-  // ejemplo: "+ C$ 250.00" o "- US$ 10.00"
-  return `${sign} ${sym} ${fmt(abs)}`.trim();
-}
-
-
 function diffKind(diff){
   const v = round2(diff || 0);
   if (moneyEquals(v, 0)) return '';
@@ -4123,31 +4068,12 @@ function setPettyCloseUIEmpty(){
   const status = document.getElementById('pc-close-status');
   const blocker = document.getElementById('pc-close-blocker');
   const fx = document.getElementById('pc-fx-rate');
-
-  const adjNioAmt = document.getElementById('pc-adj-nio-amount');
-  const adjNioConcept = document.getElementById('pc-adj-nio-concept');
-  const adjNioNotes = document.getElementById('pc-adj-nio-notes');
-
-  const adjUsdAmt = document.getElementById('pc-adj-usd-amount');
-  const adjUsdConcept = document.getElementById('pc-adj-usd-concept');
-  const adjUsdNotes = document.getElementById('pc-adj-usd-notes');
-
   const adjN = document.getElementById('pc-adj-nio-status');
   const adjU = document.getElementById('pc-adj-usd-status');
   const rec = document.getElementById('pc-adj-records');
-
   if (status) status.textContent = '';
   if (blocker){ blocker.style.display = 'none'; blocker.textContent = ''; }
   if (fx) fx.value = '';
-
-  if (adjNioAmt) adjNioAmt.value = '';
-  if (adjNioConcept) adjNioConcept.value = '';
-  if (adjNioNotes) adjNioNotes.value = '';
-
-  if (adjUsdAmt) adjUsdAmt.value = '';
-  if (adjUsdConcept) adjUsdConcept.value = '';
-  if (adjUsdNotes) adjUsdNotes.value = '';
-
   if (adjN) adjN.textContent = '';
   if (adjU) adjU.textContent = '';
   if (rec){ rec.style.display = 'none'; rec.innerHTML = ''; }
@@ -4200,7 +4126,7 @@ function renderPettyCloseUI(check, isHistory){
     const d = check.diffNio;
     const adj = day.arqueoAdjust ? day.arqueoAdjust.NIO : null;
     const diffTxt = (d == null) ? '—' : `${diffKind(d)} ${diffLabel(d,'C$')}`;
-    const adjTxt = adj ? (`Ajuste: ${formatAdjLine(adj.amount,'C$')} — Concepto: ${adj.concept}${adj.notes ? (' · ' + adj.notes) : ''}`) : 'Ajuste: (no registrado)';
+    const adjTxt = adj ? (`Ajuste: ${diffLabel(adj.amount,'C$')} · Motivo: ${adj.reason}${adj.note ? (' · ' + adj.note) : ''}`) : 'Ajuste: (no registrado)';
     adjN.textContent = `Diferencia actual: ${diffTxt}. ${adjTxt}.`;
   }
 
@@ -4210,23 +4136,23 @@ function renderPettyCloseUI(check, isHistory){
     const d = check.diffUsd;
     const adj = day.arqueoAdjust ? day.arqueoAdjust.USD : null;
     const diffTxt = (d == null) ? '—' : `${diffKind(d)} ${diffLabel(d,'US$')}`;
-    const adjTxt = adj ? (`Ajuste: ${formatAdjLine(adj.amount,'US$')} — Concepto: ${adj.concept}${adj.notes ? (' · ' + adj.notes) : ''}`) : 'Ajuste: (no registrado)';
+    const adjTxt = adj ? (`Ajuste: ${diffLabel(adj.amount,'US$')} · Motivo: ${adj.reason}${adj.note ? (' · ' + adj.note) : ''}`) : 'Ajuste: (no registrado)';
     adjU.textContent = `Diferencia actual: ${diffTxt}. ${adjTxt}.`;
   }
 
-    // Mostrar registro de ajuste(s) solo cuando existan
+  // Mostrar registro de ajuste(s) solo cuando existan
   if (rec){
     const items = [];
     const pushAdj = (sym, adj)=>{
       if (!adj) return;
       const when = (adj.createdAt) ? (()=>{ try{ return new Date(adj.createdAt).toLocaleString(); }catch(e){ return adj.createdAt; } })() : '';
-      const concept = escapeHtml(adj.concept || '');
-      const notes = (adj.notes || '').trim();
+      const concept = escapeHtml(adj.reason || '');
+      const note = (adj.note || '').trim();
+      const conceptHtml = note ? `${concept} <span class="muted">· ${escapeHtml(note)}</span>` : concept;
       items.push({
         sym,
-        amtLine: formatAdjLine(adj.amount, sym),
-        concept,
-        notesHtml: notes ? escapeHtml(notes) : '',
+        amt: diffLabel(adj.amount, sym),
+        conceptHtml,
         when
       });
     };
@@ -4238,11 +4164,10 @@ function renderPettyCloseUI(check, isHistory){
       rec.innerHTML = `<div class="title">Ajuste registrado</div>` + items.map(i => (
         `<div class="pc-adj-record">
           <div class="left">
-            <div><b>Ajuste:</b> ${escapeHtml(i.amtLine)} — <b>Concepto:</b> ${i.concept}</div>
-            ${i.notesHtml ? (`<div class="muted" style="font-size:0.85rem; margin-top:2px">${i.notesHtml}</div>`) : ''}
+            <div><b>${i.sym}</b> ${i.conceptHtml}</div>
             <small class="muted">${escapeHtml(i.when)}</small>
           </div>
-          <div class="amt">${escapeHtml(i.amtLine)}</div>
+          <div class="amt">${escapeHtml(i.amt)}</div>
         </div>`
       )).join('');
     } else {
@@ -4250,6 +4175,7 @@ function renderPettyCloseUI(check, isHistory){
       rec.innerHTML = '';
     }
   }
+
 
   if (btnClose){
     btnClose.disabled = isHistory || !!day.closedAt || !check.canClose;
@@ -4326,35 +4252,20 @@ async function onRegisterArqueoAdjust(currency){
     return;
   }
 
-  const amtEl = document.getElementById(isNio ? 'pc-adj-nio-amount' : 'pc-adj-usd-amount');
-  const conceptEl = document.getElementById(isNio ? 'pc-adj-nio-concept' : 'pc-adj-usd-concept');
-  const notesEl = document.getElementById(isNio ? 'pc-adj-nio-notes' : 'pc-adj-usd-notes');
-
-  const rawAmt = amtEl ? Number((amtEl.value || '').toString().replace(',', '.')) : NaN;
-  const amount = Number.isFinite(rawAmt) ? round2(rawAmt) : NaN;
-  const concept = conceptEl ? (conceptEl.value || '').trim() : '';
-  const notes = notesEl ? (notesEl.value || '').trim() : '';
-
-  if (!Number.isFinite(amount) || Math.abs(amount) < 0.005){
-    alert('Debes ingresar el monto del ajuste.');
-    return;
-  }
-  if (!concept){
-    alert('Debes ingresar el concepto del ajuste.');
-    return;
-  }
-
-  if (!moneyEquals(amount, diff)){
-    const sym = isNio ? 'C$' : 'US$';
-    alert(`El monto del ajuste debe igualar la diferencia actual (${formatAdjLine(diff, sym)}).`);
+  const reasonEl = document.getElementById(isNio ? 'pc-adj-nio-reason' : 'pc-adj-usd-reason');
+  const noteEl = document.getElementById(isNio ? 'pc-adj-nio-note' : 'pc-adj-usd-note');
+  const reason = reasonEl ? (reasonEl.value || '').trim() : '';
+  const note = noteEl ? (noteEl.value || '').trim() : '';
+  if (!reason){
+    alert('Debes ingresar un motivo para el ajuste.');
     return;
   }
 
   if (!day.arqueoAdjust) day.arqueoAdjust = { NIO: null, USD: null };
   day.arqueoAdjust[isNio ? 'NIO' : 'USD'] = {
-    amount: round2(amount),
-    concept,
-    notes,
+    amount: round2(diff),
+    reason,
+    note,
     createdAt: new Date().toISOString()
   };
 
@@ -4382,14 +4293,6 @@ async function onClearArqueoAdjust(currency){
   if (!day.arqueoAdjust) day.arqueoAdjust = { NIO: null, USD: null };
   if (currency === 'NIO') day.arqueoAdjust.NIO = null;
   if (currency === 'USD') day.arqueoAdjust.USD = null;
-
-  const isNio = currency === 'NIO';
-  const amtEl = document.getElementById(isNio ? 'pc-adj-nio-amount' : 'pc-adj-usd-amount');
-  const conceptEl = document.getElementById(isNio ? 'pc-adj-nio-concept' : 'pc-adj-usd-concept');
-  const notesEl = document.getElementById(isNio ? 'pc-adj-nio-notes' : 'pc-adj-usd-notes');
-  if (amtEl) amtEl.value = '';
-  if (conceptEl) conceptEl.value = '';
-  if (notesEl) notesEl.value = '';
 
   await savePettyCash(pc);
   await renderCajaChica();
@@ -4491,8 +4394,6 @@ function setPettyReadOnly(isReadOnly, allowReopen){
     'pc-btn-save-final','pc-btn-clear-final',
     'pc-mov-type','pc-mov-currency','pc-mov-amount','pc-mov-desc','pc-mov-add',
     'pc-fx-rate','pc-btn-save-fx',
-    'pc-adj-nio-amount','pc-adj-nio-concept','pc-adj-nio-notes',
-    'pc-adj-usd-amount','pc-adj-usd-concept','pc-adj-usd-notes',
     'pc-btn-adj-nio','pc-btn-clear-adj-nio',
     'pc-btn-adj-usd','pc-btn-clear-adj-usd',
     'pc-btn-close-day','pc-btn-reopen-day'
