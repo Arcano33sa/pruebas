@@ -5,7 +5,7 @@ let db;
 
 // --- Finanzas: conexión a finanzasDB para asientos automáticos
 const FIN_DB_NAME = 'finanzasDB';
-const FIN_DB_VER = 1;
+const FIN_DB_VER = 1; // (compat) ya no se usa al abrir; se abre sin versión para evitar desincronización
 let finDb;
 
 function openDB() {
@@ -61,7 +61,7 @@ function openDB() {
 function openFinanzasDB() {
   return new Promise((resolve, reject) => {
     if (finDb) return resolve(finDb);
-    const req = indexedDB.open(FIN_DB_NAME, FIN_DB_VER);
+    const req = indexedDB.open(FIN_DB_NAME); // sin versión: evita VersionError si Finanzas sube la versión
     req.onupgradeneeded = (e) => {
       const d = e.target.result;
       if (!d.objectStoreNames.contains('accounts')) {
@@ -87,8 +87,14 @@ function openFinanzasDB() {
       resolve(finDb);
     };
     req.onerror = () => {
-      console.error('Error abriendo finanzasDB desde POS', req.error);
-      reject(req.error);
+      const err = req.error;
+      console.error('Error abriendo finanzasDB desde POS', err);
+      // Si esto ocurre, NO bloqueamos el POS; solo fallará el asiento automático.
+      // Con open() sin versión ya evitamos VersionError típico cuando Finanzas sube su DB_VER.
+      if (err && err.name === 'VersionError') {
+        console.error('VersionError: la versión de finanzasDB es mayor a la solicitada por el POS. Se recomienda abrir sin versión (ya aplicado).');
+      }
+      reject(err);
     };
   });
 }
