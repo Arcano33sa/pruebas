@@ -1928,7 +1928,14 @@ async function fractionGallonsToCupsPOS(){
   const cupsCreated = gallonsToFraction * yieldCupsPerGallon;
   const mlPerCup = ML_PER_GALON / yieldCupsPerGallon;
 
-  const batches = sanitizeFractionBatches(ev.fractionBatches);
+  
+  // Snapshots de costo (evita que cambie el costo histórico si la receta se actualiza después)
+  const costPerGallonSnapshot = getCostoPorGalon();
+  const costPerCupSnapshot = (costPerGallonSnapshot > 0 && yieldCupsPerGallon > 0)
+    ? (costPerGallonSnapshot / yieldCupsPerGallon)
+    : 0;
+
+const batches = sanitizeFractionBatches(ev.fractionBatches);
   batches.push({
     batchId,
     timestamp: new Date().toISOString(),
@@ -1937,6 +1944,8 @@ async function fractionGallonsToCupsPOS(){
     cupsCreated,
     cupsRemaining: cupsCreated,
     mlPerCup,
+    costPerGallonSnapshot: (typeof costPerGallonSnapshot === 'number' ? costPerGallonSnapshot : 0),
+    costPerCupSnapshot: (typeof costPerCupSnapshot === 'number' ? costPerCupSnapshot : 0),
     note: ''
   });
 
@@ -1992,7 +2001,30 @@ async function sellCupsPOS(isCourtesy){
     return;
   }
 
-  ev.fractionBatches = batches;
+  
+  // Si hay costo de Galón disponible, “congelamos” snapshots de costo en los batches usados (para costo histórico estable)
+  const costoGalonSnapshot = getCostoPorGalon();
+  if (costoGalonSnapshot > 0 && Array.isArray(taken.breakdown) && taken.breakdown.length){
+    for (const it of taken.breakdown){
+      const bid = (it.batchId || '').toString();
+      if (!bid) continue;
+      const b = batches.find(x => String(x.batchId) === bid);
+      if (!b) continue;
+
+      const hasCupSnap = (typeof b.costPerCupSnapshot === 'number' && b.costPerCupSnapshot > 0);
+      const hasGalSnap = (typeof b.costPerGallonSnapshot === 'number' && b.costPerGallonSnapshot > 0);
+
+      if (!hasCupSnap || !hasGalSnap){
+        const y = safeInt(b.yieldCupsPerGallon, safeInt(it.yieldCupsPerGallon, 0));
+        if (y > 0){
+          b.costPerGallonSnapshot = hasGalSnap ? b.costPerGallonSnapshot : costoGalonSnapshot;
+          b.costPerCupSnapshot = hasCupSnap ? b.costPerCupSnapshot : (costoGalonSnapshot / y);
+        }
+      }
+    }
+  }
+
+ev.fractionBatches = batches;
   await put('events', ev);
 
   const date = document.getElementById('sale-date')?.value || '';
@@ -2043,36 +2075,63 @@ async function sellCupsPOS(isCourtesy){
   const total = isCourtesy ? 0 : (unitPrice * qty);
 
   // Costo por vaso: se deriva del costo unitario del Galón (Calculadora) y el rendimiento del batch (vasos/galón).
-  // Si no hay costo de Galón disponible, NO inventamos.
+  // Regla: costoPorVaso = costoGalon / yieldCupsPerGallon. Si no hay costo de Galón, NO inventamos.
+  // Preferimos snapshots del batch (costPerCupSnapshot) para costo histórico estable.
   let cupCostPerUnit = 0;
   let cupLineCost = 0;
   let cupCostKnown = false;
+
   const costoGalon = getCostoPorGalon();
-  if (costoGalon > 0 && Array.isArray(taken.breakdown) && taken.breakdown.length){
+  if (Array.isArray(taken.breakdown) && taken.breakdown.length){
     let sumCost = 0;
+    let unknownParts = 0;
+
     for (const it of taken.breakdown){
       const cupsTaken = safeInt(it.cupsTaken, 0);
       if (!cupsTaken) continue;
 
-      let y = safeInt(it.yieldCupsPerGallon, 0);
-      if (!y){
-        const ml = Number(it.mlPerCup || 0);
-        if (ml > 0) y = Math.round(ML_PER_GALON / ml);
+      const bid = (it.batchId || '').toString();
+      const b = bid ? batches.find(x => String(x.batchId) === bid) : null;
+
+      let costPerCup = 0;
+
+      // 1) Snapshot del batch (preferido)
+      if (b && typeof b.costPerCupSnapshot === 'number' && b.costPerCupSnapshot > 0){
+        costPerCup = b.costPerCupSnapshot;
+      } else {
+        // 2) Derivar yield
+        let y = safeInt(it.yieldCupsPerGallon, 0);
+        if (!y && b) y = safeInt(b.yieldCupsPerGallon, 0);
+        if (!y){
+          const ml = Number(it.mlPerCup || 0);
+          if (ml > 0) y = Math.round(ML_PER_GALON / ml);
+        }
+
+        if (costoGalon > 0 && y > 0){
+          costPerCup = costoGalon / y;
+
+          // Si el batch existe, congelamos snapshot para siguientes ventas
+          if (b){
+            if (!(typeof b.costPerGallonSnapshot === 'number' && b.costPerGallonSnapshot > 0)) b.costPerGallonSnapshot = costoGalon;
+            if (!(typeof b.costPerCupSnapshot === 'number' && b.costPerCupSnapshot > 0)) b.costPerCupSnapshot = costPerCup;
+          }
+        }
       }
 
-      if (y > 0){
-        const costPerCup = costoGalon / y;
+      if (costPerCup > 0){
         const partCost = costPerCup * cupsTaken;
         sumCost += partCost;
 
-        // Persistimos metadata para reversión / auditoría (no rompe nada existente)
-        it.yieldCupsPerGallon = y;
-        it.costPerGallonUsed = costoGalon;
+        // Metadata de auditoría (no rompe reversión)
+        it.costPerGallonUsed = (b && b.costPerGallonSnapshot) ? b.costPerGallonSnapshot : (costoGalon > 0 ? costoGalon : 0);
         it.costPerCupUsed = round4(costPerCup);
         it.costUsed = round2(partCost);
+      } else {
+        unknownParts += 1;
       }
     }
-    if (sumCost > 0){
+
+    if (unknownParts === 0 && sumCost > 0){
       cupLineCost = round2(sumCost);
       cupCostPerUnit = round4(sumCost / (qty || 1));
       cupCostKnown = true;
@@ -2534,6 +2593,12 @@ async function renderSummary(){
     galon:{qty:0,cost:0,unknown:0},
     other:{qty:0,cost:0,unknown:0}
   };
+  // Backfill rápido: si hay ventas por vaso antiguas con costo=0 pero tienen fifoBreakdown,
+  // intentamos calcular su costo usando el costo actual del galón y el yield guardado.
+  const costoGalonBackfill = getCostoPorGalon();
+  const salesToUpdate = [];
+
+
 
   // Compatibilidad con UI existente
   let grandCost = 0;
@@ -2588,6 +2653,55 @@ async function renderSummary(){
 
     const qtyAbs = Math.abs(Number(s.qty || 0)) || 0;
 
+    // Backfill para vasos: si no hay costo conocido pero hay fifoBreakdown, tratamos de calcularlo aquí
+    const isCupRecord = (typeof isCupSaleRecord === 'function' && isCupSaleRecord(s)) || String(s.productName || '').toLowerCase().includes('vaso');
+    if (!hasKnownCost && isCupRecord && costoGalonBackfill > 0 && Array.isArray(s.fifoBreakdown) && s.fifoBreakdown.length){
+      let sumCostBF = 0;
+      let unknownBF = 0;
+
+      for (const it of s.fifoBreakdown){
+        const cupsTaken = safeInt(it.cupsTaken, 0);
+        if (!cupsTaken) continue;
+
+        let y = safeInt(it.yieldCupsPerGallon, 0);
+        if (!y){
+          const ml = Number(it.mlPerCup || 0);
+          if (ml > 0) y = Math.round(ML_PER_GALON / ml);
+        }
+
+        if (y > 0){
+          const costPerCup = costoGalonBackfill / y;
+          const partCost = costPerCup * cupsTaken;
+          sumCostBF += partCost;
+
+          // Guardar metadata para auditoría y futuras pantallas
+          it.yieldCupsPerGallon = y;
+          it.costPerGallonUsed = costoGalonBackfill;
+          it.costPerCupUsed = round4(costPerCup);
+          it.costUsed = round2(partCost);
+        } else {
+          unknownBF += 1;
+        }
+      }
+
+      if (unknownBF === 0 && sumCostBF > 0){
+        lineCost = round2(sumCostBF);
+        hasKnownCost = true;
+
+        // Persistimos el backfill para que Analítica también lo vea
+        const qtyForUnit = Math.abs(Number(s.qty || 0)) || 1;
+        const updated = Object.assign({}, s, {
+          costPerUnit: round4(sumCostBF / qtyForUnit),
+          costIsKnown: true,
+          lineCost: lineCost,
+          lineProfit: (Number(s.total || 0) - lineCost),
+          fifoBreakdown: s.fifoBreakdown
+        });
+        salesToUpdate.push(updated);
+      }
+    }
+
+
     if (isCourtesy) {
       // Conteo y costo de cortesías
       const isCup = (typeof isCupSaleRecord === 'function' && isCupSaleRecord(s)) || String(s.productName || '').toLowerCase().includes('vaso');
@@ -2615,7 +2729,19 @@ async function renderSummary(){
     }
   }
 
-  grandCost = paidCost;
+  
+  // Aplicar backfill (best effort). No bloqueamos la UI si algo falla.
+  if (salesToUpdate.length){
+    try{
+      for (const rec of salesToUpdate){
+        await put('sales', rec);
+      }
+    }catch(e){
+      console.warn('Backfill de costo por vaso falló:', e);
+    }
+  }
+
+grandCost = paidCost;
   grandProfit = paidProfit;
 
   // Acumular también lo archivado por evento en grand / tablas de resumen
