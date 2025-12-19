@@ -115,8 +115,7 @@ function mapSaleToCuentaCobro(sale) {
 async function createJournalEntryForSalePOS(sale) {
   try {
     if (!sale) return;
-    // Cortesías: por ahora NO se contabilizan ingresos ni costo de venta
-    if (sale.courtesy) return;
+    const isCourtesy = !!(sale.courtesy || sale.isCourtesy);
 
     await ensureFinanzasDB();
 
@@ -141,12 +140,16 @@ async function createJournalEntryForSalePOS(sale) {
     const cashAccount = mapSaleToCuentaCobro(sale);
     const evento = sale.eventName || '';
     const descripcionBase = sale.productName || 'Venta POS';
-    const descripcion = sale.isReturn
-      ? `Devolución POS - ${descripcionBase}`
-      : `Venta POS - ${descripcionBase}`;
+    const descripcion = isCourtesy
+      ? (sale.isReturn
+          ? `Devolución Cortesía POS - ${descripcionBase}`
+          : `Cortesía POS - ${descripcionBase}`)
+      : (sale.isReturn
+          ? `Devolución POS - ${descripcionBase}`
+          : `Venta POS - ${descripcionBase}`);
 
-    // Para devoluciones lo marcamos como "ajuste" para diferenciarlo visualmente
-    const tipoMovimiento = sale.isReturn ? 'ajuste' : 'ingreso';
+    // Para devoluciones y cortesías lo marcamos como "ajuste" para diferenciarlo visualmente
+    const tipoMovimiento = (sale.isReturn || isCourtesy) ? 'ajuste' : 'ingreso';
 
     const totalsDebe = amount + amountCost;
     const totalsHaber = amount + amountCost;
@@ -258,13 +261,33 @@ async function createJournalEntryForSalePOS(sale) {
         }
       };
 
-      if (!sale.isReturn) {
+      if (isCourtesy) {
+        // Cortesía: SOLO costo (sin ingreso)
+        //   DEBE: 6105 Gasto de cortesías
+        //   HABER: 1500 Inventario producto terminado A33
+        if (!sale.isReturn) {
+          if (amountCost > 0) {
+            addLine({ accountCode: '6105', debe: amountCost, haber: 0 });
+            addLine({ accountCode: '1500', debe: 0, haber: amountCost });
+          }
+        } else {
+          // Reversión de cortesía: asiento inverso
+          //   DEBE: 1500
+          //   HABER: 6105
+          if (amountCost > 0) {
+            addLine({ accountCode: '1500', debe: amountCost, haber: 0 });
+            addLine({ accountCode: '6105', debe: 0, haber: amountCost });
+          }
+        }
+      } else if (!sale.isReturn) {
         // Venta normal:
         // Ingreso:
         //   DEBE: Caja/Banco/Clientes
         //   HABER: 4100 Ingresos por ventas Arcano 33
-        addLine({ accountCode: cashAccount, debe: amount, haber: 0 });
-        addLine({ accountCode: '4100', debe: 0, haber: amount });
+        if (amount > 0) {
+          addLine({ accountCode: cashAccount, debe: amount, haber: 0 });
+          addLine({ accountCode: '4100', debe: 0, haber: amount });
+        }
 
         // Costo de venta (si hay costo disponible):
         //   DEBE: 5100 Costo de ventas Arcano 33
@@ -278,8 +301,10 @@ async function createJournalEntryForSalePOS(sale) {
         // Ingreso inverso:
         //   DEBE: 4100
         //   HABER: Caja/Banco/Clientes
-        addLine({ accountCode: '4100', debe: amount, haber: 0 });
-        addLine({ accountCode: cashAccount, debe: 0, haber: amount });
+        if (amount > 0) {
+          addLine({ accountCode: '4100', debe: amount, haber: 0 });
+          addLine({ accountCode: cashAccount, debe: 0, haber: amount });
+        }
 
         // Costo de venta inverso:
         //   DEBE: 1500
