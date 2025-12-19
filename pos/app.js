@@ -104,8 +104,8 @@ async function ensureFinanzasDB() {
 
 // --- Backfill: crear asientos de Finanzas para cortesías ya existentes (histórico)
 // Se ejecuta de forma segura (idempotente) y sin duplicar, usando origen='POS' y origenId=sale.id.
-async function backfillCourtesyEntriesToFinanzasPOS() {
-  const BACKFILL_KEY = 'a33_backfill_finanzas_cortesias_v1';
+async function backfillSalesEntriesToFinanzasPOS() {
+  const BACKFILL_KEY = 'a33_backfill_finanzas_sales_v1';
 
   // Evitar correr en cada carga (12 horas de cooldown)
   try {
@@ -130,10 +130,10 @@ async function backfillCourtesyEntriesToFinanzasPOS() {
   } catch (_) {
     sales = [];
   }
-  const courtesySales = (sales || []).filter(s => s && (s.courtesy || s.isCourtesy) && s.id != null);
+  const salesToBackfill = (sales || []).filter(s => s && s.id != null && s.id !== '');
 
   // Nada que hacer
-  if (!courtesySales.length) {
+  if (!salesToBackfill.length) {
     try { localStorage.setItem(BACKFILL_KEY, JSON.stringify({ doneAt: Date.now(), total: 0, created: 0 })); } catch (_) {}
     return;
   }
@@ -165,7 +165,7 @@ async function backfillCourtesyEntriesToFinanzasPOS() {
 
   let created = 0, skipped = 0, failed = 0;
 
-  for (const s of courtesySales) {
+  for (const s of salesToBackfill) {
     const sid = String(s.id);
     if (existingOriginIds.has(sid)) { skipped++; continue; }
 
@@ -175,14 +175,14 @@ async function backfillCourtesyEntriesToFinanzasPOS() {
       existingOriginIds.add(sid);
     } catch (e) {
       failed++;
-      console.error('Backfill cortesías->Finanzas falló para saleId', s && s.id, e);
+      console.error('Backfill ventas->Finanzas falló para saleId', s && s.id, e);
     }
   }
 
   try {
     localStorage.setItem(BACKFILL_KEY, JSON.stringify({
       doneAt: Date.now(),
-      total: courtesySales.length,
+      total: salesToBackfill.length,
       created, skipped, failed
     }));
   } catch (_) {}
@@ -3600,9 +3600,9 @@ async function init(){
       console.error('INIT step error en ' + name, err);
     }
   };
-  // Backfill automático: crea asientos de Finanzas para cortesías históricas (si faltan)
-  await runStep('backfill cortesías finanzas', async () => {
-    await backfillCourtesyEntriesToFinanzasPOS();
+  // Backfill automático: crea asientos de Finanzas para ventas/cortesías históricas (si faltan)
+  await runStep('backfill ventas finanzas', async () => {
+    await backfillSalesEntriesToFinanzasPOS();
   });
 
 
