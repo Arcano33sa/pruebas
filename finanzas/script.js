@@ -300,6 +300,69 @@ function monthRange(year, month) {
   return { start, end };
 }
 
+
+function isoShiftDays(isoYYYYMMDD, deltaDays) {
+  // isoYYYYMMDD: 'YYYY-MM-DD'
+  const d = new Date(`${isoYYYYMMDD}T00:00:00`);
+  d.setDate(d.getDate() + Number(deltaDays || 0));
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function getDiaryRangeFromUI() {
+  let desde = (document.getElementById('diario-desde')?.value) || '';
+  let hasta = (document.getElementById('diario-hasta')?.value) || '';
+  if (desde && hasta && desde > hasta) {
+    const tmp = desde;
+    desde = hasta;
+    hasta = tmp;
+  }
+  return { desde, hasta };
+}
+
+function setDiaryRangeUI(desde, hasta) {
+  const elDesde = document.getElementById('diario-desde');
+  const elHasta = document.getElementById('diario-hasta');
+  if (elDesde) elDesde.value = desde || '';
+  if (elHasta) elHasta.value = hasta || '';
+}
+
+function applyDiaryPreset(preset) {
+  const t = todayStr();
+  const now = new Date();
+  let desde = '';
+  let hasta = '';
+
+  switch (String(preset || '').toLowerCase()) {
+    case 'hoy':
+      desde = t; hasta = t;
+      break;
+    case 'ayer': {
+      const a = isoShiftDays(t, -1);
+      desde = a; hasta = a;
+      break;
+    }
+    case '7d':
+    case 'ultimos7':
+    case 'ultimos 7':
+      hasta = t;
+      desde = isoShiftDays(t, -6);
+      break;
+    case 'mes':
+    case 'este mes':
+      hasta = t;
+      desde = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-01`;
+      break;
+    case 'todo':
+    default:
+      desde = ''; hasta = '';
+      break;
+  }
+
+  setDiaryRangeUI(desde, hasta);
+  if (finCachedData) renderDiario(finCachedData);
+}
+
+
 function fmtCurrency(v) {
   const n = Number(v || 0);
   return n.toLocaleString('es-NI', {
@@ -1085,6 +1148,8 @@ async function exportDiarioExcel() {
   const origenFilter = ($('#filtro-origen')?.value) || 'todos';
   const proveedorFilter = (document.getElementById('filtro-proveedor')?.value) || 'todos';
 
+  const { desde: diarioDesde, hasta: diarioHasta } = getDiaryRangeFromUI();
+
   const { entries, linesByEntry } = data;
 
   const sorted = [...entries].sort((a, b) => {
@@ -1102,6 +1167,11 @@ async function exportDiarioExcel() {
     if (tipoFilter !== 'todos' && tipo !== tipoFilter) continue;
 
     const origen = e.origen || 'Manual';
+    const fechaMov = String(e.fecha || e.date || '').slice(0, 10);
+    if ((diarioDesde || diarioHasta) && !fechaMov) continue;
+    if (diarioDesde && fechaMov < diarioDesde) continue;
+    if (diarioHasta && fechaMov > diarioHasta) continue;
+
     if (origenFilter !== 'todos' && origen !== origenFilter) continue;
 
     if (!matchEvent(e, eventoFilter)) continue;
@@ -1655,6 +1725,8 @@ function renderDiario(data) {
   const origenFilter = ($('#filtro-origen')?.value) || 'todos';
   const proveedorFilter = (document.getElementById('filtro-proveedor')?.value) || 'todos';
 
+  const { desde: diarioDesde, hasta: diarioHasta } = getDiaryRangeFromUI();
+
   const { entries, linesByEntry } = data;
 
   const sorted = [...entries].sort((a, b) => {
@@ -1667,6 +1739,11 @@ function renderDiario(data) {
   for (const e of sorted) {
     const tipoMov = e.tipoMovimiento || '';
     const origen = e.origen || 'Manual';
+
+    const fechaMov = String(e.fecha || e.date || '').slice(0, 10);
+    if ((diarioDesde || diarioHasta) && !fechaMov) continue;
+    if (diarioDesde && fechaMov < diarioDesde) continue;
+    if (diarioHasta && fechaMov > diarioHasta) continue;
 
     if (tipoFilter !== 'todos' && tipoMov !== tipoFilter) continue;
     if (!matchEvent(e, eventoFilter)) continue;
@@ -2472,12 +2549,22 @@ function setupFilterListeners() {
   });
 
   // Diario
-  ['filtro-tipo', 'filtro-evento-diario', 'filtro-proveedor', 'filtro-origen'].forEach(id => {
+  ['filtro-tipo', 'filtro-evento-diario', 'filtro-proveedor', 'filtro-origen', 'diario-desde', 'diario-hasta'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('change', () => {
       if (finCachedData) renderDiario(finCachedData);
     });
   });
+
+
+  const diarioPresets = document.getElementById('diario-presets');
+  if (diarioPresets) {
+    diarioPresets.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-diario-preset]');
+      if (!btn) return;
+      applyDiaryPreset(btn.dataset.diarioPreset || '');
+    });
+  }
 
   const movTipo = $('#mov-tipo');
   if (movTipo) {

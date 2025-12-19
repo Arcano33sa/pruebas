@@ -163,6 +163,24 @@
             Proveedor
             <select id="filtro-proveedor"></select>
           </label>
+
+          <label>
+            Desde
+            <input type="date" id="diario-desde">
+          </label>
+
+          <label>
+            Hasta
+            <input type="date" id="diario-hasta">
+          </label>
+
+          <div id="diario-presets" class="fin-presets">
+            <button type="button" class="btn-small" data-diario-preset="hoy">Hoy</button>
+            <button type="button" class="btn-small" data-diario-preset="ayer">Ayer</button>
+            <button type="button" class="btn-small" data-diario-preset="7d">Últimos 7</button>
+            <button type="button" class="btn-small" data-diario-preset="mes">Este mes</button>
+            <button type="button" class="btn-small" data-diario-preset="todo">Todo</button>
+          </div>
         </div>
 
         <form id="form-movimiento" class="fin-form">
