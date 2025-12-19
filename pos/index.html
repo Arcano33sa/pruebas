@@ -7,6 +7,7 @@
 <link rel="manifest" href="manifest.webmanifest?v=3.20">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
 <link rel="stylesheet" href="styles.css?v=3.20">
@@ -554,9 +555,19 @@
         <div class="row" style="margin-top:10px">
           <div class="petty-block">
             <h4>Ajuste de arqueo C$</h4>
-            <div class="row" style="gap:8px">
-              <input id="pc-adj-nio-reason" type="text" placeholder="Motivo (obligatorio)">
-              <input id="pc-adj-nio-note" type="text" placeholder="Nota (opcional)">
+            <div class="pc-adj-grid">
+              <div>
+                <label>Monto del ajuste (obligatorio)</label>
+                <input id="pc-adj-nio-amount" type="number" inputmode="decimal" step="0.01" placeholder="Monto (C$)">
+              </div>
+              <div>
+                <label>Concepto (obligatorio)</label>
+                <input id="pc-adj-nio-concept" type="text" placeholder="Concepto">
+              </div>
+              <div class="pc-adj-notes">
+                <label>Notas (opcional)</label>
+                <input id="pc-adj-nio-notes" type="text" placeholder="Notas">
+              </div>
             </div>
             <div class="row" style="gap:8px">
               <button id="pc-btn-adj-nio" class="btn-ok" type="button">Registrar ajuste C$</button>
@@ -567,9 +578,19 @@
 
           <div class="petty-block">
             <h4>Ajuste de arqueo US$</h4>
-            <div class="row" style="gap:8px">
-              <input id="pc-adj-usd-reason" type="text" placeholder="Motivo (obligatorio)">
-              <input id="pc-adj-usd-note" type="text" placeholder="Nota (opcional)">
+            <div class="pc-adj-grid">
+              <div>
+                <label>Monto del ajuste (obligatorio)</label>
+                <input id="pc-adj-usd-amount" type="number" inputmode="decimal" step="0.01" placeholder="Monto (US$)">
+              </div>
+              <div>
+                <label>Concepto (obligatorio)</label>
+                <input id="pc-adj-usd-concept" type="text" placeholder="Concepto">
+              </div>
+              <div class="pc-adj-notes">
+                <label>Notas (opcional)</label>
+                <input id="pc-adj-usd-notes" type="text" placeholder="Notas">
+              </div>
             </div>
             <div class="row" style="gap:8px">
               <button id="pc-btn-adj-usd" class="btn-ok" type="button">Registrar ajuste US$</button>

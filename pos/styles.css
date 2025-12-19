@@ -253,6 +253,18 @@ small.muted{color:var(--muted)}
 }
 
 /* Caja Chica - Ajuste registrado */
+.pc-adj-grid{
+  display:grid;
+  grid-template-columns:minmax(0,160px) minmax(0,1fr);
+  gap:8px;
+  align-items:end;
+}
+.pc-adj-grid .pc-adj-notes{ grid-column:1 / -1; }
+@media (max-width:560px){
+  .pc-adj-grid{ grid-template-columns:minmax(0,1fr); }
+  .pc-adj-grid .pc-adj-notes{ grid-column:auto; }
+}
+
 .pc-adj-records{
   margin-top:10px;
   border:1px solid #2a2a2a;
