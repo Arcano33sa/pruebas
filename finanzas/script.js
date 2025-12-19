@@ -1729,11 +1729,17 @@ function renderDiario(data) {
 
   const { entries, linesByEntry } = data;
 
+  // Mostrar lo más reciente arriba (fecha DESC, id DESC). Si falta fecha, va al final.
   const sorted = [...entries].sort((a, b) => {
-    const fa = a.fecha || a.date || '';
-    const fb = b.fecha || b.date || '';
-    if (fa === fb) return (a.id || 0) - (b.id || 0);
-    return fa.localeCompare(fb);
+    const fa = (a.fecha || a.date || '').toString();
+    const fb = (b.fecha || b.date || '').toString();
+
+    const hasA = !!fa;
+    const hasB = !!fb;
+    if (hasA !== hasB) return hasB ? 1 : -1; // sin fecha al final
+
+    if (fa === fb) return (Number(b.id || 0) - Number(a.id || 0));
+    return fb.localeCompare(fa); // ISO strings: DESC
   });
 
   for (const e of sorted) {
@@ -2005,7 +2011,13 @@ function renderProveedores(data) {
   tbody.innerHTML = '';
 
   const suppliers = (data && Array.isArray(data.suppliers)) ? [...data.suppliers] : [];
-  suppliers.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '', 'es'));
+  // Mostrar lo más reciente arriba (id DESC). Fallback por nombre.
+  suppliers.sort((a, b) => {
+    const ida = Number(a.id || 0);
+    const idb = Number(b.id || 0);
+    if (idb !== ida) return idb - ida;
+    return (a.nombre || '').localeCompare(b.nombre || '', 'es');
+  });
 
   if (!suppliers.length) {
     const tr = document.createElement('tr');
