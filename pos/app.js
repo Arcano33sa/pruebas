@@ -102,6 +102,92 @@ async function ensureFinanzasDB() {
   }
 }
 
+// --- Backfill: crear asientos de Finanzas para cortesías ya existentes (histórico)
+// Se ejecuta de forma segura (idempotente) y sin duplicar, usando origen='POS' y origenId=sale.id.
+async function backfillCourtesyEntriesToFinanzasPOS() {
+  const BACKFILL_KEY = 'a33_backfill_finanzas_cortesias_v1';
+
+  // Evitar correr en cada carga (12 horas de cooldown)
+  try {
+    const raw = localStorage.getItem(BACKFILL_KEY);
+    if (raw) {
+      const st = JSON.parse(raw);
+      if (st && st.doneAt && (Date.now() - st.doneAt) < (12 * 60 * 60 * 1000)) return;
+    }
+  } catch (_) {}
+
+  // Si Finanzas no está disponible, salir sin romper POS
+  try {
+    await ensureFinanzasDB();
+  } catch (_) {
+    return;
+  }
+
+  // Cargar ventas del POS
+  let sales = [];
+  try {
+    sales = await getAll('sales');
+  } catch (_) {
+    sales = [];
+  }
+  const courtesySales = (sales || []).filter(s => s && (s.courtesy || s.isCourtesy) && s.id != null);
+
+  // Nada que hacer
+  if (!courtesySales.length) {
+    try { localStorage.setItem(BACKFILL_KEY, JSON.stringify({ doneAt: Date.now(), total: 0, created: 0 })); } catch (_) {}
+    return;
+  }
+
+  // Cargar journalEntries existentes para evitar duplicados
+  const existingOriginIds = await new Promise((resolve) => {
+    try {
+      const tx = finDb.transaction(['journalEntries'], 'readonly');
+      const store = tx.objectStore('journalEntries');
+      const req = store.getAll();
+      req.onsuccess = () => {
+        const arr = req.result || [];
+        const set = new Set();
+        for (const e of arr) {
+          if (!e) continue;
+          const origen = e.origen != null ? e.origen : '';
+          const oid = e.origenId != null ? e.origenId : null;
+          if (String(origen).toUpperCase() === 'POS' && oid != null && oid !== '') {
+            set.add(String(oid));
+          }
+        }
+        resolve(set);
+      };
+      req.onerror = () => resolve(new Set());
+    } catch (_) {
+      resolve(new Set());
+    }
+  });
+
+  let created = 0, skipped = 0, failed = 0;
+
+  for (const s of courtesySales) {
+    const sid = String(s.id);
+    if (existingOriginIds.has(sid)) { skipped++; continue; }
+
+    try {
+      await createJournalEntryForSalePOS(s);
+      created++;
+      existingOriginIds.add(sid);
+    } catch (e) {
+      failed++;
+      console.error('Backfill cortesías->Finanzas falló para saleId', s && s.id, e);
+    }
+  }
+
+  try {
+    localStorage.setItem(BACKFILL_KEY, JSON.stringify({
+      doneAt: Date.now(),
+      total: courtesySales.length,
+      created, skipped, failed
+    }));
+  } catch (_) {}
+}
+
 // Mapea forma de pago del POS a cuenta contable
 function mapSaleToCuentaCobro(sale) {
   const pay = sale.payment || 'efectivo';
@@ -3514,6 +3600,11 @@ async function init(){
       console.error('INIT step error en ' + name, err);
     }
   };
+  // Backfill automático: crea asientos de Finanzas para cortesías históricas (si faltan)
+  await runStep('backfill cortesías finanzas', async () => {
+    await backfillCourtesyEntriesToFinanzasPOS();
+  });
+
 
   // Paso 2: defaults y migraciones
   await runStep('ensureDefaults', ensureDefaults);
