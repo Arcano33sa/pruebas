@@ -61,7 +61,7 @@ function openDB() {
 function openFinanzasDB() {
   return new Promise((resolve, reject) => {
     if (finDb) return resolve(finDb);
-    const req = indexedDB.open(FIN_DB_NAME);
+    const req = indexedDB.open(FIN_DB_NAME, FIN_DB_VER);
     req.onupgradeneeded = (e) => {
       const d = e.target.result;
       if (!d.objectStoreNames.contains('accounts')) {
@@ -102,92 +102,6 @@ async function ensureFinanzasDB() {
   }
 }
 
-// --- Backfill: crear asientos de Finanzas para cortesías ya existentes (histórico)
-// Se ejecuta de forma segura (idempotente) y sin duplicar, usando origen='POS' y origenId=sale.id.
-async function backfillSalesEntriesToFinanzasPOS() {
-  const BACKFILL_KEY = 'a33_backfill_finanzas_sales_v1';
-
-  // Evitar correr en cada carga (12 horas de cooldown)
-  try {
-    const raw = localStorage.getItem(BACKFILL_KEY);
-    if (raw) {
-      const st = JSON.parse(raw);
-      if (st && st.doneAt && (Date.now() - st.doneAt) < (12 * 60 * 60 * 1000)) return;
-    }
-  } catch (_) {}
-
-  // Si Finanzas no está disponible, salir sin romper POS
-  try {
-    await ensureFinanzasDB();
-  } catch (_) {
-    return;
-  }
-
-  // Cargar ventas del POS
-  let sales = [];
-  try {
-    sales = await getAll('sales');
-  } catch (_) {
-    sales = [];
-  }
-  const salesToBackfill = (sales || []).filter(s => s && s.id != null && s.id !== '');
-
-  // Nada que hacer
-  if (!salesToBackfill.length) {
-    try { localStorage.setItem(BACKFILL_KEY, JSON.stringify({ doneAt: Date.now(), total: 0, created: 0 })); } catch (_) {}
-    return;
-  }
-
-  // Cargar journalEntries existentes para evitar duplicados
-  const existingOriginIds = await new Promise((resolve) => {
-    try {
-      const tx = finDb.transaction(['journalEntries'], 'readonly');
-      const store = tx.objectStore('journalEntries');
-      const req = store.getAll();
-      req.onsuccess = () => {
-        const arr = req.result || [];
-        const set = new Set();
-        for (const e of arr) {
-          if (!e) continue;
-          const origen = e.origen != null ? e.origen : '';
-          const oid = e.origenId != null ? e.origenId : null;
-          if (String(origen).toUpperCase() === 'POS' && oid != null && oid !== '') {
-            set.add(String(oid));
-          }
-        }
-        resolve(set);
-      };
-      req.onerror = () => resolve(new Set());
-    } catch (_) {
-      resolve(new Set());
-    }
-  });
-
-  let created = 0, skipped = 0, failed = 0;
-
-  for (const s of salesToBackfill) {
-    const sid = String(s.id);
-    if (existingOriginIds.has(sid)) { skipped++; continue; }
-
-    try {
-      await createJournalEntryForSalePOS(s);
-      created++;
-      existingOriginIds.add(sid);
-    } catch (e) {
-      failed++;
-      console.error('Backfill ventas->Finanzas falló para saleId', s && s.id, e);
-    }
-  }
-
-  try {
-    localStorage.setItem(BACKFILL_KEY, JSON.stringify({
-      doneAt: Date.now(),
-      total: salesToBackfill.length,
-      created, skipped, failed
-    }));
-  } catch (_) {}
-}
-
 // Mapea forma de pago del POS a cuenta contable
 function mapSaleToCuentaCobro(sale) {
   const pay = sale.payment || 'efectivo';
@@ -201,7 +115,8 @@ function mapSaleToCuentaCobro(sale) {
 async function createJournalEntryForSalePOS(sale) {
   try {
     if (!sale) return;
-    const isCourtesy = !!(sale.courtesy || sale.isCourtesy);
+    // Cortesías: por ahora NO se contabilizan ingresos ni costo de venta
+    if (sale.courtesy) return;
 
     await ensureFinanzasDB();
 
@@ -226,16 +141,12 @@ async function createJournalEntryForSalePOS(sale) {
     const cashAccount = mapSaleToCuentaCobro(sale);
     const evento = sale.eventName || '';
     const descripcionBase = sale.productName || 'Venta POS';
-    const descripcion = isCourtesy
-      ? (sale.isReturn
-          ? `Devolución Cortesía POS - ${descripcionBase}`
-          : `Cortesía POS - ${descripcionBase}`)
-      : (sale.isReturn
-          ? `Devolución POS - ${descripcionBase}`
-          : `Venta POS - ${descripcionBase}`);
+    const descripcion = sale.isReturn
+      ? `Devolución POS - ${descripcionBase}`
+      : `Venta POS - ${descripcionBase}`;
 
-    // Para devoluciones y cortesías lo marcamos como "ajuste" para diferenciarlo visualmente
-    const tipoMovimiento = (sale.isReturn || isCourtesy) ? 'ajuste' : 'ingreso';
+    // Para devoluciones lo marcamos como "ajuste" para diferenciarlo visualmente
+    const tipoMovimiento = sale.isReturn ? 'ajuste' : 'ingreso';
 
     const totalsDebe = amount + amountCost;
     const totalsHaber = amount + amountCost;
@@ -347,33 +258,13 @@ async function createJournalEntryForSalePOS(sale) {
         }
       };
 
-      if (isCourtesy) {
-        // Cortesía: SOLO costo (sin ingreso)
-        //   DEBE: 6105 Gasto de cortesías
-        //   HABER: 1500 Inventario producto terminado A33
-        if (!sale.isReturn) {
-          if (amountCost > 0) {
-            addLine({ accountCode: '6105', debe: amountCost, haber: 0 });
-            addLine({ accountCode: '1500', debe: 0, haber: amountCost });
-          }
-        } else {
-          // Reversión de cortesía: asiento inverso
-          //   DEBE: 1500
-          //   HABER: 6105
-          if (amountCost > 0) {
-            addLine({ accountCode: '1500', debe: amountCost, haber: 0 });
-            addLine({ accountCode: '6105', debe: 0, haber: amountCost });
-          }
-        }
-      } else if (!sale.isReturn) {
+      if (!sale.isReturn) {
         // Venta normal:
         // Ingreso:
         //   DEBE: Caja/Banco/Clientes
         //   HABER: 4100 Ingresos por ventas Arcano 33
-        if (amount > 0) {
-          addLine({ accountCode: cashAccount, debe: amount, haber: 0 });
-          addLine({ accountCode: '4100', debe: 0, haber: amount });
-        }
+        addLine({ accountCode: cashAccount, debe: amount, haber: 0 });
+        addLine({ accountCode: '4100', debe: 0, haber: amount });
 
         // Costo de venta (si hay costo disponible):
         //   DEBE: 5100 Costo de ventas Arcano 33
@@ -387,10 +278,8 @@ async function createJournalEntryForSalePOS(sale) {
         // Ingreso inverso:
         //   DEBE: 4100
         //   HABER: Caja/Banco/Clientes
-        if (amount > 0) {
-          addLine({ accountCode: '4100', debe: amount, haber: 0 });
-          addLine({ accountCode: cashAccount, debe: 0, haber: amount });
-        }
+        addLine({ accountCode: '4100', debe: amount, haber: 0 });
+        addLine({ accountCode: cashAccount, debe: 0, haber: amount });
 
         // Costo de venta inverso:
         //   DEBE: 1500
@@ -735,13 +624,6 @@ function round2(n){
   const x = Number(n);
   if (!Number.isFinite(x)) return 0;
   return Math.round(x * 100) / 100;
-}
-
-
-function round4(n){
-  const x = Number(n);
-  if (!Number.isFinite(x)) return 0;
-  return Math.round(x * 10000) / 10000;
 }
 
 function moneyEquals(a, b){
@@ -1175,15 +1057,6 @@ function getCostoUnitarioProducto(productName) {
   const presId = mapProductNameToPresId(productName);
   if (!presId) return 0;
   const info = costos[presId];
-  if (!info) return 0;
-  const val = typeof info.costoUnidad === 'number' ? info.costoUnidad : 0;
-  return val > 0 ? val : 0;
-}
-
-function getCostoPorGalon(){
-  const costos = leerCostosPresentacion();
-  if (!costos) return 0;
-  const info = costos.galon;
   if (!info) return 0;
   const val = typeof info.costoUnidad === 'number' ? info.costoUnidad : 0;
   return val > 0 ? val : 0;
@@ -2039,14 +1912,7 @@ async function fractionGallonsToCupsPOS(){
   const cupsCreated = gallonsToFraction * yieldCupsPerGallon;
   const mlPerCup = ML_PER_GALON / yieldCupsPerGallon;
 
-  
-  // Snapshots de costo (evita que cambie el costo histórico si la receta se actualiza después)
-  const costPerGallonSnapshot = getCostoPorGalon();
-  const costPerCupSnapshot = (costPerGallonSnapshot > 0 && yieldCupsPerGallon > 0)
-    ? (costPerGallonSnapshot / yieldCupsPerGallon)
-    : 0;
-
-const batches = sanitizeFractionBatches(ev.fractionBatches);
+  const batches = sanitizeFractionBatches(ev.fractionBatches);
   batches.push({
     batchId,
     timestamp: new Date().toISOString(),
@@ -2055,8 +1921,6 @@ const batches = sanitizeFractionBatches(ev.fractionBatches);
     cupsCreated,
     cupsRemaining: cupsCreated,
     mlPerCup,
-    costPerGallonSnapshot: (typeof costPerGallonSnapshot === 'number' ? costPerGallonSnapshot : 0),
-    costPerCupSnapshot: (typeof costPerCupSnapshot === 'number' ? costPerCupSnapshot : 0),
     note: ''
   });
 
@@ -2080,7 +1944,7 @@ function fifoTakeCups(batches, qty){
     const take = Math.min(avail, remaining);
     if (take > 0){
       b.cupsRemaining = avail - take;
-      breakdown.push({ batchId: b.batchId, cupsTaken: take, mlPerCup: b.mlPerCup, yieldCupsPerGallon: b.yieldCupsPerGallon });
+      breakdown.push({ batchId: b.batchId, cupsTaken: take, mlPerCup: b.mlPerCup });
       remaining -= take;
     }
   }
@@ -2112,30 +1976,7 @@ async function sellCupsPOS(isCourtesy){
     return;
   }
 
-  
-  // Si hay costo de Galón disponible, “congelamos” snapshots de costo en los batches usados (para costo histórico estable)
-  const costoGalonSnapshot = getCostoPorGalon();
-  if (costoGalonSnapshot > 0 && Array.isArray(taken.breakdown) && taken.breakdown.length){
-    for (const it of taken.breakdown){
-      const bid = (it.batchId || '').toString();
-      if (!bid) continue;
-      const b = batches.find(x => String(x.batchId) === bid);
-      if (!b) continue;
-
-      const hasCupSnap = (typeof b.costPerCupSnapshot === 'number' && b.costPerCupSnapshot > 0);
-      const hasGalSnap = (typeof b.costPerGallonSnapshot === 'number' && b.costPerGallonSnapshot > 0);
-
-      if (!hasCupSnap || !hasGalSnap){
-        const y = safeInt(b.yieldCupsPerGallon, safeInt(it.yieldCupsPerGallon, 0));
-        if (y > 0){
-          b.costPerGallonSnapshot = hasGalSnap ? b.costPerGallonSnapshot : costoGalonSnapshot;
-          b.costPerCupSnapshot = hasCupSnap ? b.costPerCupSnapshot : (costoGalonSnapshot / y);
-        }
-      }
-    }
-  }
-
-ev.fractionBatches = batches;
+  ev.fractionBatches = batches;
   await put('events', ev);
 
   const date = document.getElementById('sale-date')?.value || '';
@@ -2185,70 +2026,6 @@ ev.fractionBatches = batches;
   const productName = isCourtesy ? 'Vaso (Cortesía)' : 'Vaso';
   const total = isCourtesy ? 0 : (unitPrice * qty);
 
-  // Costo por vaso: se deriva del costo unitario del Galón (Calculadora) y el rendimiento del batch (vasos/galón).
-  // Regla: costoPorVaso = costoGalon / yieldCupsPerGallon. Si no hay costo de Galón, NO inventamos.
-  // Preferimos snapshots del batch (costPerCupSnapshot) para costo histórico estable.
-  let cupCostPerUnit = 0;
-  let cupLineCost = 0;
-  let cupCostKnown = false;
-
-  const costoGalon = getCostoPorGalon();
-  if (Array.isArray(taken.breakdown) && taken.breakdown.length){
-    let sumCost = 0;
-    let unknownParts = 0;
-
-    for (const it of taken.breakdown){
-      const cupsTaken = safeInt(it.cupsTaken, 0);
-      if (!cupsTaken) continue;
-
-      const bid = (it.batchId || '').toString();
-      const b = bid ? batches.find(x => String(x.batchId) === bid) : null;
-
-      let costPerCup = 0;
-
-      // 1) Snapshot del batch (preferido)
-      if (b && typeof b.costPerCupSnapshot === 'number' && b.costPerCupSnapshot > 0){
-        costPerCup = b.costPerCupSnapshot;
-      } else {
-        // 2) Derivar yield
-        let y = safeInt(it.yieldCupsPerGallon, 0);
-        if (!y && b) y = safeInt(b.yieldCupsPerGallon, 0);
-        if (!y){
-          const ml = Number(it.mlPerCup || 0);
-          if (ml > 0) y = Math.round(ML_PER_GALON / ml);
-        }
-
-        if (costoGalon > 0 && y > 0){
-          costPerCup = costoGalon / y;
-
-          // Si el batch existe, congelamos snapshot para siguientes ventas
-          if (b){
-            if (!(typeof b.costPerGallonSnapshot === 'number' && b.costPerGallonSnapshot > 0)) b.costPerGallonSnapshot = costoGalon;
-            if (!(typeof b.costPerCupSnapshot === 'number' && b.costPerCupSnapshot > 0)) b.costPerCupSnapshot = costPerCup;
-          }
-        }
-      }
-
-      if (costPerCup > 0){
-        const partCost = costPerCup * cupsTaken;
-        sumCost += partCost;
-
-        // Metadata de auditoría (no rompe reversión)
-        it.costPerGallonUsed = (b && b.costPerGallonSnapshot) ? b.costPerGallonSnapshot : (costoGalon > 0 ? costoGalon : 0);
-        it.costPerCupUsed = round4(costPerCup);
-        it.costUsed = round2(partCost);
-      } else {
-        unknownParts += 1;
-      }
-    }
-
-    if (unknownParts === 0 && sumCost > 0){
-      cupLineCost = round2(sumCost);
-      cupCostPerUnit = round4(sumCost / (qty || 1));
-      cupCostKnown = true;
-    }
-  }
-
   const now = new Date();
   const time = now.toTimeString().slice(0,5);
 
@@ -2272,10 +2049,9 @@ ev.fractionBatches = batches;
     courtesyTo: isCourtesy ? ((document.getElementById('sale-courtesy-to')?.value || '').trim()) : '',
     total,
     notes: isCourtesy ? 'Cortesía por vaso' : 'Venta por vaso',
-    costPerUnit: cupCostKnown ? cupCostPerUnit : 0,
-    costIsKnown: !!cupCostKnown,
-    lineCost: cupCostKnown ? cupLineCost : 0,
-    lineProfit: total - (cupCostKnown ? cupLineCost : 0),
+    costPerUnit: 0,
+    lineCost: 0,
+    lineProfit: total,
     vaso: true,
     fifoBreakdown: taken.breakdown
   };
@@ -2682,36 +2458,6 @@ async function renderSummary(){
   }
   const transferByBank = new Map();
   let grand = 0;
-
-  // Ventas pagadas (incluye devoluciones como negativo)
-  let paidRevenue = 0;
-  let paidCost = 0;
-  let paidProfit = 0;
-
-  // Cortesías
-  let courtesyPresQty = 0;
-  let courtesyCupsQty = 0;
-  let courtesyPresCost = 0;
-  let courtesyCupsCost = 0;
-  let courtesyPresCostUnknown = 0;
-  let courtesyCupsCostUnknown = 0;
-
-  const courtesyByPres = {
-    pulso:{qty:0,cost:0,unknown:0},
-    media:{qty:0,cost:0,unknown:0},
-    djeba:{qty:0,cost:0,unknown:0},
-    litro:{qty:0,cost:0,unknown:0},
-    galon:{qty:0,cost:0,unknown:0},
-    other:{qty:0,cost:0,unknown:0}
-  };
-  // Backfill rápido: si hay ventas por vaso antiguas con costo=0 pero tienen fifoBreakdown,
-  // intentamos calcular su costo usando el costo actual del galón y el yield guardado.
-  const costoGalonBackfill = getCostoPorGalon();
-  const salesToUpdate = [];
-
-
-
-  // Compatibilidad con UI existente
   let grandCost = 0;
   let grandProfit = 0;
 
@@ -2738,122 +2484,27 @@ async function renderSummary(){
       transferByBank.set(label, cur);
     }
 
-    // Costo / utilidad (ventas pagadas + cortesías)
-    const isCourtesy = !!(s.courtesy || s.isCourtesy);
-    if (!isCourtesy) {
-      paidRevenue += total;
-    }
-
-    let lineCost = 0;
-    let hasKnownCost = false;
-    if (typeof s.lineCost === 'number') {
-      lineCost = Number(s.lineCost || 0);
-      hasKnownCost = Math.abs(lineCost) > 0;
-    } else if (typeof s.costPerUnit === 'number' && Number(s.costPerUnit) > 0) {
-      const qty = Number(s.qty || 0);
-      lineCost = Number(s.costPerUnit) * qty;
-      hasKnownCost = true;
-    }
-
-    let lineProfit = 0;
-    if (typeof s.lineProfit === 'number') {
-      lineProfit = Number(s.lineProfit || 0);
-    } else {
-      lineProfit = total - lineCost;
-    }
-
-    const qtyAbs = Math.abs(Number(s.qty || 0)) || 0;
-
-    // Backfill para vasos: si no hay costo conocido pero hay fifoBreakdown, tratamos de calcularlo aquí
-    const isCupRecord = (typeof isCupSaleRecord === 'function' && isCupSaleRecord(s)) || String(s.productName || '').toLowerCase().includes('vaso');
-    if (!hasKnownCost && isCupRecord && costoGalonBackfill > 0 && Array.isArray(s.fifoBreakdown) && s.fifoBreakdown.length){
-      let sumCostBF = 0;
-      let unknownBF = 0;
-
-      for (const it of s.fifoBreakdown){
-        const cupsTaken = safeInt(it.cupsTaken, 0);
-        if (!cupsTaken) continue;
-
-        let y = safeInt(it.yieldCupsPerGallon, 0);
-        if (!y){
-          const ml = Number(it.mlPerCup || 0);
-          if (ml > 0) y = Math.round(ML_PER_GALON / ml);
-        }
-
-        if (y > 0){
-          const costPerCup = costoGalonBackfill / y;
-          const partCost = costPerCup * cupsTaken;
-          sumCostBF += partCost;
-
-          // Guardar metadata para auditoría y futuras pantallas
-          it.yieldCupsPerGallon = y;
-          it.costPerGallonUsed = costoGalonBackfill;
-          it.costPerCupUsed = round4(costPerCup);
-          it.costUsed = round2(partCost);
-        } else {
-          unknownBF += 1;
-        }
+    // Costo y utilidad aproximada (solo ventas/no cortesías)
+    if (!s.courtesy) {
+      let lineCost = 0;
+      if (typeof s.lineCost === 'number') {
+        lineCost = Number(s.lineCost || 0);
+      } else if (typeof s.costPerUnit === 'number') {
+        const qty = Number(s.qty || 0);
+        lineCost = s.costPerUnit * qty;
       }
 
-      if (unknownBF === 0 && sumCostBF > 0){
-        lineCost = round2(sumCostBF);
-        hasKnownCost = true;
-
-        // Persistimos el backfill para que Analítica también lo vea
-        const qtyForUnit = Math.abs(Number(s.qty || 0)) || 1;
-        const updated = Object.assign({}, s, {
-          costPerUnit: round4(sumCostBF / qtyForUnit),
-          costIsKnown: true,
-          lineCost: lineCost,
-          lineProfit: (Number(s.total || 0) - lineCost),
-          fifoBreakdown: s.fifoBreakdown
-        });
-        salesToUpdate.push(updated);
-      }
-    }
-
-
-    if (isCourtesy) {
-      // Conteo y costo de cortesías
-      const isCup = (typeof isCupSaleRecord === 'function' && isCupSaleRecord(s)) || String(s.productName || '').toLowerCase().includes('vaso');
-      if (isCup) {
-        courtesyCupsQty += qtyAbs;
-        if (hasKnownCost) courtesyCupsCost += Math.abs(lineCost);
-        else courtesyCupsCostUnknown += 1;
+      let lineProfit = 0;
+      if (typeof s.lineProfit === 'number') {
+        lineProfit = Number(s.lineProfit || 0);
       } else {
-        courtesyPresQty += qtyAbs;
-        const pid = mapProductNameToPresId(s.productName) || 'other';
-        const bucket = courtesyByPres[pid] || courtesyByPres.other;
-        bucket.qty += qtyAbs;
-        if (hasKnownCost) {
-          bucket.cost += Math.abs(lineCost);
-          courtesyPresCost += Math.abs(lineCost);
-        } else {
-          bucket.unknown += 1;
-          courtesyPresCostUnknown += 1;
-        }
+        lineProfit = total - lineCost;
       }
-    } else {
-      // Ventas pagadas
-      paidCost += lineCost;
-      paidProfit += lineProfit;
+
+      grandCost += lineCost;
+      grandProfit += lineProfit;
     }
   }
-
-  
-  // Aplicar backfill (best effort). No bloqueamos la UI si algo falla.
-  if (salesToUpdate.length){
-    try{
-      for (const rec of salesToUpdate){
-        await put('sales', rec);
-      }
-    }catch(e){
-      console.warn('Backfill de costo por vaso falló:', e);
-    }
-  }
-
-grandCost = paidCost;
-  grandProfit = paidProfit;
 
   // Acumular también lo archivado por evento en grand / tablas de resumen
   for (const ev of events){
@@ -2881,38 +2532,9 @@ grandCost = paidCost;
       extraBlock.id = 'grand-extra-block';
       if (card) card.appendChild(extraBlock);
     }
-    const presLabels = {pulso:'Pulso', media:'Media', djeba:'Djeba', litro:'Litro', galon:'Galón', other:'Otros'};
-    const presOrder = ['pulso','media','djeba','litro','galon','other'];
-    const presParts = [];
-    for (const k of presOrder){
-      const b = courtesyByPres[k];
-      if (b && b.qty) presParts.push(`${presLabels[k]}: ${b.qty}`);
-    }
-    const presBreakStr = presParts.length ? presParts.join(' · ') : '—';
-
-    const fmtCost = (val, unknownCount) => {
-      if (unknownCount > 0){
-        const known = val > 0 ? `C$ ${fmt(val)}` : `C$ 0`;
-        return `${known} + N/D (${unknownCount})`;
-      }
-      return `C$ ${fmt(val)}`;
-    };
-
-    const courtesyTotalCost = courtesyPresCost + courtesyCupsCost;
-    const courtesyUnknown = courtesyPresCostUnknown + courtesyCupsCostUnknown;
-    const realProfit = (courtesyUnknown === 0) ? (grandProfit - courtesyTotalCost) : null;
-
     extraBlock.innerHTML = `
-      <p>Ingresos pagados: C$ <span id="grand-paid">${fmt(paidRevenue)}</span></p>
-      <p>Costo ventas pagadas: C$ <span id="grand-cost">${fmt(grandCost)}</span></p>
-      <p>Utilidad bruta pagada: C$ <span id="grand-profit">${fmt(grandProfit)}</span></p>
-      <hr style="opacity:.25">
-      <p><strong>Cortesías presentaciones:</strong> <span id="courtesy-pres-qty">${courtesyPresQty}</span> <span style="opacity:.85">(${presBreakStr})</span></p>
-      <p><strong>Cortesías vasos:</strong> <span id="courtesy-cups-qty">${courtesyCupsQty}</span></p>
-      <p>Costo cortesías presentaciones: <span id="courtesy-pres-cost">${fmtCost(courtesyPresCost, courtesyPresCostUnknown)}</span></p>
-      <p>Costo cortesías vasos: <span id="courtesy-cups-cost">${fmtCost(courtesyCupsCost, courtesyCupsCostUnknown)}</span></p>
-      <p><strong>Costo cortesías total:</strong> <span id="courtesy-total-cost">${fmtCost(courtesyTotalCost, courtesyUnknown)}</span></p>
-      <p><strong>Utilidad bruta real:</strong> <span id="grand-profit-real">${realProfit == null ? 'N/D' : ('C$ ' + fmt(realProfit))}</span></p>
+      <p>Costo estimado de producto: C$ <span id="grand-cost">${fmt(grandCost)}</span></p>
+      <p>Utilidad bruta aproximada: C$ <span id="grand-profit">${fmt(grandProfit)}</span></p>
     `;
   }
 
@@ -3090,33 +2712,171 @@ async function openEventView(eventId){
   <div><b>Cerrado:</b> ${ev.closedAt?new Date(ev.closedAt).toLocaleString():'—'}</div>
   <div><b># Ventas:</b> ${sales.length}</div>`;
 
-  const total = sales.reduce((a,b)=>a+b.total,0);
+  const total = sales.reduce((a,b)=> a + (Number(b && b.total) || 0), 0);
 
-  // cálculo de costo de producto usando el costo unitario por presentación
+  // --- Costos (incluye vasos usando costo del Galón / rendimiento de fraccionamiento) ---
+  const fbatches = sanitizeFractionBatches(ev && ev.fractionBatches);
+  const batchMap = new Map();
+  for (const b of fbatches){
+    if (b && b.batchId) batchMap.set(String(b.batchId), b);
+  }
+
+  const costPerGallon = getCostoUnitarioProducto('Galón');
+  const canEstimateCupCost = costPerGallon > 0;
+
+  function estimateCupCostSigned(s){
+    const qRaw = Number(s && s.qty) || 0;
+    const absQ = Math.abs(qRaw);
+    const sign = (s && (s.isReturn || qRaw < 0)) ? -1 : 1;
+    if (!(absQ > 0)) return 0;
+    if (!canEstimateCupCost) return 0;
+
+    const breakdown = Array.isArray(s && s.fifoBreakdown) ? s.fifoBreakdown : [];
+    if (breakdown.length){
+      let costAbs = 0;
+      for (const it of breakdown){
+        if (!it) continue;
+        const take = Math.abs(Number(it.cupsTaken || 0));
+        if (!(take > 0)) continue;
+
+        let y = 0;
+        const b = it.batchId ? batchMap.get(String(it.batchId)) : null;
+        if (b && b.yieldCupsPerGallon) y = safeInt(b.yieldCupsPerGallon, 0);
+        if (!(y > 0)){
+          const mlpc = Number(it.mlPerCup || (b && b.mlPerCup) || 0);
+          if (mlpc > 0) y = Math.round(ML_PER_GALON / mlpc);
+        }
+        if (!(y > 0)) y = 22;
+
+        costAbs += take * (costPerGallon / Math.max(1, y));
+      }
+      return sign * costAbs;
+    }
+
+    // Sin breakdown (caso raro): usamos el último rendimiento conocido o default 22
+    const yFallback = safeInt((fbatches.length ? fbatches[fbatches.length-1].yieldCupsPerGallon : 22), 22);
+    return sign * absQ * (costPerGallon / Math.max(1, (yFallback > 0 ? yFallback : 22)));
+  }
+
   let costoProductos = 0;
+
+  // Stats cortesías (para mostrar en VER)
+  let cortesiasPresU = 0;
+  let cortesiasVasosU = 0;
+  let costoCortesiasPres = 0;
+  let costoCortesiasVasos = 0;
+
   for (const s of sales) {
-    const unitCost = getCostoUnitarioProducto(s.productName);
-    const absQty = Math.abs(s.qty || 0);
-    const qtyParaCosto = s.isReturn ? -absQty : absQty;
-    if (unitCost > 0 && qtyParaCosto !== 0) {
-      costoProductos += unitCost * qtyParaCosto;
+    if (!s) continue;
+    const qRaw = Number(s.qty || 0);
+    const absQty = Math.abs(qRaw);
+    const isReturn = !!s.isReturn || qRaw < 0;
+    const qtyParaCosto = isReturn ? -absQty : absQty;
+
+    const isCourtesy = !!(s.courtesy || s.isCourtesy);
+
+    if (isCupSaleRecord(s)){
+      // Preferir lineCost si ya existe, si no, estimar por galón/yield.
+      const stored = Number(s.lineCost || 0);
+      const estimated = estimateCupCostSigned(s);
+      const lineCost = (Math.abs(stored) > 1e-9) ? stored : estimated;
+
+      costoProductos += lineCost;
+
+      if (isCourtesy){
+        cortesiasVasosU += absQty;
+        costoCortesiasVasos += lineCost;
+      }
+    } else {
+      const unitCost = getCostoUnitarioProducto(s.productName);
+      if (unitCost > 0 && qtyParaCosto !== 0) {
+        const lineCost = unitCost * qtyParaCosto;
+        costoProductos += lineCost;
+
+        if (isCourtesy){
+          cortesiasPresU += absQty;
+          costoCortesiasPres += lineCost;
+        }
+      } else {
+        // Sin costo conocido: igual contar cortesías en unidades
+        if (isCourtesy){
+          cortesiasPresU += absQty;
+        }
+      }
     }
   }
+
   const utilidadBruta = total - costoProductos;
 
-  const byPay = sales.reduce((m,s)=>{ m[s.payment]=(m[s.payment]||0)+s.total; return m; },{});
-  $('#ev-totals').innerHTML = `<div><b>Total vendido:</b> C$ ${fmt(total)}</div>
+  const byPay = sales.reduce((m,s)=>{ 
+    const k = (s && s.payment) ? s.payment : '';
+    m[k] = (m[k] || 0) + (Number(s && s.total) || 0); 
+    return m; 
+  },{});
+
+  const costoCortesiasTotalKnown = costoCortesiasPres + (canEstimateCupCost ? costoCortesiasVasos : 0);
+
+  $('#ev-totals').innerHTML = `<div><b>Total vendido (pagado):</b> C$ ${fmt(total)}</div>
+  <div><b>Cortesías presentaciones:</b> ${Math.round(cortesiasPresU)} unid.</div>
+  <div><b>Cortesías vasos:</b> ${Math.round(cortesiasVasosU)} vasos</div>
+  <div><b>Costo cortesías presentaciones:</b> C$ ${fmt(costoCortesiasPres)}</div>
+  <div><b>Costo cortesías vasos:</b> ${canEstimateCupCost ? ('C$ ' + fmt(costoCortesiasVasos)) : 'N/D'}</div>
+  <div><b>Costo cortesías total:</b> ${canEstimateCupCost ? ('C$ ' + fmt(costoCortesiasTotalKnown)) : ('C$ ' + fmt(costoCortesiasPres) + ' + N/D')}</div>
   <div><b>Costo estimado de producto:</b> C$ ${fmt(costoProductos)}</div>
   <div><b>Utilidad bruta aprox.:</b> C$ ${fmt(utilidadBruta)}</div>
   <div><b>Efectivo:</b> C$ ${fmt(byPay.efectivo||0)}</div>
   <div><b>Transferencia:</b> C$ ${fmt(byPay.transferencia||0)}</div>
   <div><b>Crédito:</b> C$ ${fmt(byPay.credito||0)}</div>`;
 
-  const byDay = Array.from((()=>{ const m = new Map(); for (const s of sales){ m.set(s.date, (m.get(s.date)||0)+s.total); } return m; })().entries()).sort((a,b)=>a[0].localeCompare(b[0]));
-  const tbd = $('#ev-byday tbody'); tbd.innerHTML=''; byDay.forEach(([k,v])=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; tbd.appendChild(tr); });
+  const byDay = Array.from((()=>{
+    const m = new Map();
+    for (const s of sales){
+      const k = (s && s.date) ? String(s.date) : '';
+      if (!k) continue;
+      const prev = m.get(k) || 0;
+      m.set(k, prev + (Number(s && s.total) || 0));
+    }
+    return m;
+  })().entries()).sort((a,b)=>a[0].localeCompare(b[0]));
+  const tbd = $('#ev-byday tbody'); 
+  tbd.innerHTML=''; 
+  byDay.forEach(([k,v])=>{ 
+    const tr=document.createElement('tr'); 
+    tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; 
+    tbd.appendChild(tr); 
+  });
 
-  const byProd = Array.from((()=>{ const m = new Map(); for (const s of sales){ m.set(s.productName, (m.get(s.productName)||0)+s.total); } return m; })().entries()).sort((a,b)=>a[0].localeCompare(b[0]));
-  const tbp = $('#ev-byprod tbody'); tbp.innerHTML=''; byProd.forEach(([k,v])=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; tbp.appendChild(tr); });
+  // Por producto: mostrar Monto (C$) y, si aplica, unidades (para que "Vaso (Cortesía)" no quede en 0)
+  const byProd = Array.from((()=>{
+    const m = new Map();
+    for (const s of sales){
+      const k = (s && s.productName) ? String(s.productName) : '—';
+      const prev = m.get(k) || { amount: 0, qty: 0 };
+      prev.amount += (Number(s && s.total) || 0);
+      prev.qty += (Number(s && s.qty) || 0);
+      m.set(k, prev);
+    }
+    return m;
+  })().entries()).sort((a,b)=>a[0].localeCompare(b[0]));
+  const tbp = $('#ev-byprod tbody'); 
+  tbp.innerHTML=''; 
+  byProd.forEach(([k,obj])=>{
+    const amount = obj ? (Number(obj.amount) || 0) : 0;
+    const qty = obj ? (Number(obj.qty) || 0) : 0;
+
+    let val = '';
+    if (Math.abs(amount) < 1e-9 && Math.abs(qty) > 1e-9){
+      val = `${qty} u`;
+    } else if (Math.abs(qty) > 1e-9){
+      val = `C$ ${fmt(amount)} · ${qty} u`;
+    } else {
+      val = `C$ ${fmt(amount)}`;
+    }
+
+    const tr=document.createElement('tr'); 
+    tr.innerHTML=`<td>${escapeHtml(k)}</td><td>${val}</td>`; 
+    tbp.appendChild(tr); 
+  });
 
   const tb = $('#ev-sales tbody'); tb.innerHTML='';
   sales.sort((a,b)=>a.id-b.id).forEach(s=>{
@@ -3600,11 +3360,6 @@ async function init(){
       console.error('INIT step error en ' + name, err);
     }
   };
-  // Backfill automático: crea asientos de Finanzas para ventas/cortesías históricas (si faltan)
-  await runStep('backfill ventas finanzas', async () => {
-    await backfillSalesEntriesToFinanzasPOS();
-  });
-
 
   // Paso 2: defaults y migraciones
   await runStep('ensureDefaults', ensureDefaults);
@@ -4151,8 +3906,7 @@ async function addSale(){
     eventName,
     productId,
     productName,
-    unitPrice:(courtesy ? 0 : price),
-    listUnitPrice:(courtesy ? price : null),
+    unitPrice:price,
     qty:finalQty,
     discount,
     payment,
