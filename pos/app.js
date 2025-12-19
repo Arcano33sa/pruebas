@@ -2420,7 +2420,7 @@ async function renderDay(){
     }
     const filtered = allSales.filter(s => s.eventId === curId && s.date === d);
     let total = 0;
-    filtered.sort((a,b)=> (a.id||0) - (b.id||0));
+    filtered.sort((a,b)=> (b.id||0) - (a.id||0));
     for (const s of filtered){
       total += Number(s.total || 0);
       const payClass = s.payment==='efectivo'
@@ -2549,7 +2549,7 @@ async function renderSummary(){
   [...byEvent.entries()].sort((a,b)=>a[0].localeCompare(b[0])).forEach(([k,v])=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; tbE.appendChild(tr); });
 
   const tbD=$('#tbl-por-dia tbody'); tbD.innerHTML='';
-  [...byDay.entries()].sort((a,b)=>a[0].localeCompare(b[0])).forEach(([k,v])=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; tbD.appendChild(tr); });
+  [...byDay.entries()].sort((a,b)=>b[0].localeCompare(a[0])).forEach(([k,v])=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; tbD.appendChild(tr); });
 
   const tbP=$('#tbl-por-prod tbody'); tbP.innerHTML='';
   [...byProd.entries()].sort((a,b)=>a[0].localeCompare(b[0])).forEach(([k,v])=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; tbP.appendChild(tr); });
@@ -2709,6 +2709,7 @@ async function openEventView(eventId){
   const ev = events.find(e=>e.id===eventId);
   if (!ev) return;
   const sales = (await getAll('sales')).filter(s=>s.eventId===eventId);
+  sales.sort((a,b)=> (b.id||0) - (a.id||0));
   const banks = await getAllBanksSafe();
   const bankMap = new Map();
   for (const b of banks){ if (b && b.id != null) bankMap.set(Number(b.id), b.name || ''); }
@@ -2844,7 +2845,7 @@ async function openEventView(eventId){
       m.set(k, prev + (Number(s && s.total) || 0));
     }
     return m;
-  })().entries()).sort((a,b)=>a[0].localeCompare(b[0]));
+  })().entries()).sort((a,b)=>b[0].localeCompare(a[0]));
   const tbd = $('#ev-byday tbody'); 
   tbd.innerHTML=''; 
   byDay.forEach(([k,v])=>{ 
@@ -2886,7 +2887,7 @@ async function openEventView(eventId){
   });
 
   const tb = $('#ev-sales tbody'); tb.innerHTML='';
-  sales.sort((a,b)=>a.id-b.id).forEach(s=>{
+  sales.sort((a,b)=> (b.id||0) - (a.id||0)).forEach(s=>{
     const payLabel = (s.payment === 'transferencia')
       ? (`Transferencia · ${getSaleBankLabel(s, bankMap)}`)
       : (s.payment || '');
@@ -2936,6 +2937,7 @@ async function generateCorteCSV(eventId){
   const ev = events.find(e=>e.id===eventId);
   if (!ev){ alert('Evento no encontrado'); return; }
   const sales = (await getAll('sales')).filter(s=>s.eventId===eventId);
+  sales.sort((a,b)=> (b.id||0) - (a.id||0));
   const banks = await getAllBanksSafe();
   const bankMap = new Map();
   for (const b of banks){ if (b && b.id != null) bankMap.set(Number(b.id), b.name || ''); }
@@ -3006,6 +3008,7 @@ async function exportEventExcel(eventId){
 
   const allSales = await getAll('sales');
   const sales = allSales.filter(s=>s.eventId===eventId);
+  sales.sort((a,b)=> (b.id||0) - (a.id||0));
 
   const banks = await getAllBanksSafe();
   const bankMap = new Map();
@@ -5137,7 +5140,9 @@ function renderPettyMovements(pc, dayKey, readOnly){
   const movs = Array.isArray(day.movements) ? day.movements : [];
   if (!movs.length) return;
 
-  for (const m of movs){
+  const ordered = movs.slice().sort((a,b)=> (b.id||0) - (a.id||0));
+
+  for (const m of ordered){
     const tr = document.createElement('tr');
 
     const tdDate = document.createElement('td');
