@@ -28,26 +28,25 @@
       <a href="../index.html">Menú principal</a>
       <a href="../calculadora/index.html">Calculadora</a>
       <a href="../inventario/index.html">Inventario</a>
-      <a href="../pos/index.html">A33 POS · Eventos</a>
-      <a href="../pedidos/index.html">Planificación de Pedidos</a>
-      <a href="../analitica/index.html">Analítica de Ventas</a>
-      <a href="../lotes/index.html">Control de Lotes</a>
+      <a href="../pos/index.html">POS</a>
+      <a href="../analitica/index.html">Analítica</a>
     </div>
 
     <div class="nav-group">
       <span class="nav-group-label">Finanzas</span>
-      <button type="button" class="fin-tab-btn active" data-view="tablero">Tablero Finanzas</button>
-      <button type="button" class="fin-tab-btn" data-view="diario">Diario y Ajustes</button>
-      <button type="button" class="fin-tab-btn" data-view="estados">Estados Financieros</button>
-      <button type="button" class="fin-tab-btn" data-view="compras">Compras a Proveedor</button>
-      <button type="button" class="fin-tab-btn" data-view="proveedores">Proveedores</button>
+      <button type="button" class="fin-tab-btn active" data-view="view-tablero">Tablero</button>
+      <button type="button" class="fin-tab-btn" data-view="view-diario">Diario</button>
+      <button type="button" class="fin-tab-btn" data-view="view-estados">Estados</button>
+      <button type="button" class="fin-tab-btn" data-view="view-compras">Compras</button>
+      <button type="button" class="fin-tab-btn" data-view="view-proveedores">Proveedores</button>
+      <button type="button" class="fin-tab-btn" data-view="view-ajustes">Ajustes</button>
     </div>
   </nav>
 </header>
 
     <main class="fin-main">
 
-      <!-- TABLERO FINANZAS -->
+      <!-- TABLERO -->
       <section id="view-tablero" class="fin-view active">
         <header class="fin-section-header">
           <h2>Tablero Finanzas</h2>
@@ -63,7 +62,7 @@
             Año
             <select id="tab-anio"></select>
           </label>
-          <label>
+          <label class="fin-form-grow">
             Evento
             <select id="tab-evento"></select>
           </label>
@@ -78,6 +77,11 @@
           <article class="fin-card">
             <h3>Costos de venta (5xxx)</h3>
             <p id="tab-costos" class="fin-card-number">C$ 0.00</p>
+          </article>
+
+          <article class="fin-card">
+            <h3>Costo cortesías (POS)</h3>
+            <p id="tab-cortesias" class="fin-card-number">C$ 0.00</p>
           </article>
 
           <article class="fin-card">
@@ -106,26 +110,15 @@
           </article>
         </div>
 
-        <!-- Gráfico Ingresos / Costos / Resultado -->
-        <section class="fin-subsection">
-          <header class="fin-section-header fin-section-header--sub">
-            <h3>Gráfico Ingresos / Costos / Resultado</h3>
-            <p>
-              Visualiza el comportamiento del periodo y evento seleccionados.
-              Barras en colores de la Suite A33.
-            </p>
-          </header>
-          <div class="fin-chart-wrapper">
-            <canvas id="tab-chart" width="480" height="240"></canvas>
-          </div>
-        </section>
+        <button type="button" class="fin-btn-export" id="btn-export-tablero">Exportar Tablero (Excel)</button>
+        <p class="fin-help">Exporta el resumen del Tablero (filtrado por mes/año/evento) a Excel.</p>
       </section>
 
-      <!-- DIARIO Y AJUSTES -->
+      <!-- DIARIO -->
       <section id="view-diario" class="fin-view">
         <header class="fin-section-header">
           <h2>Diario y Ajustes</h2>
-          <p>Registra ingresos, egresos y ajustes manuales. Por detrás se generan asientos DEBE/HABER.</p>
+          <p>Listado cronológico de asientos. Filtros por tipo, evento, origen y proveedor.</p>
         </header>
 
         <div class="fin-filters-row fin-filters-row--compact">
@@ -133,9 +126,10 @@
             Tipo
             <select id="filtro-tipo">
               <option value="todos">Todos</option>
-              <option value="ingreso">Ingresos</option>
-              <option value="egreso">Egresos</option>
-              <option value="ajuste">Ajustes</option>
+              <option value="ingreso">Ingreso</option>
+              <option value="egreso">Egreso</option>
+              <option value="traslado">Traslado</option>
+              <option value="ajuste">Ajuste</option>
             </select>
           </label>
 
@@ -145,81 +139,21 @@
           </label>
 
           <label>
+            Proveedor
+            <select id="filtro-proveedor"></select>
+          </label>
+
+          <label>
             Origen
             <select id="filtro-origen">
               <option value="todos">Todos</option>
               <option value="Manual">Manual</option>
               <option value="POS">POS</option>
+              <option value="Compras">Compras</option>
+              <option value="Inventario">Inventario</option>
             </select>
           </label>
-
-          <label>
-            Proveedor
-            <select id="filtro-proveedor"></select>
-          </label>
         </div>
-
-        <form id="form-movimiento" class="fin-form">
-          <div class="fin-form-row">
-            <label>
-              Fecha
-              <input type="date" id="mov-fecha">
-            </label>
-
-            <label>
-              Tipo de movimiento
-              <select id="mov-tipo">
-                <option value="ingreso">Ingreso</option>
-                <option value="egreso">Egreso</option>
-                <option value="ajuste">Ajuste</option>
-              </select>
-            </label>
-
-            <label>
-              Medio
-              <select id="mov-medio">
-                <option value="caja">Caja</option>
-                <option value="banco">Banco</option>
-              </select>
-            </label>
-
-            <label>
-              Monto
-              <input type="number" id="mov-monto" step="0.01" min="0">
-            </label>
-          </div>
-
-          <div class="fin-form-row">
-            <label class="fin-form-grow">
-              Cuenta principal
-              <select id="mov-cuenta"></select>
-            </label>
-
-            <label class="fin-form-grow">
-              Evento (texto opcional)
-              <input type="text" id="mov-evento" placeholder="Ej: General, NE2025, Boda X, etc.">
-            </label>
-          </div>
-
-          <div class="fin-form-row">
-            <label class="fin-form-grow">
-              Descripción
-              <input type="text" id="mov-descripcion" placeholder="Descripción del movimiento">
-            </label>
-
-            <button type="button" id="mov-guardar" class="btn-primary">
-              Guardar movimiento
-            </button>
-          </div>
-
-          <p class="fin-help">
-            En Fase 3A el asiento sigue siendo de dos líneas automáticas:
-            <br>
-            <strong>Ingreso:</strong> DEBE Caja/Banco · HABER Cuenta de ingreso seleccionada.<br>
-            <strong>Egreso:</strong> DEBE Cuenta de gasto/costo · HABER Caja/Banco.<br>
-            <strong>Ajuste simple:</strong> Caja/Banco contra la cuenta seleccionada.
-          </p>
-        </form>
 
         <div class="fin-table-wrapper">
           <table class="fin-table">
@@ -231,260 +165,42 @@
                 <th>Evento</th>
                 <th>Proveedor</th>
                 <th>Origen</th>
-                <th>Debe</th>
-                <th>Haber</th>
-                <th></th>
+                <th class="num">Debe</th>
+                <th class="num">Haber</th>
+                <th>Detalle</th>
               </tr>
             </thead>
             <tbody id="diario-tbody"></tbody>
           </table>
         </div>
 
-        <!-- Exportar Diario a Excel -->
-        <button type="button" id="btn-export-diario" class="fin-btn-export">
-          Exportar Diario a Excel
-        </button>
+        <button type="button" class="fin-btn-export" id="btn-export-diario">Exportar Diario (Excel)</button>
+        <p class="fin-help">Exporta el diario filtrado actual a Excel.</p>
       </section>
 
-      
-<!-- COMPRAS A PROVEEDOR -->
-<section id="view-compras" class="fin-view">
-  <header class="fin-section-header">
-    <h2>Compras a Proveedor</h2>
-    <p>Registra compras pagadas (sin deudas) y consulta un reporte rápido por proveedor.</p>
-  </header>
-
-  <form id="form-compra" class="fin-form">
-    <div class="fin-form-row">
-      <label class="fin-form-grow">
-        Proveedor
-        <select id="compra-proveedor"></select>
-      </label>
-
-      <label>
-        Fecha
-        <input type="date" id="compra-fecha">
-      </label>
-
-      <label>
-        Tipo de compra
-        <select id="compra-tipo">
-          <option value="inventory">Compra a Inventario (Insumos)</option>
-          <option value="expense">Gasto inmediato</option>
-        </select>
-      </label>
-
-      <label>
-        Pago
-        <select id="compra-medio">
-          <option value="cash">Caja</option>
-          <option value="bank">Banco</option>
-        </select>
-      </label>
-
-      <label>
-        Monto
-        <input type="number" id="compra-monto" step="0.01" min="0">
-      </label>
-    </div>
-
-    <div class="fin-form-row">
-      <label class="fin-form-grow">
-        Cuenta DEBE
-        <select id="compra-cuenta-debe"></select>
-      </label>
-
-      <label class="fin-form-grow">
-        Cuenta HABER
-        <select id="compra-cuenta-haber"></select>
-      </label>
-    </div>
-
-    <div class="fin-form-row">
-      <label class="fin-form-grow">
-        Descripción / concepto
-        <input type="text" id="compra-descripcion" placeholder="Ej: Vino tinto, vodka, jugo, etc.">
-      </label>
-
-      <label class="fin-form-grow">
-        Referencia (factura/recibo)
-        <input type="text" id="compra-referencia" placeholder="Opcional">
-      </label>
-
-      <button type="button" id="compra-guardar" class="btn-primary">
-        Guardar compra
-      </button>
-    </div>
-
-    <p class="fin-help">
-      Aquí no existe “Proveedores por pagar”. Toda compra queda registrada como pagada al momento.
-      Se guarda bajo <strong>General/Central</strong> (sin evento).
-    </p>
-  </form>
-
-  <section class="fin-subsection">
-    <header class="fin-section-header fin-section-header--sub">
-      <h3>Reporte rápido: Compras por Proveedor</h3>
-      <p>Filtra por mes o por rango de fechas. Totales por proveedor y desglose por método de pago.</p>
-    </header>
-
-    <div class="fin-filters-row fin-filters-row--compact">
-      <label>
-        Modo de periodo
-        <select id="compras-modo">
-          <option value="mes">Por mes</option>
-          <option value="rango">Por rango</option>
-        </select>
-      </label>
-
-      <div id="compras-filtros-mes" class="fin-inline-group">
-        <label>
-          Mes
-          <select id="compras-mes"></select>
-        </label>
-        <label>
-          Año
-          <select id="compras-anio"></select>
-        </label>
-      </div>
-
-      <div id="compras-filtros-rango" class="fin-inline-group hidden">
-        <label>
-          Desde
-          <input type="date" id="compras-desde">
-        </label>
-        <label>
-          Hasta
-          <input type="date" id="compras-hasta">
-        </label>
-      </div>
-
-      <label>
-        Proveedor
-        <select id="compras-proveedor"></select>
-      </label>
-    </div>
-
-    <div class="fin-table-wrapper">
-      <table class="fin-table">
-        <thead>
-          <tr>
-            <th>Proveedor</th>
-            <th># compras</th>
-            <th>Total</th>
-            <th>Caja</th>
-            <th>Banco</th>
-          </tr>
-        </thead>
-        <tbody id="compras-tbody"></tbody>
-      </table>
-    </div>
-
-    <p id="compras-ayuda" class="fin-help"></p>
-  </section>
-</section>
-
-<!-- PROVEEDORES -->
-<section id="view-proveedores" class="fin-view">
-  <header class="fin-section-header">
-    <h2>Proveedores</h2>
-    <p>Catálogo simple de proveedores. Sirve para filtrar el Diario y el reporte de compras.</p>
-  </header>
-
-  <form id="form-proveedor" class="fin-form">
-    <input type="hidden" id="prov-id">
-
-    <div class="fin-form-row">
-      <label class="fin-form-grow">
-        Nombre (obligatorio)
-        <input type="text" id="prov-nombre" placeholder="Ej: Global Brand">
-      </label>
-
-      <label>
-        Teléfono
-        <input type="text" id="prov-telefono" placeholder="Opcional">
-      </label>
-    </div>
-
-    <div class="fin-form-row">
-      <label class="fin-form-grow">
-        Nota
-        <input type="text" id="prov-nota" placeholder="Opcional">
-      </label>
-
-      <div class="fin-actions">
-        <button type="button" id="prov-guardar" class="btn-primary">Guardar proveedor</button>
-        <button type="button" id="prov-cancelar" class="btn-ghost hidden">Cancelar</button>
-      </div>
-    </div>
-
-    <p class="fin-help">
-      Tip: aunque borres un proveedor del catálogo, las compras históricas se quedan con el nombre guardado en el asiento.
-    </p>
-  </form>
-
-  <div class="fin-table-wrapper">
-    <table class="fin-table">
-      <thead>
-        <tr>
-          <th>Nombre</th>
-          <th>Teléfono</th>
-          <th>Nota</th>
-          <th>Acciones</th>
-        </tr>
-      </thead>
-      <tbody id="proveedores-tbody"></tbody>
-    </table>
-  </div>
-</section>
-
-      <!-- ESTADOS FINANCIEROS -->
+      <!-- ESTADOS -->
       <section id="view-estados" class="fin-view">
         <header class="fin-section-header">
-          <h2>Estados Financieros</h2>
-          <p>Estado de Resultados, Balance General y Flujo de Caja usando los asientos de Finanzas.</p>
+          <h2>Estados financieros</h2>
+          <p>Estado de Resultados y Balance General. Filtra por rango de fechas y evento.</p>
         </header>
 
         <div class="fin-subtabs">
-          <button type="button" class="fin-subtab-btn active" data-subview="er">Estado de Resultados</button>
-          <button type="button" class="fin-subtab-btn" data-subview="bg">Balance General</button>
-          <button type="button" class="fin-subtab-btn" data-subview="fc">Flujo de Caja</button>
+          <button type="button" class="fin-subtab-btn active" data-subview="sub-er">Estado de Resultados</button>
+          <button type="button" class="fin-subtab-btn" data-subview="sub-bg">Balance General</button>
         </div>
 
-        <!-- Estado de Resultados -->
-        <section id="sub-er" class="fin-subview active">
+        <div class="fin-subview active" id="sub-er">
           <div class="fin-filters-row">
             <label>
-              Modo de periodo
-              <select id="er-modo">
-                <option value="mes">Por mes</option>
-                <option value="rango">Por rango de fechas</option>
-              </select>
+              Desde
+              <input type="date" id="er-desde">
             </label>
-
-            <div id="er-filtros-mes" class="fin-inline-group">
-              <label>
-                Mes
-                <select id="er-mes"></select>
-              </label>
-              <label>
-                Año
-                <select id="er-anio"></select>
-              </label>
-            </div>
-
-            <div id="er-filtros-rango" class="fin-inline-group hidden">
-              <label>
-                Desde
-                <input type="date" id="er-desde">
-              </label>
-              <label>
-                Hasta
-                <input type="date" id="er-hasta">
-              </label>
-            </div>
-
             <label>
+              Hasta
+              <input type="date" id="er-hasta">
+            </label>
+            <label class="fin-form-grow">
               Evento
               <select id="er-evento"></select>
             </label>
@@ -492,53 +208,56 @@
 
           <div class="fin-cards-grid fin-cards-grid--er">
             <article class="fin-card">
-              <h3>Ingresos (4xxx)</h3>
+              <h3>Ingresos</h3>
               <p id="er-ingresos" class="fin-card-number">C$ 0.00</p>
             </article>
-
             <article class="fin-card">
-              <h3>Costos de venta (5xxx)</h3>
+              <h3>Costos de venta</h3>
               <p id="er-costos" class="fin-card-number">C$ 0.00</p>
             </article>
-
             <article class="fin-card">
-              <h3>Gastos de operación (6xxx)</h3>
-              <p id="er-gastos" class="fin-card-number">C$ 0.00</p>
-            </article>
-
-            <article class="fin-card fin-card-strong">
-              <h3>Utilidad bruta</h3>
+              <h3>Margen bruto</h3>
               <p id="er-bruta" class="fin-card-number">C$ 0.00</p>
             </article>
-
+            <article class="fin-card">
+              <h3>Gastos</h3>
+              <p id="er-gastos" class="fin-card-number">C$ 0.00</p>
+            </article>
             <article class="fin-card fin-card-strong">
-              <h3>Utilidad neta</h3>
+              <h3>Resultado neto</h3>
               <p id="er-neta" class="fin-card-number">C$ 0.00</p>
             </article>
           </div>
 
-          <!-- Exportar Estado de Resultados -->
-          <button type="button" id="btn-export-er" class="fin-btn-export">
-            Exportar Estado de Resultados a Excel
-          </button>
+          <button type="button" class="fin-btn-export" id="btn-export-er">Exportar ER (Excel)</button>
+          <p class="fin-help">Exporta el estado de resultados del rango seleccionado.</p>
 
-          <p class="fin-help">
-            Nota: en Fase 3A los costos (5xxx) se pueden registrar manualmente.
-            En Fase 3B los costos de venta se generarán en automático desde el POS según presentaciones de Arcano 33.
-          </p>
+          <h3 style="margin-top:14px; color: var(--fin-muted); font-size: 0.9rem;">Resultados por evento (en el rango)</h3>
+          <div class="fin-table-wrapper">
+            <table class="fin-table">
+              <thead>
+                <tr>
+                  <th>Evento</th>
+                  <th class="num">Ingresos</th>
+                  <th class="num">Costos</th>
+                  <th class="num">Gastos</th>
+                  <th class="num">Neto</th>
+                </tr>
+              </thead>
+              <tbody id="er-eventos-tbody"></tbody>
+            </table>
+          </div>
+        </div>
 
-          <!-- Aquí, debajo, el JS inserta:
-               - Rentabilidad por presentación
-               - Comparativo de eventos
-               con sus propios botones de exportar -->
-        </section>
-
-        <!-- Balance General -->
-        <section id="sub-bg" class="fin-subview">
+        <div class="fin-subview" id="sub-bg">
           <div class="fin-filters-row">
             <label>
-              Fecha de corte
+              Fecha corte
               <input type="date" id="bg-fecha">
+            </label>
+            <label class="fin-form-grow">
+              Evento
+              <select id="bg-evento"></select>
             </label>
           </div>
 
@@ -546,105 +265,154 @@
             <table class="fin-table">
               <thead>
                 <tr>
-                  <th>Grupo</th>
-                  <th>Saldo</th>
+                  <th>Cuenta</th>
+                  <th class="num">Saldo</th>
                 </tr>
               </thead>
-              <tbody id="bg-tbody">
-                <tr>
-                  <td>Activos (1xxx)</td>
-                  <td id="bg-activos" class="num">C$ 0.00</td>
-                </tr>
-                <tr>
-                  <td>Pasivos (2xxx)</td>
-                  <td id="bg-pasivos" class="num">C$ 0.00</td>
-                </tr>
-                <tr>
-                  <td>Patrimonio (3xxx)</td>
-                  <td id="bg-patrimonio" class="num">C$ 0.00</td>
-                </tr>
-                <tr class="fin-row-strong">
-                  <td>Activos – Pasivos – Patrimonio</td>
-                  <td id="bg-cuadre" class="num">C$ 0.00</td>
-                </tr>
-              </tbody>
+              <tbody id="bg-tbody"></tbody>
             </table>
           </div>
 
-          <!-- Exportar Balance General -->
-          <button type="button" id="btn-export-bg" class="fin-btn-export">
-            Exportar Balance General a Excel
-          </button>
+          <button type="button" class="fin-btn-export" id="btn-export-bg">Exportar Balance (Excel)</button>
+          <p class="fin-help">Exporta el balance general a la fecha corte.</p>
+        </div>
+      </section>
+
+      <!-- COMPRAS -->
+      <section id="view-compras" class="fin-view">
+        <header class="fin-section-header">
+          <h2>Compras a proveedor</h2>
+          <p>Registra compras y genera el asiento contable. Puedes asociar un evento si aplica.</p>
+        </header>
+
+        <form id="form-compra" class="fin-form">
+          <div class="fin-form-row">
+            <label class="fin-form-grow">
+              Proveedor
+              <select id="compra-proveedor"></select>
+            </label>
+
+            <label class="fin-form-grow">
+              Descripción
+              <input type="text" id="compra-descripcion" placeholder="Ej. Botellas 750 ml">
+            </label>
+
+            <label>
+              Fecha
+              <input type="date" id="compra-fecha">
+            </label>
+          </div>
+
+          <div class="fin-form-row">
+            <label class="fin-form-grow">
+              Evento (opcional)
+              <select id="compra-evento"></select>
+            </label>
+
+            <label>
+              Monto (C$)
+              <input type="number" step="0.01" id="compra-monto" value="0">
+            </label>
+
+            <label>
+              Tipo
+              <select id="compra-tipo">
+                <option value="inventario">Compra a inventario</option>
+                <option value="gasto">Gasto directo</option>
+              </select>
+            </label>
+
+            <button type="submit" class="btn-primary">Registrar compra</button>
+          </div>
 
           <p class="fin-help">
-            Idealmente el Balance cuadra (Activos = Pasivos + Patrimonio).
-            En esta Fase 3A solo se usan las cuentas 1xxx, 2xxx y 3xxx que entren en los asientos.
+            Compra a inventario: DEBE 1500 / HABER 2100 (CxP) o 1100/1110 si pagas al contado.<br>
+            Gasto directo: DEBE 6xxx / HABER 2100 o caja/banco.
           </p>
-        </section>
-
-        <!-- Flujo de Caja -->
-        <section id="sub-fc" class="fin-subview">
-          <header class="fin-section-header fin-section-header--sub">
-            <h3>Flujo de Caja simple</h3>
-            <p>
-              Usa el mismo periodo seleccionado en el Estado de Resultados (mes o rango).
-              Calcula Caja + Banco: saldo inicial, entradas, salidas y saldo final,
-              separando operación vs aportes/retiros del dueño.
-            </p>
-          </header>
-
-          <div class="fin-table-wrapper">
-            <table class="fin-table" id="fc-table">
-              <thead>
-                <tr>
-                  <th>Concepto</th>
-                  <th>Monto</th>
-                </tr>
-              </thead>
-              <tbody id="fc-tbody">
-                <tr>
-                  <td colspan="2">Sin datos de efectivo para el periodo seleccionado.</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <!-- Exportar Flujo de Caja -->
-          <button type="button" id="btn-export-fc" class="fin-btn-export">
-            Exportar Flujo de Caja a Excel
-          </button>
-        </section>
+        </form>
       </section>
+
+      <!-- PROVEEDORES -->
+      <section id="view-proveedores" class="fin-view">
+        <header class="fin-section-header">
+          <h2>Proveedores</h2>
+          <p>Administra proveedores (CRUD). Estos se usan al registrar compras.</p>
+        </header>
+
+        <form id="form-proveedor" class="fin-form">
+          <div class="fin-form-row">
+            <label class="fin-form-grow">
+              Nombre proveedor
+              <input type="text" id="prov-nombre" placeholder="Ej. Distribuidora X">
+            </label>
+            <label class="fin-form-grow">
+              Teléfono (opcional)
+              <input type="text" id="prov-telefono" placeholder="Ej. 8888-8888">
+            </label>
+            <label class="fin-form-grow">
+              Nota (opcional)
+              <input type="text" id="prov-nota" placeholder="Ej. Crédito 15 días">
+            </label>
+            <button type="submit" class="btn-primary">Guardar proveedor</button>
+          </div>
+        </form>
+
+        <div class="fin-table-wrapper">
+          <table class="fin-table">
+            <thead>
+              <tr>
+                <th>Proveedor</th>
+                <th>Teléfono</th>
+                <th>Nota</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="proveedores-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- AJUSTES -->
+      <section id="view-ajustes" class="fin-view">
+        <header class="fin-section-header">
+          <h2>Ajustes</h2>
+          <p>Herramientas y configuración (cuentas, exportaciones, etc.).</p>
+        </header>
+
+        <div class="fin-help">
+          Próximamente: configuración avanzada, integraciones y utilidades.
+        </div>
+      </section>
+
     </main>
 
-    <!-- Toast -->
-    <div id="toast" class="fin-toast"></div>
-
-    <!-- Modal detalle de asiento -->
-    <div id="detalle-modal" class="fin-modal">
+    <!-- MODAL DETALLE -->
+    <div class="fin-modal" id="modal-detalle">
       <div class="fin-modal-content">
-        <header class="fin-modal-header">
-          <h3>Detalle de asiento</h3>
-          <button type="button" id="detalle-cerrar" class="btn-close">×</button>
-        </header>
+        <div class="fin-modal-header">
+          <strong>Detalle de asiento</strong>
+          <button type="button" class="btn-close" id="btn-cerrar-modal">×</button>
+        </div>
         <div class="fin-modal-body">
-          <div id="detalle-meta" class="fin-detalle-meta"></div>
+          <div class="fin-detalle-meta" id="detalle-meta"></div>
           <div class="fin-table-wrapper">
             <table class="fin-table">
               <thead>
                 <tr>
                   <th>Cuenta</th>
                   <th>Nombre</th>
-                  <th>Debe</th>
-                  <th>Haber</th>
+                  <th class="num">Debe</th>
+                  <th class="num">Haber</th>
                 </tr>
               </thead>
-              <tbody id="detalle-tbody"></tbody>
+              <tbody id="detalle-lines"></tbody>
             </table>
           </div>
         </div>
       </div>
     </div>
+
+    <div class="fin-toast" id="toast"></div>
 
   </div>
 
