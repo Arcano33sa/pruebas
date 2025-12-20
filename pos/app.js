@@ -1154,6 +1154,19 @@ function saleSortKeyPOS(s){
   return (Number.isFinite(idn) ? idn : 0);
 }
 
+// Descuento total (compatibilidad: ventas antiguas / Extras)
+function getSaleDiscountTotalPOS(s){
+  if (!s) return 0;
+  const d = Number(s.discount);
+  if (Number.isFinite(d)) return d;
+  const du = Number(s.discountPerUnit);
+  if (Number.isFinite(du) && du > 0){
+    const q = Math.abs(Number(s.qty || 0));
+    return du * q;
+  }
+  return 0;
+}
+
 
 // --- Consecutivo por evento (N°) para ventas (incluye Extras)
 // Nota: mantenemos el `id` real (autoincrement/timestamp) para trazabilidad.
@@ -1528,13 +1541,14 @@ async function getHiddenProductIdsPOS(){
 async function renderProductChips(){
   const chips = $('#product-chips'); if (!chips) return;
   chips.innerHTML='';
+
   const hiddenIds = await getHiddenProductIdsPOS();
   let list = (await getAll('products')).filter(p=>p.active!==false && !hiddenIds.has(p.id));
 
   // Orden con prioridad de Arcano 33
   const priority = ['pulso','media','djeba','litro','galon','galón','galon 3800','galón 3800'];
   list.sort((a,b)=>{
-    const ia = priority.findIndex(x=>normName(a.name).includes(x)); 
+    const ia = priority.findIndex(x=>normName(a.name).includes(x));
     const ib = priority.findIndex(x=>normName(b.name).includes(x));
     const pa = ia===-1?999:ia; const pb = ib===-1?999:ib;
     if (pa!==pb) return pa-pb;
@@ -1547,29 +1561,75 @@ async function renderProductChips(){
   const enabled = !!(current && cur && !cur.closedAt);
 
   const sel = $('#sale-product');
-  const selectedId = parseInt((sel && sel.value) ? sel.value : (list[0]?.id || 0), 10);
+  const selected = parseSelectedSellItemValue(sel ? sel.value : '');
 
+  // Productos
   for (const p of list){
     const c = document.createElement('button');
     c.className = 'chip';
+    c.dataset.kind = 'product';
+    c.dataset.id = p.id;
     if (!enabled) c.classList.add('disabled');
     c.textContent = p.name;
-    c.dataset.id = p.id;
-    if (p.id === selectedId) c.classList.add('active');
+    if (selected && selected.kind==='product' && p.id === selected.id) c.classList.add('active');
+
     c.onclick = async()=>{
       if (!enabled) return;
-      const prev = parseInt(sel.value||'0',10);
-      sel.value = p.id;
-      const same = prev === p.id;
+      const prev = parseSelectedSellItemValue(sel.value);
+      sel.value = String(p.id);
+      const same = prev && prev.kind==='product' && prev.id === p.id;
       if (same) { $('#sale-qty').value = Math.max(1, parseFloat($('#sale-qty').value||'1')) + 1; }
       else { $('#sale-qty').value = 1; }
-      const pr = (await getAll('products')).find(x=>x.id===p.id);
-      if (pr) $('#sale-price').value = pr.price;
-      $$('.chip').forEach(x=>x.classList.remove('active')); c.classList.add('active');
+      $('#sale-price').value = p.price;
+      updateChipsActiveFromSelectionPOS();
       await refreshSaleStockLabel();
       recomputeTotal();
     };
+
     chips.appendChild(c);
+  }
+
+  // Extras (por evento)
+  try{
+    const ev = await getActiveEventPOS();
+    const extras = ev ? sanitizeExtrasPOS(ev.extras).filter(x=>x && x.active!==false) : [];
+    if (extras.length){
+      // separador visual simple
+      const sep = document.createElement('div');
+      sep.className = 'chips-sep';
+      sep.textContent = 'Extras';
+      chips.appendChild(sep);
+
+      extras.sort((a,b)=> a.name.localeCompare(b.name, 'es'));
+
+      for (const x of extras){
+        const c = document.createElement('button');
+        c.className = 'chip extra';
+        c.dataset.kind = 'extra';
+        c.dataset.extraId = x.id;
+        if (!enabled) c.classList.add('disabled');
+        if (x.stock <= 0) c.classList.add('out');
+        c.textContent = x.name;
+        if (selected && selected.kind==='extra' && Number(selected.id) === Number(x.id)) c.classList.add('active');
+
+        c.onclick = async()=>{
+          if (!enabled) return;
+          const prev = parseSelectedSellItemValue(sel.value);
+          sel.value = `extra:${x.id}`;
+          const same = prev && prev.kind==='extra' && prev.id === x.id;
+          if (same) { $('#sale-qty').value = Math.max(1, parseFloat($('#sale-qty').value||'1')) + 1; }
+          else { $('#sale-qty').value = 1; }
+          $('#sale-price').value = x.unitPrice;
+          updateChipsActiveFromSelectionPOS();
+          await refreshSaleStockLabel();
+          recomputeTotal();
+        };
+
+        chips.appendChild(c);
+      }
+    }
+  }catch(e){
+    // no-op
   }
 
   if (list.length===0){
@@ -1754,7 +1814,8 @@ async function refreshEventUI(){
   }
 
   await updateSellEnabled();
-  await renderProductChips();
+  try{ await refreshProductSelect({ keepSelection:true }); }catch(e){ try{ await renderProductChips(); }catch(_){ } }
+  try{ await renderExtrasUI(); }catch(e){}
   try{ await renderCajaChica(); }catch(e){}
 }
 
@@ -1852,41 +1913,415 @@ async function onTogglePettyForCurrentEvent(){
 }
 
 // Product select + stock label
-async function refreshProductSelect(){
+async function refreshProductSelect(opts){
+  opts = opts || {};
+  const keepSelection = (opts.keepSelection !== false);
+
   const hiddenIds = await getHiddenProductIdsPOS();
   const all = await getAll('products');
   const list = all.filter(p => !hiddenIds.has(p.id));
+
   const sel = $('#sale-product');
   if (!sel) return;
+
+  const prevVal = keepSelection ? String(sel.value || '').trim() : '';
   sel.innerHTML = '';
+
+  // Productos
   for (const p of list) {
     const opt = document.createElement('option');
     opt.value = p.id;
     opt.textContent = `${p.name} (C${fmt(p.price)})${p.active===false?' [inactivo]':''}`;
     sel.appendChild(opt);
   }
-  const first = list[0] || all[0];
-  if (first){ 
-    sel.value = first.id; 
-    $('#sale-price').value = first.price; 
+
+  // Extras del evento activo
+  try{
+    const ev = await getActiveEventPOS();
+    const extras = ev ? sanitizeExtrasPOS(ev.extras).filter(x=>x && x.active!==false) : [];
+    if (ev && extras.length){
+      const og = document.createElement('optgroup');
+      og.label = 'Extras';
+      for (const x of extras){
+        const opt = document.createElement('option');
+        opt.value = `extra:${x.id}`;
+        const flags = [];
+        if (x.stock <= 0) flags.push('SIN STOCK');
+        else if (x.stock <= x.lowStockAlert) flags.push('BAJO');
+        opt.textContent = `${x.name} (C${fmt(x.unitPrice)})${flags.length ? ' ['+flags.join(', ')+']' : ''}`;
+        og.appendChild(opt);
+      }
+      sel.appendChild(og);
+    }
+  }catch(e){
+    console.warn('No se pudieron cargar Extras para el selector', e);
   }
+
+  // Reseleccionar si aplica
+  if (keepSelection && prevVal && Array.from(sel.options).some(o => o.value === prevVal)){
+    sel.value = prevVal;
+  } else {
+    const first = sel.querySelector('option');
+    if (first) sel.value = first.value;
+  }
+
+  await setSalePriceFromSelectionPOS();
   await renderProductChips();
-  const selId = parseInt(sel.value||'0',10);
-  document.querySelectorAll('#product-chips .chip').forEach(x=>{
-    if (parseInt(x.dataset.id,10)===selId) x.classList.add('active');
-  });
   await refreshSaleStockLabel();
   recomputeTotal();
 }
 
 async function refreshSaleStockLabel(){
   const curId = await getMeta('currentEventId');
-  const prodId = parseInt($('#sale-product').value||'0',10);
+  const selVal = String($('#sale-product')?.value || '').trim();
+  const item = parseSelectedSellItemValue(selVal);
+
+  if (!curId || !item){
+    $('#sale-stock').textContent='—';
+    return;
+  }
+
+  if (item.kind === 'extra'){
+    const ev = await getActiveEventPOS();
+    const extras = ev ? sanitizeExtrasPOS(ev.extras) : [];
+    const x = extras.find(z => Number(z.id) === Number(item.id));
+    $('#sale-stock').textContent = x ? String(x.stock) : '—';
+    return;
+  }
+
+  const prodId = item.id;
   const products = await getAll('products');
   const p = products.find(pp=>pp.id===prodId);
-  if (!p || p.manageStock===false || !curId) { $('#sale-stock').textContent='—'; return; }
+  if (!p || p.manageStock===false) { $('#sale-stock').textContent='—'; return; }
   const st = await computeStock(parseInt(curId,10), prodId);
   $('#sale-stock').textContent = st;
+}
+
+// --- Extras por evento (solo POS / por evento activo) ---
+let editingExtraIdPOS = null;
+
+function parseSelectedSellItemValue(val){
+  const v = String(val || '').trim();
+  if (!v) return null;
+  if (v.startsWith('extra:')){
+    const id = parseInt(v.slice(6), 10);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    return { kind:'extra', id };
+  }
+  const id = parseInt(v, 10);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  return { kind:'product', id };
+}
+
+function sanitizeExtrasPOS(raw){
+  const arr = Array.isArray(raw) ? raw : [];
+  const clean = [];
+  for (const x of arr){
+    if (!x) continue;
+    const id = parseInt(x.id, 10);
+    if (!id) continue;
+    const name = String(x.name || '').trim();
+    if (!name) continue;
+    const stock = Number(x.stock || 0);
+    const unitCost = Number(x.unitCost || 0);
+    const unitPrice = Number(x.unitPrice || 0);
+    const lowStockAlert = safeInt(x.lowStockAlert, 5);
+    clean.push({
+      id,
+      name,
+      stock: Number.isFinite(stock) ? stock : 0,
+      unitCost: Number.isFinite(unitCost) ? unitCost : 0,
+      unitPrice: Number.isFinite(unitPrice) ? unitPrice : 0,
+      lowStockAlert: (lowStockAlert>0?lowStockAlert:5),
+      active: (x.active === false) ? false : true,
+      createdAt: x.createdAt || null,
+      updatedAt: x.updatedAt || null
+    });
+  }
+  return clean;
+}
+
+function ensureEventExtraSeqPOS(ev){
+  if (!ev) return;
+  const extras = sanitizeExtrasPOS(ev.extras);
+  let maxId = 0;
+  for (const x of extras) maxId = Math.max(maxId, Number(x.id) || 0);
+  const cur = safeInt(ev.extraSeq, 0);
+  ev.extraSeq = Math.max(cur, maxId);
+  ev.extras = extras;
+}
+
+async function getActiveEventPOS(){
+  const curId = await getMeta('currentEventId');
+  if (!curId) return null;
+  const evs = await getAll('events');
+  const ev = evs.find(e => e.id === curId) || null;
+  if (!ev || ev.closedAt) return null;
+  ensureEventExtraSeqPOS(ev);
+  return ev;
+}
+
+async function setSalePriceFromSelectionPOS(){
+  const sel = $('#sale-product');
+  if (!sel) return;
+  const item = parseSelectedSellItemValue(sel.value);
+  if (!item) return;
+  if (item.kind === 'product'){
+    const p = (await getAll('products')).find(x => x.id === item.id);
+    if (p) $('#sale-price').value = p.price;
+    return;
+  }
+  const ev = await getActiveEventPOS();
+  if (!ev) return;
+  const extras = sanitizeExtrasPOS(ev.extras);
+  const x = extras.find(z => Number(z.id) === Number(item.id));
+  if (x) $('#sale-price').value = x.unitPrice;
+}
+
+function updateChipsActiveFromSelectionPOS(){
+  const sel = $('#sale-product');
+  const item = parseSelectedSellItemValue(sel ? sel.value : '');
+  document.querySelectorAll('#product-chips .chip').forEach(btn => {
+    const kind = (btn.dataset.kind || 'product');
+    let isActive = false;
+    if (item){
+      if (item.kind === 'product' && kind === 'product'){
+        isActive = (parseInt(btn.dataset.id || '0', 10) === item.id);
+      }
+      if (item.kind === 'extra' && kind === 'extra'){
+        isActive = (parseInt(btn.dataset.extraId || '0', 10) === item.id);
+      }
+    }
+    btn.classList.toggle('active', isActive);
+  });
+}
+
+function resetExtraFormPOS(){
+  editingExtraIdPOS = null;
+  const name = document.getElementById('extra-name');
+  const stock = document.getElementById('extra-stock');
+  const cost = document.getElementById('extra-cost');
+  const price = document.getElementById('extra-price');
+  const low = document.getElementById('extra-low');
+  if (name) name.value = '';
+  if (stock) stock.value = '';
+  if (cost) cost.value = '';
+  if (price) price.value = '';
+  if (low) low.value = '';
+  const btnCancel = document.getElementById('btn-cancel-extra');
+  if (btnCancel) btnCancel.style.display = 'none';
+}
+
+async function renderExtrasUI(){
+  const label = document.getElementById('extras-event-label');
+  const note = document.getElementById('extras-disabled-note');
+  const listEl = document.getElementById('extras-list');
+
+  const ev = await getActiveEventPOS();
+  const enabled = !!ev;
+
+  if (label) label.textContent = enabled ? (ev.name || '—') : '—';
+  if (note) note.style.display = enabled ? 'none' : 'block';
+
+  const idsToDisable = ['extra-name','extra-stock','extra-cost','extra-price','extra-low','btn-save-extra'];
+  for (const id of idsToDisable){
+    const el = document.getElementById(id);
+    if (el) el.disabled = !enabled;
+  }
+
+  if (!listEl) return;
+
+  if (!enabled){
+    listEl.innerHTML = '<div class="muted">Activa un evento para gestionar Extras.</div>';
+    resetExtraFormPOS();
+    return;
+  }
+
+  ensureEventExtraSeqPOS(ev);
+  const extras = sanitizeExtrasPOS(ev.extras).filter(x=>x.active!==false);
+
+  if (!extras.length){
+    listEl.innerHTML = '<div class="muted">Aún no hay Extras en este evento.</div>';
+    return;
+  }
+
+  extras.sort((a,b)=> a.name.localeCompare(b.name));
+
+  const rows = extras.map(x=>{
+    const low = (x.stock <= x.lowStockAlert && x.stock > 0);
+    const out = (x.stock <= 0);
+    const cls = ['extra-row', low?'low':'', out?'out':''].filter(Boolean).join(' ');
+    const flags = out ? '<span class="pill danger">SIN STOCK</span>' : (low ? '<span class="pill warn">BAJO</span>' : '');
+    return `
+      <div class="${cls}" data-id="${x.id}">
+        <div class="extra-main">
+          <div class="extra-name"><strong>${escapeHtml(x.name)}</strong> ${flags}</div>
+          <div class="extra-meta">Stock: <strong>${x.stock}</strong> · PU: <strong>C${fmt(x.unitPrice)}</strong> · Costo: <strong>C${fmt(x.unitCost)}</strong> · Alerta: ${x.lowStockAlert}</div>
+        </div>
+        <div class="extra-actions">
+          <button class="btn-small extra-edit" data-action="edit" data-id="${x.id}">Editar</button>
+          <button class="btn-small extra-restock" data-action="restock" data-id="${x.id}">+ Stock</button>
+          <button class="btn-small danger extra-del" data-action="del" data-id="${x.id}">Eliminar</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  listEl.innerHTML = rows;
+}
+
+async function onSaveExtraPOS(){
+  const ev = await getActiveEventPOS();
+  if (!ev){
+    alert('Debes activar un evento para crear Extras.');
+    return;
+  }
+
+  const name = (document.getElementById('extra-name')?.value || '').trim();
+  const stock = parseFloat(document.getElementById('extra-stock')?.value || '');
+  const unitCost = parseFloat(document.getElementById('extra-cost')?.value || '');
+  const unitPrice = parseFloat(document.getElementById('extra-price')?.value || '');
+  const lowDefault = safeInt(document.getElementById('extra-low-default')?.value, 5);
+  const lowStockAlert = safeInt(document.getElementById('extra-low')?.value, lowDefault);
+
+  if (!name){ alert('Nombre de Extra es obligatorio'); return; }
+  if (!Number.isFinite(stock) || stock < 0){ alert('Stock/Cantidad debe ser 0 o mayor'); return; }
+  if (!Number.isFinite(unitCost) || unitCost < 0){ alert('Costo unitario es obligatorio (>= 0)'); return; }
+  if (!Number.isFinite(unitPrice) || unitPrice <= 0){ alert('Precio unitario es obligatorio (> 0)'); return; }
+
+  ensureEventExtraSeqPOS(ev);
+  const extras = sanitizeExtrasPOS(ev.extras);
+
+  const nowIso = new Date().toISOString();
+
+  if (editingExtraIdPOS){
+    const x = extras.find(z => Number(z.id) === Number(editingExtraIdPOS));
+    if (!x){
+      alert('No se encontró el Extra a editar (posible cambio de evento).');
+      resetExtraFormPOS();
+      await renderExtrasUI();
+      return;
+    }
+    x.name = name;
+    x.stock = stock;
+    x.unitCost = unitCost;
+    x.unitPrice = unitPrice;
+    x.lowStockAlert = (lowStockAlert>0?lowStockAlert:5);
+    x.updatedAt = nowIso;
+  } else {
+    ev.extraSeq = safeInt(ev.extraSeq, 0) + 1;
+    const newId = ev.extraSeq;
+    extras.push({
+      id: newId,
+      name,
+      stock,
+      unitCost,
+      unitPrice,
+      lowStockAlert: (lowStockAlert>0?lowStockAlert:5),
+      active: true,
+      createdAt: nowIso,
+      updatedAt: nowIso
+    });
+  }
+
+  ev.extras = extras;
+  await put('events', ev);
+
+  resetExtraFormPOS();
+  await renderExtrasUI();
+  await refreshProductSelect({ keepSelection:true });
+  toast('Extra guardado');
+}
+
+async function onExtrasListClickPOS(e){
+  const btn = e.target.closest('button');
+  if (!btn) return;
+
+  const action = btn.dataset.action;
+  const extraId = parseInt(btn.dataset.id || '0', 10);
+  if (!extraId) return;
+
+  const ev = await getActiveEventPOS();
+  if (!ev) return;
+
+  ensureEventExtraSeqPOS(ev);
+  const extras = sanitizeExtrasPOS(ev.extras);
+  const x = extras.find(z => Number(z.id) === Number(extraId));
+  if (!x) return;
+
+  if (action === 'edit'){
+    editingExtraIdPOS = extraId;
+    const name = document.getElementById('extra-name');
+    const stock = document.getElementById('extra-stock');
+    const cost = document.getElementById('extra-cost');
+    const price = document.getElementById('extra-price');
+    const low = document.getElementById('extra-low');
+    if (name) name.value = x.name;
+    if (stock) stock.value = x.stock;
+    if (cost) cost.value = x.unitCost;
+    if (price) price.value = x.unitPrice;
+    if (low) low.value = x.lowStockAlert;
+    const btnCancel = document.getElementById('btn-cancel-extra');
+    if (btnCancel) btnCancel.style.display = 'inline-block';
+    return;
+  }
+
+  if (action === 'restock'){
+    const raw = prompt(`Agregar stock a "${x.name}". Cantidad a sumar:`, '0');
+    if (raw == null) return;
+    const add = parseFloat(raw);
+    if (!Number.isFinite(add) || add <= 0){ alert('Cantidad no válida'); return; }
+    x.stock = Number(x.stock || 0) + add;
+    x.updatedAt = new Date().toISOString();
+    ev.extras = extras;
+    await put('events', ev);
+    await renderExtrasUI();
+    await refreshProductSelect({ keepSelection:true });
+    toast('Stock actualizado');
+    return;
+  }
+
+  if (action === 'del'){
+    const ok = confirm(`Eliminar Extra "${x.name}" del evento. No se borran ventas ya registradas. ¿Continuar?`);
+    if (!ok) return;
+    ev.extras = extras.filter(z => Number(z.id) !== Number(extraId));
+    await put('events', ev);
+    resetExtraFormPOS();
+    await renderExtrasUI();
+    await refreshProductSelect({ keepSelection:true });
+    toast('Extra eliminado');
+    return;
+  }
+}
+
+async function revertExtraStockAfterSaleDeletePOS(sale){
+  try{
+    if (!sale || !sale.extraId || !sale.eventId) return;
+    const evs = await getAll('events');
+    const ev = evs.find(e => e.id === sale.eventId) || null;
+    if (!ev) return;
+    ensureEventExtraSeqPOS(ev);
+    const extras = sanitizeExtrasPOS(ev.extras);
+    const x = extras.find(z => Number(z.id) === Number(sale.extraId));
+    if (!x) return;
+    const q = Number(sale.qty || 0);
+    x.stock = Number(x.stock || 0) + q;
+    x.updatedAt = new Date().toISOString();
+    ev.extras = extras;
+    await put('events', ev);
+    // refrescar UI si este es el evento activo
+    const cur = await getMeta('currentEventId');
+    if (cur && Number(cur) === Number(ev.id)){
+      try{ await renderExtrasUI(); }catch(e){}
+      try{ await refreshProductSelect({ keepSelection:true }); }catch(e){}
+    }
+  }catch(err){
+    console.warn('No se pudo revertir stock de Extra al borrar venta', err);
+  }
+}
+
+// Alias por compatibilidad (evitar regresiones por nombre)
+async function revertExtraStockForSaleDeletePOS(sale){
+  return revertExtraStockAfterSaleDeletePOS(sale);
 }
 
 // Inventory logic
@@ -2595,11 +3030,13 @@ async function renderDay(){
         ? 'Efec'
         : (s.payment==='transferencia' ? (`Transferencia · ${getSaleBankLabel(s, bankMap)}`) : 'Cred');
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${getSaleTimeTextPOS(s)}</td>
+      const seqTxt = getSaleSeqDisplayPOS(s);
+      const timeTxt = getSaleTimeTextPOS(s);
+      tr.innerHTML = `<td>${seqTxt ? ('#' + seqTxt + ' · ') : ''}${timeTxt}</td>
         <td>${s.productName}</td>
         <td>${s.qty}</td>
         <td>${fmt(s.unitPrice)}</td>
-        <td>${fmt(s.discount||0)}</td>
+        <td>${fmt(getSaleDiscountTotalPOS(s))}</td>
         <td>${fmt(s.total)}</td>
         <td><span class="tag ${payClass}">${payTxt}</span></td>
         <td>${s.courtesy?'✓':''}</td>
@@ -3061,7 +3498,7 @@ async function openEventView(eventId){
     const payLabel = (s.payment === 'transferencia')
       ? (`Transferencia · ${getSaleBankLabel(s, bankMap)}`)
       : (s.payment || '');
-    const tr=document.createElement('tr'); tr.innerHTML = `<td>${getSaleSeqDisplayPOS(s)}</td><td>${s.date}</td><td>${getSaleTimeTextPOS(s)}</td><td>${s.productName}</td><td>${s.qty}</td><td>${fmt(s.unitPrice)}</td><td>${fmt(s.discount||0)}</td><td>${fmt(s.total)}</td><td>${payLabel}</td><td>${s.courtesy?'✓':''}</td><td>${s.isReturn?'✓':''}</td><td>${s.customer||''}</td><td>${s.courtesyTo||''}</td><td>${s.notes||''}</td>`;
+    const tr=document.createElement('tr'); tr.innerHTML = `<td>${getSaleSeqDisplayPOS(s)}</td><td>${s.date}</td><td>${getSaleTimeTextPOS(s)}</td><td>${s.productName}</td><td>${s.qty}</td><td>${fmt(s.unitPrice)}</td><td>${fmt(getSaleDiscountTotalPOS(s))}</td><td>${fmt(s.total)}</td><td>${payLabel}</td><td>${s.courtesy?'✓':''}</td><td>${s.isReturn?'✓':''}</td><td>${s.customer||''}</td><td>${s.courtesyTo||''}</td><td>${s.notes||''}</td>`;
     tb.appendChild(tr);
   });
 
@@ -3081,7 +3518,7 @@ async function exportEventSalesCSV(eventId){
   const ordered = [...sales].sort((a,b)=> (saleSortKeyPOS(b) - saleSortKeyPOS(a)));
   for (const s of ordered){
     const bank = (s.payment === 'transferencia') ? getSaleBankLabel(s, bankMap) : '';
-    rows.push([ (s.seqId || ''), s.id, s.date, getSaleTimeTextPOS(s), s.productName, s.qty, s.unitPrice, (s.discount||0), s.total, (s.payment||''), bank, s.courtesy?1:0, s.isReturn?1:0, s.customer||'', s.courtesyTo||'', s.notes||'']);
+    rows.push([ (s.seqId || ''), s.id, s.date, getSaleTimeTextPOS(s), s.productName, s.qty, s.unitPrice, getSaleDiscountTotalPOS(s), s.total, (s.payment||''), bank, s.courtesy?1:0, s.isReturn?1:0, s.customer||'', s.courtesyTo||'', s.notes||'']);
   }
   const safeName = (ev?ev.name:'evento').replace(/[^a-z0-9_\- ]/gi,'_');
   downloadExcel(`ventas_${safeName}.xlsx`, 'Ventas', rows);
@@ -3091,8 +3528,9 @@ function buildCorteSummaryRows(eName, sales){
   for (const s of sales){
     const absQty = Math.abs(s.qty||0);
     const absTotal = Math.abs(s.total||0);
-    bruto += (s.courtesy ? (s.unitPrice*absQty) : (absTotal + (s.discount||0)));
-    descuentos += (s.discount||0) * (s.isReturn?-1:1);
+    const disc = getSaleDiscountTotalPOS(s);
+    bruto += (s.courtesy ? (s.unitPrice*absQty) : (absTotal + disc));
+    descuentos += disc * (s.isReturn?-1:1);
     if (s.courtesy){ cortesiasU += absQty; cortesiasVal += (s.unitPrice*absQty); }
     if (s.isReturn){ devolU += absQty; devolVal += absTotal; }
     if (s.payment==='efectivo') efectivo += s.total;
@@ -3157,7 +3595,7 @@ async function generateCorteCSV(eventId){
   rows.push(['id','fecha','hora','producto','cant','PU','desc_C$','total','pago','banco','cortesia','devolucion','cliente','cortesia_a','notas']);
   for (const s of sales){
     const bank = (s.payment === 'transferencia') ? getSaleBankLabel(s, bankMap) : '';
-    rows.push([s.id, s.date, s.time||'', s.productName, s.qty, s.unitPrice, (s.discount||0), s.total, (s.payment||''), bank, s.courtesy?1:0, s.isReturn?1:0, s.customer||'', s.courtesyTo||'', s.notes||'']);
+    rows.push([s.id, s.date, getSaleTimeTextPOS(s), s.productName, s.qty, s.unitPrice, getSaleDiscountTotalPOS(s), s.total, (s.payment||''), bank, s.courtesy?1:0, s.isReturn?1:0, s.customer||'', s.courtesyTo||'', s.notes||'']);
   }
   const safeName = ev.name.replace(/[^a-z0-9_\- ]/gi,'_');
   downloadExcel(`corte_${safeName}.xlsx`, 'Corte', rows);
@@ -3178,6 +3616,9 @@ async function exportEventExcel(eventId){
 
   const allSales = await getAll('sales');
   const sales = allSales.filter(s=>s.eventId===eventId);
+
+  // Asegurar N° consecutivo por evento antes de exportar (persistente)
+  try{ await backfillSaleSeqIdsForEventPOS(eventId, ev, sales); }catch(e){ console.warn('backfillSaleSeqIdsForEventPOS (export) failed', e); }
 
   const banks = await getAllBanksSafe();
   const bankMap = new Map();
@@ -3398,17 +3839,23 @@ async function exportEventExcel(eventId){
 
   // --- Hoja 3 opcional: Ventas_Detalle ---
   const ventasRows = [];
-  ventasRows.push(['id','fecha','hora','producto','cantidad','PU_C$','descuento_C$','total_C$','pago','banco','cortesia','devolucion','cliente','cortesia_a','notas']);
+  ventasRows.push(['N°','id','fecha','hora','producto','cantidad','PU_C$','descuento_C$','total_C$','costo_unit_C$','costo_total_C$','pago','banco','cortesia','devolucion','cliente','cortesia_a','notas']);
   for (const s of sales){
+    const qty = Number(s.qty || 0);
+    const costUnit = Number.isFinite(Number(s.costPerUnit)) ? Number(s.costPerUnit) : 0;
+    const costTotal = Number.isFinite(Number(s.lineCost)) ? Number(s.lineCost) : (costUnit * qty);
     ventasRows.push([
+      getSaleSeqDisplayPOS(s),
       s.id,
       s.date || '',
-      s.time || '',
+      getSaleTimeTextPOS(s) || '',
       s.productName || '',
-      s.qty || 0,
+      qty || 0,
       s.unitPrice || 0,
-      s.discount || 0,
+      getSaleDiscountTotalPOS(s) || 0,
       s.total || 0,
+      costUnit || 0,
+      costTotal || 0,
       s.payment || '',
       (s.payment === 'transferencia') ? getSaleBankLabel(s, bankMap) : '',
       s.courtesy ? 1 : 0,
@@ -3787,7 +4234,26 @@ async function init(){
   $('#btn-close-event').addEventListener('click', async()=>{ const id = parseInt($('#sale-event').value||'0',10); const current = await getMeta('currentEventId'); const useId = id || current; if (!useId) return alert('Selecciona un evento'); await closeEvent(parseInt(useId,10)); });
   $('#btn-reopen-event').addEventListener('click', async()=>{ const val = $('#sale-event').value; const id = parseInt(val||'0',10); if (!id) return alert('Selecciona un evento cerrado'); await reopenEvent(id); });
 
-  $('#sale-product').addEventListener('change', async()=>{ const id = parseInt($('#sale-product').value,10); const p = (await getAll('products')).find(x=>x.id===id); if (p) $('#sale-price').value = p.price; document.querySelectorAll('#product-chips .chip').forEach(x=>x.classList.toggle('active', parseInt(x.dataset.id,10)===id)); await refreshSaleStockLabel(); recomputeTotal(); });
+  $('#sale-product').addEventListener('change', async()=>{
+    await setSalePriceFromSelectionPOS();
+    updateChipsActiveFromSelectionPOS();
+    await refreshSaleStockLabel();
+    recomputeTotal();
+  });
+
+  // Extras por evento (Vender tab)
+  const btnSaveExtra = document.getElementById('btn-save-extra');
+  if (btnSaveExtra){
+    btnSaveExtra.addEventListener('click', ()=> onSaveExtraPOS().catch(err=>console.error(err)));
+  }
+  const btnCancelExtra = document.getElementById('btn-cancel-extra');
+  if (btnCancelExtra){
+    btnCancelExtra.addEventListener('click', ()=> resetExtraFormPOS());
+  }
+  const extrasList = document.getElementById('extras-list');
+  if (extrasList){
+    extrasList.addEventListener('click', (e)=> onExtrasListClickPOS(e).catch(err=>console.error(err)));
+  }
   $('#sale-price').addEventListener('input', recomputeTotal);
   $('#sale-qty').addEventListener('input', recomputeTotal);
   $('#sale-discount').addEventListener('input', recomputeTotal);
@@ -3833,6 +4299,7 @@ async function init(){
     const last = filtered.sort((a,b)=> a.id - b.id)[filtered.length - 1];
     if (!confirm('¿Eliminar la última venta registrada?')) return;
     const delRes = await del('sales', last.id);
+    try{ await revertExtraStockForSaleDeletePOS(last); }catch(e){}
     await renderDay();
     await renderSummary();
     await refreshSaleStockLabel();
@@ -3856,6 +4323,8 @@ async function init(){
       return;
     }
 
+    const saleToDelete = (await getAll('sales')).find(s=>s.id===id) || null;
+
     if (!confirm('¿Eliminar esta venta?')) return;
 
     const prevText = btn.textContent;
@@ -3864,6 +4333,7 @@ async function init(){
 
     try{
       const delRes = await del('sales', id);
+      try{ if (saleToDelete) await revertExtraStockForSaleDeletePOS(saleToDelete); }catch(e){ console.warn('revertExtraStockForSaleDeletePOS (delete) failed', e); }
 
       // Refrescar UI
       try{
@@ -4046,7 +4516,13 @@ async function addSale(){
   const curId = await getMeta('currentEventId');
   if (!curId){ alert('Selecciona un evento'); return; }
   const date = $('#sale-date').value;
-  const productId = parseInt($('#sale-product').value||'0',10);
+  const selVal = String($('#sale-product')?.value || '').trim();
+  const parsed = parseSelectedSellItemValue(selVal);
+  if (parsed && parsed.kind === 'extra'){
+    await addExtraSale(parsed.id);
+    return;
+  }
+  const productId = (parsed && parsed.kind === 'product') ? parsed.id : parseInt(selVal||'0',10);
   const qtyIn = parseFloat($('#sale-qty').value||'0');
   const qty = Math.abs(qtyIn);
   const price = parseFloat($('#sale-price').value||'0');
@@ -4177,6 +4653,160 @@ async function addSale(){
   toast('Venta agregada');
 }
 
+
+async function addExtraSale(extraId){
+  const curId = await getMeta('currentEventId');
+  if (!curId){ alert('Selecciona un evento'); return; }
+
+  const ev = await getEventByIdPOS(curId);
+  if (!ev || ev.closedAt){ alert('No hay un evento activo válido'); return; }
+
+  const date = $('#sale-date').value;
+  const qtyIn = parseFloat($('#sale-qty').value||'0');
+  const qty = Math.abs(qtyIn);
+  const discountPerUnit = Math.max(0, parseFloat($('#sale-discount').value||'0'));
+  const payment = $('#sale-payment').value;
+  const courtesy = $('#sale-courtesy').checked;
+  const isReturn = $('#sale-return').checked;
+  const customer = (payment==='credito') ? ($('#sale-customer').value||'').trim() : '';
+  const courtesyTo = $('#sale-courtesy-to').value || '';
+  const notes = $('#sale-notes').value || '';
+
+  if (!date || !qty) { alert('Completa fecha y cantidad'); return; }
+  if (payment==='credito' && !customer){ alert('Ingresa el nombre del cliente (crédito)'); return; }
+
+  // Banco (obligatorio si es Transferencia)
+  let bankId = null;
+  let bankName = '';
+  if (payment === 'transferencia'){
+    const activeBanks = (await getAllBanksSafe()).filter(b => b && b.isActive !== false);
+    if (!activeBanks.length){
+      alert('No hay bancos activos. Agregá uno en Productos.');
+      return;
+    }
+    const sel = document.getElementById('sale-bank');
+    const raw = sel ? String(sel.value || '').trim() : '';
+    const id = parseInt(raw || '0', 10);
+    if (!id){
+      alert('Selecciona el banco para la transferencia.');
+      return;
+    }
+    const found = activeBanks.find(b => Number(b.id) === id);
+    bankId = id;
+    bankName = (found && found.name) ? String(found.name) : '';
+  }
+
+  const extras = sanitizeExtrasPOS(ev.extras).filter(x=>x && x.active!==false);
+  const extra = extras.find(x=>Number(x.id)===Number(extraId));
+  if (!extra){
+    alert('Extra no encontrado.');
+    await renderExtrasUI();
+    await refreshProductSelect({ keepSelection:true });
+    return;
+  }
+
+  const unitPrice = Number(extra.unitPrice)||0;
+  const effectiveUnit = Math.max(0, unitPrice - discountPerUnit);
+  let total = effectiveUnit * qty;
+  if (courtesy) total = 0;
+  if (isReturn) total = -total;
+
+  // Descuento total (compatibilidad con UI/exports)
+  const discount = courtesy ? 0 : (discountPerUnit * qty);
+
+  const finalQty = isReturn ? -qty : qty;
+
+  // Validar stock (para ventas normales y cortesías)
+  if (finalQty > 0) {
+    const stockNow = Number(extra.stock)||0;
+    if (stockNow < finalQty) {
+      const want = confirm(
+        'Stock insuficiente para "' + extra.name + '".\n\n' +
+        'Stock actual: ' + stockNow + '\n' +
+        'Requerido: ' + finalQty + '\n\n' +
+        '¿Deseas agregar stock ahora?'
+      );
+      if (want) {
+        const suggest = String(Math.max(0, finalQty - stockNow));
+        const rawAdd = prompt('Cantidad a agregar:', suggest);
+        const addQty = parseFloat(rawAdd || '0');
+        if (addQty > 0) {
+          extra.stock = stockNow + addQty;
+        }
+      }
+      if ((Number(extra.stock)||0) < finalQty) {
+        alert('Stock insuficiente. Agregá stock y volvé a intentar.');
+        await renderExtrasUI();
+        await refreshSaleStockLabel();
+        return;
+      }
+    }
+  }
+
+  // Descontar / revertir stock
+  extra.stock = (Number(extra.stock)||0) - finalQty;
+  extra.updatedAt = Date.now();
+  ev.extras = extras;
+  await put('events', ev);
+
+  // Construir venta (costo congelado)
+  const now = new Date();
+  const time = now.toTimeString().slice(0,5);
+
+  const costPerUnit = Number(extra.unitCost)||0;
+  const lineCost = costPerUnit * finalQty;
+  const lineProfit = total - lineCost;
+
+  const saleRecord = {
+    id: Date.now(),
+    eventId: curId,
+    eventName: ev.name,
+    date,
+    time,
+    productId: null,
+    productName: extra.name,
+    isExtra: true,
+    extraId: extra.id,
+    qty: finalQty,
+    unitPrice,
+    discount,
+    discountPerUnit,
+    total,
+    payment,
+    bankId,
+    bankName,
+    customer,
+    courtesy,
+    courtesyTo,
+    notes,
+    isReturn,
+    createdAt: Date.now(),
+    costPerUnit,
+    lineCost,
+    lineProfit
+  };
+
+  try{ await ensureNewSaleSeqIdPOS(ev, saleRecord); }catch(e){ console.warn('ensureNewSaleSeqIdPOS (extra) failed', e); }
+
+  await put('sales', saleRecord);
+  await createJournalEntryForSalePOS(saleRecord);
+
+  // Reset mínimos
+  $('#sale-qty').value = '1';
+  $('#sale-discount').value = '0';
+  $('#sale-courtesy').checked = false;
+  $('#sale-courtesy-to').disabled = true;
+  $('#sale-courtesy-to').value = '';
+  $('#sale-notes').value = '';
+  $('#sale-return').checked = false;
+
+  await renderDay();
+  await renderSummary();
+  await renderExtrasUI();
+  await refreshProductSelect({ keepSelection:true });
+
+  toast(courtesy ? 'Cortesía de Extra registrada' : 'Venta de Extra registrada');
+}
 
 function getSelectedPcDay(){
   const inp = document.getElementById('pc-day');

@@ -556,8 +556,9 @@
           <div class="petty-block">
             <h4>Ajuste de arqueo C$</h4>
             <div class="row" style="gap:8px">
-              <input id="pc-adj-nio-reason" type="text" placeholder="Motivo (obligatorio)">
-              <input id="pc-adj-nio-note" type="text" placeholder="Nota (opcional)">
+              <input id="pc-adj-nio-amount" type="number" inputmode="decimal" step="0.01" placeholder="Monto ajuste (obligatorio)">
+              <input id="pc-adj-nio-concept" type="text" placeholder="Concepto (obligatorio)">
+              <input id="pc-adj-nio-notes" type="text" placeholder="Notas (opcional)">
             </div>
             <div class="row" style="gap:8px">
               <button id="pc-btn-adj-nio" class="btn-ok" type="button">Registrar ajuste C$</button>
@@ -569,8 +570,9 @@
           <div class="petty-block">
             <h4>Ajuste de arqueo US$</h4>
             <div class="row" style="gap:8px">
-              <input id="pc-adj-usd-reason" type="text" placeholder="Motivo (obligatorio)">
-              <input id="pc-adj-usd-note" type="text" placeholder="Nota (opcional)">
+              <input id="pc-adj-usd-amount" type="number" inputmode="decimal" step="0.01" placeholder="Monto ajuste (obligatorio)">
+              <input id="pc-adj-usd-concept" type="text" placeholder="Concepto (obligatorio)">
+              <input id="pc-adj-usd-notes" type="text" placeholder="Notas (opcional)">
             </div>
             <div class="row" style="gap:8px">
               <button id="pc-btn-adj-usd" class="btn-ok" type="button">Registrar ajuste US$</button>
@@ -665,7 +667,7 @@
         </div>
         <div>
           <label>Cantidad (stock)</label>
-          <input id="extra-qty" type="number" inputmode="numeric" step="1" min="0" placeholder="0">
+          <input id="extra-stock" type="number" inputmode="numeric" step="1" min="0" placeholder="0">
         </div>
         <div>
           <label>Precio venta (C$)</label>
