@@ -1,6 +1,6 @@
 // --- IndexedDB helpers POS
 const DB_NAME = 'a33-pos';
-const DB_VER = 23; // schema estable (+ banks)
+const DB_VER = 23;
 let db;
 
 // --- Finanzas: conexión a finanzasDB para asientos automáticos
@@ -62,6 +62,7 @@ function openDB() {
         try { e.target.transaction.objectStore('banks').createIndex('by_name', 'name'); } catch {}
         try { e.target.transaction.objectStore('banks').createIndex('by_active', 'isActive'); } catch {}
       }
+
     };
     req.onsuccess = () => { db = req.result; resolve(db); };
     req.onerror = () => reject(req.error);
@@ -1009,6 +1010,161 @@ function ymdPrev(ymd){
   const dt = dateFromYMD(ymd);
   dt.setDate(dt.getDate() - 1);
   return ymdFromDate(dt);
+}
+
+
+// --- Resumen: Períodos (mes) + Archivo (solo lectura)
+const SUMMARY_PERIOD_LS = 'a33.pos.summaryPeriod'; // 'YYYY-MM' o '__all__'
+const SUMMARY_MODE_LS = 'a33.pos.summaryMode';     // 'live' | 'archive'
+const SUMMARY_ARCHIVE_ID_LS = 'a33.pos.summaryArchiveId';
+
+let currentSummarySnapshot = null;      // último snapshot renderizado (live o archivo)
+let summaryCloseExportedOk = false;     // guardia para "Cerrar período"
+
+function currentMonthKey(){
+  const dt = new Date();
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth()+1).padStart(2,'0');
+  return `${y}-${m}`;
+}
+function ensureSummaryPeriodDefault(){
+  try{
+    if (!localStorage.getItem(SUMMARY_PERIOD_LS)){
+      localStorage.setItem(SUMMARY_PERIOD_LS, currentMonthKey());
+    }
+  }catch(e){}
+}
+function getSummaryPeriodKey(){
+  try{
+    const v = localStorage.getItem(SUMMARY_PERIOD_LS);
+    if (!v) return currentMonthKey();
+    if (v === '__all__') return null;
+    return v;
+  }catch(e){
+    return currentMonthKey();
+  }
+}
+function setSummaryPeriodKey(keyOrNull){
+  try{
+    if (!keyOrNull) localStorage.setItem(SUMMARY_PERIOD_LS, '__all__');
+    else localStorage.setItem(SUMMARY_PERIOD_LS, String(keyOrNull));
+  }catch(e){}
+}
+function getSummaryMode(){
+  try{ return localStorage.getItem(SUMMARY_MODE_LS) || 'live'; }catch(e){ return 'live'; }
+}
+function setSummaryMode(mode){
+  try{ localStorage.setItem(SUMMARY_MODE_LS, mode); }catch(e){}
+}
+function getSummaryArchiveId(){
+  try{
+    return localStorage.getItem(SUMMARY_ARCHIVE_ID_LS) || null;
+  }catch(e){ return null; }
+}
+function setSummaryArchiveId(id){
+  try{
+    if (id == null) localStorage.removeItem(SUMMARY_ARCHIVE_ID_LS);
+    else localStorage.setItem(SUMMARY_ARCHIVE_ID_LS, String(id));
+  }catch(e){}
+}
+
+function newSummaryArchiveId(){
+  // ID compacto y suficientemente único para uso local
+  return `sa_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`;
+}
+
+const SUMMARY_ARCHIVES_META_KEY = 'summaryArchives'; // en store meta: {id:'summaryArchives', value:[...]}
+
+function formatMonthLabel(periodKey){
+  if (!periodKey) return 'Todo el historial';
+  try{
+    const [y,m] = String(periodKey).split('-').map(Number);
+    const dt = new Date(y, (m||1)-1, 1);
+    // Capitalizar primera letra
+    const t = dt.toLocaleDateString('es-NI', { month:'long', year:'numeric' });
+    return t.charAt(0).toUpperCase() + t.slice(1);
+  }catch(e){
+    return String(periodKey);
+  }
+}
+function nextPeriodKey(periodKey){
+  if (!periodKey) return currentMonthKey();
+  const [y0,m0] = String(periodKey).split('-').map(Number);
+  if (!y0 || !m0) return currentMonthKey();
+  let y = y0, m = m0 + 1;
+  if (m > 12){ m = 1; y += 1; }
+  return `${y}-${String(m).padStart(2,'0')}`;
+}
+
+async function getAllSummaryArchivesSafe(){
+  try{
+    const v = await getMeta(SUMMARY_ARCHIVES_META_KEY);
+    return Array.isArray(v) ? v : [];
+  }catch(err){
+    return [];
+  }
+}
+async function saveAllSummaryArchivesSafe(list){
+  try{
+    await setMeta(SUMMARY_ARCHIVES_META_KEY, Array.isArray(list) ? list : []);
+    return true;
+  }catch(err){
+    return false;
+  }
+}
+async function getSummaryArchiveByIdSafe(id){
+  try{
+    if (!id) return null;
+    const all = await getAllSummaryArchivesSafe();
+    return all.find(a=>String(a.id)===String(id)) || null;
+  }catch(err){
+    return null;
+  }
+}
+
+function showSummaryCloseModal(show){
+  const el = document.getElementById('summary-close-modal');
+  if (el) el.style.display = show ? 'flex' : 'none';
+}
+function showSummaryArchiveModal(show){
+  const el = document.getElementById('summary-archive-modal');
+  if (el) el.style.display = show ? 'flex' : 'none';
+}
+
+function updateSummaryControlsUI({ mode='live', periodKey=null, archiveName='' } = {}){
+  const inp = document.getElementById('summary-period');
+  const btnAll = document.getElementById('btn-summary-all');
+  const badge = document.getElementById('summary-mode-badge');
+  const btnBack = document.getElementById('btn-summary-back-live');
+
+  if (inp){
+    inp.disabled = (mode === 'archive');
+    // input[type=month] acepta '' para vacío
+    inp.value = periodKey ? String(periodKey) : '';
+  }
+  if (btnAll) btnAll.style.display = (mode === 'archive') ? 'none' : 'inline-block';
+  if (btnBack) btnBack.style.display = (mode === 'archive') ? 'inline-block' : 'none';
+
+  if (badge){
+    if (mode === 'archive'){
+      badge.textContent = 'Solo lectura';
+      badge.className = 'tag small closed';
+      badge.title = archiveName ? (`Archivo: ${archiveName}`) : 'Archivo (solo lectura)';
+    } else {
+      badge.textContent = 'En vivo';
+      badge.className = 'tag small open';
+      badge.title = '';
+    }
+  }
+
+  const hint = document.getElementById('summary-period-hint');
+  if (hint){
+    if (mode === 'archive'){
+      hint.textContent = archiveName ? `Viendo archivo: ${archiveName} (solo lectura)` : 'Viendo archivo (solo lectura).';
+    } else {
+      hint.textContent = periodKey ? `Resumen filtrado por: ${formatMonthLabel(periodKey)}` : 'Viendo: Todo el historial (ojo: puede crecer).';
+    }
+  }
 }
 
 
@@ -3161,7 +3317,254 @@ async function renderDay(){
 }
 
 // Summary (extendido con costo y utilidad)
+async function exportSummarySnapshotToExcel(snapshot, { fileName } = {}){
+  if (!snapshot){
+    toast('No hay datos para exportar');
+    return;
+  }
+  if (typeof XLSX === 'undefined'){
+    alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Revisa tu conexión a internet.');
+    return;
+  }
+
+  const periodKey = snapshot.periodKey || null;
+  const label = snapshot.label || formatMonthLabel(periodKey);
+  const totals = snapshot.totals || {};
+
+  const safePart = (s)=> (String(s||'').replace(/[\\/:*?"<>|]/g,' ').trim());
+  const baseName = fileName ? safePart(fileName) : null;
+  const filename = baseName || (periodKey ? `resumen_${periodKey}_${safePart(label)||'mes'}.xlsx` : `resumen_todo_${safePart(label)||'historial'}.xlsx`);
+
+  const sheets = [];
+
+  // Hoja: Resumen (KPIs)
+  const resumenRows = [];
+  resumenRows.push(['Período', label]);
+  resumenRows.push(['Generado', snapshot.generatedAt || new Date().toISOString()]);
+  resumenRows.push([]);
+  resumenRows.push(['Total General (C$)', totals.grand || 0]);
+  resumenRows.push(['Costo estimado (C$)', totals.grandCost || 0]);
+  resumenRows.push(['Utilidad bruta (C$)', totals.grandProfit || 0]);
+  resumenRows.push(['Cortesías (Costo real) (C$)', totals.courtesyCost || 0]);
+  resumenRows.push(['Utilidad después de cortesías (C$)', totals.profitAfterCourtesy || 0]);
+  resumenRows.push([]);
+  resumenRows.push(['Cortesías: cantidad (unidades)', totals.courtesyQty || 0]);
+  resumenRows.push(['Cortesías: transacciones', totals.courtesyTx || 0]);
+  resumenRows.push(['Cortesías: valor equivalente (C$)', totals.courtesyEquiv || 0]);
+  sheets.push({ name: 'Resumen', rows: resumenRows });
+
+  // Hoja: Por Evento
+  const evRows = [];
+  evRows.push(['Evento','Total_C$']);
+  for (const it of (snapshot.byEvent || [])){
+    evRows.push([it.name || '', Number(it.total || 0)]);
+  }
+  sheets.push({ name: 'Por_Evento', rows: evRows });
+
+  // Hoja: Por Día
+  const dayRows = [];
+  dayRows.push(['Fecha','Total_C$']);
+  for (const it of (snapshot.byDay || [])){
+    dayRows.push([it.date || '', Number(it.total || 0)]);
+  }
+  sheets.push({ name: 'Por_Dia', rows: dayRows });
+
+  // Hoja: Por Producto (ventas reales)
+  const prodRows = [];
+  prodRows.push(['Producto','Total_C$']);
+  for (const it of (snapshot.byProd || [])){
+    prodRows.push([it.name || '', Number(it.total || 0)]);
+  }
+  sheets.push({ name: 'Por_Producto', rows: prodRows });
+
+  // Hoja: Por Método de Pago
+  const payRows = [];
+  payRows.push(['Metodo','Total_C$']);
+  for (const it of (snapshot.byPay || [])){
+    payRows.push([it.method || '', Number(it.total || 0)]);
+  }
+  sheets.push({ name: 'Por_Pago', rows: payRows });
+
+  // Hoja: Transferencias por banco
+  const bankRows = [];
+  bankRows.push(['Banco','Total_C$','Transacciones']);
+  for (const it of (snapshot.transferByBank || [])){
+    bankRows.push([it.bank || '', Number(it.total || 0), Number(it.count || 0)]);
+  }
+  sheets.push({ name: 'Transfer_Banco', rows: bankRows });
+
+  // Hoja: Cortesías (detalle por producto)
+  const courRows = [];
+  courRows.push(['Producto','Cantidad','Costo_total_C$','Valor_equivalente_C$']);
+  for (const it of (snapshot.courtesyByProd || [])){
+    courRows.push([it.name || '', Number(it.qty || 0), Number(it.cost || 0), Number(it.equiv || 0)]);
+  }
+  sheets.push({ name: 'Cortesias_PorProducto', rows: courRows });
+
+  const wb = XLSX.utils.book_new();
+  for (const sh of sheets){
+    const ws = XLSX.utils.aoa_to_sheet(sh.rows);
+    XLSX.utils.book_append_sheet(wb, ws, sh.name);
+  }
+
+  XLSX.writeFile(wb, filename);
+}
+
+function applySummarySnapshotToUI(snapshot){
+  if (!snapshot) return;
+  const totals = snapshot.totals || {};
+
+  // --- KPIs ---
+  const grandTotalEl = document.getElementById('grand-total');
+  if (grandTotalEl) grandTotalEl.textContent = fmt(Number(totals.grand || 0));
+
+  const costEl = document.getElementById('grand-cost');
+  if (costEl) costEl.textContent = fmt(Number(totals.grandCost || 0));
+
+  const profitEl = document.getElementById('grand-profit');
+  if (profitEl) profitEl.textContent = fmt(Number(totals.grandProfit || 0));
+
+  const courCostEl = document.getElementById('grand-courtesy-cost');
+  if (courCostEl) courCostEl.textContent = fmt(Number(totals.courtesyCost || 0));
+
+  const profitAfterEl = document.getElementById('grand-profit-after-courtesy');
+  if (profitAfterEl) profitAfterEl.textContent = fmt(Number(totals.profitAfterCourtesy || 0));
+
+  // --- Totales Cortesías ---
+  const courCostTot = document.getElementById('courtesy-cost-total');
+  if (courCostTot) courCostTot.textContent = fmt(Number(totals.courtesyCost || 0));
+
+  const courQtyTot = document.getElementById('courtesy-count-total');
+  if (courQtyTot) courQtyTot.textContent = Math.round(Number(totals.courtesyQty || 0));
+
+  const courEqTot = document.getElementById('courtesy-equiv-total');
+  if (courEqTot) courEqTot.textContent = fmt(Number(totals.courtesyEquiv || 0));
+
+  const courTxTot = document.getElementById('courtesy-tx-total');
+  if (courTxTot) courTxTot.textContent = Math.round(Number(totals.courtesyTx || 0));
+
+  // --- Tablas ---
+  const fill = (tbodySel, rows, rowHtmlFn, emptyHtml) => {
+    const tb = document.querySelector(tbodySel);
+    if (!tb) return;
+    tb.innerHTML = '';
+    if (!rows || !rows.length){
+      const tr = document.createElement('tr');
+      tr.innerHTML = emptyHtml;
+      tb.appendChild(tr);
+      return;
+    }
+    for (const it of rows){
+      const tr = document.createElement('tr');
+      tr.innerHTML = rowHtmlFn(it);
+      tb.appendChild(tr);
+    }
+  };
+
+  fill('#tbl-por-evento tbody', snapshot.byEvent,
+    (it)=>`<td>${escapeHtml(it.name||'')}</td><td>${fmt(Number(it.total||0))}</td>`,
+    `<td colspan="2" class="muted">(sin datos)</td>`
+  );
+
+  fill('#tbl-por-dia tbody', snapshot.byDay,
+    (it)=>`<td>${escapeHtml(it.date||'')}</td><td>${fmt(Number(it.total||0))}</td>`,
+    `<td colspan="2" class="muted">(sin datos)</td>`
+  );
+
+  fill('#tbl-por-prod tbody', snapshot.byProd,
+    (it)=>`<td>${escapeHtml(it.name||'')}</td><td>${fmt(Number(it.total||0))}</td>`,
+    `<td colspan="2" class="muted">(sin ventas)</td>`
+  );
+
+  fill('#tbl-por-pago tbody', snapshot.byPay,
+    (it)=>`<td>${escapeHtml(it.method||'')}</td><td>${fmt(Number(it.total||0))}</td>`,
+    `<td colspan="2" class="muted">(sin datos)</td>`
+  );
+
+  fill('#tbl-transfer-bank tbody', snapshot.transferByBank,
+    (it)=>`<td>${escapeHtml(it.bank||'')}</td><td>${fmt(Number(it.total||0))}</td><td>${Math.round(Number(it.count||0))}</td>`,
+    `<td colspan="3" class="muted">(sin transferencias)</td>`
+  );
+
+  fill('#tbl-courtesy-byprod tbody', snapshot.courtesyByProd,
+    (it)=>`<td>${escapeHtml(it.name||'')}</td><td>${Math.round(Number(it.qty||0))}</td><td>${fmt(Number(it.cost||0))}</td><td>${fmt(Number(it.equiv||0))}</td>`,
+    `<td colspan="4" class="muted">(sin cortesías)</td>`
+  );
+}
+
+let summaryArchivesCache = [];
+
+async function refreshSummaryArchivesUI(){
+  const input = document.getElementById('summary-archive-search');
+  const term = (input && input.value) ? String(input.value).trim().toLowerCase() : '';
+
+  // Cargar cache si está vacío (o si el usuario pide refresh explícito)
+  if (!Array.isArray(summaryArchivesCache)) summaryArchivesCache = [];
+  const rows = summaryArchivesCache.filter(a=>{
+    if (!a) return false;
+    if (!term) return true;
+    const n = String(a.name||'').toLowerCase();
+    const p = String(a.periodKey||'').toLowerCase();
+    return n.includes(term) || p.includes(term);
+  }).sort((a,b)=>{
+    const ad = a.createdAt || '';
+    const bd = b.createdAt || '';
+    return (bd > ad) ? 1 : (bd < ad ? -1 : 0);
+  });
+
+  const tbody = document.querySelector('#tbl-summary-archives tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  if (!rows.length){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="4" class="muted">(sin archivos)</td>`;
+    tbody.appendChild(tr);
+    return;
+  }
+
+  for (const a of rows){
+    const tr = document.createElement('tr');
+    const created = a.createdAt ? new Date(a.createdAt).toLocaleString() : '';
+    tr.innerHTML = `
+      <td>${escapeHtml(a.name || '')}</td>
+      <td>${escapeHtml(formatMonthLabel(a.periodKey || null))}</td>
+      <td>${escapeHtml(created)}</td>
+      <td>
+        <div class="archive-actions">
+          <button class="arch-view" data-id="${a.id}">Ver</button>
+          <button class="arch-export" data-id="${a.id}">Excel</button>
+          <button class="arch-activate" data-id="${a.id}">Activar</button>
+        </div>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
 async function renderSummary(){
+  const periodKey = getSummaryPeriodKey();
+  const mode = getSummaryMode();
+
+  // --- Modo archivo (solo lectura) ---
+  if (mode === 'archive'){
+    const archId = getSummaryArchiveId();
+    const arch = await getSummaryArchiveByIdSafe(archId);
+    if (arch && arch.snapshot){
+      currentSummarySnapshot = arch.snapshot;
+      applySummarySnapshotToUI(arch.snapshot);
+      updateSummaryControlsUI({ mode:'archive', periodKey: arch.periodKey || arch.snapshot.periodKey || periodKey, archiveName: arch.name || '' });
+      return;
+    } else {
+      // Si el archivo no existe, volvemos a live sin bloquear al usuario.
+      setSummaryMode('live');
+      setSummaryArchiveId(null);
+    }
+  }
+
+  // --- Live ---
+  updateSummaryControlsUI({ mode:'live', periodKey });
+
   const sales = await getAll('sales');
   const events = await getAll('events');
   const products = await getAll('products');
@@ -3172,6 +3575,11 @@ async function renderSummary(){
     if (!p) continue;
     if (p.id != null) productById.set(Number(p.id), p);
     if (p.name) productByName.set(String(p.name), p);
+  }
+
+  const eventNameById = new Map();
+  for (const ev of (events || [])){
+    if (ev && ev.id != null) eventNameById.set(Number(ev.id), String(ev.name || ''));
   }
 
   const isCourtesySale = (s) => !!(s && (s.courtesy || s.isCourtesy));
@@ -3235,19 +3643,29 @@ async function renderSummary(){
   const byPay = new Map();
   const byEvent = new Map();
 
+  // Filtrar por mes (si aplica)
+  const matchPeriod = (s) => {
+    if (!periodKey) return true; // Todo
+    const d = (s && typeof s.date === 'string') ? s.date : '';
+    return d && d.startsWith(periodKey);
+  };
+
   for (const s of (sales || [])){
     if (!s) continue;
+    if (!matchPeriod(s)) continue;
 
     const total = Number(s.total || 0);
     const courtesy = isCourtesySale(s);
+    const evName = (s.eventName || eventNameById.get(Number(s.eventId)) || 'General') || 'General';
+    const dayKey = (typeof s.date === 'string' && s.date) ? s.date : '';
 
     if (!courtesy){
       grand += total;
 
-      byDay.set(s.date, (byDay.get(s.date) || 0) + total);
+      if (dayKey) byDay.set(dayKey, (byDay.get(dayKey) || 0) + total);
       byProd.set(s.productName, (byProd.get(s.productName) || 0) + total);
       byPay.set(s.payment || 'efectivo', (byPay.get(s.payment || 'efectivo') || 0) + total);
-      byEvent.set(s.eventName || 'General', (byEvent.get(s.eventName || 'General') || 0) + total);
+      byEvent.set(evName, (byEvent.get(evName) || 0) + total);
 
       // Transferencias por banco
       if ((s.payment || '') === 'transferencia'){
@@ -3294,186 +3712,74 @@ async function renderSummary(){
     }
   }
 
-  // Acumular también lo archivado por evento (si existiera)
-  for (const ev of (events || [])){
-    if (ev.archive && ev.archive.totals){
-      const t = ev.archive.totals;
+  // Acumular también lo archivado por evento (si existiera) SOLO cuando es "Todo el historial".
+  if (!periodKey){
+    for (const ev of (events || [])){
+      if (ev.archive && ev.archive.totals){
+        const t = ev.archive.totals;
 
-      grand += (t.grand || 0);
-      byEvent.set(ev.name, (byEvent.get(ev.name) || 0) + (t.grand || 0));
+        grand += (t.grand || 0);
+        byEvent.set(ev.name, (byEvent.get(ev.name) || 0) + (t.grand || 0));
 
-      if (t.byPay){
-        for (const k of Object.keys(t.byPay)){
-          byPay.set(k, (byPay.get(k) || 0) + (t.byPay[k] || 0));
+        if (t.byPay){
+          for (const k of Object.keys(t.byPay)){
+            byPay.set(k, (byPay.get(k) || 0) + (t.byPay[k] || 0));
+          }
         }
-      }
 
-      // Por producto: excluir cualquier llave tipo "(Cortesía)"
-      if (t.byProduct){
-        for (const k of Object.keys(t.byProduct)){
-          if (/\(Cortesía\)/i.test(String(k))) continue;
-          byProd.set(k, (byProd.get(k) || 0) + (t.byProduct[k] || 0));
+        // Por producto: excluir cualquier llave tipo "(Cortesía)"
+        if (t.byProduct){
+          for (const k of Object.keys(t.byProduct)){
+            if (/\(Cortesía\)/i.test(String(k))) continue;
+            byProd.set(k, (byProd.get(k) || 0) + (t.byProduct[k] || 0));
+          }
         }
-      }
 
-      if (t.byDay){
-        for (const k of Object.keys(t.byDay)){
-          byDay.set(k, (byDay.get(k) || 0) + (t.byDay[k] || 0));
+        if (t.byDay){
+          for (const k of Object.keys(t.byDay)){
+            byDay.set(k, (byDay.get(k) || 0) + (t.byDay[k] || 0));
+          }
         }
-      }
 
-      // Nota: por ahora no tenemos costo/utilidad/cortesías archivados.
+        // Nota: por ahora no tenemos costo/utilidad/cortesías archivados por evento.
+      }
     }
   }
 
   const profitAfterCourtesy = grandProfit - courtesyCost;
 
-  // --- Top KPIs ---
-  const grandTotalEl = document.getElementById('grand-total');
-  if (grandTotalEl) grandTotalEl.textContent = fmt(grand);
+  // Convertir maps en arrays ordenados
+  const byEventArr = Array.from(byEvent.entries()).map(([name, total])=>({ name, total })).sort((a,b)=>Number(b.total||0)-Number(a.total||0));
+  const byDayArr = Array.from(byDay.entries()).map(([date, total])=>({ date, total })).sort((a,b)=> (String(b.date||'').localeCompare(String(a.date||'')))); // más reciente primero
+  const byProdArr = Array.from(byProd.entries()).map(([name, total])=>({ name, total })).sort((a,b)=>Number(b.total||0)-Number(a.total||0));
+  const byPayArr = Array.from(byPay.entries()).map(([method, total])=>({ method, total })).sort((a,b)=>Number(b.total||0)-Number(a.total||0));
+  const transferArr = Array.from(transferByBank.entries()).map(([bank, obj])=>({ bank, total: Number(obj.total||0), count: Number(obj.count||0) })).sort((a,b)=>Number(b.total||0)-Number(a.total||0));
+  const courtesyArr = Array.from(courtesyByProd.entries()).map(([name, obj])=>({ name, qty: Number(obj.qty||0), cost: Number(obj.cost||0), equiv: Number(obj.equiv||0) })).sort((a,b)=>Number(b.cost||0)-Number(a.cost||0));
 
-  const costEl = document.getElementById('grand-cost');
-  if (costEl) costEl.textContent = fmt(grandCost);
+  const snapshot = {
+    periodKey: periodKey || null,
+    label: formatMonthLabel(periodKey),
+    generatedAt: new Date().toISOString(),
+    totals: {
+      grand: round2(grand),
+      grandCost: round2(grandCost),
+      grandProfit: round2(grandProfit),
+      courtesyCost: round2(courtesyCost),
+      profitAfterCourtesy: round2(profitAfterCourtesy),
+      courtesyQty: round2(courtesyQty),
+      courtesyEquiv: round2(courtesyEquiv),
+      courtesyTx: round2(courtesyTx),
+    },
+    byEvent: byEventArr,
+    byDay: byDayArr,
+    byProd: byProdArr,
+    byPay: byPayArr,
+    transferByBank: transferArr,
+    courtesyByProd: courtesyArr,
+  };
 
-  const profitEl = document.getElementById('grand-profit');
-  if (profitEl) profitEl.textContent = fmt(grandProfit);
-
-  const courCostEl = document.getElementById('grand-courtesy-cost');
-  if (courCostEl) courCostEl.textContent = fmt(courtesyCost);
-
-  const profitAfterEl = document.getElementById('grand-profit-after-courtesy');
-  if (profitAfterEl) profitAfterEl.textContent = fmt(profitAfterCourtesy);
-
-  // Compat: si no existe el bloque superior nuevo, intentamos crearlo sin romper el HTML viejo
-  if (!costEl || !profitEl || !courCostEl || !profitAfterEl){
-    const totalSpan = document.getElementById('grand-total');
-    if (totalSpan){
-      const card = totalSpan.closest('.card') || totalSpan.parentElement || document.getElementById('tab-resumen') || document.body;
-      let extraBlock = document.getElementById('grand-extra-block');
-      if (!extraBlock){
-        extraBlock = document.createElement('div');
-        extraBlock.id = 'grand-extra-block';
-        if (card) card.appendChild(extraBlock);
-      }
-      extraBlock.innerHTML = `
-        <p>Costo estimado de producto: C$ <span id="grand-cost">${fmt(grandCost)}</span></p>
-        <p>Utilidad bruta aproximada: C$ <span id="grand-profit">${fmt(grandProfit)}</span></p>
-        <p>Cortesías (Costo real): C$ <span id="grand-courtesy-cost">${fmt(courtesyCost)}</span></p>
-        <p>Utilidad después de cortesías: C$ <span id="grand-profit-after-courtesy">${fmt(profitAfterCourtesy)}</span></p>
-      `;
-    }
-  }
-
-  // --- Tablas existentes (solo ventas reales) ---
-  const tbE = document.querySelector('#tbl-por-evento tbody');
-  if (tbE){
-    tbE.innerHTML = '';
-    [...byEvent.entries()]
-      .sort((a,b)=>String(a[0]).localeCompare(String(b[0]),'es-NI'))
-      .forEach(([k,v])=>{
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${escapeHtml(k)}</td><td>${fmt(v)}</td>`;
-        tbE.appendChild(tr);
-      });
-  }
-
-  const tbD = document.querySelector('#tbl-por-dia tbody');
-  if (tbD){
-    tbD.innerHTML = '';
-    // Más reciente primero (YYYY-MM-DD)
-    [...byDay.entries()]
-      .sort((a,b)=>String(b[0]).localeCompare(String(a[0])))
-      .forEach(([k,v])=>{
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${escapeHtml(k)}</td><td>${fmt(v)}</td>`;
-        tbD.appendChild(tr);
-      });
-  }
-
-  const tbP = document.querySelector('#tbl-por-prod tbody');
-  if (tbP){
-    tbP.innerHTML = '';
-    [...byProd.entries()]
-      .filter(([k,_v])=> !(/\(Cortesía\)/i.test(String(k))))
-      .sort((a,b)=>String(a[0]).localeCompare(String(b[0]),'es-NI'))
-      .forEach(([k,v])=>{
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${escapeHtml(k)}</td><td>${fmt(v)}</td>`;
-        tbP.appendChild(tr);
-      });
-  }
-
-  const tbPay = document.querySelector('#tbl-por-pago tbody');
-  if (tbPay){
-    tbPay.innerHTML = '';
-    [...byPay.entries()]
-      .sort((a,b)=>String(a[0]).localeCompare(String(b[0]),'es-NI'))
-      .forEach(([k,v])=>{
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${escapeHtml(k)}</td><td>${fmt(v)}</td>`;
-        tbPay.appendChild(tr);
-      });
-  }
-
-  // Tabla: Transferencias por banco (Resumen)
-  const tbBank = document.querySelector('#tbl-transfer-bank tbody');
-  if (tbBank){
-    tbBank.innerHTML = '';
-    if (transferByBank.size){
-      const entries = Array.from(transferByBank.entries())
-        .sort((a,b)=> (Number((b[1]||{}).total||0) - Number((a[1]||{}).total||0)));
-      for (const [label, obj] of entries){
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${escapeHtml(label)}</td><td>${fmt(Number(obj.total||0))}</td><td>${obj.count||0}</td>`;
-        tbBank.appendChild(tr);
-      }
-    } else {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td colspan="3" class="muted">(sin transferencias)</td>`;
-      tbBank.appendChild(tr);
-    }
-  }
-
-  // --- Nueva sección: Cortesías ---
-  const courTotalCostEl = document.getElementById('courtesy-total-cost');
-  if (courTotalCostEl) courTotalCostEl.textContent = fmt(courtesyCost);
-
-  const courTotalQtyEl = document.getElementById('courtesy-total-qty');
-  if (courTotalQtyEl) courTotalQtyEl.textContent = String(Math.round(courtesyQty));
-
-  const courTotalEquivEl = document.getElementById('courtesy-total-equiv');
-  if (courTotalEquivEl) courTotalEquivEl.textContent = fmt(courtesyEquiv);
-
-  const courTxEl = document.getElementById('courtesy-total-tx');
-  if (courTxEl) courTxEl.textContent = String(courtesyTx);
-
-  const tbCour = document.querySelector('#tbl-courtesy-byprod tbody');
-  if (tbCour){
-    tbCour.innerHTML = '';
-    if (courtesyByProd.size){
-      const entries = Array.from(courtesyByProd.entries())
-        .sort((a,b)=>String(a[0]).localeCompare(String(b[0]),'es-NI'));
-
-      for (const [name, obj] of entries){
-        const q = obj ? Number(obj.qty || 0) : 0;
-        const c = obj ? Number(obj.cost || 0) : 0;
-        const e = obj ? Number(obj.equiv || 0) : 0;
-
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${escapeHtml(name)}</td>
-          <td>${Math.round(q)}</td>
-          <td>${fmt(c)}</td>
-          <td>${fmt(e)}</td>
-        `;
-        tbCour.appendChild(tr);
-      }
-    } else {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td colspan="4" class="muted">(sin cortesías)</td>`;
-      tbCour.appendChild(tr);
-    }
-  }
+  currentSummarySnapshot = snapshot;
+  applySummarySnapshotToUI(snapshot);
 }
 
 // CSV helpers
@@ -4341,6 +4647,8 @@ async function init(){
   }catch(err){
     console.error('INIT step error al configurar fecha por defecto', err);
   }
+  // Resumen: por defecto, usar el mes actual (si el usuario no eligió otro)
+  ensureSummaryPeriodDefault();
 
   // Paso 4: refrescar vistas principales
   await runStep('refreshEventUI', refreshEventUI);
@@ -4377,6 +4685,251 @@ async function init(){
       const tab = b.dataset.tab;
       if (tab) setTab(tab);
     });
+  }
+
+
+  // --- Resumen: Período / Archivo / Cerrar período ---
+  try{
+    const periodInput = document.getElementById('summary-period');
+    if (periodInput){
+      // Prefill si estamos en live
+      const pk = getSummaryPeriodKey();
+      if (pk) periodInput.value = pk;
+      periodInput.addEventListener('change', async ()=>{
+        // Cambiar período = siempre vuelve a live
+        setSummaryMode('live');
+        setSummaryArchiveId(null);
+        const v = (periodInput.value || '').trim();
+        setSummaryPeriodKey(v ? v : null);
+        await renderSummary();
+      });
+    }
+
+    const btnAll = document.getElementById('btn-summary-all');
+    if (btnAll){
+      btnAll.addEventListener('click', async ()=>{
+        setSummaryMode('live');
+        setSummaryArchiveId(null);
+        setSummaryPeriodKey(null);
+        await renderSummary();
+      });
+    }
+
+    const btnBackLive = document.getElementById('btn-summary-back-live');
+    if (btnBackLive){
+      btnBackLive.addEventListener('click', async ()=>{
+        setSummaryMode('live');
+        setSummaryArchiveId(null);
+        await renderSummary();
+      });
+    }
+
+    const btnExport = document.getElementById('btn-summary-export');
+    if (btnExport){
+      btnExport.addEventListener('click', ()=>{
+        if (!currentSummarySnapshot){
+          toast('No hay datos para exportar');
+          return;
+        }
+        exportSummarySnapshotToExcel(currentSummarySnapshot, {});
+      });
+    }
+
+    const btnArchive = document.getElementById('btn-summary-archive');
+    if (btnArchive){
+      btnArchive.addEventListener('click', async ()=>{
+        summaryArchivesCache = await getAllSummaryArchivesSafe();
+        await refreshSummaryArchivesUI();
+        showSummaryArchiveModal(true);
+      });
+    }
+
+    const btnArchClose = document.getElementById('summary-archive-close');
+    if (btnArchClose){
+      btnArchClose.addEventListener('click', ()=> showSummaryArchiveModal(false));
+    }
+    const btnArchRefresh = document.getElementById('summary-archive-refresh');
+    if (btnArchRefresh){
+      btnArchRefresh.addEventListener('click', async ()=>{
+        summaryArchivesCache = await getAllSummaryArchivesSafe();
+        await refreshSummaryArchivesUI();
+      });
+    }
+    const archSearch = document.getElementById('summary-archive-search');
+    if (archSearch){
+      archSearch.addEventListener('input', async ()=>{ await refreshSummaryArchivesUI(); });
+    }
+
+    const tblArchives = document.getElementById('tbl-summary-archives');
+    if (tblArchives){
+      tblArchives.addEventListener('click', async (e)=>{
+        const b = e.target.closest('button');
+        if (!b) return;
+        const id = (b.dataset.id || '').trim();
+        if (!id) return;
+
+        // Obtener el archivo (snapshot)
+        const arch = await getSummaryArchiveByIdSafe(id);
+        if (!arch || !arch.snapshot){
+          alert('No se pudo abrir ese archivo.');
+          return;
+        }
+
+        if (b.classList.contains('arch-view')){
+          setSummaryMode('archive');
+          setSummaryArchiveId(id);
+          showSummaryArchiveModal(false);
+          await renderSummary();
+          return;
+        }
+
+        if (b.classList.contains('arch-export')){
+          exportSummarySnapshotToExcel(arch.snapshot, { fileName: `resumen_${arch.periodKey || 'archivo'}_${(arch.name || 'cierre')}.xlsx` });
+          return;
+        }
+
+        if (b.classList.contains('arch-activate')){
+          setSummaryMode('live');
+          setSummaryArchiveId(null);
+          setSummaryPeriodKey(arch.periodKey || null);
+          showSummaryArchiveModal(false);
+          await renderSummary();
+          return;
+        }
+      });
+    }
+
+    const btnClosePeriod = document.getElementById('btn-summary-close-period');
+    if (btnClosePeriod){
+      btnClosePeriod.addEventListener('click', ()=>{
+        const pk = getSummaryPeriodKey();
+        if (!pk){
+          alert('Para cerrar un período, primero selecciona un mes (no "Todo").');
+          return;
+        }
+        summaryCloseExportedOk = false;
+
+        const lbl = document.getElementById('summary-close-period-label');
+        if (lbl) lbl.textContent = formatMonthLabel(pk);
+
+        const nameInput = document.getElementById('summary-close-name');
+        if (nameInput) nameInput.value = formatMonthLabel(pk);
+
+        const st = document.getElementById('summary-close-status');
+        if (st) st.textContent = '';
+
+        const btnConfirm = document.getElementById('summary-close-confirm');
+        if (btnConfirm) btnConfirm.disabled = true;
+
+        showSummaryCloseModal(true);
+      });
+    }
+
+    const btnCloseCancel = document.getElementById('summary-close-cancel');
+    if (btnCloseCancel){
+      btnCloseCancel.addEventListener('click', ()=> showSummaryCloseModal(false));
+    }
+
+    const btnCloseExport = document.getElementById('summary-close-export');
+    if (btnCloseExport){
+      btnCloseExport.addEventListener('click', async ()=>{
+        const pk = getSummaryPeriodKey();
+        if (!pk){
+          alert('Selecciona un mes para cerrar.');
+          return;
+        }
+
+        // Asegurar que estamos en live y con ese mes seleccionado
+        setSummaryMode('live');
+        setSummaryArchiveId(null);
+        setSummaryPeriodKey(pk);
+        await renderSummary();
+
+        if (!currentSummarySnapshot){
+          alert('No hay datos para exportar en ese período.');
+          return;
+        }
+
+        const nm = (document.getElementById('summary-close-name')?.value || '').trim() || formatMonthLabel(pk);
+        exportSummarySnapshotToExcel(currentSummarySnapshot, { fileName: `resumen_${pk}_${nm}.xlsx` });
+
+        summaryCloseExportedOk = true;
+        const st = document.getElementById('summary-close-status');
+        if (st) st.textContent = 'Excel exportado. Ya puedes cerrar y archivar.';
+        const btnConfirm = document.getElementById('summary-close-confirm');
+        if (btnConfirm) btnConfirm.disabled = false;
+      });
+    }
+
+    const btnCloseConfirm = document.getElementById('summary-close-confirm');
+    if (btnCloseConfirm){
+      btnCloseConfirm.addEventListener('click', async ()=>{
+        if (!summaryCloseExportedOk){
+          alert('Primero exporta el Excel (obligatorio).');
+          return;
+        }
+        const pk = getSummaryPeriodKey();
+        if (!pk){
+          alert('Selecciona un mes para cerrar.');
+          return;
+        }
+        const nm = (document.getElementById('summary-close-name')?.value || '').trim();
+        if (!nm){
+          alert('Escribe un nombre para el cierre.');
+          return;
+        }
+
+        // Garantizar snapshot actual del mes
+        setSummaryMode('live');
+        setSummaryArchiveId(null);
+        setSummaryPeriodKey(pk);
+        await renderSummary();
+
+        const snap = currentSummarySnapshot;
+        if (!snap){
+          alert('No hay datos para archivar.');
+          return;
+        }
+
+        try{
+          const all = await getAllSummaryArchivesSafe();
+          const newId = newSummaryArchiveId();
+          all.push({
+            id: newId,
+            name: nm,
+            periodKey: pk,
+            createdAt: new Date().toISOString(),
+            snapshot: snap,
+            totals: snap.totals || null
+          });
+          const ok = await saveAllSummaryArchivesSafe(all);
+          if (!ok) throw new Error('saveAllSummaryArchivesSafe failed');
+          toast('Período archivado');
+          showSummaryCloseModal(false);
+
+          // "Reiniciar": mover al siguiente mes automáticamente
+          const nextPk = nextPeriodKey(pk);
+          setSummaryPeriodKey(nextPk);
+          await renderSummary();
+
+        }catch(err){
+          console.error('Error archivando período', err);
+          alert('No se pudo archivar el período.');
+        }
+      });
+    }
+
+    // Cerrar modales al tocar fuera del panel
+    const closeModal = document.getElementById('summary-close-modal');
+    if (closeModal){
+      closeModal.addEventListener('click', (e)=>{ if (e.target && e.target.id === 'summary-close-modal') showSummaryCloseModal(false); });
+    }
+    const archModal = document.getElementById('summary-archive-modal');
+    if (archModal){
+      archModal.addEventListener('click', (e)=>{ if (e.target && e.target.id === 'summary-archive-modal') showSummaryArchiveModal(false); });
+    }
+  }catch(err){
+    console.error('INIT: error bind Resumen Períodos/Archivo', err);
   }
 
   // Vender tab

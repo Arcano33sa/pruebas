@@ -421,3 +421,41 @@ small.muted{color:var(--muted)}
   padding:10px 12px;
   font-size:13px;
 }
+
+
+/* --- Resumen: controles de período y archivo --- */
+.summary-controls{
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  align-items:flex-end;
+  flex-wrap:wrap;
+  margin: 6px 0 12px;
+}
+.summary-controls-left{
+  flex: 1 1 360px;
+  min-width: 280px;
+}
+.summary-controls-right{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:flex-end;
+}
+.tag.small{
+  font-size: 12px;
+  padding: 2px 8px;
+}
+#tbl-summary-archives th, #tbl-summary-archives td{
+  white-space: nowrap;
+}
+#tbl-summary-archives td:nth-child(1){
+  white-space: normal;
+}
+.archive-actions{
+  display:flex;
+  gap:6px;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+}
