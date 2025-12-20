@@ -61,7 +61,7 @@ function openDB() {
 function openFinanzasDB() {
   return new Promise((resolve, reject) => {
     if (finDb) return resolve(finDb);
-    const req = indexedDB.open(FIN_DB_NAME);
+    const req = indexedDB.open(FIN_DB_NAME, FIN_DB_VER);
     req.onupgradeneeded = (e) => {
       const d = e.target.result;
       if (!d.objectStoreNames.contains('accounts')) {
@@ -1154,6 +1154,120 @@ function saleSortKeyPOS(s){
   return (Number.isFinite(idn) ? idn : 0);
 }
 
+
+// --- Consecutivo por evento (N°) para ventas (incluye Extras)
+// Nota: mantenemos el `id` real (autoincrement/timestamp) para trazabilidad.
+// El consecutivo oficial por evento se guarda en `sale.seqId` y se exporta como "N°".
+function isLikelyAutoIdPOS(n){
+  return Number.isFinite(n) && n > 0 && n < 1000000000; // ids autoincrement típicos
+}
+
+function getSaleExistingSeqCandidatePOS(s){
+  const seq = Number(s && s.seqId);
+  if (Number.isFinite(seq) && seq > 0) return seq;
+  const idn = Number(s && s.id);
+  if (isLikelyAutoIdPOS(idn)) return idn;
+  return 0;
+}
+
+function computeEventSaleSeqBasePOS(sales){
+  let base = 0;
+  if (!Array.isArray(sales)) return base;
+  for (const s of sales){
+    const cand = getSaleExistingSeqCandidatePOS(s);
+    if (cand > base) base = cand;
+  }
+  return base;
+}
+
+async function backfillSaleSeqIdsForEventPOS(eventId, ev=null, sales=null){
+  try{
+    const event = ev || await getEventByIdPOS(eventId);
+    if (!event) return { updated:0, saleSeq:0 };
+
+    const allSales = sales || (await getAll('sales')).filter(s=>s.eventId===eventId);
+    const used = new Set();
+    let base = computeEventSaleSeqBasePOS(allSales);
+
+    // Reservar números ya usados
+    for (const s of allSales){
+      const seq = Number(s && s.seqId);
+      if (Number.isFinite(seq) && seq > 0) used.add(seq);
+      const idn = Number(s && s.id);
+      if (isLikelyAutoIdPOS(idn)) used.add(idn);
+    }
+
+    let updated = 0;
+    for (const s of allSales){
+      const cur = Number(s && s.seqId);
+      if (Number.isFinite(cur) && cur > 0) continue;
+
+      const idn = Number(s && s.id);
+
+      // Si el id "parece" autoincrement y no colisiona, usarlo como N°
+      if (isLikelyAutoIdPOS(idn) && !used.has(idn)){
+        s.seqId = idn;
+        used.add(idn);
+        if (idn > base) base = idn;
+      } else {
+        // Si el id es timestamp (muy grande) o colisiona, asignar el siguiente consecutivo
+        do { base += 1; } while (used.has(base));
+        s.seqId = base;
+        used.add(base);
+      }
+
+      try{
+        await put('sales', s);
+        updated++;
+      }catch(e){}
+    }
+
+    // Actualizar contador del evento (no bajarlo nunca)
+    const curSeq = Number(event.saleSeq || 0);
+    if (!Number.isFinite(curSeq) || curSeq < base) event.saleSeq = base;
+
+    try{ await put('events', event); }catch(e){}
+    return { updated, saleSeq: Number(event.saleSeq||0) };
+  }catch(e){
+    console.warn('No se pudo backfill de N° por evento', e);
+    return { updated:0, saleSeq:0 };
+  }
+}
+
+async function ensureNewSaleSeqIdPOS(event, saleRecord){
+  if (!event || !saleRecord) return;
+
+  // Si el evento no tiene contador, inicializar desde ventas existentes (una sola vez)
+  let curSeq = Number(event.saleSeq || 0);
+  if (!Number.isFinite(curSeq) || curSeq <= 0){
+    const sales = (await getAll('sales')).filter(s=>s.eventId===event.id);
+    const hasMissing = sales.some(s => !(Number(s && s.seqId) > 0));
+    if (hasMissing){
+      const res = await backfillSaleSeqIdsForEventPOS(event.id, event, sales);
+      curSeq = Number(res.saleSeq || 0);
+    } else {
+      curSeq = computeEventSaleSeqBasePOS(sales);
+      event.saleSeq = curSeq;
+      await put('events', event);
+    }
+  }
+
+  curSeq = Number(event.saleSeq || curSeq || 0);
+  const next = (Number.isFinite(curSeq) ? curSeq : 0) + 1;
+
+  saleRecord.seqId = next;
+  event.saleSeq = next;
+
+  await put('events', event);
+}
+
+function getSaleSeqDisplayPOS(s){
+  const n = Number(s && s.seqId);
+  if (Number.isFinite(n) && n > 0) return String(n);
+  const idn = Number(s && s.id);
+  return (Number.isFinite(idn) ? String(idn) : '');
+}
+
 function humanizeError(err){
   if (!err) return 'Error desconocido.';
   if (typeof err === 'string') return err;
@@ -1410,333 +1524,6 @@ async function getHiddenProductIdsPOS(){
   return hidden;
 }
 
-
-
-// --- Items Extra por evento (Charcutería, snacks, etc.) ---
-function getElFirst(ids){
-  for (const id of ids){
-    const el = document.getElementById(id);
-    if (el) return el;
-  }
-  return null;
-}
-function toNum(v, def=0){
-  const n = Number(v);
-  return Number.isFinite(n) ? n : def;
-}
-function toMoney(v, def=0){
-  const n = Number(v);
-  if (!Number.isFinite(n)) return def;
-  return Math.round(n * 100) / 100;
-}
-function toStr(v){
-  return (v == null ? '' : String(v)).trim();
-}
-function normExtraName(s){
-  return toStr(s)
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g,'')
-    .replace(/\s+/g,' ')
-    .trim();
-}
-
-function ensureEventExtras(ev){
-  if (!ev) return [];
-  if (!Array.isArray(ev.extras)) ev.extras = [];
-  return ev.extras;
-}
-
-function coerceExtraRecord(raw){
-  const r = (raw && typeof raw === 'object') ? raw : {};
-  const id = (r.id != null) ? Number(r.id) : Date.now();
-  const name = toStr(r.name || r.nombre);
-  const qty = Math.max(0, Math.floor(toNum(r.qty, toNum(r.stock, 0))));
-  const cost = Math.max(0, toMoney(r.cost, toMoney(r.unitCost, 0)));
-  const price = Math.max(0, toMoney(r.price, toMoney(r.unitPrice, 0)));
-  const lowStockAt = Math.max(0, Math.floor(toNum(r.lowStockAt, toNum(r.warnAt, 5))));
-  const isActive = (r.isActive !== false);
-  const createdAt = (typeof r.createdAt === 'string' && r.createdAt.trim()) ? r.createdAt : new Date().toISOString();
-  const deletedAt = (typeof r.deletedAt === 'string' && r.deletedAt.trim()) ? r.deletedAt : null;
-  return { id, name, qty, cost, price, lowStockAt, isActive, createdAt, deletedAt };
-}
-
-async function getCurrentEventPOS(){
-  const curId = await getMeta('currentEventId');
-  if (!curId) return null;
-  const evs = await getAll('events');
-  return evs.find(e=>e.id===curId) || null;
-}
-
-async function saveEventPOS(ev){
-  if (!ev) return;
-  await put('events', ev);
-}
-
-function isExtraSelectionId(id){
-  return Number.isFinite(id) && id < 0;
-}
-
-async function getExtraByIdForEvent(eventId, extraId){
-  const evs = await getAll('events');
-  const ev = evs.find(e=>e.id===eventId);
-  if (!ev) return null;
-  const extras = ensureEventExtras(ev).map(coerceExtraRecord);
-  ev.extras = extras;
-  const ex = extras.find(x=>Number(x.id)===Number(extraId) && x.deletedAt==null);
-  return ex || null;
-}
-
-async function computeExtraStock(eventId, extraId){
-  const ex = await getExtraByIdForEvent(eventId, extraId);
-  if (!ex) return 0;
-  const sales = await getAll('sales');
-  const sold = (sales||[]).filter(s=>{
-    if (!s) return false;
-    if (s.eventId !== eventId) return false;
-    const isExtra = (s.itemType === 'extra') || (s.extraId != null) || (Number(s.productId) === -Number(extraId));
-    if (!isExtra) return false;
-    const sid = (s.extraId != null) ? Number(s.extraId) : -Number(s.productId);
-    return Number(sid) === Number(extraId);
-  }).reduce((acc,s)=> acc + Number(s.qty||0), 0);
-  return Math.max(0, Number(ex.qty||0) - sold);
-}
-
-async function syncSaleUIFromSelection(){
-  const sel = document.getElementById('sale-product');
-  if (!sel) return;
-  const id = parseInt(String(sel.value||'0'), 10);
-  const curId = await getMeta('currentEventId');
-
-  if (isExtraSelectionId(id)){
-    const extraId = Math.abs(id);
-    const ex = curId ? await getExtraByIdForEvent(curId, extraId) : null;
-    if (ex){
-      const pr = document.getElementById('sale-price');
-      if (pr) pr.value = ex.price;
-    }
-    // Al seleccionar extra, apagamos chips (son solo de presentaciones)
-    document.querySelectorAll('#product-chips .chip').forEach(x=>x.classList.remove('active'));
-    await refreshSaleStockLabel();
-    recomputeTotal();
-    return;
-  }
-
-  const products = await getAll('products');
-  const p = products.find(x=>x.id===id);
-  if (p){
-    const pr = document.getElementById('sale-price');
-    if (pr) pr.value = p.price;
-  }
-  document.querySelectorAll('#product-chips .chip').forEach(x=>x.classList.toggle('active', parseInt(x.dataset.id,10)===id));
-  await refreshSaleStockLabel();
-  recomputeTotal();
-}
-
-async function refreshExtrasUI(){
-  // Actualiza: etiqueta Evento Activo + listado de extras (si existe UI)
-  const label = getElFirst(['extras-event-label','extra-event-label','extras-event-name','extra-event-name']);
-  const listEl = getElFirst(['extras-list','extra-list','extras-table','extra-table']);
-  const btnAdd = getElFirst(['btn-add-extra','btn-extra-add','btnAddExtra']);
-  const nameInp = getElFirst(['extra-name','extra_name','extraName']);
-  const qtyInp  = getElFirst(['extra-qty','extra_qty','extraQty']);
-  const costInp = getElFirst(['extra-cost','extra_cost','extraCost']);
-  const priceInp= getElFirst(['extra-price','extra_price','extraPrice']);
-  const lowInp  = getElFirst(['extra-low','extra-lowstock','extra_low','extraLow','extraWarnAt']);
-
-  const curId = await getMeta('currentEventId');
-  const evs = await getAll('events');
-  const ev = curId ? evs.find(e=>e.id===curId) : null;
-
-  if (label){
-    label.textContent = ev ? ev.name : '—';
-  }
-
-  // Si no hay panel de extras en HTML, no hacemos más.
-  if (!listEl) return;
-
-  if (!ev){
-    listEl.innerHTML = '<div class="muted">Selecciona un evento en Vender para gestionar Extras.</div>';
-    return;
-  }
-  if (ev.closedAt){
-    listEl.innerHTML = '<div class="muted">Evento cerrado. Reábrelo para modificar Extras.</div>';
-    return;
-  }
-
-  const extras = ensureEventExtras(ev).map(coerceExtraRecord).filter(x=>x.deletedAt==null);
-  ev.extras = extras;
-
-  const sales = await getAll('sales');
-  const rows = [];
-  for (const ex of extras){
-    const sold = (sales||[]).filter(s=>{
-      if (!s || s.eventId !== ev.id) return false;
-      const sid = (s.extraId != null) ? Number(s.extraId) : (s.itemType === 'extra' ? -Number(s.productId) : null);
-      if (sid == null) return false;
-      return Number(sid) === Number(ex.id);
-    }).reduce((acc,s)=> acc + Number(s.qty||0), 0);
-    const remaining = Math.max(0, Number(ex.qty||0) - sold);
-    rows.push({ex, sold, remaining});
-  }
-
-  rows.sort((a,b)=> a.ex.name.localeCompare(b.ex.name,'es'));
-
-  let html = '';
-  html += '<table class="table">';
-  html += '<thead><tr><th>Extra</th><th>Stock</th><th>Vend.</th><th>Disp.</th><th>Costo</th><th>Precio</th><th>Alerta</th><th>Estado</th><th></th></tr></thead><tbody>';
-  for (const r of rows){
-    const ex = r.ex;
-    const warn = (r.remaining <= (ex.lowStockAt||0)) ? '⚠️' : '';
-    html += '<tr>';
-    html += `<td>${escapeHtml(ex.name)}</td>`;
-    html += `<td>${ex.qty||0}</td>`;
-    html += `<td>${r.sold||0}</td>`;
-    html += `<td>${r.remaining||0} ${warn}</td>`;
-    html += `<td>C$ ${fmt(ex.cost||0)}</td>`;
-    html += `<td>C$ ${fmt(ex.price||0)}</td>`;
-    html += `<td>${ex.lowStockAt||0}</td>`;
-    html += `<td>${ex.isActive!==false ? 'Activo' : 'Oculto'}</td>`;
-    html += `<td class="actions">
-      <button class="btn small btn-extra-restock" data-id="${ex.id}">+ Stock</button>
-      <button class="btn small btn-extra-edit" data-id="${ex.id}">Editar</button>
-      <button class="btn small btn-extra-toggle" data-id="${ex.id}">${ex.isActive!==false ? 'Ocultar' : 'Mostrar'}</button>
-      <button class="btn small danger btn-extra-del" data-id="${ex.id}">Eliminar</button>
-    </td>`;
-    html += '</tr>';
-  }
-  html += '</tbody></table>';
-
-  if (!extras.length){
-    html = '<div class="muted">Aún no hay Extras en este evento.</div>';
-  }
-
-  listEl.innerHTML = html;
-
-  // Bind add button si existe (una sola vez)
-  if (btnAdd && !btnAdd.dataset.bound){
-    btnAdd.dataset.bound = '1';
-    btnAdd.addEventListener('click', async ()=>{
-      const nm = toStr(nameInp && nameInp.value);
-      const qty = Math.floor(Math.max(0, toNum(qtyInp && qtyInp.value, 0)));
-      const cost = Math.max(0, toMoney(costInp && costInp.value, 0));
-      const price = Math.max(0, toMoney(priceInp && priceInp.value, 0));
-      const low = Math.floor(Math.max(0, toNum(lowInp && lowInp.value, 5)));
-
-      if (!nm){ alert('Nombre del Extra es obligatorio.'); return; }
-      if (!(qty >= 0)){ alert('Cantidad inválida.'); return; }
-      if (!(price >= 0)){ alert('Precio inválido.'); return; }
-
-      const key = normExtraName(nm);
-      const dup = extras.find(x=> normExtraName(x.name) === key);
-      if (dup){
-        alert('Ya existe un Extra con ese nombre en este evento.');
-        return;
-      }
-
-      const ex = coerceExtraRecord({ id: Date.now(), name: nm, qty, cost, price, lowStockAt: low, isActive: true });
-      ev.extras.push(ex);
-      await saveEventPOS(ev);
-      if (nameInp) nameInp.value = '';
-      if (qtyInp) qtyInp.value = '';
-      if (costInp) costInp.value = '';
-      if (priceInp) priceInp.value = '';
-      if (lowInp) lowInp.value = '';
-      await refreshExtrasUI();
-      await refreshProductSelect();
-      toast('Extra agregado');
-    });
-  }
-
-  // Delegación de acciones en la tabla
-  if (!listEl.dataset.bound){
-    listEl.dataset.bound = '1';
-    listEl.addEventListener('click', async (e)=>{
-      const restockBtn = e.target.closest('.btn-extra-restock');
-      const editBtn = e.target.closest('.btn-extra-edit');
-      const toggleBtn = e.target.closest('.btn-extra-toggle');
-      const delBtn = e.target.closest('.btn-extra-del');
-      const btn = restockBtn || editBtn || toggleBtn || delBtn;
-      if (!btn) return;
-      const exId = Number(btn.dataset.id);
-      if (!Number.isFinite(exId)) return;
-
-      const evNow = await getCurrentEventPOS();
-      if (!evNow) return alert('Selecciona un evento primero.');
-      if (evNow.closedAt) return alert('Evento cerrado.');
-
-      const extrasNow = ensureEventExtras(evNow).map(coerceExtraRecord).filter(x=>x.deletedAt==null);
-      evNow.extras = extrasNow;
-      const ex = extrasNow.find(x=>Number(x.id)===exId);
-      if (!ex) return;
-
-      if (restockBtn){
-        const add = prompt(`Agregar stock a "${ex.name}".\n\nStock actual: ${ex.qty}\n\nCantidad a agregar:`);
-        if (!add) return;
-        const n = Math.floor(toNum(add, 0));
-        if (!(n > 0)) return alert('Cantidad inválida.');
-        ex.qty = Math.max(0, Math.floor(Number(ex.qty||0) + n));
-        await saveEventPOS(evNow);
-        await refreshExtrasUI();
-        await refreshProductSelect();
-        toast('Stock actualizado');
-        return;
-      }
-
-      if (editBtn){
-        const nm = prompt('Nombre del Extra:', ex.name);
-        if (nm == null) return;
-        const qtyStr = prompt('Stock total (número):', String(ex.qty||0));
-        if (qtyStr == null) return;
-        const costStr = prompt('Costo unitario (C$):', String(ex.cost||0));
-        if (costStr == null) return;
-        const priceStr = prompt('Precio unitario (C$):', String(ex.price||0));
-        if (priceStr == null) return;
-        const lowStr = prompt('Alertar cuando quede <= (unidades):', String(ex.lowStockAt||0));
-        if (lowStr == null) return;
-
-        const newName = toStr(nm);
-        if (!newName) return alert('Nombre obligatorio.');
-        const key = normExtraName(newName);
-        const dup = extrasNow.find(x=> Number(x.id)!==exId && normExtraName(x.name)===key);
-        if (dup) return alert('Ya existe otro Extra con ese nombre.');
-
-        ex.name = newName;
-        ex.qty = Math.max(0, Math.floor(toNum(qtyStr, ex.qty||0)));
-        ex.cost = Math.max(0, toMoney(costStr, ex.cost||0));
-        ex.price = Math.max(0, toMoney(priceStr, ex.price||0));
-        ex.lowStockAt = Math.max(0, Math.floor(toNum(lowStr, ex.lowStockAt||0)));
-        await saveEventPOS(evNow);
-        await refreshExtrasUI();
-        await refreshProductSelect();
-        toast('Extra actualizado');
-        return;
-      }
-
-      if (toggleBtn){
-        ex.isActive = !(ex.isActive !== false);
-        await saveEventPOS(evNow);
-        await refreshExtrasUI();
-        await refreshProductSelect();
-        toast('Extra actualizado');
-        return;
-      }
-
-      if (delBtn){
-        const ok = confirm(`¿Eliminar "${ex.name}"?\n\nEsto NO borra ventas pasadas, solo lo quita de la lista del evento.`);
-        if (!ok) return;
-        ex.deletedAt = new Date().toISOString();
-        ex.isActive = false;
-        await saveEventPOS(evNow);
-        await refreshExtrasUI();
-        await refreshProductSelect();
-        toast('Extra eliminado');
-        return;
-      }
-    });
-  }
-}
-
 // Chips de productos (todos los activos)
 async function renderProductChips(){
   const chips = $('#product-chips'); if (!chips) return;
@@ -1853,7 +1640,7 @@ function setTab(name){
   const btn = document.querySelector(`.tabbar button[data-tab="${name}"]`);
   if (btn) btn.classList.add('active');
   if (name==='resumen') renderSummary();
-  if (name==='productos') { renderProductos(); setTimeout(()=>{ try{ refreshExtrasUI().catch(()=>{}); }catch(e){} }, 0); }
+  if (name==='productos') renderProductos();
   if (name==='eventos') renderEventos();
   if (name==='inventario') renderInventario();
   if (name==='caja') renderCajaChica();
@@ -2066,101 +1853,38 @@ async function onTogglePettyForCurrentEvent(){
 
 // Product select + stock label
 async function refreshProductSelect(){
+  const hiddenIds = await getHiddenProductIdsPOS();
+  const all = await getAll('products');
+  const list = all.filter(p => !hiddenIds.has(p.id));
   const sel = $('#sale-product');
   if (!sel) return;
-
-  const prevVal = String(sel.value || '').trim();
-  const hiddenIds = await getHiddenProductIdsPOS();
-
-  const productsAll = await getAll('products');
-  let list = (productsAll || []).filter(p=>p && p.active!==false && !hiddenIds.has(p.id));
-
-  // Orden con prioridad de Arcano 33
-  const priority = ['pulso','media','djeba','litro','galon','galón','galon 3800','galón 3800'];
-  list.sort((a,b)=>{
-    const ia = priority.findIndex(x=>normName(a.name).includes(x));
-    const ib = priority.findIndex(x=>normName(b.name).includes(x));
-    const pa = ia===-1?999:ia; const pb = ib===-1?999:ib;
-    if (pa!==pb) return pa-pb;
-    return a.name.localeCompare(b.name, 'es');
-  });
-
-  // Extras del evento activo
-  const curId = await getMeta('currentEventId');
-  let extras = [];
-  if (curId){
-    const evs = await getAll('events');
-    const ev = evs.find(e=>e.id===curId);
-    if (ev){
-      extras = ensureEventExtras(ev).map(coerceExtraRecord).filter(x=>x.deletedAt==null && x.isActive!==false);
-      ev.extras = ensureEventExtras(ev).map(coerceExtraRecord);
-    }
-  }
-
   sel.innerHTML = '';
-
-  for (const p of list){
+  for (const p of list) {
     const opt = document.createElement('option');
-    opt.value = String(p.id);
+    opt.value = p.id;
     opt.textContent = `${p.name} (C${fmt(p.price)})${p.active===false?' [inactivo]':''}`;
     sel.appendChild(opt);
   }
-
-  if (extras.length){
-    const og = document.createElement('optgroup');
-    og.label = 'Extras';
-    extras.sort((a,b)=> String(a.name||'').localeCompare(String(b.name||''), 'es'));
-    for (const ex of extras){
-      const opt = document.createElement('option');
-      opt.value = String(-Number(ex.id));
-      opt.textContent = `★ ${ex.name} (C${fmt(ex.price||0)})`;
-      og.appendChild(opt);
-    }
-    sel.appendChild(og);
+  const first = list[0] || all[0];
+  if (first){ 
+    sel.value = first.id; 
+    $('#sale-price').value = first.price; 
   }
-
-  // Restaurar selección si existe; si no, elegir primero disponible
-  const hasOption = (v)=> Array.from(sel.querySelectorAll('option')).some(o=> o.value === String(v));
-  let desired = prevVal && hasOption(prevVal) ? prevVal : '';
-  if (!desired){
-    if (list.length) desired = String(list[0].id);
-    else if (extras.length) desired = String(-Number(extras[0].id));
-  }
-  if (desired) sel.value = desired;
-
-  await syncSaleUIFromSelection();
+  await renderProductChips();
+  const selId = parseInt(sel.value||'0',10);
+  document.querySelectorAll('#product-chips .chip').forEach(x=>{
+    if (parseInt(x.dataset.id,10)===selId) x.classList.add('active');
+  });
+  await refreshSaleStockLabel();
+  recomputeTotal();
 }
 
 async function refreshSaleStockLabel(){
   const curId = await getMeta('currentEventId');
-  const raw = $('#sale-product') ? $('#sale-product').value : '';
-  const prodId = parseInt(String(raw||'0'), 10);
-
-  if (!curId || !prodId){
-    $('#sale-stock').textContent = '—';
-    return;
-  }
-
-  // Extras (id negativo)
-  if (isExtraSelectionId(prodId)){
-    const extraId = Math.abs(prodId);
-    const ex = await getExtraByIdForEvent(curId, extraId);
-    if (!ex){
-      $('#sale-stock').textContent = '—';
-      return;
-    }
-    const st = await computeExtraStock(curId, extraId);
-    const warn = (st <= (ex.lowStockAt||0)) ? ' ⚠️' : '';
-    $('#sale-stock').textContent = String(st) + warn;
-    return;
-  }
-
+  const prodId = parseInt($('#sale-product').value||'0',10);
   const products = await getAll('products');
-  const p = (products || []).find(pp=>pp.id===prodId);
-  if (!p || p.manageStock===false){
-    $('#sale-stock').textContent = '—';
-    return;
-  }
+  const p = products.find(pp=>pp.id===prodId);
+  if (!p || p.manageStock===false || !curId) { $('#sale-stock').textContent='—'; return; }
   const st = await computeStock(parseInt(curId,10), prodId);
   $('#sale-stock').textContent = st;
 }
@@ -2500,6 +2224,8 @@ async function sellCupsPOS(isCourtesy){
     vaso: true,
     fifoBreakdown: taken.breakdown
   };
+
+  try{ await ensureNewSaleSeqIdPOS(ev, saleRecord); }catch(e){ console.warn('No se pudo asignar N° por evento a venta por vaso', e); }
 
   const saleId = await put('sales', saleRecord);
   saleRecord.id = saleId;
@@ -3149,6 +2875,10 @@ async function openEventView(eventId){
   const ev = events.find(e=>e.id===eventId);
   if (!ev) return;
   const sales = (await getAll('sales')).filter(s=>s.eventId===eventId);
+  // Asegurar N° consecutivo por evento (persistente) para export
+  await backfillSaleSeqIdsForEventPOS(eventId, ev, sales);
+  // Asegurar N° consecutivo por evento (persistente) para UI/Export
+  await backfillSaleSeqIdsForEventPOS(eventId, ev, sales);
   const banks = await getAllBanksSafe();
   const bankMap = new Map();
   for (const b of banks){ if (b && b.id != null) bankMap.set(Number(b.id), b.name || ''); }
@@ -3331,7 +3061,7 @@ async function openEventView(eventId){
     const payLabel = (s.payment === 'transferencia')
       ? (`Transferencia · ${getSaleBankLabel(s, bankMap)}`)
       : (s.payment || '');
-    const tr=document.createElement('tr'); tr.innerHTML = `<td>${s.id}</td><td>${s.date}</td><td>${getSaleTimeTextPOS(s)}</td><td>${s.productName}</td><td>${s.qty}</td><td>${fmt(s.unitPrice)}</td><td>${fmt(s.discount||0)}</td><td>${fmt(s.total)}</td><td>${payLabel}</td><td>${s.courtesy?'✓':''}</td><td>${s.isReturn?'✓':''}</td><td>${s.customer||''}</td><td>${s.courtesyTo||''}</td><td>${s.notes||''}</td>`;
+    const tr=document.createElement('tr'); tr.innerHTML = `<td>${getSaleSeqDisplayPOS(s)}</td><td>${s.date}</td><td>${getSaleTimeTextPOS(s)}</td><td>${s.productName}</td><td>${s.qty}</td><td>${fmt(s.unitPrice)}</td><td>${fmt(s.discount||0)}</td><td>${fmt(s.total)}</td><td>${payLabel}</td><td>${s.courtesy?'✓':''}</td><td>${s.isReturn?'✓':''}</td><td>${s.customer||''}</td><td>${s.courtesyTo||''}</td><td>${s.notes||''}</td>`;
     tb.appendChild(tr);
   });
 
@@ -3347,11 +3077,11 @@ async function exportEventSalesCSV(eventId){
   const bankMap = new Map();
   for (const b of banks){ if (b && b.id != null) bankMap.set(Number(b.id), b.name || ''); }
 
-  const rows = [['id','fecha','hora','producto','cant','PU','desc_C$','total','pago','banco','cortesia','devolucion','cliente','cortesia_a','notas']];
+  const rows = [['N°','id','fecha','hora','producto','cant','PU','desc_C$','total','pago','banco','cortesia','devolucion','cliente','cortesia_a','notas']];
   const ordered = [...sales].sort((a,b)=> (saleSortKeyPOS(b) - saleSortKeyPOS(a)));
   for (const s of ordered){
     const bank = (s.payment === 'transferencia') ? getSaleBankLabel(s, bankMap) : '';
-    rows.push([s.id, s.date, getSaleTimeTextPOS(s), s.productName, s.qty, s.unitPrice, (s.discount||0), s.total, (s.payment||''), bank, s.courtesy?1:0, s.isReturn?1:0, s.customer||'', s.courtesyTo||'', s.notes||'']);
+    rows.push([ (s.seqId || ''), s.id, s.date, getSaleTimeTextPOS(s), s.productName, s.qty, s.unitPrice, (s.discount||0), s.total, (s.payment||''), bank, s.courtesy?1:0, s.isReturn?1:0, s.customer||'', s.courtesyTo||'', s.notes||'']);
   }
   const safeName = (ev?ev.name:'evento').replace(/[^a-z0-9_\- ]/gi,'_');
   downloadExcel(`ventas_${safeName}.xlsx`, 'Ventas', rows);
@@ -3877,7 +3607,6 @@ async function init(){
   await runStep('refreshCupBlock', refreshCupBlock);
   await runStep('renderSummary', renderSummary);
   await runStep('renderProductos', renderProductos);
-  await runStep('refreshExtrasUI', refreshExtrasUI);
   await runStep('renderEventos', renderEventos);
   await runStep('renderInventario', renderInventario);
   await runStep('renderCajaChica', renderCajaChica);
@@ -3913,10 +3642,8 @@ async function init(){
     const val = $('#sale-event').value;
     if (val === '') { await setMeta('currentEventId', null); }
     else { await setMeta('currentEventId', parseInt(val,10)); }
-    await refreshEventUI();
-    await refreshProductSelect();
-    try{ await refreshExtrasUI(); }catch(e){}
-    await refreshSaleStockLabel();
+    await refreshEventUI(); 
+    await refreshSaleStockLabel(); 
     await renderDay();
   });
 
@@ -4060,7 +3787,7 @@ async function init(){
   $('#btn-close-event').addEventListener('click', async()=>{ const id = parseInt($('#sale-event').value||'0',10); const current = await getMeta('currentEventId'); const useId = id || current; if (!useId) return alert('Selecciona un evento'); await closeEvent(parseInt(useId,10)); });
   $('#btn-reopen-event').addEventListener('click', async()=>{ const val = $('#sale-event').value; const id = parseInt(val||'0',10); if (!id) return alert('Selecciona un evento cerrado'); await reopenEvent(id); });
 
-  $('#sale-product').addEventListener('change', async()=>{ await syncSaleUIFromSelection(); });
+  $('#sale-product').addEventListener('change', async()=>{ const id = parseInt($('#sale-product').value,10); const p = (await getAll('products')).find(x=>x.id===id); if (p) $('#sale-price').value = p.price; document.querySelectorAll('#product-chips .chip').forEach(x=>x.classList.toggle('active', parseInt(x.dataset.id,10)===id)); await refreshSaleStockLabel(); recomputeTotal(); });
   $('#sale-price').addEventListener('input', recomputeTotal);
   $('#sale-qty').addEventListener('input', recomputeTotal);
   $('#sale-discount').addEventListener('input', recomputeTotal);
@@ -4103,7 +3830,7 @@ async function init(){
       alert('No hay ventas para deshacer en este día.');
       return;
     }
-    const last = filtered.sort((a,b)=> (b.id||0) - (a.id||0))[0];
+    const last = filtered.sort((a,b)=> a.id - b.id)[filtered.length - 1];
     if (!confirm('¿Eliminar la última venta registrada?')) return;
     const delRes = await del('sales', last.id);
     await renderDay();
@@ -4318,7 +4045,6 @@ function recomputeTotal(){
 async function addSale(){
   const curId = await getMeta('currentEventId');
   if (!curId){ alert('Selecciona un evento'); return; }
-
   const date = $('#sale-date').value;
   const productId = parseInt($('#sale-product').value||'0',10);
   const qtyIn = parseFloat($('#sale-qty').value||'0');
@@ -4331,7 +4057,6 @@ async function addSale(){
   const customer = (payment==='credito') ? ($('#sale-customer').value||'').trim() : '';
   const courtesyTo = $('#sale-courtesy-to').value || '';
   const notes = $('#sale-notes').value || '';
-
   if (!date || !productId || !qty) { alert('Completa fecha, producto y cantidad'); return; }
   if (payment==='credito' && !customer){ alert('Ingresa el nombre del cliente (crédito)'); return; }
 
@@ -4360,70 +4085,15 @@ async function addSale(){
   const event = events.find(e=>e.id===curId);
   if (!event || event.closedAt){ alert('Este evento está cerrado. Reábrelo o activa otro.'); return; }
 
-  let productName = 'N/D';
-  let unitCost = 0;
-  let itemType = 'producto';
-  let extraId = null;
+  const products = await getAll('products');
+  const prod = products.find(p=>p.id===productId);
+  const productName = prod ? prod.name : 'N/D';
 
-  // --- Extra (id negativo) ---
-  if (isExtraSelectionId(productId)){
-    itemType = 'extra';
-    extraId = Math.abs(productId);
-    const ex = await getExtraByIdForEvent(curId, extraId);
-    if (!ex || ex.deletedAt){
-      alert('Este Extra ya no existe o fue eliminado.');
-      await refreshProductSelect();
-      return;
-    }
-    if (ex.isActive === false){
-      alert('Este Extra está oculto. Actívalo en Productos.');
-      return;
-    }
-
-    productName = ex.name;
-    unitCost = Number(ex.cost || 0);
-
-    if (!isReturn){
-      const st = await computeExtraStock(curId, extraId);
-      if (st < qty){
-        const add = prompt(`Stock insuficiente de "${productName}".
-
-Disponible: ${st}
-Intentas vender: ${qty}
-
-Escribe cuántas unidades deseas AGREGAR al stock (o deja vacío para cancelar):`);
-        if (!add) return;
-        const inc = Math.floor(toNum(add, 0));
-        if (!(inc > 0)){
-          alert('Cantidad inválida.');
-          return;
-        }
-        // Aumentar stock total del Extra
-        const evNow = await getCurrentEventPOS();
-        if (!evNow) return;
-        const arr = ensureEventExtras(evNow).map(coerceExtraRecord).filter(x=>x.deletedAt==null);
-        evNow.extras = arr;
-        const exNow = arr.find(x=>Number(x.id)===Number(extraId));
-        if (!exNow) return;
-        exNow.qty = Math.max(0, Math.floor(Number(exNow.qty||0) + inc));
-        await saveEventPOS(evNow);
-        try{ await refreshExtrasUI(); }catch(e){}
-      }
-    }
-
-  } else {
-    // --- Producto normal ---
-    const products = await getAll('products');
-    const prod = products.find(p=>p.id===productId);
-    productName = prod ? prod.name : 'N/D';
-    unitCost = getCostoUnitarioProducto(productName);
-
-    if (prod && prod.manageStock!==false && !isReturn){
-      const st = await computeStock(curId, productId);
-      if (st < qty){
-        const go = confirm(`Stock insuficiente de ${productName}: disponible ${st}, intentas vender ${qty}. ¿Continuar de todos modos?`);
-        if (!go) return;
-      }
+  if (prod && prod.manageStock!==false && !isReturn){
+    const st = await computeStock(curId, productId);
+    if (st < qty){
+      const go = confirm(`Stock insuficiente de ${productName}: disponible ${st}, intentas vender ${qty}. ¿Continuar de todos modos?`);
+      if (!go) return;
     }
   }
 
@@ -4436,33 +4106,30 @@ Escribe cuántas unidades deseas AGREGAR al stock (o deja vacío para cancelar):
   const finalQty = isReturn ? -qty : qty;
   if (isReturn) total = -total;
 
+  const unitCost = getCostoUnitarioProducto(productName);
   const lineCost = unitCost * finalQty;
   const lineProfit = total - lineCost;
 
   const eventName = event ? event.name : 'General';
-  const now = new Date();
-  const time = now.toTimeString().slice(0,5);
+  const now = new Date(); const time = now.toTimeString().slice(0,5);
 
-  // Ajustar inventario central de producto terminado SOLO para presentaciones (no Extras)
-  if (itemType !== 'extra'){
-    try{
-      applyFinishedFromSalePOS({ productName, qty: finalQty }, +1);
-    }catch(e){
-      console.error('No se pudo actualizar inventario central desde venta', e);
-    }
+  // Ajustar inventario central de producto terminado
+  try{
+    applyFinishedFromSalePOS({ productName, qty: finalQty }, +1);
+  }catch(e){
+    console.error('No se pudo actualizar inventario central desde venta', e);
   }
 
   const saleRecord = {
     date,
     time,
-    eventId: curId,
+    createdAt: Date.now(),
+    eventId:curId,
     eventName,
     productId,
     productName,
-    itemType,
-    extraId,
-    unitPrice: price,
-    qty: finalQty,
+    unitPrice:price,
+    qty:finalQty,
     discount,
     payment,
     bankId: (payment === 'transferencia') ? bankId : null,
@@ -4473,10 +4140,12 @@ Escribe cuántas unidades deseas AGREGAR al stock (o deja vacío para cancelar):
     courtesyTo,
     total,
     notes,
-    costPerUnit: unitCost,
+    costPerUnit:unitCost,
     lineCost,
     lineProfit
   };
+
+  try{ await ensureNewSaleSeqIdPOS(event, saleRecord); }catch(e){ console.warn('No se pudo asignar N° por evento a esta venta', e); }
 
   const saleId = await put('sales', saleRecord);
   saleRecord.id = saleId;
@@ -4488,26 +4157,12 @@ Escribe cuántas unidades deseas AGREGAR al stock (o deja vacío para cancelar):
     console.error('No se pudo generar el asiento automático de esta venta', err);
   }
 
-  // Aviso de bajo stock para Extras
-  if (itemType === 'extra' && !isReturn){
-    try{
-      const ex = await getExtraByIdForEvent(curId, extraId);
-      if (ex){
-        const st = await computeExtraStock(curId, extraId);
-        if (st <= (ex.lowStockAt||0)){
-          toast(`⚠️ Bajo stock: ${ex.name} (quedan ${st})`);
-        }
-      }
-    }catch(e){}
-  }
-
   // limpiar campos para el siguiente registro (incluye NOTAS)
-  $('#sale-qty').value=1;
-  $('#sale-discount').value=0;
-  if (payment==='credito') $('#sale-customer').value='';
+  $('#sale-qty').value=1; 
+  $('#sale-discount').value=0; 
+  if (payment==='credito') $('#sale-customer').value=''; 
   $('#sale-courtesy-to').value='';
-  $('#sale-notes').value='';
-
+  $('#sale-notes').value=''; // limpiar notas
   const nextTotal = (courtesy?0:price).toFixed(2);
   const saleTotal2 = $('#sale-total');
   if (saleTotal2) {
@@ -4518,10 +4173,7 @@ Escribe cuántas unidades deseas AGREGAR al stock (o deja vacío para cancelar):
     sticky2.textContent = nextTotal;
   }
 
-  await renderDay();
-  await renderSummary();
-  await refreshSaleStockLabel();
-  await renderInventario();
+  await renderDay(); await renderSummary(); await refreshSaleStockLabel(); await renderInventario();
   toast('Venta agregada');
 }
 
