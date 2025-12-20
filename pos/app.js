@@ -1233,6 +1233,19 @@ function getSaleBankLabel(sale, bankMap){
   return name || 'Sin banco';
 }
 
+
+// Hora de venta (HH:MM) con fallback seguro para registros antiguos que no tengan `time`.
+function saleHHMM(sale){
+  if (!sale) return '';
+  const t = (sale.time || '').trim();
+  if (t) return t;
+  const raw = sale.createdAt || sale.ts || sale.timestamp || sale.id;
+  if (!raw) return '';
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return '';
+  return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+}
+
 async function refreshSaleBankSelect(){
   const row = document.getElementById('sale-bank-row');
   const sel = document.getElementById('sale-bank');
@@ -2909,7 +2922,7 @@ async function renderDay(){
         ? 'Efec'
         : (s.payment==='transferencia' ? (`Transferencia · ${getSaleBankLabel(s, bankMap)}`) : 'Cred');
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${s.time||''}</td>
+      tr.innerHTML = `<td>${saleHHMM(s)}</td>
         <td>${s.productName}</td>
         <td>${s.qty}</td>
         <td>${fmt(s.unitPrice)}</td>
@@ -3369,7 +3382,7 @@ async function openEventView(eventId){
     const payLabel = (s.payment === 'transferencia')
       ? (`Transferencia · ${getSaleBankLabel(s, bankMap)}`)
       : (s.payment || '');
-    const tr=document.createElement('tr'); tr.innerHTML = `<td>${s.id}</td><td>${s.date}</td><td>${s.time||''}</td><td>${s.productName}</td><td>${s.qty}</td><td>${fmt(s.unitPrice)}</td><td>${fmt(s.discount||0)}</td><td>${fmt(s.total)}</td><td>${payLabel}</td><td>${s.courtesy?'✓':''}</td><td>${s.isReturn?'✓':''}</td><td>${s.customer||''}</td><td>${s.courtesyTo||''}</td><td>${s.notes||''}</td>`;
+    const tr=document.createElement('tr'); tr.innerHTML = `<td>${s.id}</td><td>${s.date}</td><td>${saleHHMM(s)}</td><td>${s.productName}</td><td>${s.qty}</td><td>${fmt(s.unitPrice)}</td><td>${fmt(s.discount||0)}</td><td>${fmt(s.total)}</td><td>${payLabel}</td><td>${s.courtesy?'✓':''}</td><td>${s.isReturn?'✓':''}</td><td>${s.customer||''}</td><td>${s.courtesyTo||''}</td><td>${s.notes||''}</td>`;
     tb.appendChild(tr);
   });
 
@@ -3388,7 +3401,7 @@ async function exportEventSalesCSV(eventId){
   const rows = [['id','fecha','hora','producto','cant','PU','desc_C$','total','pago','banco','cortesia','devolucion','cliente','cortesia_a','notas']];
   for (const s of sales){
     const bank = (s.payment === 'transferencia') ? getSaleBankLabel(s, bankMap) : '';
-    rows.push([s.id, s.date, s.time||'', s.productName, s.qty, s.unitPrice, (s.discount||0), s.total, (s.payment||''), bank, s.courtesy?1:0, s.isReturn?1:0, s.customer||'', s.courtesyTo||'', s.notes||'']);
+    rows.push([s.id, s.date, saleHHMM(s), s.productName, s.qty, s.unitPrice, (s.discount||0), s.total, (s.payment||''), bank, s.courtesy?1:0, s.isReturn?1:0, s.customer||'', s.courtesyTo||'', s.notes||'']);
   }
   const safeName = (ev?ev.name:'evento').replace(/[^a-z0-9_\- ]/gi,'_');
   downloadExcel(`ventas_${safeName}.xlsx`, 'Ventas', rows);
@@ -3464,7 +3477,7 @@ async function generateCorteCSV(eventId){
   rows.push(['id','fecha','hora','producto','cant','PU','desc_C$','total','pago','banco','cortesia','devolucion','cliente','cortesia_a','notas']);
   for (const s of sales){
     const bank = (s.payment === 'transferencia') ? getSaleBankLabel(s, bankMap) : '';
-    rows.push([s.id, s.date, s.time||'', s.productName, s.qty, s.unitPrice, (s.discount||0), s.total, (s.payment||''), bank, s.courtesy?1:0, s.isReturn?1:0, s.customer||'', s.courtesyTo||'', s.notes||'']);
+    rows.push([s.id, s.date, saleHHMM(s), s.productName, s.qty, s.unitPrice, (s.discount||0), s.total, (s.payment||''), bank, s.courtesy?1:0, s.isReturn?1:0, s.customer||'', s.courtesyTo||'', s.notes||'']);
   }
   const safeName = ev.name.replace(/[^a-z0-9_\- ]/gi,'_');
   downloadExcel(`corte_${safeName}.xlsx`, 'Corte', rows);
@@ -3668,7 +3681,7 @@ async function exportEventExcel(eventId){
     ventasRows.push([
       s.id,
       s.date || '',
-      s.time || '',
+      saleHHMM(s),
       s.productName || '',
       s.qty || 0,
       s.unitPrice || 0,
@@ -4348,6 +4361,11 @@ async function addSale(){
   }
 
   const date = $('#sale-date').value;
+  // Hora: algunos registros (ej. Extras) pueden quedar sin hora si no la fijamos explícitamente.
+  // Tomamos la hora del input si existe; si no, usamos la hora actual (HH:MM).
+  const _now = new Date();
+  const _hhmmNow = String(_now.getHours()).padStart(2,'0') + ':' + String(_now.getMinutes()).padStart(2,'0');
+  const time = ($('#sale-time')?.value || '').trim() || _hhmmNow;
   const selectedId = parseInt($('#sale-product').value||'0',10);
   const isExtra = selectedId < 0;
 
@@ -4472,6 +4490,7 @@ async function addSale(){
     id: Date.now(),
     eventId: curId,
     date,
+    time,
     productId: selectedId,
     productName,
     qty: finalQty,
