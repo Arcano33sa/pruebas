@@ -555,19 +555,9 @@
         <div class="row" style="margin-top:10px">
           <div class="petty-block">
             <h4>Ajuste de arqueo C$</h4>
-            <div class="pc-adj-grid">
-              <div>
-                <label>Monto del ajuste (obligatorio)</label>
-                <input id="pc-adj-nio-amount" type="number" inputmode="decimal" step="0.01" placeholder="Monto (C$)">
-              </div>
-              <div>
-                <label>Concepto (obligatorio)</label>
-                <input id="pc-adj-nio-concept" type="text" placeholder="Concepto">
-              </div>
-              <div class="pc-adj-notes">
-                <label>Notas (opcional)</label>
-                <input id="pc-adj-nio-notes" type="text" placeholder="Notas">
-              </div>
+            <div class="row" style="gap:8px">
+              <input id="pc-adj-nio-reason" type="text" placeholder="Motivo (obligatorio)">
+              <input id="pc-adj-nio-note" type="text" placeholder="Nota (opcional)">
             </div>
             <div class="row" style="gap:8px">
               <button id="pc-btn-adj-nio" class="btn-ok" type="button">Registrar ajuste C$</button>
@@ -578,19 +568,9 @@
 
           <div class="petty-block">
             <h4>Ajuste de arqueo US$</h4>
-            <div class="pc-adj-grid">
-              <div>
-                <label>Monto del ajuste (obligatorio)</label>
-                <input id="pc-adj-usd-amount" type="number" inputmode="decimal" step="0.01" placeholder="Monto (US$)">
-              </div>
-              <div>
-                <label>Concepto (obligatorio)</label>
-                <input id="pc-adj-usd-concept" type="text" placeholder="Concepto">
-              </div>
-              <div class="pc-adj-notes">
-                <label>Notas (opcional)</label>
-                <input id="pc-adj-usd-notes" type="text" placeholder="Notas">
-              </div>
+            <div class="row" style="gap:8px">
+              <input id="pc-adj-usd-reason" type="text" placeholder="Motivo (obligatorio)">
+              <input id="pc-adj-usd-note" type="text" placeholder="Nota (opcional)">
             </div>
             <div class="row" style="gap:8px">
               <button id="pc-btn-adj-usd" class="btn-ok" type="button">Registrar ajuste US$</button>
@@ -662,6 +642,56 @@
 
   <section id="tab-productos" class="tab card" style="display:none">
     <h2>Productos</h2>
+
+    <div class="card" id="extras-card">
+      <h3>✨ Extras por evento</h3>
+      <div class="info"><small>Para vender ítems ad-hoc (ej. <b>Charcutería</b>) sin crearlos en Inventario central. Estos extras son <b>solo del evento activo</b>.</small></div>
+
+      <div class="row">
+        <div>
+          <label>Evento activo</label>
+          <div id="extras-event-label" class="info-strong">—</div>
+        </div>
+        <div>
+          <label>Alerta stock bajo (default)</label>
+          <input id="extra-low-default" type="number" inputmode="numeric" step="1" min="0" value="5">
+        </div>
+      </div>
+
+      <div class="row3">
+        <div>
+          <label>Nombre</label>
+          <input id="extra-name" placeholder="Ej: Charcutería">
+        </div>
+        <div>
+          <label>Cantidad (stock)</label>
+          <input id="extra-qty" type="number" inputmode="numeric" step="1" min="0" placeholder="0">
+        </div>
+        <div>
+          <label>Precio venta (C$)</label>
+          <input id="extra-price" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0">
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Costo unitario (C$)</label>
+          <input id="extra-cost" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0">
+        </div>
+        <div>
+          <label>Alerta stock bajo (este extra)</label>
+          <input id="extra-low" type="number" inputmode="numeric" step="1" min="0" placeholder="5">
+        </div>
+      </div>
+
+      <div class="row">
+        <button id="btn-save-extra" class="btn-ok">+ Agregar extra</button>
+        <button id="btn-cancel-extra" class="btn-warn" style="display:none">Cancelar edición</button>
+      </div>
+
+      <div id="extras-list"></div>
+      <div class="warn" id="extras-disabled-note" style="display:none"></div>
+    </div>
     <div id="productos-list"></div>
     <div class="row">
       <input id="new-name" placeholder="Nombre">
