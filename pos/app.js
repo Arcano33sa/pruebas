@@ -1154,6 +1154,67 @@ function saleSortKeyPOS(s){
   return (Number.isFinite(idn) ? idn : 0);
 }
 
+// --- IDs visibles por evento (para evitar IDs tipo timestamp en la UI/export)
+const SALE_VISIBLE_ID_THRESHOLD = 1e12; // IDs >= 1e12 suelen ser timestamps (Date.now)
+
+function getSaleVisibleIdPOS(s){
+  if (!s) return null;
+  const cand = (s.visibleId ?? s.displayId ?? s.publicId ?? null);
+  const v = Number(cand);
+  if (Number.isFinite(v) && v > 0) return v;
+
+  // Si el id autoincremental es razonable, úsalo como visible
+  const idn = Number(s.id);
+  if (Number.isFinite(idn) && idn > 0 && idn < SALE_VISIBLE_ID_THRESHOLD) return idn;
+
+  return null;
+}
+
+async function getNextSaleVisibleIdForEventPOS(eventId){
+  if (!eventId) return 1;
+  const all = await getAll('sales');
+  let max = 0;
+  for (const s of (all || [])){
+    if (!s || s.eventId !== eventId) continue;
+    const v = getSaleVisibleIdPOS(s);
+    if (v && v > max) max = v;
+  }
+  return max + 1;
+}
+
+// Si existen ventas con id "raro" (timestamp), les asignamos visibleId secuencial por evento y lo persistimos.
+async function ensureSaleVisibleIdsForEventPOS(eventId){
+  if (!eventId) return;
+  const all = await getAll('sales');
+  const list = (all || []).filter(s => s && s.eventId === eventId);
+  if (!list.length) return;
+
+  // Base del contador: máximo visible existente (visibleId o id autoincremental razonable)
+  let max = 0;
+  for (const s of list){
+    const v = getSaleVisibleIdPOS(s);
+    if (v && v > max) max = v;
+  }
+
+  // Solo las que NO tienen visibleId y cuyo id parece timestamp
+  const needs = list.filter(s => {
+    const v = Number(s.visibleId);
+    if (Number.isFinite(v) && v > 0) return false;
+    const idn = Number(s.id);
+    return Number.isFinite(idn) && idn >= SALE_VISIBLE_ID_THRESHOLD;
+  }).sort((a,b)=> saleSortKeyPOS(a) - saleSortKeyPOS(b));
+
+  if (!needs.length) return;
+
+  for (const s of needs){
+    max += 1;
+    s.visibleId = max;
+    try { await put('sales', s); }
+    catch (e) { console.error('No se pudo persistir visibleId en venta', e); }
+  }
+}
+
+
 function humanizeError(err){
   if (!err) return 'Error desconocido.';
   if (typeof err === 'string') return err;
@@ -2083,6 +2144,8 @@ async function sellCupsPOS(isCourtesy){
   const now = new Date();
   const time = now.toTimeString().slice(0,5);
 
+  const visibleId = await getNextSaleVisibleIdForEventPOS(curId);
+
   const saleRecord = {
     date,
     time,
@@ -2758,6 +2821,7 @@ async function openEventView(eventId){
   const events = await getAll('events');
   const ev = events.find(e=>e.id===eventId);
   if (!ev) return;
+  await ensureSaleVisibleIdsForEventPOS(eventId);
   const sales = (await getAll('sales')).filter(s=>s.eventId===eventId);
   const banks = await getAllBanksSafe();
   const bankMap = new Map();
@@ -2941,7 +3005,7 @@ async function openEventView(eventId){
     const payLabel = (s.payment === 'transferencia')
       ? (`Transferencia · ${getSaleBankLabel(s, bankMap)}`)
       : (s.payment || '');
-    const tr=document.createElement('tr'); tr.innerHTML = `<td>${s.id}</td><td>${s.date}</td><td>${getSaleTimeTextPOS(s)}</td><td>${s.productName}</td><td>${s.qty}</td><td>${fmt(s.unitPrice)}</td><td>${fmt(s.discount||0)}</td><td>${fmt(s.total)}</td><td>${payLabel}</td><td>${s.courtesy?'✓':''}</td><td>${s.isReturn?'✓':''}</td><td>${s.customer||''}</td><td>${s.courtesyTo||''}</td><td>${s.notes||''}</td>`;
+    const tr=document.createElement('tr'); tr.innerHTML = `<td>${(getSaleVisibleIdPOS(s) ?? s.id)}</td><td>${s.date}</td><td>${getSaleTimeTextPOS(s)}</td><td>${s.productName}</td><td>${s.qty}</td><td>${fmt(s.unitPrice)}</td><td>${fmt(s.discount||0)}</td><td>${fmt(s.total)}</td><td>${payLabel}</td><td>${s.courtesy?'✓':''}</td><td>${s.isReturn?'✓':''}</td><td>${s.customer||''}</td><td>${s.courtesyTo||''}</td><td>${s.notes||''}</td>`;
     tb.appendChild(tr);
   });
 
@@ -2952,6 +3016,7 @@ async function openEventView(eventId){
 async function exportEventSalesCSV(eventId){
   const events = await getAll('events');
   const ev = events.find(e=>e.id===eventId);
+  await ensureSaleVisibleIdsForEventPOS(eventId);
   const sales = (await getAll('sales')).filter(s=>s.eventId===eventId);
   const banks = await getAllBanksSafe();
   const bankMap = new Map();
@@ -3056,7 +3121,9 @@ async function exportEventExcel(eventId){
     return;
   }
 
-  const allSales = await getAll('sales');
+  
+  await ensureSaleVisibleIdsForEventPOS(eventId);
+const allSales = await getAll('sales');
   const sales = allSales.filter(s=>s.eventId===eventId);
 
   const banks = await getAllBanksSafe();
@@ -3281,6 +3348,7 @@ async function exportEventExcel(eventId){
   ventasRows.push(['id','fecha','hora','producto','cantidad','PU_C$','descuento_C$','total_C$','pago','banco','cortesia','devolucion','cliente','cortesia_a','notas']);
   for (const s of sales){
     ventasRows.push([
+      (getSaleVisibleIdPOS(s) ?? ''),
       s.id,
       s.date || '',
       s.time || '',
@@ -4000,10 +4068,13 @@ async function addSale(){
     console.error('No se pudo actualizar inventario central desde venta', e);
   }
 
+  const visibleId = await getNextSaleVisibleIdForEventPOS(curId);
+
   const saleRecord = {
     date,
     time,
     createdAt: Date.now(),
+    visibleId,
     eventId:curId,
     eventName,
     productId,
