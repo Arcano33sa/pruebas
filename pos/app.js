@@ -3164,106 +3164,256 @@ async function renderDay(){
 async function renderSummary(){
   const sales = await getAll('sales');
   const events = await getAll('events');
+  const products = await getAll('products');
+
+  const productById = new Map();
+  const productByName = new Map();
+  for (const p of (products || [])){
+    if (!p) continue;
+    if (p.id != null) productById.set(Number(p.id), p);
+    if (p.name) productByName.set(String(p.name), p);
+  }
+
+  const isCourtesySale = (s) => !!(s && (s.courtesy || s.isCourtesy));
+  const normalizeCourtesyProductName = (name) => String(name || '—').replace(/\s*\(Cortesía\)\s*$/i, '').trim() || '—';
+
+  const getLineCost = (s) => {
+    if (!s) return 0;
+    if (typeof s.lineCost === 'number' && Number.isFinite(s.lineCost)) return Number(s.lineCost || 0);
+    if (typeof s.costPerUnit === 'number' && Number.isFinite(s.costPerUnit)){
+      const qty = Number(s.qty || 0);
+      return Number(s.costPerUnit || 0) * qty;
+    }
+    return 0;
+  };
+
+  const getListUnitPrice = (s) => {
+    if (!s) return 0;
+    const unit = Number(s.unitPrice || 0);
+    if (unit > 0) return unit;
+
+    const pid = (s.productId != null) ? Number(s.productId) : null;
+    if (pid != null && productById.has(pid)){
+      const p = productById.get(pid);
+      const pr = Number(p && p.price) || 0;
+      if (pr > 0) return pr;
+    }
+
+    const n = normalizeCourtesyProductName(s.productName || '');
+    if (n && productByName.has(n)){
+      const p = productByName.get(n);
+      const pr = Number(p && p.price) || 0;
+      if (pr > 0) return pr;
+    }
+
+    return 0;
+  };
 
   const banks = await getAllBanksSafe();
   const bankMap = new Map();
   for (const b of banks){
     if (b && b.id != null) bankMap.set(Number(b.id), b.name || '');
   }
+
   const transferByBank = new Map();
+
+  // Ventas reales (ingresos)
   let grand = 0;
   let grandCost = 0;
   let grandProfit = 0;
 
-  const byDay=new Map(); 
-  const byProd=new Map(); 
-  const byPay=new Map(); 
-  const byEvent=new Map();
+  // Cortesías (impacto real + equivalente informativo)
+  let courtesyCost = 0;
+  let courtesyQty = 0; // unidades (suma de qty abs)
+  let courtesyEquiv = 0;
+  let courtesyTx = 0;
 
-  for (const s of sales){
+  const courtesyByProd = new Map(); // name -> { qty, cost, equiv }
+
+  const byDay = new Map();
+  const byProd = new Map();
+  const byPay = new Map();
+  const byEvent = new Map();
+
+  for (const s of (sales || [])){
+    if (!s) continue;
+
     const total = Number(s.total || 0);
-    grand += total;
+    const courtesy = isCourtesySale(s);
 
-    byDay.set(s.date,(byDay.get(s.date)||0)+total);
-    byProd.set(s.productName,(byProd.get(s.productName)||0)+total);
-    byPay.set(s.payment||'efectivo',(byPay.get(s.payment||'efectivo')||0)+total);
-    byEvent.set(s.eventName||'General',(byEvent.get(s.eventName||'General')||0)+total);
+    if (!courtesy){
+      grand += total;
 
-    // Transferencias por banco
-    if ((s.payment || '') === 'transferencia'){
-      const label = getSaleBankLabel(s, bankMap);
-      const cur = transferByBank.get(label) || { total: 0, count: 0 };
-      cur.total += total;
-      cur.count += 1;
-      transferByBank.set(label, cur);
-    }
+      byDay.set(s.date, (byDay.get(s.date) || 0) + total);
+      byProd.set(s.productName, (byProd.get(s.productName) || 0) + total);
+      byPay.set(s.payment || 'efectivo', (byPay.get(s.payment || 'efectivo') || 0) + total);
+      byEvent.set(s.eventName || 'General', (byEvent.get(s.eventName || 'General') || 0) + total);
 
-    // Costo y utilidad aproximada (solo ventas/no cortesías)
-    if (!s.courtesy) {
-      let lineCost = 0;
-      if (typeof s.lineCost === 'number') {
-        lineCost = Number(s.lineCost || 0);
-      } else if (typeof s.costPerUnit === 'number') {
-        const qty = Number(s.qty || 0);
-        lineCost = s.costPerUnit * qty;
+      // Transferencias por banco
+      if ((s.payment || '') === 'transferencia'){
+        const label = getSaleBankLabel(s, bankMap);
+        const cur = transferByBank.get(label) || { total: 0, count: 0 };
+        cur.total += total;
+        cur.count += 1;
+        transferByBank.set(label, cur);
       }
 
+      // Costo y utilidad aproximada (ventas reales)
+      const lineCost = getLineCost(s);
       let lineProfit = 0;
-      if (typeof s.lineProfit === 'number') {
+      if (typeof s.lineProfit === 'number' && Number.isFinite(s.lineProfit)) {
         lineProfit = Number(s.lineProfit || 0);
       } else {
         lineProfit = total - lineCost;
       }
-
       grandCost += lineCost;
       grandProfit += lineProfit;
+
+    } else {
+      courtesyTx += 1;
+
+      const qRaw = Number(s.qty || 0);
+      const absQty = Math.abs(qRaw);
+      const sign = (s.isReturn || qRaw < 0) ? -1 : 1;
+
+      courtesyQty += absQty;
+
+      const lineCost = getLineCost(s);
+      courtesyCost += lineCost;
+
+      const listUnit = getListUnitPrice(s);
+      const eq = sign * absQty * listUnit;
+      courtesyEquiv += eq;
+
+      const pname = normalizeCourtesyProductName(s.productName);
+      const prev = courtesyByProd.get(pname) || { qty: 0, cost: 0, equiv: 0 };
+      prev.qty += absQty;
+      prev.cost += lineCost;
+      prev.equiv += eq;
+      courtesyByProd.set(pname, prev);
     }
   }
 
-  // Acumular también lo archivado por evento en grand / tablas de resumen
-  for (const ev of events){
+  // Acumular también lo archivado por evento (si existiera)
+  for (const ev of (events || [])){
     if (ev.archive && ev.archive.totals){
       const t = ev.archive.totals;
-      grand += (t.grand||0);
-      byEvent.set(ev.name,(byEvent.get(ev.name)||0)+(t.grand||0));
-      if (t.byPay){ for (const k of Object.keys(t.byPay)){ byPay.set(k,(byPay.get(k)||0)+(t.byPay[k]||0)); } }
-      if (t.byProduct){ for (const k of Object.keys(t.byProduct)){ byProd.set(k,(byProd.get(k)||0)+(t.byProduct[k]||0)); } }
-      if (t.byDay){ for (const k of Object.keys(t.byDay)){ byDay.set(k,(byDay.get(k)||0)+(t.byDay[k]||0)); } }
-      // Nota: por ahora no tenemos costo/utilidad archivados, así que grandCost/grandProfit reflejan ventas vivas.
+
+      grand += (t.grand || 0);
+      byEvent.set(ev.name, (byEvent.get(ev.name) || 0) + (t.grand || 0));
+
+      if (t.byPay){
+        for (const k of Object.keys(t.byPay)){
+          byPay.set(k, (byPay.get(k) || 0) + (t.byPay[k] || 0));
+        }
+      }
+
+      // Por producto: excluir cualquier llave tipo "(Cortesía)"
+      if (t.byProduct){
+        for (const k of Object.keys(t.byProduct)){
+          if (/\(Cortesía\)/i.test(String(k))) continue;
+          byProd.set(k, (byProd.get(k) || 0) + (t.byProduct[k] || 0));
+        }
+      }
+
+      if (t.byDay){
+        for (const k of Object.keys(t.byDay)){
+          byDay.set(k, (byDay.get(k) || 0) + (t.byDay[k] || 0));
+        }
+      }
+
+      // Nota: por ahora no tenemos costo/utilidad/cortesías archivados.
     }
   }
 
-  // Total vendido
-  $('#grand-total').textContent = fmt(grand);
+  const profitAfterCourtesy = grandProfit - courtesyCost;
 
-  // Crear/actualizar bloque extra para costo y utilidad si no existe en el HTML
-  const totalSpan = document.getElementById('grand-total');
-  if (totalSpan) {
-    let extraBlock = document.getElementById('grand-extra-block');
-    if (!extraBlock) {
+  // --- Top KPIs ---
+  const grandTotalEl = document.getElementById('grand-total');
+  if (grandTotalEl) grandTotalEl.textContent = fmt(grand);
+
+  const costEl = document.getElementById('grand-cost');
+  if (costEl) costEl.textContent = fmt(grandCost);
+
+  const profitEl = document.getElementById('grand-profit');
+  if (profitEl) profitEl.textContent = fmt(grandProfit);
+
+  const courCostEl = document.getElementById('grand-courtesy-cost');
+  if (courCostEl) courCostEl.textContent = fmt(courtesyCost);
+
+  const profitAfterEl = document.getElementById('grand-profit-after-courtesy');
+  if (profitAfterEl) profitAfterEl.textContent = fmt(profitAfterCourtesy);
+
+  // Compat: si no existe el bloque superior nuevo, intentamos crearlo sin romper el HTML viejo
+  if (!costEl || !profitEl || !courCostEl || !profitAfterEl){
+    const totalSpan = document.getElementById('grand-total');
+    if (totalSpan){
       const card = totalSpan.closest('.card') || totalSpan.parentElement || document.getElementById('tab-resumen') || document.body;
-      extraBlock = document.createElement('div');
-      extraBlock.id = 'grand-extra-block';
-      if (card) card.appendChild(extraBlock);
+      let extraBlock = document.getElementById('grand-extra-block');
+      if (!extraBlock){
+        extraBlock = document.createElement('div');
+        extraBlock.id = 'grand-extra-block';
+        if (card) card.appendChild(extraBlock);
+      }
+      extraBlock.innerHTML = `
+        <p>Costo estimado de producto: C$ <span id="grand-cost">${fmt(grandCost)}</span></p>
+        <p>Utilidad bruta aproximada: C$ <span id="grand-profit">${fmt(grandProfit)}</span></p>
+        <p>Cortesías (Costo real): C$ <span id="grand-courtesy-cost">${fmt(courtesyCost)}</span></p>
+        <p>Utilidad después de cortesías: C$ <span id="grand-profit-after-courtesy">${fmt(profitAfterCourtesy)}</span></p>
+      `;
     }
-    extraBlock.innerHTML = `
-      <p>Costo estimado de producto: C$ <span id="grand-cost">${fmt(grandCost)}</span></p>
-      <p>Utilidad bruta aproximada: C$ <span id="grand-profit">${fmt(grandProfit)}</span></p>
-    `;
   }
 
-  const tbE=$('#tbl-por-evento tbody'); tbE.innerHTML='';
-  [...byEvent.entries()].sort((a,b)=>a[0].localeCompare(b[0])).forEach(([k,v])=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; tbE.appendChild(tr); });
+  // --- Tablas existentes (solo ventas reales) ---
+  const tbE = document.querySelector('#tbl-por-evento tbody');
+  if (tbE){
+    tbE.innerHTML = '';
+    [...byEvent.entries()]
+      .sort((a,b)=>String(a[0]).localeCompare(String(b[0]),'es-NI'))
+      .forEach(([k,v])=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${escapeHtml(k)}</td><td>${fmt(v)}</td>`;
+        tbE.appendChild(tr);
+      });
+  }
 
-  const tbD=$('#tbl-por-dia tbody'); tbD.innerHTML='';
-  // Más reciente primero (YYYY-MM-DD)
-  [...byDay.entries()].sort((a,b)=>b[0].localeCompare(a[0])).forEach(([k,v])=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; tbD.appendChild(tr); });
+  const tbD = document.querySelector('#tbl-por-dia tbody');
+  if (tbD){
+    tbD.innerHTML = '';
+    // Más reciente primero (YYYY-MM-DD)
+    [...byDay.entries()]
+      .sort((a,b)=>String(b[0]).localeCompare(String(a[0])))
+      .forEach(([k,v])=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${escapeHtml(k)}</td><td>${fmt(v)}</td>`;
+        tbD.appendChild(tr);
+      });
+  }
 
-  const tbP=$('#tbl-por-prod tbody'); tbP.innerHTML='';
-  [...byProd.entries()].sort((a,b)=>a[0].localeCompare(b[0])).forEach(([k,v])=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; tbP.appendChild(tr); });
+  const tbP = document.querySelector('#tbl-por-prod tbody');
+  if (tbP){
+    tbP.innerHTML = '';
+    [...byProd.entries()]
+      .filter(([k,_v])=> !(/\(Cortesía\)/i.test(String(k))))
+      .sort((a,b)=>String(a[0]).localeCompare(String(b[0]),'es-NI'))
+      .forEach(([k,v])=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${escapeHtml(k)}</td><td>${fmt(v)}</td>`;
+        tbP.appendChild(tr);
+      });
+  }
 
-  const tbPay=$('#tbl-por-pago tbody'); tbPay.innerHTML='';
-  [...byPay.entries()].sort((a,b)=>a[0].localeCompare(b[0])).forEach(([k,v])=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td>${k}</td><td>${fmt(v)}</td>`; tbPay.appendChild(tr); });
+  const tbPay = document.querySelector('#tbl-por-pago tbody');
+  if (tbPay){
+    tbPay.innerHTML = '';
+    [...byPay.entries()]
+      .sort((a,b)=>String(a[0]).localeCompare(String(b[0]),'es-NI'))
+      .forEach(([k,v])=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${escapeHtml(k)}</td><td>${fmt(v)}</td>`;
+        tbPay.appendChild(tr);
+      });
+  }
 
   // Tabla: Transferencias por banco (Resumen)
   const tbBank = document.querySelector('#tbl-transfer-bank tbody');
@@ -3274,13 +3424,54 @@ async function renderSummary(){
         .sort((a,b)=> (Number((b[1]||{}).total||0) - Number((a[1]||{}).total||0)));
       for (const [label, obj] of entries){
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${label}</td><td>${fmt(Number(obj.total||0))}</td><td>${obj.count||0}</td>`;
+        tr.innerHTML = `<td>${escapeHtml(label)}</td><td>${fmt(Number(obj.total||0))}</td><td>${obj.count||0}</td>`;
         tbBank.appendChild(tr);
       }
     } else {
       const tr = document.createElement('tr');
       tr.innerHTML = `<td colspan="3" class="muted">(sin transferencias)</td>`;
       tbBank.appendChild(tr);
+    }
+  }
+
+  // --- Nueva sección: Cortesías ---
+  const courTotalCostEl = document.getElementById('courtesy-total-cost');
+  if (courTotalCostEl) courTotalCostEl.textContent = fmt(courtesyCost);
+
+  const courTotalQtyEl = document.getElementById('courtesy-total-qty');
+  if (courTotalQtyEl) courTotalQtyEl.textContent = String(Math.round(courtesyQty));
+
+  const courTotalEquivEl = document.getElementById('courtesy-total-equiv');
+  if (courTotalEquivEl) courTotalEquivEl.textContent = fmt(courtesyEquiv);
+
+  const courTxEl = document.getElementById('courtesy-total-tx');
+  if (courTxEl) courTxEl.textContent = String(courtesyTx);
+
+  const tbCour = document.querySelector('#tbl-courtesy-byprod tbody');
+  if (tbCour){
+    tbCour.innerHTML = '';
+    if (courtesyByProd.size){
+      const entries = Array.from(courtesyByProd.entries())
+        .sort((a,b)=>String(a[0]).localeCompare(String(b[0]),'es-NI'));
+
+      for (const [name, obj] of entries){
+        const q = obj ? Number(obj.qty || 0) : 0;
+        const c = obj ? Number(obj.cost || 0) : 0;
+        const e = obj ? Number(obj.equiv || 0) : 0;
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${escapeHtml(name)}</td>
+          <td>${Math.round(q)}</td>
+          <td>${fmt(c)}</td>
+          <td>${fmt(e)}</td>
+        `;
+        tbCour.appendChild(tr);
+      }
+    } else {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td colspan="4" class="muted">(sin cortesías)</td>`;
+      tbCour.appendChild(tr);
     }
   }
 }
