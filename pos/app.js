@@ -5,8 +5,19 @@ let db;
 
 // --- Finanzas: conexión a finanzasDB para asientos automáticos
 const FIN_DB_NAME = 'finanzasDB';
-const FIN_DB_VER = 1;
 let finDb;
+let finanzasBridgeWarned = false;
+let finanzasBridgeBlockedWarned = false;
+function notifyFinanzasBridge(msg, { force = false } = {}) {
+  try {
+    if (!force && finanzasBridgeWarned) return;
+    finanzasBridgeWarned = true;
+    if (typeof toast === 'function') toast(msg);
+    else alert(msg);
+  } catch (e) {
+    console.warn('No se pudo notificar problema POS→Finanzas', e);
+  }
+}
 
 function openDB() {
   return new Promise((resolve, reject) => {
@@ -61,7 +72,14 @@ function openDB() {
 function openFinanzasDB() {
   return new Promise((resolve, reject) => {
     if (finDb) return resolve(finDb);
-    const req = indexedDB.open(FIN_DB_NAME, FIN_DB_VER);
+    const req = indexedDB.open(FIN_DB_NAME);
+    req.onblocked = () => {
+      console.warn('Apertura de finanzasDB bloqueada (POS). Cierra otras pestañas con Suite A33/Finanzas abiertas.');
+      if (!finanzasBridgeBlockedWarned) {
+        finanzasBridgeBlockedWarned = true;
+        notifyFinanzasBridge('⚠️ POS no puede conectar con Finanzas porque otra pestaña está bloqueando la base de datos. Cerrá otras pestañas de la Suite y reintentá.', { force: true });
+      }
+    };
     req.onupgradeneeded = (e) => {
       const d = e.target.result;
       if (!d.objectStoreNames.contains('accounts')) {
@@ -84,10 +102,18 @@ function openFinanzasDB() {
     };
     req.onsuccess = (e) => {
       finDb = e.target.result;
+      // Si Finanzas actualiza el esquema mientras POS está abierto, cerramos para no bloquear el upgrade
+      finDb.onversionchange = () => {
+        try { finDb.close(); } catch (e) {}
+        finDb = null;
+        console.warn('finanzasDB cambió de versión mientras POS estaba abierto; se cerró la conexión para permitir el upgrade.');
+      };
+      console.info(`POS conectado a finanzasDB (versión ${finDb.version})`);
       resolve(finDb);
     };
     req.onerror = () => {
       console.error('Error abriendo finanzasDB desde POS', req.error);
+      notifyFinanzasBridge('⚠️ POS no pudo abrir Finanzas para asientos automáticos. Abrí el módulo Finanzas una vez, y si hay otra pestaña abierta, cerrala y reintentá.');
       reject(req.error);
     };
   });
@@ -98,6 +124,7 @@ async function ensureFinanzasDB() {
     await openFinanzasDB();
   } catch (e) {
     console.error('No se pudo abrir finanzasDB para asientos automáticos', e);
+    notifyFinanzasBridge('⚠️ No se pudo conectar con Finanzas. Las ventas se guardaron, pero el asiento contable no se pudo generar. Revisá consola / versión de la BD y reintentá.');
     throw e;
   }
 }
