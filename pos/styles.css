@@ -278,3 +278,84 @@ small.muted{color:var(--muted)}
   white-space:nowrap;
 }
 
+
+/* =========================
+   Extras por evento (POS > Productos)
+   ========================= */
+#extras-list{
+  margin-top:10px;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+
+.extra-row{
+  display:grid;
+  grid-template-columns:minmax(220px,1fr) 110px 110px 90px auto;
+  gap:10px;
+  align-items:center;
+  padding:10px 12px;
+  border:1px solid #2a2a2a;
+  border-radius:12px;
+  background:#141414;
+}
+
+.extra-row.low{border-color:#5a3d3d}
+.extra-row.out{border-color:#5a3d12}
+
+.extra-col{
+  min-width:0;
+  white-space:nowrap;
+  font-variant-numeric:tabular-nums;
+}
+
+.extra-name{
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.extra-cost,.extra-price,.extra-stock{ text-align:right; }
+
+.extra-actions{
+  display:flex;
+  justify-content:flex-end;
+  gap:8px;
+  flex-wrap:nowrap;
+}
+
+.extra-actions button{
+  width:auto;
+}
+
+/* Botones compactos dentro del listado de extras (sin afectar otros btn-small fuera de esta zona) */
+.extra-actions .btn-small{
+  padding:6px 10px;
+  border-radius:10px;
+  font-size:12px;
+}
+
+.pill{
+  display:inline-block;
+  margin-left:8px;
+  padding:2px 8px;
+  border-radius:999px;
+  font-size:11px;
+  font-weight:700;
+  line-height:1.6;
+  border:1px solid #333;
+  background:#222;
+  color:#ddd;
+  vertical-align:middle;
+}
+.pill.warn{border-color:#5a3d12;color:#ffd7a1}
+.pill.danger{border-color:#5a3d3d;color:#ffb3b3}
+
+@media (max-width:560px){
+  .extra-row{grid-template-columns:minmax(140px,1fr) 90px 90px 70px auto}
+  .extra-actions{gap:6px}
+  .extra-actions .btn-small{padding:6px 8px;font-size:11px}
+}
+
+@media (max-width:420px){
+  .extra-row{grid-template-columns:1fr 80px 80px 60px auto}
+}

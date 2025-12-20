@@ -2154,14 +2154,14 @@ async function renderExtrasUI(){
     const flags = out ? '<span class="pill danger">SIN STOCK</span>' : (low ? '<span class="pill warn">BAJO</span>' : '');
     return `
       <div class="${cls}" data-id="${x.id}">
-        <div class="extra-main">
-          <div class="extra-name"><strong>${escapeHtml(x.name)}</strong> ${flags}</div>
-          <div class="extra-meta">Stock: <strong>${x.stock}</strong> · PU: <strong>C${fmt(x.unitPrice)}</strong> · Costo: <strong>C${fmt(x.unitCost)}</strong> · Alerta: ${x.lowStockAlert}</div>
-        </div>
+        <div class="extra-col extra-name"><strong>${escapeHtml(x.name)}</strong> ${flags}</div>
+        <div class="extra-col extra-cost">C$${fmt(x.unitCost)}</div>
+        <div class="extra-col extra-price">C$${fmt(x.unitPrice)}</div>
+        <div class="extra-col extra-stock"><span class="stockpill ${low?'low':''}"><strong>${x.stock}</strong></span></div>
         <div class="extra-actions">
           <button class="btn-small extra-edit" data-action="edit" data-id="${x.id}">Editar</button>
-          <button class="btn-small extra-restock" data-action="restock" data-id="${x.id}">+ Stock</button>
-          <button class="btn-small danger extra-del" data-action="del" data-id="${x.id}">Eliminar</button>
+          <button class="btn-small btn-ok extra-restock" data-action="restock" data-id="${x.id}">Agregar</button>
+          <button class="btn-small btn-danger extra-del" data-action="del" data-id="${x.id}">Eliminar</button>
         </div>
       </div>`;
   }).join('');
