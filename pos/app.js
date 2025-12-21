@@ -3431,17 +3431,18 @@ function applySummarySnapshotToUI(snapshot){
   if (profitAfterEl) profitAfterEl.textContent = fmt(Number(totals.profitAfterCourtesy || 0));
 
   // --- Totales Cortesías ---
-  const courCostTot = document.getElementById('courtesy-cost-total');
-  if (courCostTot) courCostTot.textContent = fmt(Number(totals.courtesyCost || 0));
+  // Compatibilidad: IDs antiguos + nuevos (los nuevos son los usados en index.html).
+  const setByIds = (ids, val) => {
+    for (const id of ids){
+      const el = document.getElementById(id);
+      if (el) el.textContent = val;
+    }
+  };
 
-  const courQtyTot = document.getElementById('courtesy-count-total');
-  if (courQtyTot) courQtyTot.textContent = Math.round(Number(totals.courtesyQty || 0));
-
-  const courEqTot = document.getElementById('courtesy-equiv-total');
-  if (courEqTot) courEqTot.textContent = fmt(Number(totals.courtesyEquiv || 0));
-
-  const courTxTot = document.getElementById('courtesy-tx-total');
-  if (courTxTot) courTxTot.textContent = Math.round(Number(totals.courtesyTx || 0));
+  setByIds(['courtesy-total-cost','courtesy-cost-total'], fmt(Number(totals.courtesyCost || 0)));
+  setByIds(['courtesy-total-qty','courtesy-count-total'], String(Math.round(Number(totals.courtesyQty || 0))));
+  setByIds(['courtesy-total-equiv','courtesy-equiv-total'], fmt(Number(totals.courtesyEquiv || 0)));
+  setByIds(['courtesy-total-tx','courtesy-tx-total'], String(Math.round(Number(totals.courtesyTx || 0))));
 
   // --- Tablas ---
   const fill = (tbodySel, rows, rowHtmlFn, emptyHtml) => {
