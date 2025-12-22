@@ -6,7 +6,8 @@ const ASSETS = [
   "./script.js",
   "./manifest.webmanifest",
   "./images/logo.png"
-];
+,
+  '/assets/js/a33-input-ux.js'];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

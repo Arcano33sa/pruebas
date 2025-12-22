@@ -9,7 +9,8 @@ const ASSETS = [
   './logo.png',
   './brand_symbol.jpg',
   './brand_wordmark.jpg'
-];
+,
+  '/assets/js/a33-input-ux.js'];
 
 self.addEventListener('install', (e)=>{
   e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS.filter(Boolean))));
