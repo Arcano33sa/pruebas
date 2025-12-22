@@ -101,7 +101,7 @@
       </div>
       <div>
         <label>Descuento por unidad (C$)</label>
-        <input id="sale-discount" type="number" inputmode="decimal" step="0.01" value="0">
+        <input id="sale-discount" class="a33-num" data-a33-default="0" type="number" inputmode="decimal" step="0.01" value="0">
       </div>
       <div>
         <label>Método de pago</label>
@@ -180,7 +180,7 @@
         </div>
         <div>
           <label>Precio por vaso (C$)</label>
-          <input id="cup-price" type="number" inputmode="decimal" step="0.01" min="0" value="0">
+          <input id="cup-price" class="a33-num" data-a33-default="0" type="number" inputmode="decimal" step="0.01" min="0" value="0">
         </div>
         <div>
           <label>&nbsp;</label>
@@ -393,15 +393,15 @@
                 <tr><th>Denominación</th><th>Cantidad</th><th>Subtotal</th></tr>
               </thead>
               <tbody>
-                <tr><td>C$ 1</td><td><input id="pc-nio-q-1" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-1">0.00</span></td></tr>
-                <tr><td>C$ 5</td><td><input id="pc-nio-q-5" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-5">0.00</span></td></tr>
-                <tr><td>C$ 10</td><td><input id="pc-nio-q-10" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-10">0.00</span></td></tr>
-                <tr><td>C$ 20</td><td><input id="pc-nio-q-20" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-20">0.00</span></td></tr>
-                <tr><td>C$ 50</td><td><input id="pc-nio-q-50" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-50">0.00</span></td></tr>
-                <tr><td>C$ 100</td><td><input id="pc-nio-q-100" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-100">0.00</span></td></tr>
-                <tr><td>C$ 200</td><td><input id="pc-nio-q-200" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-200">0.00</span></td></tr>
-                <tr><td>C$ 500</td><td><input id="pc-nio-q-500" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-500">0.00</span></td></tr>
-                <tr><td>C$ 1000</td><td><input id="pc-nio-q-1000" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-1000">0.00</span></td></tr>
+                <tr><td>C$ 1</td><td><input id="pc-nio-q-1" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-1">0.00</span></td></tr>
+                <tr><td>C$ 5</td><td><input id="pc-nio-q-5" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-5">0.00</span></td></tr>
+                <tr><td>C$ 10</td><td><input id="pc-nio-q-10" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-10">0.00</span></td></tr>
+                <tr><td>C$ 20</td><td><input id="pc-nio-q-20" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-20">0.00</span></td></tr>
+                <tr><td>C$ 50</td><td><input id="pc-nio-q-50" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-50">0.00</span></td></tr>
+                <tr><td>C$ 100</td><td><input id="pc-nio-q-100" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-100">0.00</span></td></tr>
+                <tr><td>C$ 200</td><td><input id="pc-nio-q-200" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-200">0.00</span></td></tr>
+                <tr><td>C$ 500</td><td><input id="pc-nio-q-500" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-500">0.00</span></td></tr>
+                <tr><td>C$ 1000</td><td><input id="pc-nio-q-1000" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-1000">0.00</span></td></tr>
               </tbody>
               <tfoot>
                 <tr><td colspan="2">Total inicial C$</td><td>C$ <span id="pc-nio-total">0.00</span></td></tr>
@@ -415,12 +415,12 @@
                 <tr><th>Denominación</th><th>Cantidad</th><th>Subtotal</th></tr>
               </thead>
               <tbody>
-                <tr><td>US$ 1</td><td><input id="pc-usd-q-1" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-1">0.00</span></td></tr>
-                <tr><td>US$ 5</td><td><input id="pc-usd-q-5" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-5">0.00</span></td></tr>
-                <tr><td>US$ 10</td><td><input id="pc-usd-q-10" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-10">0.00</span></td></tr>
-                <tr><td>US$ 20</td><td><input id="pc-usd-q-20" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-20">0.00</span></td></tr>
-                <tr><td>US$ 50</td><td><input id="pc-usd-q-50" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-50">0.00</span></td></tr>
-                <tr><td>US$ 100</td><td><input id="pc-usd-q-100" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-100">0.00</span></td></tr>
+                <tr><td>US$ 1</td><td><input id="pc-usd-q-1" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-1">0.00</span></td></tr>
+                <tr><td>US$ 5</td><td><input id="pc-usd-q-5" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-5">0.00</span></td></tr>
+                <tr><td>US$ 10</td><td><input id="pc-usd-q-10" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-10">0.00</span></td></tr>
+                <tr><td>US$ 20</td><td><input id="pc-usd-q-20" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-20">0.00</span></td></tr>
+                <tr><td>US$ 50</td><td><input id="pc-usd-q-50" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-50">0.00</span></td></tr>
+                <tr><td>US$ 100</td><td><input id="pc-usd-q-100" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-100">0.00</span></td></tr>
               </tbody>
               <tfoot>
                 <tr><td colspan="2">Total inicial US$</td><td>US$ <span id="pc-usd-total">0.00</span></td></tr>
@@ -465,7 +465,7 @@
           </div>
           <div class="col">
             <label for="pc-mov-amount">Monto</label>
-            <input id="pc-mov-amount" type="number" min="0" step="0.01" value="0.00">
+            <input id="pc-mov-amount" class="a33-num" data-a33-default="0.00" type="number" inputmode="decimal" min="0" step="0.01" value="0.00">
           </div>
           <div class="col">
             <label for="pc-mov-desc">Descripción</label>
@@ -514,15 +514,15 @@
                 <tr><th>Denominación</th><th>Cantidad</th><th>Subtotal</th></tr>
               </thead>
               <tbody>
-                <tr><td>C$ 1</td><td><input id="pc-fnio-q-1" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-1">0.00</span></td></tr>
-                <tr><td>C$ 5</td><td><input id="pc-fnio-q-5" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-5">0.00</span></td></tr>
-                <tr><td>C$ 10</td><td><input id="pc-fnio-q-10" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-10">0.00</span></td></tr>
-                <tr><td>C$ 20</td><td><input id="pc-fnio-q-20" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-20">0.00</span></td></tr>
-                <tr><td>C$ 50</td><td><input id="pc-fnio-q-50" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-50">0.00</span></td></tr>
-                <tr><td>C$ 100</td><td><input id="pc-fnio-q-100" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-100">0.00</span></td></tr>
-                <tr><td>C$ 200</td><td><input id="pc-fnio-q-200" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-200">0.00</span></td></tr>
-                <tr><td>C$ 500</td><td><input id="pc-fnio-q-500" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-500">0.00</span></td></tr>
-                <tr><td>C$ 1000</td><td><input id="pc-fnio-q-1000" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-1000">0.00</span></td></tr>
+                <tr><td>C$ 1</td><td><input id="pc-fnio-q-1" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-1">0.00</span></td></tr>
+                <tr><td>C$ 5</td><td><input id="pc-fnio-q-5" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-5">0.00</span></td></tr>
+                <tr><td>C$ 10</td><td><input id="pc-fnio-q-10" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-10">0.00</span></td></tr>
+                <tr><td>C$ 20</td><td><input id="pc-fnio-q-20" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-20">0.00</span></td></tr>
+                <tr><td>C$ 50</td><td><input id="pc-fnio-q-50" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-50">0.00</span></td></tr>
+                <tr><td>C$ 100</td><td><input id="pc-fnio-q-100" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-100">0.00</span></td></tr>
+                <tr><td>C$ 200</td><td><input id="pc-fnio-q-200" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-200">0.00</span></td></tr>
+                <tr><td>C$ 500</td><td><input id="pc-fnio-q-500" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-500">0.00</span></td></tr>
+                <tr><td>C$ 1000</td><td><input id="pc-fnio-q-1000" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-1000">0.00</span></td></tr>
               </tbody>
               <tfoot>
                 <tr><td colspan="2">Total final C$</td><td>C$ <span id="pc-fnio-total">0.00</span></td></tr>
@@ -536,12 +536,12 @@
                 <tr><th>Denominación</th><th>Cantidad</th><th>Subtotal</th></tr>
               </thead>
               <tbody>
-                <tr><td>US$ 1</td><td><input id="pc-fusd-q-1" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-1">0.00</span></td></tr>
-                <tr><td>US$ 5</td><td><input id="pc-fusd-q-5" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-5">0.00</span></td></tr>
-                <tr><td>US$ 10</td><td><input id="pc-fusd-q-10" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-10">0.00</span></td></tr>
-                <tr><td>US$ 20</td><td><input id="pc-fusd-q-20" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-20">0.00</span></td></tr>
-                <tr><td>US$ 50</td><td><input id="pc-fusd-q-50" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-50">0.00</span></td></tr>
-                <tr><td>US$ 100</td><td><input id="pc-fusd-q-100" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-100">0.00</span></td></tr>
+                <tr><td>US$ 1</td><td><input id="pc-fusd-q-1" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-1">0.00</span></td></tr>
+                <tr><td>US$ 5</td><td><input id="pc-fusd-q-5" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-5">0.00</span></td></tr>
+                <tr><td>US$ 10</td><td><input id="pc-fusd-q-10" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-10">0.00</span></td></tr>
+                <tr><td>US$ 20</td><td><input id="pc-fusd-q-20" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-20">0.00</span></td></tr>
+                <tr><td>US$ 50</td><td><input id="pc-fusd-q-50" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-50">0.00</span></td></tr>
+                <tr><td>US$ 100</td><td><input id="pc-fusd-q-100" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-100">0.00</span></td></tr>
               </tbody>
               <tfoot>
                 <tr><td colspan="2">Total final US$</td><td>US$ <span id="pc-fusd-total">0.00</span></td></tr>
@@ -852,6 +852,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="app.js?v=3.20"></script>
+<script src="/assets/js/a33-input-ux.js"></script>
 <script>
   if ('serviceWorker' in navigator) { navigator.serviceWorker.register('./sw.js?v=3.20'); }
 </script>

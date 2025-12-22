@@ -1705,7 +1705,7 @@ async function renderProductos(){
       <div class="row">
         <input data-id="${p.id}" class="p-name" value="${p.name}">
         <div class="row">
-          <input data-id="${p.id}" class="p-price" type="number" inputmode="decimal" step="0.01" value="${p.price}">
+          <input data-id="${p.id}" class="p-price a33-num" data-a33-default="${p.price}" type="number" inputmode="decimal" step="0.01" value="${p.price}">
           <label class="flag"><input type="checkbox" class="p-active" data-id="${p.id}" ${p.active===false?'':'checked'}> Activo</label>
           <label class="flag"><input type="checkbox" class="p-manage" data-id="${p.id}" ${p.manageStock===false?'':'checked'}> Inventario</label>
           <button data-id="${p.id}" class="btn-danger btn-del">Eliminar</button>
@@ -3152,7 +3152,7 @@ async function renderInventario(){
       <td>${p.name}</td>
       <td><input type="checkbox" class="inv-active" data-id="${p.id}" ${p.active===false?'':'checked'}></td>
       <td><input type="checkbox" class="inv-manage" data-id="${p.id}" ${p.manageStock===false?'':'checked'}></td>
-      <td><input class="inv-inicial" data-id="${p.id}" type="number" inputmode="numeric" step="1" value="${init?init.qty:0}" ${disabled}></td>
+      <td><input class="inv-inicial a33-num" data-a33-default="${init?init.qty:0}" data-id="${p.id}" type="number" inputmode="numeric" step="1" value="${init?init.qty:0}" ${disabled}></td>
       <td><input class="inv-repo" data-id="${p.id}" type="number" inputmode="numeric" step="1" placeholder="+" ${disabled}></td>
       <td><input class="inv-ajuste" data-id="${p.id}" type="number" inputmode="numeric" step="1" placeholder="+/-" ${disabled}></td>
       <td><span class="stockpill ${st<=0?'low':''}">${st}</span></td>

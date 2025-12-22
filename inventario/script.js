@@ -52,6 +52,16 @@ function parseNumber(value) {
   return Number.isNaN(n) ? 0 : n;
 }
 
+function markA33Num(input, { defaultValue = '0', mode = 'decimal' } = {}) {
+  try {
+    if (!input || !(input instanceof HTMLInputElement)) return;
+    if (input.readOnly || input.disabled) return;
+    input.classList.add('a33-num');
+    input.dataset.a33Default = String(defaultValue);
+    input.inputMode = mode;
+  } catch (e) {}
+}
+
 function loadInventario() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_INVENTARIO);
@@ -146,6 +156,7 @@ function renderLiquidos(inv) {
     inputStock.value = typeof info.stock === "number" ? info.stock : parseNumber(info.stock);
     inputStock.dataset.id = l.id;
     inputStock.dataset.kind = "liquid-stock";
+    markA33Num(inputStock, { defaultValue: '0', mode: 'decimal' });
     tdStock.appendChild(inputStock);
     tr.appendChild(tdStock);
 
@@ -157,6 +168,7 @@ function renderLiquidos(inv) {
     inputMax.value = typeof info.max === "number" ? info.max : parseNumber(info.max);
     inputMax.dataset.id = l.id;
     inputMax.dataset.kind = "liquid-max";
+    markA33Num(inputMax, { defaultValue: '0', mode: 'decimal' });
     tdMax.appendChild(inputMax);
     tr.appendChild(tdMax);
 
@@ -223,6 +235,7 @@ function renderBotellas(inv) {
     inputStock.value = typeof info.stock === "number" ? info.stock : parseNumber(info.stock);
     inputStock.dataset.id = bDef.id;
     inputStock.dataset.kind = "bottle-stock";
+    markA33Num(inputStock, { defaultValue: '0', mode: 'numeric' });
     tdStock.appendChild(inputStock);
     tr.appendChild(tdStock);
 
