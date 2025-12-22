@@ -3,6 +3,22 @@ const DB_NAME = 'a33-pos';
 const DB_VER = 23; // schema estable (+ banks)
 let db;
 
+// iPad (PWA desde Inicio): evita zoom por doble-tap en botones/chips
+// Nota: NO bloquea pinch-zoom del sistema; solo anula el "double tap" sobre controles clickeables.
+(() => {
+  let lastTouchEnd = 0;
+  document.addEventListener('touchend', (e) => {
+    const t = e.target;
+    const el = t && t.closest ? t.closest('button, .chip, .btn-link, .tabbar button, .stepper button') : null;
+    if (!el) return;
+    const now = Date.now();
+    if (now - lastTouchEnd <= 350) {
+      e.preventDefault();
+    }
+    lastTouchEnd = now;
+  }, { passive: false });
+})();
+
 // --- Finanzas: conexión a finanzasDB para asientos automáticos
 const FIN_DB_NAME = 'finanzasDB';
 let finDb;
