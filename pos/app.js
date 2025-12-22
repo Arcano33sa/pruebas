@@ -5310,27 +5310,18 @@ async function getPettyCloseCheck(eventId, pc, dayKey, cashSalesNio){
     errors.push('Falta guardar el T/C del día (C$ por 1 US$) porque hubo USD en Caja Chica.');
   }
 
+  // Regla: no se puede cerrar si la diferencia no es 0.
+  // La diferencia se corrige registrando movimientos (entradas/salidas) y/o el ajuste de arqueo,
+  // que también crea un movimiento REAL dentro de days[dayKey].movements[].
   if (diffNio != null && !moneyEquals(diffNio, 0)){
-    const adj = day.arqueoAdjust ? day.arqueoAdjust.NIO : null;
-    if (!adjustMatches(adj, diffNio)){
-      errors.push(`Hay diferencia en C$ (${diffKind(diffNio)} ${diffLabel(diffNio,'C$')}). Registra movimientos faltantes o un ajuste de arqueo igual a la diferencia.`);
-    }
-  } else {
-    const adj = day.arqueoAdjust ? day.arqueoAdjust.NIO : null;
-    if (adj) warnings.push('Hay un ajuste C$ guardado pero no hay diferencia actual. (Puedes quitarlo si no aplica).');
+    errors.push(`Hay diferencia en C$ (${diffKind(diffNio)} ${diffLabel(diffNio,'C$')}). Registra movimientos faltantes o registra un ajuste de arqueo igual a la diferencia.`);
   }
 
   if (diffUsd != null && !moneyEquals(diffUsd, 0)){
-    const adj = day.arqueoAdjust ? day.arqueoAdjust.USD : null;
-    if (!adjustMatches(adj, diffUsd)){
-      errors.push(`Hay diferencia en US$ (${diffKind(diffUsd)} ${diffLabel(diffUsd,'US$')}). Registra movimientos faltantes o un ajuste de arqueo igual a la diferencia.`);
-    }
-  } else {
-    const adj = day.arqueoAdjust ? day.arqueoAdjust.USD : null;
-    if (adj) warnings.push('Hay un ajuste US$ guardado pero no hay diferencia actual. (Puedes quitarlo si no aplica).');
+    errors.push(`Hay diferencia en US$ (${diffKind(diffUsd)} ${diffLabel(diffUsd,'US$')}). Registra movimientos faltantes o registra un ajuste de arqueo igual a la diferencia.`);
   }
 
-  return { day, sum, diffNio, diffUsd, usdActive, errors, warnings, canClose: errors.length === 0 };
+  return { dayKey, day, sum, diffNio, diffUsd, usdActive, errors, warnings, canClose: errors.length === 0 };
 }
 
 function setPettyCloseUIEmpty(){
@@ -5378,6 +5369,7 @@ function renderPettyCloseUI(check, isHistory){
 
   const day = check.day;
   const sum = check.sum;
+  const dayKey = check.dayKey || getSelectedPcDay();
 
   if (fx){
     fx.value = (day.fxRate && day.fxRate > 0) ? String(day.fxRate) : '';
@@ -5386,6 +5378,27 @@ function renderPettyCloseUI(check, isHistory){
 
   const fmtIso = (iso)=>{
     try{ return new Date(iso).toLocaleString(); }catch(e){ return iso || ''; }
+  };
+
+  const isArqDesc = (desc)=>{
+    const d = (typeof desc === 'string') ? desc.trim() : '';
+    // Preferimos el formato "Arqueo —" pero aceptamos variantes para compatibilidad.
+    return d.startsWith('Arqueo —') || d.startsWith('Arqueo -') || d.startsWith('Arqueo—') || d.startsWith('Arqueo');
+  };
+
+  const getArqueoMovs = (currency)=>{
+    const movs = (day && Array.isArray(day.movements)) ? day.movements : [];
+    return movs.filter(m => {
+      if (!m || typeof m !== 'object') return false;
+      if ((m.date || '') !== dayKey) return false;
+      if ((m.currency || '') !== currency) return false;
+      return (m.isArqueo || m.kind === 'arqueo' || isArqDesc(m.description));
+    });
+  };
+
+  const lastArqueo = (currency)=>{
+    const a = getArqueoMovs(currency);
+    return a.length ? a[a.length-1] : null;
   };
 
   if (status){
@@ -5412,51 +5425,45 @@ function renderPettyCloseUI(check, isHistory){
   const adjN = document.getElementById('pc-adj-nio-status');
   if (adjN){
     const d = check.diffNio;
-    const adj = day.arqueoAdjust ? day.arqueoAdjust.NIO : null;
     const diffTxt = (d == null) ? '—' : `${diffKind(d)} ${diffLabel(d,'C$')}`;
-    const adjTxt = adj ? (`Ajuste: ${formatAdjLine(adj.amount,'C$')} — Concepto: ${adj.concept}${adj.notes ? (' · ' + adj.notes) : ''}`) : 'Ajuste: (no registrado)';
-    adjN.textContent = `Diferencia actual: ${diffTxt}. ${adjTxt}.`;
+    const mov = lastArqueo('NIO');
+    const adjTxt = mov ? (`Ajuste (movimiento): ${(mov.type === 'entrada') ? '+' : '-'} C$ ${fmt(mov.amount)} — ${escapeHtml((mov.description || '').trim())}`) : 'Ajuste: (no registrado)';
+    adjN.innerHTML = `Diferencia actual: ${escapeHtml(diffTxt)}. ${adjTxt}.`;
   }
 
   const adjU = document.getElementById('pc-adj-usd-status');
   const rec = document.getElementById('pc-adj-records');
   if (adjU){
     const d = check.diffUsd;
-    const adj = day.arqueoAdjust ? day.arqueoAdjust.USD : null;
     const diffTxt = (d == null) ? '—' : `${diffKind(d)} ${diffLabel(d,'US$')}`;
-    const adjTxt = adj ? (`Ajuste: ${formatAdjLine(adj.amount,'US$')} — Concepto: ${adj.concept}${adj.notes ? (' · ' + adj.notes) : ''}`) : 'Ajuste: (no registrado)';
-    adjU.textContent = `Diferencia actual: ${diffTxt}. ${adjTxt}.`;
+    const mov = lastArqueo('USD');
+    const adjTxt = mov ? (`Ajuste (movimiento): ${(mov.type === 'entrada') ? '+' : '-'} US$ ${fmt(mov.amount)} — ${escapeHtml((mov.description || '').trim())}`) : 'Ajuste: (no registrado)';
+    adjU.innerHTML = `Diferencia actual: ${escapeHtml(diffTxt)}. ${adjTxt}.`;
   }
 
-    // Mostrar registro de ajuste(s) solo cuando existan
+  // Bloque opcional: mostrar el/los ajustes detectados como movimientos reales
   if (rec){
     const items = [];
-    const pushAdj = (sym, adj)=>{
-      if (!adj) return;
-      const when = (adj.createdAt) ? (()=>{ try{ return new Date(adj.createdAt).toLocaleString(); }catch(e){ return adj.createdAt; } })() : '';
-      const concept = escapeHtml(adj.concept || '');
-      const notes = (adj.notes || '').trim();
-      items.push({
-        sym,
-        amtLine: formatAdjLine(adj.amount, sym),
-        concept,
-        notesHtml: notes ? escapeHtml(notes) : '',
-        when
-      });
+    const addMov = (sym, m)=>{
+      if (!m) return;
+      const typeSign = (m.type === 'entrada') ? '+' : '-';
+      const amtLine = `${typeSign} ${sym} ${fmt(Number(m.amount || 0))}`;
+      const desc = escapeHtml((m.description || '').trim());
+      items.push({ sym, amtLine, desc });
     };
-    if (day.arqueoAdjust && day.arqueoAdjust.NIO) pushAdj('C$', day.arqueoAdjust.NIO);
-    if (day.arqueoAdjust && day.arqueoAdjust.USD) pushAdj('US$', day.arqueoAdjust.USD);
+
+    for (const m of getArqueoMovs('NIO')) addMov('C$', m);
+    for (const m of getArqueoMovs('USD')) addMov('US$', m);
 
     if (items.length){
       rec.style.display = 'block';
-      rec.innerHTML = `<div class="title">Ajuste registrado</div>` + items.map(i => (
+      rec.innerHTML = `<div class="title">Ajuste detectado (movimiento)</div>` + items.map(i => (
         `<div class="pc-adj-record">
           <div class="left">
-            <div><b>Ajuste:</b> ${escapeHtml(i.amtLine)} — <b>Concepto:</b> ${i.concept}</div>
-            ${i.notesHtml ? (`<div class="muted" style="font-size:0.85rem; margin-top:2px">${i.notesHtml}</div>`) : ''}
-            <small class="muted">${escapeHtml(i.when)}</small>
+            <div><b>Ajuste:</b> ${i.amtLine}</div>
+            <div class="muted" style="font-size:0.85rem; margin-top:2px">${i.desc}</div>
           </div>
-          <div class="amt">${escapeHtml(i.amtLine)}</div>
+          <div class="amt">${i.amtLine}</div>
         </div>`
       )).join('');
     } else {
@@ -5476,6 +5483,7 @@ function renderPettyCloseUI(check, isHistory){
 }
 
 async function onSavePettyFxRate(){
+
   if (isPettyHistoryMode()){
     alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
     return;
@@ -5525,10 +5533,13 @@ function findExistingArqueoMovement(day, dayKey, currency, type, amountAbs){
     const dk = (m.date || dayKey || '').toString();
     if (dayKey && dk !== dayKey) continue;
     if ((m.currency || '') !== currency) continue;
-    if ((m.type || '') !== type) continue;
+    if (type && (m.type || '') !== type) continue;
+
     const amt = Number(m.amount || 0);
-    if (!moneyEquals(amt, amountAbs)) continue;
-    const tagged = !!(m.isArqueo || m.kind === 'arqueo' || (typeof m.description === 'string' && m.description.startsWith('Arqueo')));
+    if (Number.isFinite(amountAbs) && amountAbs != null && !moneyEquals(amt, amountAbs)) continue;
+
+    const desc = (typeof m.description === 'string') ? m.description.trim() : '';
+    const tagged = !!(m.isArqueo || m.kind === 'arqueo' || desc.startsWith('Arqueo —') || desc.startsWith('Arqueo -') || desc.startsWith('Arqueo—'));
     if (!tagged) continue;
     return m;
   }
@@ -5540,6 +5551,7 @@ async function onRegisterArqueoAdjust(currency){
     alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
     return;
   }
+
   const evId = await getMeta('currentEventId');
   if (!evId){
     alert('Debes activar un evento antes de registrar ajuste.');
@@ -5547,6 +5559,7 @@ async function onRegisterArqueoAdjust(currency){
   }
 
   if (!(await ensurePettyEnabledForEvent(evId))) return;
+
   const dayKey = getSelectedPcDay();
   const pc = await getPettyCash(evId);
   const day = ensurePcDay(pc, dayKey);
@@ -5555,6 +5568,7 @@ async function onRegisterArqueoAdjust(currency){
     return;
   }
 
+  // Diferencia actual (contado - esperado) por moneda
   const cashSales = await getCashSalesNioForDay(evId, dayKey);
   const check = await getPettyCloseCheck(evId, pc, dayKey, cashSales);
 
@@ -5571,7 +5585,7 @@ async function onRegisterArqueoAdjust(currency){
     return;
   }
 
-  // Inputs (opcionales): si vienen vacíos, autocompletamos con la diferencia y un concepto sugerido.
+  // Inputs (opcionales). Si vienen vacíos, autocompletamos.
   const amtEl = document.getElementById(isNio ? 'pc-adj-nio-amount' : 'pc-adj-usd-amount');
   const conceptEl = document.getElementById(isNio ? 'pc-adj-nio-concept' : 'pc-adj-usd-concept');
   const notesEl = document.getElementById(isNio ? 'pc-adj-nio-notes' : 'pc-adj-usd-notes');
@@ -5579,70 +5593,79 @@ async function onRegisterArqueoAdjust(currency){
   const suggestedConcept = (diff > 0) ? 'Arqueo — Sobrante' : 'Arqueo — Faltante';
 
   const rawAmt = amtEl ? Number((amtEl.value || '').toString().replace(',', '.')) : NaN;
-  let amountInput = Number.isFinite(rawAmt) ? round2(rawAmt) : NaN;
+  let amountInput = (rawAmt == rawAmt) ? round2(rawAmt) : NaN; // NaN-safe
   let concept = conceptEl ? (conceptEl.value || '').trim() : '';
   const notes = notesEl ? (notesEl.value || '').trim() : '';
 
-  // Autocompletar concepto/monto si están vacíos
   if (!concept){
     concept = suggestedConcept;
     if (conceptEl) conceptEl.value = concept;
   }
+
+  // Asegurar que el description empiece por "Arqueo —" para poder detectar/evitar duplicados.
+  if (!concept.startsWith('Arqueo —')){
+    concept = suggestedConcept + ' · ' + concept;
+    if (conceptEl) conceptEl.value = concept;
+  }
+
   if (!Number.isFinite(amountInput) || Math.abs(amountInput) < 0.005){
-    amountInput = round2(diff);
+    amountInput = round2(Math.abs(diff));
     if (amtEl) amtEl.value = String(amountInput);
   }
 
   // Aceptar el monto con signo o sin signo, siempre que coincida en valor absoluto.
   if (!moneyEquals(Math.abs(amountInput), Math.abs(diff))){
-    alert(`El monto del ajuste debe igualar la diferencia actual (${formatAdjLine(diff, sym)}).`);
+    alert('El monto del ajuste debe igualar la diferencia actual (' + formatAdjLine(diff, sym) + ').');
     return;
   }
-
-  // El ajuste REAL se materializa como movimiento para que afecte el esperado y se vea en "Movimientos registrados".
-  if (!Array.isArray(day.movements)) day.movements = [];
 
   const movType = (diff > 0) ? 'entrada' : 'salida';
   const movAmount = round2(Math.abs(diff));
 
+  if (!Array.isArray(day.movements)) day.movements = [];
+
   // Evitar duplicados (doble click)
   const existing = findExistingArqueoMovement(day, dayKey, currency, movType, movAmount);
-
-  // Guardamos/actualizamos el registro informativo de arqueo (para UI)
-  if (!day.arqueoAdjust) day.arqueoAdjust = { NIO: null, USD: null };
-  day.arqueoAdjust[isNio ? 'NIO' : 'USD'] = {
-    amount: round2(diff),
-    concept,
-    notes,
-    createdAt: new Date().toISOString()
-  };
-
   if (existing){
-    await savePettyCash(pc);
     await renderCajaChica();
     highlightPettyMovementRow(existing.id);
     toast('Ajuste ya existía (no se duplicó)');
     return;
   }
 
-  const newId = day.movements.length ? (Math.max(...day.movements.map(m=>m && m.id ? m.id : 0)) + 1) : 1;
+  const maxId = day.movements.length ? Math.max(...day.movements.map(m => (m && m.id) ? Number(m.id) : 0), 0) : 0;
+  const newId = (Number.isFinite(maxId) ? maxId : 0) + 1;
   const desc = (concept + (notes ? (' · ' + notes) : '')).trim();
 
+  // Movimiento REAL (formato obligatorio, igual al TEST)
   day.movements.push({
     id: newId,
-    date: dayKey,
     type: movType,
-    currency,
+    currency: currency,
     amount: movAmount,
     description: desc,
-    kind: 'arqueo',
-    isArqueo: true,
-    createdAt: new Date().toISOString()
+    date: dayKey
   });
 
-  await savePettyCash(pc);
+  // Persistir usando el mismo flujo que los movimientos manuales
+  const ok = await savePettyCash(pc);
+  if (!ok){
+    alert('No se pudo guardar el ajuste de arqueo. Cierra otras pestañas de la Suite y reintenta.');
+    return;
+  }
+
+  // Verificación dura: debe existir en IndexedDB en days[dayKey].movements[]
+  const pcAfter = await getPettyCash(evId);
+  const dayAfter = ensurePcDay(pcAfter, dayKey);
+  const persisted = findExistingArqueoMovement(dayAfter, dayKey, currency, movType, movAmount);
+  if (!persisted){
+    alert('El ajuste no se persistió en IndexedDB (movements no cambió). No se habilitará el cierre.');
+    await renderCajaChica();
+    return;
+  }
+
   await renderCajaChica();
-  highlightPettyMovementRow(newId);
+  highlightPettyMovementRow(persisted.id);
   toast('Ajuste de arqueo aplicado');
 }
 
@@ -5654,6 +5677,7 @@ async function onClearArqueoAdjust(currency){
   const evId = await getMeta('currentEventId');
   if (!evId) return;
   if (!(await ensurePettyEnabledForEvent(evId))) return;
+
   const dayKey = getSelectedPcDay();
   const pc = await getPettyCash(evId);
   const day = ensurePcDay(pc, dayKey);
@@ -5662,26 +5686,28 @@ async function onClearArqueoAdjust(currency){
     return;
   }
 
-  const isNio = currency === 'NIO';
-
-  // 1) Quitar registro informativo
-  if (!day.arqueoAdjust) day.arqueoAdjust = { NIO: null, USD: null };
-  if (currency === 'NIO') day.arqueoAdjust.NIO = null;
-  if (currency === 'USD') day.arqueoAdjust.USD = null;
-
-  // 2) Quitar movimiento real de arqueo (para que el esperado vuelva al estado previo)
+  // Remover todos los movimientos de arqueo para esa moneda/fecha
   if (!Array.isArray(day.movements)) day.movements = [];
+
   day.movements = day.movements.filter(m => {
     if (!m || typeof m !== 'object') return false;
-    const tagged = !!(m.isArqueo || m.kind === 'arqueo');
-    if (!tagged) return true;
-    const dk = (m.date || dayKey || '').toString();
+    const dk = (m.date || '').toString();
     if (dk !== dayKey) return true;
     if ((m.currency || '') !== currency) return true;
-    return false; // eliminar
+
+    const desc = (typeof m.description === 'string') ? m.description.trim() : '';
+    const tagged = !!(m.isArqueo || m.kind === 'arqueo' || desc.startsWith('Arqueo —') || desc.startsWith('Arqueo -') || desc.startsWith('Arqueo—'));
+    return !tagged; // eliminar si es arqueo
   });
 
+  // Compatibilidad: si existía arqueoAdjust viejo, limpiarlo (no es la fuente de verdad)
+  if (day.arqueoAdjust){
+    if (currency === 'NIO') day.arqueoAdjust.NIO = null;
+    if (currency === 'USD') day.arqueoAdjust.USD = null;
+  }
+
   // Limpiar inputs
+  const isNio = currency === 'NIO';
   const amtEl = document.getElementById(isNio ? 'pc-adj-nio-amount' : 'pc-adj-usd-amount');
   const conceptEl = document.getElementById(isNio ? 'pc-adj-nio-concept' : 'pc-adj-usd-concept');
   const notesEl = document.getElementById(isNio ? 'pc-adj-nio-notes' : 'pc-adj-usd-notes');
@@ -5689,9 +5715,23 @@ async function onClearArqueoAdjust(currency){
   if (conceptEl) conceptEl.value = '';
   if (notesEl) notesEl.value = '';
 
-  await savePettyCash(pc);
+  const ok = await savePettyCash(pc);
+  if (!ok){
+    alert('No se pudo guardar la eliminación del ajuste. Cierra otras pestañas y reintenta.');
+    return;
+  }
+
+  // Verificar que ya no exista
+  const pcAfter = await getPettyCash(evId);
+  const dayAfter = ensurePcDay(pcAfter, dayKey);
+  const stillThere = findExistingArqueoMovement(dayAfter, dayKey, currency, null, null);
+
   await renderCajaChica();
-  toast('Ajuste removido');
+  if (stillThere){
+    toast('Ajuste no pudo removerse (revisa el registro)');
+  } else {
+    toast('Ajuste removido');
+  }
 }
 
 async function onClosePettyDay(){
