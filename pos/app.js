@@ -4153,7 +4153,13 @@ async function exportEventExcel(eventId){
         detRows.push(['(sin movimientos)','','','']);
       } else {
         for (const m of movs){
-          const tipoText = m.type === 'salida' ? 'Salida' : 'Entrada';
+          let tipoText;
+          if (m && m.isAdjust){
+            const k = m.adjustKind === 'sobrante' ? 'Sobrante' : 'Faltante';
+            tipoText = `Ajuste (${k})`;
+          } else {
+            tipoText = m.type === 'salida' ? 'Egreso' : 'Ingreso';
+          }
           const monedaText = m.currency === 'USD' ? 'US$' : 'C$';
           detRows.push([tipoText, monedaText, m.amount || 0, m.description || '']);
         }
@@ -4193,20 +4199,18 @@ async function exportEventExcel(eventId){
       detRows.push(['Inicial', sumDay.usd.initial, 'Entradas', sumDay.usd.entradas, 'Salidas', sumDay.usd.salidas, 'Teórico', sumDay.usd.teorico, 'Final', sumDay.usd.final != null ? sumDay.usd.final : '', 'Dif', sumDay.usd.diferencia != null ? sumDay.usd.diferencia : '' ]);
 
       detRows.push([]);
-      // Ajuste de arqueo (si aplica)
-      detRows.push(['Ajuste de arqueo']);
-      detRows.push(['Moneda','AjusteMonto','AjusteConcepto','AjusteNotas','Creado']);
-      const adjN = day && day.arqueoAdjust ? day.arqueoAdjust.NIO : null;
-      const adjU = day && day.arqueoAdjust ? day.arqueoAdjust.USD : null;
-      if (adjN){
-        detRows.push(['C$', adjN.amount, adjN.concept, adjN.notes || '', adjN.createdAt || '']);
+      // Ajustes (movimientos tipo Ajuste)
+      detRows.push(['Ajustes (Movimientos tipo Ajuste)']);
+      detRows.push(['Moneda','Tipo','Monto','Descripción','Creado']);
+      const adjMovs = (movs || []).filter(m => m && m.isAdjust);
+      if (!adjMovs.length){
+        detRows.push(['', '(sin ajustes)', '', '', '']);
       } else {
-        detRows.push(['C$', '', '', '', '']);
-      }
-      if (adjU){
-        detRows.push(['US$', adjU.amount, adjU.concept, adjU.notes || '', adjU.createdAt || '']);
-      } else {
-        detRows.push(['US$', '', '', '', '']);
+        for (const m of adjMovs){
+          const monedaText = m.currency === 'USD' ? 'US$' : 'C$';
+          const k = m.adjustKind === 'sobrante' ? 'Sobrante' : 'Faltante';
+          detRows.push([monedaText, k, m.amount || 0, m.description || '', m.createdAt || '']);
+        }
       }
 
       detRows.push([]);
@@ -4218,22 +4222,22 @@ async function exportEventExcel(eventId){
   const wsCaja = XLSX.utils.aoa_to_sheet(detRows);
   XLSX.utils.book_append_sheet(wb, wsCaja, 'CajaChica_Detalle');
 
-  // --- Hoja: CajaChica_Ajustes (solo ajustes registrados) ---
+  // --- Hoja: CajaChica_Ajustes (movimientos tipo Ajuste) ---
   const adjRows = [];
   adjRows.push(['dia','moneda','AjusteMonto','AjusteConcepto','AjusteNotas','AjusteResumen','creado']);
   if (dayKeys && dayKeys.length){
     for (const dk of dayKeys){
       const day = ensurePcDay(pc, dk);
-      const aN = day && day.arqueoAdjust ? day.arqueoAdjust.NIO : null;
-      const aU = day && day.arqueoAdjust ? day.arqueoAdjust.USD : null;
-
-      if (aN){
-        const resumen = `Ajuste: ${formatAdjLine(aN.amount,'C$')} — Concepto: ${aN.concept}${aN.notes ? (' · ' + aN.notes) : ''}`;
-        adjRows.push([dk,'C$', aN.amount, aN.concept, aN.notes || '', resumen, aN.createdAt || '']);
-      }
-      if (aU){
-        const resumen = `Ajuste: ${formatAdjLine(aU.amount,'US$')} — Concepto: ${aU.concept}${aU.notes ? (' · ' + aU.notes) : ''}`;
-        adjRows.push([dk,'US$', aU.amount, aU.concept, aU.notes || '', resumen, aU.createdAt || '']);
+      const movs = (day && Array.isArray(day.movements)) ? day.movements : [];
+      const adjMovs = movs.filter(m => m && m.isAdjust);
+      for (const m of adjMovs){
+        const monedaText = m.currency === 'USD' ? 'US$' : 'C$';
+        const signed = (m.type === 'salida') ? -Math.abs(Number(m.amount || 0)) : Math.abs(Number(m.amount || 0));
+        const concept = m.description || '';
+        const notes = '';
+        const kind = m.adjustKind === 'sobrante' ? 'Sobrante' : 'Faltante';
+        const resumen = `Ajuste: ${formatAdjLine(signed, monedaText)} — ${kind}${concept ? (' · ' + concept) : ''}`;
+        adjRows.push([dk, monedaText, signed, concept, notes, resumen, m.createdAt || '']);
       }
     }
   }
@@ -4242,6 +4246,7 @@ async function exportEventExcel(eventId){
   }
   const wsAdj = XLSX.utils.aoa_to_sheet(adjRows);
   XLSX.utils.book_append_sheet(wb, wsAdj, 'CajaChica_Ajustes');
+
 
   // --- Hoja 3 opcional: Ventas_Detalle ---
   const ventasRows = [];
@@ -4318,10 +4323,11 @@ async function closeEvent(eventId){
         for (const dayKey of sorted){
           const cashSalesNio = cashByDay.get(dayKey) || 0;
           const day = ensurePcDay(pc, dayKey);
-          const check = await getPettyCloseCheck(eventId, pc, dayKey, cashSalesNio);
+          const fx = ev ? Number(ev.fxRate || 0) : null;
+          const check = await getPettyCloseCheck(eventId, pc, dayKey, cashSalesNio, fx);
 
           if (!day.closedAt){
-            pending.push({ dayKey, reason: 'Falta Cierre definitivo del día.' });
+            pending.push({ dayKey, reason: 'Falta cierre del día.' });
             continue;
           }
           // Si por alguna razón hay errores aún estando cerrado, bloquear cierre del evento
@@ -4334,9 +4340,9 @@ async function closeEvent(eventId){
           const lines = pending.slice(0, 25).map(p => `- ${p.dayKey}: ${p.reason}`).join('\n');
           const more = pending.length > 25 ? `\n... y ${pending.length - 25} más.` : '';
           alert(
-            'No se puede cerrar el evento porque faltan cierres definitivos de Caja Chica:\n\n' +
+            'No se puede cerrar el evento porque faltan cierres del día de Caja Chica:\n\n' +
             lines + more +
-            '\n\nVe a Caja Chica y realiza “Cierre definitivo del día”.'
+            '\n\nVe a Caja Chica y realiza “Cierre del día”.'
           );
           return;
         }
@@ -5243,8 +5249,6 @@ function hasPettyDayActivity(day){
   if (day.initial && day.initial.savedAt) return true;
   if (day.finalCount && day.finalCount.savedAt) return true;
   if (Array.isArray(day.movements) && day.movements.length) return true;
-  if (day.fxRate != null) return true;
-  if (day.arqueoAdjust && (day.arqueoAdjust.NIO || day.arqueoAdjust.USD)) return true;
   return false;
 }
 
@@ -5257,8 +5261,6 @@ function hasUsdActivity(day, sum){
     if (Math.abs(Number(sum.usd.salidas || 0)) > eps) return true;
     if (sum.usd.final != null && Math.abs(Number(sum.usd.final || 0)) > eps) return true;
   }
-  if (day.fxRate != null) return true;
-  if (day.arqueoAdjust && day.arqueoAdjust.USD) return true;
   if (Array.isArray(day.movements) && day.movements.some(m => m && m.currency === 'USD' && Math.abs(Number(m.amount || 0)) > eps)) return true;
   return false;
 }
@@ -5290,186 +5292,107 @@ function diffKind(diff){
   return v > 0 ? 'Sobrante' : 'Faltante';
 }
 
-async function getPettyCloseCheck(eventId, pc, dayKey, cashSalesNio){
-  const day = ensurePcDay(pc, dayKey);
-  const sum = computePettyCashSummary(pc, dayKey, { cashSalesNio: Number(cashSalesNio || 0) });
-
-  const diffNio = (sum.nio.final != null) ? round2(sum.nio.final - sum.nio.teorico) : null;
-  const diffUsd = (sum.usd.final != null) ? round2(sum.usd.final - sum.usd.teorico) : null;
-
-  const usdActive = hasUsdActivity(day, sum);
-
+async function getPettyCloseCheck(eventId, pc, dayKey, cashSalesNio, eventFxRate){
   const errors = [];
   const warnings = [];
 
-  if (!day.finalCount || !day.finalCount.savedAt){
-    errors.push('Falta guardar el arqueo final.');
+  if (!eventId){
+    errors.push('No hay evento activo.');
+    return { canClose:false, errors, warnings, day:null, sum:null, diffNio:null, diffUsd:null, fxRate:null };
   }
 
-  if (usdActive && !(day.fxRate && day.fxRate > 0)){
-    errors.push('Falta guardar el T/C del día (C$ por 1 US$) porque hubo USD en Caja Chica.');
+  const pcSafe = pc || (await getPettyCash(eventId));
+  const day = ensurePcDay(pcSafe, dayKey);
+
+  const fxRaw = Number(eventFxRate || 0);
+  const fxRate = (Number.isFinite(fxRaw) && fxRaw > 0) ? fxRaw : null;
+
+  const sum = computePettyCashSummary(pcSafe, dayKey, { cashSalesNio });
+
+  const diffNio = (sum && sum.nio && sum.nio.diferencia != null) ? Number(sum.nio.diferencia) : null;
+  const diffUsd = (sum && sum.usd && sum.usd.diferencia != null) ? Number(sum.usd.diferencia) : null;
+
+  const hasFinal = !!(day && day.finalCount && day.finalCount.savedAt);
+  if (!hasFinal) errors.push('Guarda el arqueo final antes de cerrar el día.');
+
+  const usdActive = hasUsdActivity(day, sum);
+  if (usdActive && !(fxRate && fxRate > 0)){
+    errors.push('Define el tipo de cambio (USD → C$) para este evento.');
   }
 
-  // Regla: no se puede cerrar si la diferencia no es 0.
-  // La diferencia se corrige registrando movimientos (entradas/salidas) y/o el ajuste de arqueo,
-  // que también crea un movimiento REAL dentro de days[dayKey].movements[].
-  if (diffNio != null && !moneyEquals(diffNio, 0)){
-    errors.push(`Hay diferencia en C$ (${diffKind(diffNio)} ${diffLabel(diffNio,'C$')}). Registra movimientos faltantes o registra un ajuste de arqueo igual a la diferencia.`);
+  const eps = 0.005;
+  if (hasFinal){
+    if (diffNio != null && Math.abs(diffNio) > eps){
+      const kind = (diffNio > 0) ? 'Sobrante' : 'Faltante';
+      errors.push(`Hay diferencia en C$ (${kind} C$ ${fmt(Math.abs(round2(diffNio)))}). Registra movimientos faltantes o un ajuste de caja igual a la diferencia.`);
+    }
+
+    // USD: si hay USD activo, también debe cuadrar
+    if (usdActive && diffUsd != null && Math.abs(diffUsd) > eps){
+      const kind = (diffUsd > 0) ? 'Sobrante' : 'Faltante';
+      errors.push(`Hay diferencia en US$ (${kind} US$ ${fmt(Math.abs(round2(diffUsd)))}). Registra movimientos faltantes o un ajuste de caja igual a la diferencia.`);
+    }
   }
 
-  if (diffUsd != null && !moneyEquals(diffUsd, 0)){
-    errors.push(`Hay diferencia en US$ (${diffKind(diffUsd)} ${diffLabel(diffUsd,'US$')}). Registra movimientos faltantes o registra un ajuste de arqueo igual a la diferencia.`);
-  }
-
-  return { dayKey, day, sum, diffNio, diffUsd, usdActive, errors, warnings, canClose: errors.length === 0 };
+  const canClose = errors.length === 0;
+  return { canClose, errors, warnings, day, sum, diffNio, diffUsd, fxRate };
 }
 
 function setPettyCloseUIEmpty(){
   const status = document.getElementById('pc-close-status');
   const blocker = document.getElementById('pc-close-blocker');
-  const fx = document.getElementById('pc-fx-rate');
-
-  const adjNioAmt = document.getElementById('pc-adj-nio-amount');
-  const adjNioConcept = document.getElementById('pc-adj-nio-concept');
-  const adjNioNotes = document.getElementById('pc-adj-nio-notes');
-
-  const adjUsdAmt = document.getElementById('pc-adj-usd-amount');
-  const adjUsdConcept = document.getElementById('pc-adj-usd-concept');
-  const adjUsdNotes = document.getElementById('pc-adj-usd-notes');
-
-  const adjN = document.getElementById('pc-adj-nio-status');
-  const adjU = document.getElementById('pc-adj-usd-status');
-  const rec = document.getElementById('pc-adj-records');
+  const btnClose = document.getElementById('pc-btn-close-day');
+  const btnReopen = document.getElementById('pc-btn-reopen-day');
 
   if (status) status.textContent = '';
-  if (blocker){ blocker.style.display = 'none'; blocker.textContent = ''; }
+  if (blocker){
+    blocker.style.display = 'none';
+    blocker.textContent = '';
+  }
+  if (btnClose) btnClose.disabled = true;
+  if (btnReopen){
+    btnReopen.style.display = 'none';
+    btnReopen.disabled = true;
+  }
+
+  // También limpiar UI del tipo de cambio por evento
+  const fx = document.getElementById('pc-event-fx-rate');
   if (fx) fx.value = '';
-
-  if (adjNioAmt) adjNioAmt.value = '';
-  if (adjNioConcept) adjNioConcept.value = '';
-  if (adjNioNotes) adjNioNotes.value = '';
-
-  if (adjUsdAmt) adjUsdAmt.value = '';
-  if (adjUsdConcept) adjUsdConcept.value = '';
-  if (adjUsdNotes) adjUsdNotes.value = '';
-
-  if (adjN) adjN.textContent = '';
-  if (adjU) adjU.textContent = '';
-  if (rec){ rec.style.display = 'none'; rec.innerHTML = ''; }
-  const btnRe = document.getElementById('pc-btn-reopen-day');
-  if (btnRe) btnRe.style.display = 'none';
 }
 
 function renderPettyCloseUI(check, isHistory){
   const status = document.getElementById('pc-close-status');
   const blocker = document.getElementById('pc-close-blocker');
-  const fx = document.getElementById('pc-fx-rate');
   const btnClose = document.getElementById('pc-btn-close-day');
   const btnReopen = document.getElementById('pc-btn-reopen-day');
 
+  if (!status || !blocker) return;
+  if (!check || !check.day || !check.sum){
+    status.textContent = '';
+    blocker.style.display = 'none';
+    blocker.textContent = '';
+    if (btnClose) btnClose.disabled = true;
+    if (btnReopen){
+      btnReopen.style.display = 'none';
+      btnReopen.disabled = true;
+    }
+    return;
+  }
+
   const day = check.day;
   const sum = check.sum;
-  const dayKey = check.dayKey || getSelectedPcDay();
 
-  if (fx){
-    fx.value = (day.fxRate && day.fxRate > 0) ? String(day.fxRate) : '';
-    fx.disabled = isHistory || !!day.closedAt;
-  }
+  const fxLine = (check.fxRate && check.fxRate > 0) ? (` · T/C: C$ ${fmt(check.fxRate)} por US$ 1`) : '';
+  const closedLine = day.closedAt ? ('Día cerrado') : ('Día abierto');
 
-  const fmtIso = (iso)=>{
-    try{ return new Date(iso).toLocaleString(); }catch(e){ return iso || ''; }
-  };
+  status.textContent = `${closedLine} · Teórico C$ ${fmt(sum.nio.teorico)} / Final C$ ${fmt(sum.nio.final ?? 0)}${fxLine}`;
 
-  const isArqDesc = (desc)=>{
-    const d = (typeof desc === 'string') ? desc.trim() : '';
-    // Preferimos el formato "Arqueo —" pero aceptamos variantes para compatibilidad.
-    return d.startsWith('Arqueo —') || d.startsWith('Arqueo -') || d.startsWith('Arqueo—') || d.startsWith('Arqueo');
-  };
-
-  const getArqueoMovs = (currency)=>{
-    const movs = (day && Array.isArray(day.movements)) ? day.movements : [];
-    return movs.filter(m => {
-      if (!m || typeof m !== 'object') return false;
-      if ((m.date || '') !== dayKey) return false;
-      if ((m.currency || '') !== currency) return false;
-      return (m.isArqueo || m.kind === 'arqueo' || isArqDesc(m.description));
-    });
-  };
-
-  const lastArqueo = (currency)=>{
-    const a = getArqueoMovs(currency);
-    return a.length ? a[a.length-1] : null;
-  };
-
-  if (status){
-    if (day.closedAt){
-      status.innerHTML = `<b>Estado:</b> Cerrado el ${fmtIso(day.closedAt)}.`;
-    } else {
-      status.innerHTML = `<b>Estado:</b> Abierto. <span class="muted">Esperado hoy: C$ ${fmt(sum.nio.teorico)} (incluye ventas efectivo C$ ${fmt(sum.nio.ventasEfectivo || 0)}) · US$ ${fmt(sum.usd.teorico)}</span>`;
-    }
-  }
-
-  if (blocker){
-    if (check.errors.length){
-      blocker.style.display = 'block';
-      blocker.innerHTML = '<b>No se puede cerrar:</b><ul style="margin:6px 0 0 18px">' + check.errors.map(e=>`<li>${e}</li>`).join('') + '</ul>';
-    } else if (check.warnings.length){
-      blocker.style.display = 'block';
-      blocker.innerHTML = '<b>Avisos:</b><ul style="margin:6px 0 0 18px">' + check.warnings.map(e=>`<li>${e}</li>`).join('') + '</ul>';
-    } else {
-      blocker.style.display = 'none';
-      blocker.textContent = '';
-    }
-  }
-
-  const adjN = document.getElementById('pc-adj-nio-status');
-  if (adjN){
-    const d = check.diffNio;
-    const diffTxt = (d == null) ? '—' : `${diffKind(d)} ${diffLabel(d,'C$')}`;
-    const mov = lastArqueo('NIO');
-    const adjTxt = mov ? (`Ajuste (movimiento): ${(mov.type === 'entrada') ? '+' : '-'} C$ ${fmt(mov.amount)} — ${escapeHtml((mov.description || '').trim())}`) : 'Ajuste: (no registrado)';
-    adjN.innerHTML = `Diferencia actual: ${escapeHtml(diffTxt)}. ${adjTxt}.`;
-  }
-
-  const adjU = document.getElementById('pc-adj-usd-status');
-  const rec = document.getElementById('pc-adj-records');
-  if (adjU){
-    const d = check.diffUsd;
-    const diffTxt = (d == null) ? '—' : `${diffKind(d)} ${diffLabel(d,'US$')}`;
-    const mov = lastArqueo('USD');
-    const adjTxt = mov ? (`Ajuste (movimiento): ${(mov.type === 'entrada') ? '+' : '-'} US$ ${fmt(mov.amount)} — ${escapeHtml((mov.description || '').trim())}`) : 'Ajuste: (no registrado)';
-    adjU.innerHTML = `Diferencia actual: ${escapeHtml(diffTxt)}. ${adjTxt}.`;
-  }
-
-  // Bloque opcional: mostrar el/los ajustes detectados como movimientos reales
-  if (rec){
-    const items = [];
-    const addMov = (sym, m)=>{
-      if (!m) return;
-      const typeSign = (m.type === 'entrada') ? '+' : '-';
-      const amtLine = `${typeSign} ${sym} ${fmt(Number(m.amount || 0))}`;
-      const desc = escapeHtml((m.description || '').trim());
-      items.push({ sym, amtLine, desc });
-    };
-
-    for (const m of getArqueoMovs('NIO')) addMov('C$', m);
-    for (const m of getArqueoMovs('USD')) addMov('US$', m);
-
-    if (items.length){
-      rec.style.display = 'block';
-      rec.innerHTML = `<div class="title">Ajuste detectado (movimiento)</div>` + items.map(i => (
-        `<div class="pc-adj-record">
-          <div class="left">
-            <div><b>Ajuste:</b> ${i.amtLine}</div>
-            <div class="muted" style="font-size:0.85rem; margin-top:2px">${i.desc}</div>
-          </div>
-          <div class="amt">${i.amtLine}</div>
-        </div>`
-      )).join('');
-    } else {
-      rec.style.display = 'none';
-      rec.innerHTML = '';
-    }
+  if (check.errors && check.errors.length){
+    blocker.style.display = 'block';
+    blocker.textContent = 'No se puede cerrar:\n- ' + check.errors.join('\n- ');
+  } else {
+    blocker.style.display = 'none';
+    blocker.textContent = '';
   }
 
   if (btnClose){
@@ -5482,71 +5405,9 @@ function renderPettyCloseUI(check, isHistory){
   }
 }
 
-async function onSavePettyFxRate(){
+async function onSaveEventFxRate(){
+  const fx = document.getElementById('pc-event-fx-rate');
 
-  if (isPettyHistoryMode()){
-    alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
-    return;
-  }
-  const evId = await getMeta('currentEventId');
-  if (!evId){
-    alert('Debes activar un evento antes de guardar el T/C.');
-    return;
-  }
-
-  if (!(await ensurePettyEnabledForEvent(evId))) return;
-  const dayKey = getSelectedPcDay();
-  const pc = await getPettyCash(evId);
-  const day = ensurePcDay(pc, dayKey);
-  if (day.closedAt){
-    alert('Este día está cerrado. Reábrelo para editar.');
-    return;
-  }
-
-  const fx = document.getElementById('pc-fx-rate');
-  const raw = fx ? Number(fx.value || 0) : 0;
-  const rate = (Number.isFinite(raw) && raw > 0) ? raw : null;
-
-  day.fxRate = rate;
-  await savePettyCash(pc);
-  await renderCajaChica();
-  toast('T/C guardado');
-}
-
-
-function highlightPettyMovementRow(id){
-  try{
-    const el = document.getElementById('pc-mov-row-' + String(id));
-    if (!el) return;
-    el.classList.add('pc-row-highlight');
-    try{ el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }catch(e){ el.scrollIntoView(); }
-    setTimeout(()=>{ try{ el.classList.remove('pc-row-highlight'); }catch(e){} }, 1800);
-  }catch(e){
-    console.warn('No se pudo resaltar movimiento Caja Chica', e);
-  }
-}
-
-function findExistingArqueoMovement(day, dayKey, currency, type, amountAbs){
-  const movs = (day && Array.isArray(day.movements)) ? day.movements : [];
-  for (const m of movs){
-    if (!m || typeof m !== 'object') continue;
-    const dk = (m.date || dayKey || '').toString();
-    if (dayKey && dk !== dayKey) continue;
-    if ((m.currency || '') !== currency) continue;
-    if (type && (m.type || '') !== type) continue;
-
-    const amt = Number(m.amount || 0);
-    if (Number.isFinite(amountAbs) && amountAbs != null && !moneyEquals(amt, amountAbs)) continue;
-
-    const desc = (typeof m.description === 'string') ? m.description.trim() : '';
-    const tagged = !!(m.isArqueo || m.kind === 'arqueo' || desc.startsWith('Arqueo —') || desc.startsWith('Arqueo -') || desc.startsWith('Arqueo—'));
-    if (!tagged) continue;
-    return m;
-  }
-  return null;
-}
-
-async function onRegisterArqueoAdjust(currency){
   if (isPettyHistoryMode()){
     alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
     return;
@@ -5554,184 +5415,32 @@ async function onRegisterArqueoAdjust(currency){
 
   const evId = await getMeta('currentEventId');
   if (!evId){
-    alert('Debes activar un evento antes de registrar ajuste.');
+    alert('Debes activar un evento antes de guardar el T/C.');
     return;
   }
 
-  if (!(await ensurePettyEnabledForEvent(evId))) return;
-
-  const dayKey = getSelectedPcDay();
-  const pc = await getPettyCash(evId);
-  const day = ensurePcDay(pc, dayKey);
-  if (day.closedAt){
-    alert('Este día está cerrado. Reábrelo para editar.');
+  const evs = await getAll('events');
+  const ev = (evs || []).find(e => e && e.id === evId);
+  if (!ev){
+    alert('No se encontró el evento activo.');
     return;
   }
 
-  // Diferencia actual (contado - esperado) por moneda
-  const cashSales = await getCashSalesNioForDay(evId, dayKey);
-  const check = await getPettyCloseCheck(evId, pc, dayKey, cashSales);
+  const raw = fx ? Number((fx.value || '').toString().replace(',', '.')) : 0;
+  const rate = (Number.isFinite(raw) && raw > 0) ? round2(raw) : null;
 
-  const isNio = currency === 'NIO';
-  const diff = isNio ? check.diffNio : check.diffUsd;
-  const sym = isNio ? 'C$' : 'US$';
-
-  if (diff == null){
-    alert('Primero guarda el arqueo final para poder calcular la diferencia.');
-    return;
-  }
-  if (moneyEquals(diff, 0)){
-    alert('No hay diferencia actual para ajustar.');
-    return;
-  }
-
-  // Inputs (opcionales). Si vienen vacíos, autocompletamos.
-  const amtEl = document.getElementById(isNio ? 'pc-adj-nio-amount' : 'pc-adj-usd-amount');
-  const conceptEl = document.getElementById(isNio ? 'pc-adj-nio-concept' : 'pc-adj-usd-concept');
-  const notesEl = document.getElementById(isNio ? 'pc-adj-nio-notes' : 'pc-adj-usd-notes');
-
-  const suggestedConcept = (diff > 0) ? 'Arqueo — Sobrante' : 'Arqueo — Faltante';
-
-  const rawAmt = amtEl ? Number((amtEl.value || '').toString().replace(',', '.')) : NaN;
-  let amountInput = (rawAmt == rawAmt) ? round2(rawAmt) : NaN; // NaN-safe
-  let concept = conceptEl ? (conceptEl.value || '').trim() : '';
-  const notes = notesEl ? (notesEl.value || '').trim() : '';
-
-  if (!concept){
-    concept = suggestedConcept;
-    if (conceptEl) conceptEl.value = concept;
-  }
-
-  // Asegurar que el description empiece por "Arqueo —" para poder detectar/evitar duplicados.
-  if (!concept.startsWith('Arqueo —')){
-    concept = suggestedConcept + ' · ' + concept;
-    if (conceptEl) conceptEl.value = concept;
-  }
-
-  if (!Number.isFinite(amountInput) || Math.abs(amountInput) < 0.005){
-    amountInput = round2(Math.abs(diff));
-    if (amtEl) amtEl.value = String(amountInput);
-  }
-
-  // Aceptar el monto con signo o sin signo, siempre que coincida en valor absoluto.
-  if (!moneyEquals(Math.abs(amountInput), Math.abs(diff))){
-    alert('El monto del ajuste debe igualar la diferencia actual (' + formatAdjLine(diff, sym) + ').');
-    return;
-  }
-
-  const movType = (diff > 0) ? 'entrada' : 'salida';
-  const movAmount = round2(Math.abs(diff));
-
-  if (!Array.isArray(day.movements)) day.movements = [];
-
-  // Evitar duplicados (doble click)
-  const existing = findExistingArqueoMovement(day, dayKey, currency, movType, movAmount);
-  if (existing){
-    await renderCajaChica();
-    highlightPettyMovementRow(existing.id);
-    toast('Ajuste ya existía (no se duplicó)');
-    return;
-  }
-
-  const maxId = day.movements.length ? Math.max(...day.movements.map(m => (m && m.id) ? Number(m.id) : 0), 0) : 0;
-  const newId = (Number.isFinite(maxId) ? maxId : 0) + 1;
-  const desc = (concept + (notes ? (' · ' + notes) : '')).trim();
-
-  // Movimiento REAL (formato obligatorio, igual al TEST)
-  day.movements.push({
-    id: newId,
-    type: movType,
-    currency: currency,
-    amount: movAmount,
-    description: desc,
-    date: dayKey
-  });
-
-  // Persistir usando el mismo flujo que los movimientos manuales
-  const ok = await savePettyCash(pc);
-  if (!ok){
-    alert('No se pudo guardar el ajuste de arqueo. Cierra otras pestañas de la Suite y reintenta.');
-    return;
-  }
-
-  // Verificación dura: debe existir en IndexedDB en days[dayKey].movements[]
-  const pcAfter = await getPettyCash(evId);
-  const dayAfter = ensurePcDay(pcAfter, dayKey);
-  const persisted = findExistingArqueoMovement(dayAfter, dayKey, currency, movType, movAmount);
-  if (!persisted){
-    alert('El ajuste no se persistió en IndexedDB (movements no cambió). No se habilitará el cierre.');
-    await renderCajaChica();
-    return;
-  }
+  ev.fxRate = rate;
+  await put('events', ev);
 
   await renderCajaChica();
-  highlightPettyMovementRow(persisted.id);
-  toast('Ajuste de arqueo aplicado');
+  toast('Tipo de cambio guardado');
 }
 
-async function onClearArqueoAdjust(currency){
-  if (isPettyHistoryMode()){
-    alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
-    return;
-  }
-  const evId = await getMeta('currentEventId');
-  if (!evId) return;
-  if (!(await ensurePettyEnabledForEvent(evId))) return;
-
-  const dayKey = getSelectedPcDay();
-  const pc = await getPettyCash(evId);
-  const day = ensurePcDay(pc, dayKey);
-  if (day.closedAt){
-    alert('Este día está cerrado. Reábrelo para editar.');
-    return;
-  }
-
-  // Remover todos los movimientos de arqueo para esa moneda/fecha
-  if (!Array.isArray(day.movements)) day.movements = [];
-
-  day.movements = day.movements.filter(m => {
-    if (!m || typeof m !== 'object') return false;
-    const dk = (m.date || '').toString();
-    if (dk !== dayKey) return true;
-    if ((m.currency || '') !== currency) return true;
-
-    const desc = (typeof m.description === 'string') ? m.description.trim() : '';
-    const tagged = !!(m.isArqueo || m.kind === 'arqueo' || desc.startsWith('Arqueo —') || desc.startsWith('Arqueo -') || desc.startsWith('Arqueo—'));
-    return !tagged; // eliminar si es arqueo
-  });
-
-  // Compatibilidad: si existía arqueoAdjust viejo, limpiarlo (no es la fuente de verdad)
-  if (day.arqueoAdjust){
-    if (currency === 'NIO') day.arqueoAdjust.NIO = null;
-    if (currency === 'USD') day.arqueoAdjust.USD = null;
-  }
-
-  // Limpiar inputs
-  const isNio = currency === 'NIO';
-  const amtEl = document.getElementById(isNio ? 'pc-adj-nio-amount' : 'pc-adj-usd-amount');
-  const conceptEl = document.getElementById(isNio ? 'pc-adj-nio-concept' : 'pc-adj-usd-concept');
-  const notesEl = document.getElementById(isNio ? 'pc-adj-nio-notes' : 'pc-adj-usd-notes');
-  if (amtEl) amtEl.value = '';
-  if (conceptEl) conceptEl.value = '';
-  if (notesEl) notesEl.value = '';
-
-  const ok = await savePettyCash(pc);
-  if (!ok){
-    alert('No se pudo guardar la eliminación del ajuste. Cierra otras pestañas y reintenta.');
-    return;
-  }
-
-  // Verificar que ya no exista
-  const pcAfter = await getPettyCash(evId);
-  const dayAfter = ensurePcDay(pcAfter, dayKey);
-  const stillThere = findExistingArqueoMovement(dayAfter, dayKey, currency, null, null);
-
-  await renderCajaChica();
-  if (stillThere){
-    toast('Ajuste no pudo removerse (revisa el registro)');
-  } else {
-    toast('Ajuste removido');
-  }
+function updatePettyMovementTypeUI(){
+  const typeSel = document.getElementById('pc-mov-type');
+  const wrap = document.getElementById('pc-adjust-kind-wrap');
+  if (!typeSel || !wrap) return;
+  wrap.style.display = (typeSel.value === 'ajuste') ? 'block' : 'none';
 }
 
 async function onClosePettyDay(){
@@ -5755,7 +5464,10 @@ async function onClosePettyDay(){
   }
 
   const cashSales = await getCashSalesNioForDay(evId, dayKey);
-  const check = await getPettyCloseCheck(evId, pc, dayKey, cashSales);
+  const evs = await getAll('events');
+  const ev = (evs || []).find(e => e && e.id === evId);
+  const fx = ev ? Number(ev.fxRate || 0) : null;
+  const check = await getPettyCloseCheck(evId, pc, dayKey, cashSales, fx);
 
   if (!check.canClose){
     alert('No se puede cerrar:\n\n- ' + check.errors.join('\n- '));
@@ -5763,7 +5475,7 @@ async function onClosePettyDay(){
     return;
   }
 
-  const ok = confirm(`¿Cerrar definitivamente el día ${dayKey}?
+  const ok = confirm(`¿Cerrar el día ${dayKey}?
 
 Esto bloqueará edición de Caja Chica para este día.`);
   if (!ok) return;
@@ -5771,7 +5483,7 @@ Esto bloqueará edición de Caja Chica para este día.`);
   day.closedAt = new Date().toISOString();
   await savePettyCash(pc);
   await renderCajaChica();
-  toast('Día cerrado definitivamente');
+  toast('Día cerrado');
 }
 
 async function onReopenPettyDay(){
@@ -5790,7 +5502,7 @@ async function onReopenPettyDay(){
   }
   const ok = confirm(`¿Reabrir el día ${dayKey}?
 
-Podrás editar Caja Chica y el cierre definitivo quedará removido.`);
+Podrás editar Caja Chica y el cierre del día quedará removido.`);
   if (!ok) return;
 
   day.closedAt = null;
@@ -5831,17 +5543,19 @@ function setPettyReadOnly(isReadOnly, allowReopen){
   [
     'pc-btn-save-initial','pc-btn-clear-initial',
     'pc-btn-save-final','pc-btn-clear-final',
-    'pc-mov-type','pc-mov-currency','pc-mov-amount','pc-mov-desc','pc-mov-add',
-    'pc-fx-rate','pc-btn-save-fx',
-    'pc-adj-nio-amount','pc-adj-nio-concept','pc-adj-nio-notes',
-    'pc-adj-usd-amount','pc-adj-usd-concept','pc-adj-usd-notes',
-    'pc-btn-adj-nio','pc-btn-clear-adj-nio',
-    'pc-btn-adj-usd','pc-btn-clear-adj-usd',
+    'pc-mov-type','pc-mov-adjust-kind','pc-mov-currency','pc-mov-amount','pc-mov-desc','pc-mov-add',
     'pc-btn-close-day','pc-btn-reopen-day'
   ].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = !!isReadOnly;
   });
+
+  // El tipo de cambio es por evento: solo bloquear en modo histórico
+  const fx = document.getElementById('pc-event-fx-rate');
+  const fxBtn = document.getElementById('pc-btn-save-event-fx');
+  const hist = isPettyHistoryMode();
+  if (fx) fx.disabled = hist;
+  if (fxBtn) fxBtn.disabled = hist;
 
   if (allowReopen){
     const reopen = document.getElementById('pc-btn-reopen-day');
@@ -6134,8 +5848,27 @@ async function renderCajaChica(){
 
   renderPettyHistoryControls(pc);
 
-  // Cierre definitivo
-  const check = await getPettyCloseCheck(evId, pc, dayKey, cashSalesNio);
+  // Cierre del día (candado)
+  // Tipo de cambio persistente por evento (fallback: último fxRate legado en Caja Chica)
+  let fx = Number(ev.fxRate || 0);
+  if (!(Number.isFinite(fx) && fx > 0)) fx = null;
+  if (!fx && pc && pc.days){
+    const keys = listPcDayKeys(pc).sort((a,b)=> b.localeCompare(a));
+    for (const k of keys){
+      const d = pc.days[k];
+      const legacy = d ? Number(d.fxRate || 0) : 0;
+      if (Number.isFinite(legacy) && legacy > 0){ fx = legacy; break; }
+    }
+    if (fx && !(Number(ev.fxRate||0) > 0)){
+      ev.fxRate = fx;
+      await put('events', ev);
+    }
+  }
+
+  const fxInput = document.getElementById('pc-event-fx-rate');
+  if (fxInput) fxInput.value = (fx && fx > 0) ? String(fx) : '';
+
+  const check = await getPettyCloseCheck(evId, pc, dayKey, cashSalesNio, fx);
   renderPettyCloseUI(check, hist);
 
   setPettyReadOnly(readOnlyDay, (!hist && !!day.closedAt));
@@ -6460,15 +6193,18 @@ function renderPettyMovements(pc, dayKey, readOnly){
       tr.id = 'pc-mov-row-' + String(m.id);
       tr.dataset.pcMovId = String(m.id);
     }
-    if (m && (m.kind === 'arqueo' || m.isArqueo)){
-      tr.dataset.pcKind = 'arqueo';
-    }
 
     const tdDate = document.createElement('td');
     tdDate.textContent = m.date || dk;
 
     const tdType = document.createElement('td');
-    tdType.textContent = (m.type === 'salida') ? 'Salida' : 'Entrada';
+    // Tipo visible: Ingreso / Egreso / Ajuste
+    let typeLabel = (m && m.type === 'salida') ? 'Egreso' : 'Ingreso';
+    if (m && m.isAdjust){
+      const k = (m.adjustKind === 'sobrante') ? 'Sobrante' : 'Faltante';
+      typeLabel = `Ajuste (${k})`;
+    }
+    tdType.textContent = typeLabel;
 
     const tdCur = document.createElement('td');
     tdCur.textContent = (m.currency === 'USD') ? 'US$' : 'C$';
@@ -6517,26 +6253,44 @@ async function onAddPettyMovement(){
   const dayKey = getSelectedPcDay();
 
   const typeSel = document.getElementById('pc-mov-type');
+  const kindSel = document.getElementById('pc-mov-adjust-kind');
   const curSel  = document.getElementById('pc-mov-currency');
   const amtInput = document.getElementById('pc-mov-amount');
   const descInput = document.getElementById('pc-mov-desc');
 
-  const type = typeSel ? typeSel.value : 'entrada';
+  const uiType = typeSel ? typeSel.value : 'entrada';
   const currency = curSel ? curSel.value : 'NIO';
   const rawAmt = amtInput ? Number(amtInput.value || 0) : 0;
   const amount = Number.isFinite(rawAmt) ? rawAmt : 0;
-  const description = descInput ? (descInput.value || '').trim() : '';
+  let description = descInput ? (descInput.value || '').trim() : '';
 
   if (!amount || amount <= 0){
     alert('Ingresa un monto mayor a cero.');
     return;
   }
-  if (type !== 'entrada' && type !== 'salida'){
-    alert('Tipo de movimiento inválido.');
-    return;
-  }
   if (currency !== 'NIO' && currency !== 'USD'){
     alert('Moneda inválida.');
+    return;
+  }
+
+  // Nuevo tipo: Ajuste (se guarda internamente como entrada/salida, con bandera isAdjust)
+  let type = uiType;
+  let isAdjust = false;
+  let adjustKind = null;
+
+  if (uiType === 'ajuste'){
+    isAdjust = true;
+    adjustKind = kindSel ? kindSel.value : 'faltante';
+    if (adjustKind !== 'sobrante') adjustKind = 'faltante';
+    type = (adjustKind === 'sobrante') ? 'entrada' : 'salida';
+
+    if (!description){
+      description = `Ajuste — ${adjustKind === 'sobrante' ? 'Sobrante' : 'Faltante'}`;
+    }
+  }
+
+  if (type !== 'entrada' && type !== 'salida'){
+    alert('Tipo de movimiento inválido.');
     return;
   }
 
@@ -6546,21 +6300,30 @@ async function onAddPettyMovement(){
 
   const newId = day.movements.length ? Math.max(...day.movements.map(m=>m.id||0)) + 1 : 1;
 
-  day.movements.push({
+  const mov = {
     id: newId,
     date: dayKey,
     type,
     currency,
     amount,
     description
-  });
+  };
+
+  if (isAdjust){
+    mov.isAdjust = true;
+    mov.adjustKind = adjustKind;
+  }
+
+  day.movements.push(mov);
 
   await savePettyCash(pc);
-  updatePettySummaryUI(pc, dayKey);
-  renderPettyMovements(pc, dayKey, false);
+  // Re-render completo para refrescar candado de cierre
+  await renderCajaChica();
 
   if (amtInput) amtInput.value = '0.00';
   if (descInput) descInput.value = '';
+  if (typeSel) typeSel.value = 'entrada';
+  updatePettyMovementTypeUI();
 }
 
 async function onDeletePettyMovement(id){
@@ -6579,9 +6342,9 @@ async function onDeletePettyMovement(id){
   day.movements = day.movements.filter(m => m.id !== id);
 
   await savePettyCash(pc);
-  updatePettySummaryUI(pc, dayKey);
-  renderPettyMovements(pc, dayKey, false);
+  await renderCajaChica();
 }
+
 
 async function onUsePrevCierre(){
   if (isPettyHistoryMode()){
@@ -6743,45 +6506,19 @@ function bindCajaChicaEvents(){
       onUseHistoryFinalAsInitial().catch(err=>console.error(err));
     });
   }
+  // Tipo de movimiento: mostrar/ocultar opciones de Ajuste
+  const typeSel = document.getElementById('pc-mov-type');
+  if (typeSel){
+    typeSel.addEventListener('change', updatePettyMovementTypeUI);
+    updatePettyMovementTypeUI();
+  }
 
-  // Cierre definitivo (T/C + ajuste + candado)
-  const btnSaveFx = document.getElementById('pc-btn-save-fx');
+  // Tipo de cambio (USD → C$) por evento (persistente)
+  const btnSaveFx = document.getElementById('pc-btn-save-event-fx');
   if (btnSaveFx){
     btnSaveFx.addEventListener('click', (e)=>{
       e.preventDefault();
-      onSavePettyFxRate();
-    });
-  }
-
-  const btnAdjNio = document.getElementById('pc-btn-adj-nio');
-  if (btnAdjNio){
-    btnAdjNio.addEventListener('click', (e)=>{
-      e.preventDefault();
-      onRegisterArqueoAdjust('NIO');
-    });
-  }
-
-  const btnClrAdjNio = document.getElementById('pc-btn-clear-adj-nio');
-  if (btnClrAdjNio){
-    btnClrAdjNio.addEventListener('click', (e)=>{
-      e.preventDefault();
-      onClearArqueoAdjust('NIO');
-    });
-  }
-
-  const btnAdjUsd = document.getElementById('pc-btn-adj-usd');
-  if (btnAdjUsd){
-    btnAdjUsd.addEventListener('click', (e)=>{
-      e.preventDefault();
-      onRegisterArqueoAdjust('USD');
-    });
-  }
-
-  const btnClrAdjUsd = document.getElementById('pc-btn-clear-adj-usd');
-  if (btnClrAdjUsd){
-    btnClrAdjUsd.addEventListener('click', (e)=>{
-      e.preventDefault();
-      onClearArqueoAdjust('USD');
+      onSaveEventFxRate();
     });
   }
 

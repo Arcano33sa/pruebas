@@ -444,9 +444,17 @@
           <div class="col">
             <label for="pc-mov-type">Tipo</label>
             <select id="pc-mov-type">
-              <option value="entrada">Entrada</option>
-              <option value="salida">Salida</option>
+              <option value="entrada">Ingreso</option>
+              <option value="salida">Egreso</option>
+              <option value="ajuste">Ajuste</option>
             </select>
+            <div id="pc-adjust-kind-wrap" style="display:none; margin-top:6px">
+              <label for="pc-mov-adjust-kind" class="muted" style="font-size:0.8rem">Modo ajuste</label>
+              <select id="pc-mov-adjust-kind">
+                <option value="faltante">Faltante</option>
+                <option value="sobrante">Sobrante</option>
+              </select>
+            </div>
           </div>
           <div class="col">
             <label for="pc-mov-currency">Moneda</label>
@@ -465,6 +473,18 @@
           </div>
           <div class="col">
             <button id="pc-mov-add" class="btn-ok">Agregar movimiento</button>
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:8px">
+          <div class="col">
+            <label for="pc-event-fx-rate">Tipo de cambio (USD → C$)</label>
+            <input id="pc-event-fx-rate" type="number" inputmode="decimal" step="0.01" min="0" placeholder="C$ por 1 US$">
+            <small class="muted">Se guarda por evento y se precarga automáticamente. Solo se exige si hoy hubo USD en Caja Chica.</small>
+          </div>
+          <div class="col" style="min-width:160px">
+            <label>&nbsp;</label>
+            <button id="pc-btn-save-event-fx" class="btn-primary" type="button">Guardar T/C</button>
           </div>
         </div>
 
@@ -535,60 +555,16 @@
         </div>
       </div>
 
-      <div class="card petty-cierre">
-        <h3>Cierre definitivo del día</h3>
-        <div class="row">
-          <div class="col">
-            <label><b>T/C:</b></label>
-            <input id="pc-fx-rate" type="number" inputmode="decimal" step="0.01" min="0" placeholder="T/C: (C$ por 1 US$)">
-            <small class="muted">C$ por 1 US$. Se requiere solo si hubo USD en Caja Chica hoy.</small>
-          </div>
-          <div class="col" style="min-width:160px">
-            <label>&nbsp;</label>
-            <button id="pc-btn-save-fx" class="btn-primary" type="button">Guardar T/C</button>
-          </div>
-        </div>
-
+      <div class="card petty-close">
+        <h3>Cierre del día</h3>
         <div id="pc-close-status" class="info" style="margin-top:8px"></div>
         <div id="pc-close-blocker" class="warn" style="display:none; margin-top:8px"></div>
 
         <div class="row" style="margin-top:10px">
-          <div class="petty-block">
-            <h4>Ajuste de arqueo C$</h4>
-            <div class="row" style="gap:8px">
-              <input id="pc-adj-nio-amount" type="number" inputmode="decimal" step="0.01" placeholder="Monto ajuste (obligatorio)">
-              <input id="pc-adj-nio-concept" type="text" placeholder="Concepto (obligatorio)">
-              <input id="pc-adj-nio-notes" type="text" placeholder="Notas (opcional)">
-            </div>
-            <div class="row" style="gap:8px">
-              <button id="pc-btn-adj-nio" class="btn-ok" type="button">Registrar ajuste C$</button>
-              <button id="pc-btn-clear-adj-nio" class="btn-link" type="button">Quitar ajuste</button>
-            </div>
-            <div id="pc-adj-nio-status" class="muted"></div>
-          </div>
-
-          <div class="petty-block">
-            <h4>Ajuste de arqueo US$</h4>
-            <div class="row" style="gap:8px">
-              <input id="pc-adj-usd-amount" type="number" inputmode="decimal" step="0.01" placeholder="Monto ajuste (obligatorio)">
-              <input id="pc-adj-usd-concept" type="text" placeholder="Concepto (obligatorio)">
-              <input id="pc-adj-usd-notes" type="text" placeholder="Notas (opcional)">
-            </div>
-            <div class="row" style="gap:8px">
-              <button id="pc-btn-adj-usd" class="btn-ok" type="button">Registrar ajuste US$</button>
-              <button id="pc-btn-clear-adj-usd" class="btn-link" type="button">Quitar ajuste</button>
-            </div>
-            <div id="pc-adj-usd-status" class="muted"></div>
-          </div>
-        </div>
-
-        <div id="pc-adj-records" class="pc-adj-records" style="display:none"></div>
-
-        <div class="row" style="margin-top:10px">
-          <button id="pc-btn-close-day" class="btn-ok" type="button">Cierre definitivo del día</button>
+          <button id="pc-btn-close-day" class="btn-ok" type="button">Cerrar día</button>
           <button id="pc-btn-reopen-day" class="btn-warn" type="button" style="display:none">Reabrir día</button>
         </div>
-        <small class="muted">Regla: si existe diferencia entre el efectivo contado y el esperado, debes registrar movimientos faltantes o un ajuste de arqueo antes de poder cerrar.</small>
+        <small class="muted">Regla: si existe diferencia entre el efectivo contado y el esperado, registra movimientos faltantes o un <b>Ajuste</b> igual a la diferencia antes de poder cerrar.</small>
       </div>
 </div>
   </section>
