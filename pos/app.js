@@ -6017,7 +6017,32 @@ async function onRegisterArqueoAdjust(currency){
   };
 
   await savePettyCash(pc);
+
+  // Verificación para evitar "toast fantasma" si el ajuste no se persistió
+  const verifyPc = await getPettyCash(evId);
+  const verifyDay = ensurePcDay(verifyPc, dayKey);
+  const verifyAdj = (verifyDay && verifyDay.arqueoAdjust) ? verifyDay.arqueoAdjust[isNio ? 'NIO' : 'USD'] : null;
+
+  if (!verifyAdj || !moneyEquals(verifyAdj.amount, amount)){
+    alert('No se pudo guardar el ajuste de arqueo. Intenta de nuevo.\n\nSi el problema persiste, cerrá otras pestañas de la Suite y revisá la consola.');
+    await renderCajaChica();
+    return;
+  }
+
+  // Limpiar inputs para evitar confusión (ya quedó guardado)
+  if (amtEl) amtEl.value = '';
+  if (conceptEl) conceptEl.value = '';
+  if (notesEl) notesEl.value = '';
+
+  // Re-render completo (incluye la línea del ajuste + desbloqueo de cierre)
   await renderCajaChica();
+
+  // Llevar a la vista la "línea" del ajuste registrado
+  const recBox = document.getElementById('pc-adj-records');
+  if (recBox && recBox.style.display !== 'none'){
+    try{ recBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }catch(e){}
+  }
+
   toast('Ajuste de arqueo registrado');
 }
 
