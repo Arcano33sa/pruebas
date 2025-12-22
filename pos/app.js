@@ -5505,6 +5505,36 @@ async function onSavePettyFxRate(){
   toast('T/C guardado');
 }
 
+
+function highlightPettyMovementRow(id){
+  try{
+    const el = document.getElementById('pc-mov-row-' + String(id));
+    if (!el) return;
+    el.classList.add('pc-row-highlight');
+    try{ el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }catch(e){ el.scrollIntoView(); }
+    setTimeout(()=>{ try{ el.classList.remove('pc-row-highlight'); }catch(e){} }, 1800);
+  }catch(e){
+    console.warn('No se pudo resaltar movimiento Caja Chica', e);
+  }
+}
+
+function findExistingArqueoMovement(day, dayKey, currency, type, amountAbs){
+  const movs = (day && Array.isArray(day.movements)) ? day.movements : [];
+  for (const m of movs){
+    if (!m || typeof m !== 'object') continue;
+    const dk = (m.date || dayKey || '').toString();
+    if (dayKey && dk !== dayKey) continue;
+    if ((m.currency || '') !== currency) continue;
+    if ((m.type || '') !== type) continue;
+    const amt = Number(m.amount || 0);
+    if (!moneyEquals(amt, amountAbs)) continue;
+    const tagged = !!(m.isArqueo || m.kind === 'arqueo' || (typeof m.description === 'string' && m.description.startsWith('Arqueo')));
+    if (!tagged) continue;
+    return m;
+  }
+  return null;
+}
+
 async function onRegisterArqueoAdjust(currency){
   if (isPettyHistoryMode()){
     alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
@@ -5530,6 +5560,7 @@ async function onRegisterArqueoAdjust(currency){
 
   const isNio = currency === 'NIO';
   const diff = isNio ? check.diffNio : check.diffUsd;
+  const sym = isNio ? 'C$' : 'US$';
 
   if (diff == null){
     alert('Primero guarda el arqueo final para poder calcular la diferencia.');
@@ -5540,41 +5571,79 @@ async function onRegisterArqueoAdjust(currency){
     return;
   }
 
+  // Inputs (opcionales): si vienen vacíos, autocompletamos con la diferencia y un concepto sugerido.
   const amtEl = document.getElementById(isNio ? 'pc-adj-nio-amount' : 'pc-adj-usd-amount');
   const conceptEl = document.getElementById(isNio ? 'pc-adj-nio-concept' : 'pc-adj-usd-concept');
   const notesEl = document.getElementById(isNio ? 'pc-adj-nio-notes' : 'pc-adj-usd-notes');
 
+  const suggestedConcept = (diff > 0) ? 'Arqueo — Sobrante' : 'Arqueo — Faltante';
+
   const rawAmt = amtEl ? Number((amtEl.value || '').toString().replace(',', '.')) : NaN;
-  const amount = Number.isFinite(rawAmt) ? round2(rawAmt) : NaN;
-  const concept = conceptEl ? (conceptEl.value || '').trim() : '';
+  let amountInput = Number.isFinite(rawAmt) ? round2(rawAmt) : NaN;
+  let concept = conceptEl ? (conceptEl.value || '').trim() : '';
   const notes = notesEl ? (notesEl.value || '').trim() : '';
 
-  if (!Number.isFinite(amount) || Math.abs(amount) < 0.005){
-    alert('Debes ingresar el monto del ajuste.');
-    return;
-  }
+  // Autocompletar concepto/monto si están vacíos
   if (!concept){
-    alert('Debes ingresar el concepto del ajuste.');
-    return;
+    concept = suggestedConcept;
+    if (conceptEl) conceptEl.value = concept;
+  }
+  if (!Number.isFinite(amountInput) || Math.abs(amountInput) < 0.005){
+    amountInput = round2(diff);
+    if (amtEl) amtEl.value = String(amountInput);
   }
 
-  if (!moneyEquals(amount, diff)){
-    const sym = isNio ? 'C$' : 'US$';
+  // Aceptar el monto con signo o sin signo, siempre que coincida en valor absoluto.
+  if (!moneyEquals(Math.abs(amountInput), Math.abs(diff))){
     alert(`El monto del ajuste debe igualar la diferencia actual (${formatAdjLine(diff, sym)}).`);
     return;
   }
 
+  // El ajuste REAL se materializa como movimiento para que afecte el esperado y se vea en "Movimientos registrados".
+  if (!Array.isArray(day.movements)) day.movements = [];
+
+  const movType = (diff > 0) ? 'entrada' : 'salida';
+  const movAmount = round2(Math.abs(diff));
+
+  // Evitar duplicados (doble click)
+  const existing = findExistingArqueoMovement(day, dayKey, currency, movType, movAmount);
+
+  // Guardamos/actualizamos el registro informativo de arqueo (para UI)
   if (!day.arqueoAdjust) day.arqueoAdjust = { NIO: null, USD: null };
   day.arqueoAdjust[isNio ? 'NIO' : 'USD'] = {
-    amount: round2(amount),
+    amount: round2(diff),
     concept,
     notes,
     createdAt: new Date().toISOString()
   };
 
+  if (existing){
+    await savePettyCash(pc);
+    await renderCajaChica();
+    highlightPettyMovementRow(existing.id);
+    toast('Ajuste ya existía (no se duplicó)');
+    return;
+  }
+
+  const newId = day.movements.length ? (Math.max(...day.movements.map(m=>m && m.id ? m.id : 0)) + 1) : 1;
+  const desc = (concept + (notes ? (' · ' + notes) : '')).trim();
+
+  day.movements.push({
+    id: newId,
+    date: dayKey,
+    type: movType,
+    currency,
+    amount: movAmount,
+    description: desc,
+    kind: 'arqueo',
+    isArqueo: true,
+    createdAt: new Date().toISOString()
+  });
+
   await savePettyCash(pc);
   await renderCajaChica();
-  toast('Ajuste de arqueo registrado');
+  highlightPettyMovementRow(newId);
+  toast('Ajuste de arqueo aplicado');
 }
 
 async function onClearArqueoAdjust(currency){
@@ -5593,11 +5662,26 @@ async function onClearArqueoAdjust(currency){
     return;
   }
 
+  const isNio = currency === 'NIO';
+
+  // 1) Quitar registro informativo
   if (!day.arqueoAdjust) day.arqueoAdjust = { NIO: null, USD: null };
   if (currency === 'NIO') day.arqueoAdjust.NIO = null;
   if (currency === 'USD') day.arqueoAdjust.USD = null;
 
-  const isNio = currency === 'NIO';
+  // 2) Quitar movimiento real de arqueo (para que el esperado vuelva al estado previo)
+  if (!Array.isArray(day.movements)) day.movements = [];
+  day.movements = day.movements.filter(m => {
+    if (!m || typeof m !== 'object') return false;
+    const tagged = !!(m.isArqueo || m.kind === 'arqueo');
+    if (!tagged) return true;
+    const dk = (m.date || dayKey || '').toString();
+    if (dk !== dayKey) return true;
+    if ((m.currency || '') !== currency) return true;
+    return false; // eliminar
+  });
+
+  // Limpiar inputs
   const amtEl = document.getElementById(isNio ? 'pc-adj-nio-amount' : 'pc-adj-usd-amount');
   const conceptEl = document.getElementById(isNio ? 'pc-adj-nio-concept' : 'pc-adj-usd-concept');
   const notesEl = document.getElementById(isNio ? 'pc-adj-nio-notes' : 'pc-adj-usd-notes');
@@ -6331,6 +6415,15 @@ function renderPettyMovements(pc, dayKey, readOnly){
   for (const m of ordered){
     const tr = document.createElement('tr');
 
+    // Identificadores para enfocar/evitar duplicados (arqueo)
+    if (m && m.id != null){
+      tr.id = 'pc-mov-row-' + String(m.id);
+      tr.dataset.pcMovId = String(m.id);
+    }
+    if (m && (m.kind === 'arqueo' || m.isArqueo)){
+      tr.dataset.pcKind = 'arqueo';
+    }
+
     const tdDate = document.createElement('td');
     tdDate.textContent = m.date || dk;
 
@@ -6351,6 +6444,7 @@ function renderPettyMovements(pc, dayKey, readOnly){
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'btn small danger';
+      btn.dataset.movid = String(m.id || '');
       btn.textContent = 'Eliminar';
       btn.addEventListener('click', ()=> onDeletePettyMovement(m.id));
       tdAct.appendChild(btn);

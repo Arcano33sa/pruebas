@@ -252,6 +252,13 @@ small.muted{color:var(--muted)}
   font-variant-numeric:tabular-nums;
 }
 
+
+/* Caja Chica - resaltar movimiento */
+.pc-row-highlight{
+  outline:2px solid rgba(255,215,0,.85);
+  background: rgba(255,215,0,.08);
+}
+
 /* Caja Chica - Ajuste registrado */
 .pc-adj-records{
   margin-top:10px;
