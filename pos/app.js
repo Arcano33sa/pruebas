@@ -4774,6 +4774,19 @@ async function init(){
   $('#qty-minus').addEventListener('click', ()=>{ const v = Math.max(1, parseInt($('#sale-qty').value||'1',10) - 1); $('#sale-qty').value = v; recomputeTotal(); });
   $('#qty-plus').addEventListener('click', ()=>{ const v = Math.max(1, parseInt($('#sale-qty').value||'1',10) + 1); $('#sale-qty').value = v; recomputeTotal(); });
 
+  // Stepper (Venta por vaso)
+  const cupQtyInp = document.getElementById('cup-qty');
+  const cupMinus = document.getElementById('cup-qty-minus');
+  const cupPlus = document.getElementById('cup-qty-plus');
+  if (cupMinus && cupQtyInp) cupMinus.addEventListener('click', ()=>{
+    const v = Math.max(1, parseInt(cupQtyInp.value || '1', 10) - 1);
+    cupQtyInp.value = v;
+  });
+  if (cupPlus && cupQtyInp) cupPlus.addEventListener('click', ()=>{
+    const v = Math.max(1, parseInt(cupQtyInp.value || '1', 10) + 1);
+    cupQtyInp.value = v;
+  });
+
   // Productos: agregar + restaurar
   document.getElementById('btn-add-prod').onclick = async()=>{ const name = $('#new-name').value.trim(); const price = parseFloat($('#new-price').value||'0'); if (!name || !(price>0)) return alert('Nombre y precio'); try{ await put('products', {name, price, manageStock:true, active:true}); $('#new-name').value=''; $('#new-price').value=''; await renderProductos(); await refreshProductSelect(); await renderInventario(); toast('Producto agregado'); }catch(err){ alert('No se pudo agregar. ¿Nombre duplicado?'); } };
   document.getElementById('btn-restore-seed').onclick = restoreSeed;

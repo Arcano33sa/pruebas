@@ -176,7 +176,11 @@
       <div class="row3">
         <div>
           <label>Cantidad de vasos</label>
-          <input id="cup-qty" type="number" inputmode="numeric" step="1" min="1" value="1">
+          <div class="stepper">
+            <button id="cup-qty-minus" type="button">−</button>
+            <input id="cup-qty" type="number" inputmode="numeric" step="1" min="1" value="1">
+            <button id="cup-qty-plus" type="button">+</button>
+          </div>
         </div>
         <div>
           <label>Precio por vaso (C$)</label>
