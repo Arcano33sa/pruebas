@@ -91,10 +91,99 @@ button{cursor:pointer}
 table{width:100%;border-collapse:collapse;margin-top:10px}
 th,td{border-bottom:1px solid #2a2a2a;padding:10px;text-align:left;font-size:14px;white-space:nowrap}
 tfoot td{font-weight:700}
-.tabbar{position:fixed;bottom:0;left:0;right:0;background:#121212;border-top:1px solid #2a2a2a;display:grid;grid-template-columns:repeat(7,1fr);gap:0;z-index:11}
-.tabbar button{border-radius:0;border:none;padding:12px 6px;background:transparent;color:#f0f0f0}
-.tabbar button.active{color:var(--accent);font-weight:700}
-footer{height:58px}
+/* -----------------------------
+   A33 · Barra inferior (Tabs) — Premium
+   ----------------------------- */
+.tabbar{
+  /* Layout */
+  position:fixed;
+  left:50%;
+  transform:translateX(-50%);
+  bottom:calc(10px + constant(safe-area-inset-bottom));
+  bottom:calc(10px + env(safe-area-inset-bottom));
+  width:min(980px, calc(100vw - 20px));
+  z-index:11;
+
+  /* Cápsula */
+  --tab-gold:#ddbf64;
+  --tab-gold-2:#b28d38;
+  background:rgba(0,0,0,.92);
+  border:1px solid rgba(221,191,100,.55);
+  box-shadow:0 10px 30px rgba(0,0,0,.55);
+  border-radius:22px;
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+
+  /* Grid */
+  display:grid;
+  grid-template-columns:repeat(7, minmax(0,1fr));
+  gap:6px;
+  padding:10px;
+}
+
+.tabbar button{
+  min-height:44px;
+  border:none;
+  border-radius:16px;
+  padding:10px 6px 8px;
+  background:transparent;
+  color:rgba(255,255,255,.84);
+  font-size:11px;
+  line-height:1.1;
+  letter-spacing:.2px;
+  font-weight:600;
+  position:relative;
+}
+
+.tabbar button:hover{background:rgba(221,191,100,.10)}
+
+.tabbar button.active{
+  color:var(--tab-gold);
+  background:rgba(221,191,100,.10);
+  box-shadow: inset 0 0 0 1px rgba(221,191,100,.22);
+}
+
+.tabbar button.active::after{
+  content:"";
+  position:absolute;
+  left:50%;
+  transform:translateX(-50%);
+  bottom:6px;
+  width:18px;
+  height:3px;
+  border-radius:999px;
+  background:var(--tab-gold);
+}
+
+/* Si el ancho es insuficiente: 2 filas 4 + 3 (sin overflow-x) */
+@media (max-width: 620px){
+  .tabbar{
+    grid-template-columns:repeat(12, minmax(0,1fr));
+    gap:8px 6px;
+    border-radius:20px;
+  }
+  .tabbar button{
+    grid-column: span 3; /* 4 botones (12/3) */
+    font-size:10.5px;
+    border-radius:14px;
+  }
+  .tabbar button:nth-child(n+5){
+    grid-column: span 4; /* 3 botones (12/4) */
+  }
+  .tabbar button.active::after{width:16px}
+}
+
+/* Espaciador para que el contenido no quede debajo de la barra */
+footer{
+  height:calc(84px + constant(safe-area-inset-bottom));
+  height:calc(84px + env(safe-area-inset-bottom));
+}
+@media (max-width: 620px){
+  footer{
+    height:calc(136px + constant(safe-area-inset-bottom));
+    height:calc(136px + env(safe-area-inset-bottom));
+  }
+}
 small.muted{color:var(--muted)}
 .flag{display:flex;align-items:center;gap:8px}
 .flag input[type="checkbox"]{width:auto}
