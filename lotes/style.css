@@ -270,98 +270,10 @@ tr:nth-child(even) td {
   color: var(--color-accent-soft);
 }
 
-.actions-cell {
-  text-align: right;
-}
-
-/* --- Lotes Registrados: compactación para iPad PWA (sin tocar lógica) --- */
-
-/* Mantener todo en una sola línea y evitar que la fila empuje las acciones fuera */
-.table-lotes td,
-.table-lotes th {
+.actions-cell{
+  /* Mantener comportamiento de celda de tabla (evita romper anchos) */
   white-space: nowrap;
-}
-
-/* Hacer que la tabla “calce” en iPad sin scroll horizontal: fijar layout + elipsis */
-.table-lotes {
-  table-layout: fixed;
-}
-
-.table-lotes th,
-.table-lotes td {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Anchos por columna (1-indexed): Fecha | Código | Vol | P | M | D | L | G | Caducidad | Acciones */
-.table-lotes th:nth-child(1),
-.table-lotes td:nth-child(1) {
-  width: 92px;
-}
-
-.table-lotes th:nth-child(2),
-.table-lotes td:nth-child(2) {
-  width: calc(16ch + 0.8rem);
-  min-width: calc(16ch + 0.8rem);
-  max-width: calc(16ch + 0.8rem);
-  padding-left: 0.4rem;
-  padding-right: 0.4rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  letter-spacing: 0.02em;
-}
-
-.table-lotes th:nth-child(3),
-.table-lotes td:nth-child(3) {
-  width: 86px;
   text-align: right;
-}
-
-.table-lotes th:nth-child(9),
-.table-lotes td:nth-child(9) {
-  width: 96px;
-}
-
-.table-lotes th:nth-child(10),
-.table-lotes td:nth-child(10) {
-  width: 120px;
-  min-width: 120px;
-  max-width: 120px;
-  overflow: visible; /* permite que el flex interno no se recorte */
-  text-overflow: clip;
-}
-
-/* Columna producto compacta */
-.col-producto-abbr {
-  width: 44px;
-  max-width: 44px;
-  text-align: center;
-  font-weight: 800;
-  white-space: nowrap;
-}
-
-/* Acciones siempre dentro */
-.table-lotes .acciones {
-  display: inline-flex;
-  gap: 4px;
-  justify-content: flex-end;
-  align-items: center;
-  flex-wrap: nowrap;
-}
-
-.table-lotes .acciones button {
-  padding: 6px 8px;
-  min-height: 32px;
-}
-
-/* Botones de acciones en modo compacto (icon-only) */
-.table-lotes .btn.icon {
-  padding: 0;
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
-  min-height: 32px;
-  font-size: 1rem;
-  line-height: 1;
 }
 
 .app-footer {
@@ -373,6 +285,129 @@ tr:nth-child(even) td {
   background: rgba(5, 5, 5, 0.95);
 }
 
+/* ================================
+   Ajustes iPad PWA — Tabla Lotes
+   (evita overflow de acciones)
+   ================================ */
+
+.table-wrapper{
+  /* Evitar scroll horizontal en iPad, mantener scroll vertical */
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* Tabla específica de lotes (si existe la clase) */
+.table-lotes{
+  width: 100%;
+  table-layout: fixed; /* clave para respetar anchos */
+}
+
+/* Mantener todo en una línea */
+.table-lotes th,
+.table-lotes td{
+  white-space: nowrap;
+}
+
+/* Columna 1: FECHA (YYYY-MM-DD) */
+.table-lotes th:nth-child(1),
+.table-lotes td:nth-child(1){
+  width: 10ch;
+  min-width: 10ch;
+  max-width: 10ch;
+}
+
+/* Columna 2: CÓDIGO — siempre 16 caracteres */
+.table-lotes th:nth-child(2),
+.table-lotes td:nth-child(2){
+  width: 16ch;
+  min-width: 16ch;
+  max-width: 16ch;
+  padding-left: .25rem;
+  padding-right: .25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+.table-lotes td:nth-child(2){
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Columna 3: VOL. ML */
+.table-lotes th:nth-child(3),
+.table-lotes td:nth-child(3){
+  width: 7ch;
+  min-width: 7ch;
+  max-width: 7ch;
+  text-align: right;
+  padding-left: .25rem;
+  padding-right: .25rem;
+}
+
+/* Columnas 4-8: P M D L G (compactas) */
+.table-lotes th:nth-child(4),
+.table-lotes td:nth-child(4),
+.table-lotes th:nth-child(5),
+.table-lotes td:nth-child(5),
+.table-lotes th:nth-child(6),
+.table-lotes td:nth-child(6),
+.table-lotes th:nth-child(7),
+.table-lotes td:nth-child(7),
+.table-lotes th:nth-child(8),
+.table-lotes td:nth-child(8){
+  width: 36px;
+  min-width: 36px;
+  max-width: 36px;
+  text-align: center;
+  padding-left: .18rem;
+  padding-right: .18rem;
+  font-weight: 800;
+}
+
+/* Columna 9: CADUCIDAD (YYYY-MM-DD) */
+.table-lotes th:nth-child(9),
+.table-lotes td:nth-child(9){
+  width: 10ch;
+  min-width: 10ch;
+  max-width: 10ch;
+}
+
+/* Columna 10: ACCIONES — que quepan 3 íconos */
+.table-lotes th:nth-child(10),
+.table-lotes td:nth-child(10){
+  width: 124px;
+  min-width: 124px;
+  max-width: 124px;
+  padding-left: .2rem;
+  padding-right: .2rem;
+  overflow: visible; /* no recortar el 🗑 */
+}
+
+/* Wrapper de acciones (si existe) */
+.table-lotes .acciones{
+  display: inline-flex;
+  gap: 4px;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: nowrap;
+  width: 100%;
+}
+
+/* Si los botones están directo en la celda (fallback) */
+.table-lotes td:nth-child(10) > button{
+  margin-left: 4px;
+}
+
+/* Botón icon-only (si usan clase .btn.icon) */
+.table-lotes .btn.icon{
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* Responsive */
 
 @media (max-width: 1024px) {
@@ -382,16 +417,6 @@ tr:nth-child(even) td {
 
   .table-wrapper {
     max-height: none;
-  }
-
-  /* En tablet/iPad: sin scroll horizontal, más compacto */
-  .table-wrapper {
-    overflow-x: hidden;
-  }
-
-  .table-lotes th,
-  .table-lotes td {
-    padding: 0.38rem 0.42rem;
   }
 }
 
