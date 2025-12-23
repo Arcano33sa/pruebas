@@ -275,6 +275,37 @@ tr:nth-child(even) td {
   gap: 0.25rem;
 }
 
+/* --- Lotes Registrados: compactación para iPad PWA (sin tocar lógica) --- */
+
+/* Mantener todo en una sola línea y evitar que la fila empuje las acciones fuera */
+.table-lotes td,
+.table-lotes th {
+  white-space: nowrap;
+}
+
+/* Columna producto compacta */
+.col-producto-abbr {
+  width: 44px;
+  max-width: 44px;
+  text-align: center;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+/* Acciones siempre dentro */
+.table-lotes .acciones {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+.table-lotes .acciones button {
+  padding: 6px 8px;
+  min-height: 32px;
+}
+
 .app-footer {
   padding: 0.6rem 1.5rem 0.9rem;
   font-size: 0.75rem;
@@ -293,6 +324,16 @@ tr:nth-child(even) td {
 
   .table-wrapper {
     max-height: none;
+  }
+
+  /* En tablet/iPad: sin scroll horizontal, más compacto */
+  .table-wrapper {
+    overflow-x: hidden;
+  }
+
+  .table-lotes th,
+  .table-lotes td {
+    padding: 0.38rem 0.42rem;
   }
 }
 

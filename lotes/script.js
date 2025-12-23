@@ -3,6 +3,21 @@ const STORAGE_KEY = "arcano33_lotes";
 
 let editingId = null;
 
+// Abreviaturas para compactar columnas (UI) sin tocar datos
+const PROD_ABBR = {
+  Pulso: "P",
+  Media: "M",
+  Djeba: "D",
+  Litro: "L",
+  "Galón": "G",
+  Galon: "G",
+};
+
+function abbrProducto(nombre) {
+  if (!nombre) return "";
+  return PROD_ABBR[nombre] || nombre.trim().charAt(0).toUpperCase();
+}
+
 function $(id) {
   return document.getElementById(id);
 }
@@ -232,6 +247,13 @@ function renderTable() {
     fields.forEach((value, idx) => {
       const td = document.createElement("td");
       td.textContent = value;
+
+      // Compactar visualmente las columnas de productos (Pulso/Media/Djeba/Litro/Galón)
+      // idx: 0 Fecha, 1 Código, 2 VolTotal, 3 Pulso, 4 Media, 5 Djeba, 6 Litro, 7 Galón, 8 Caducidad
+      if (idx >= 3 && idx <= 7) {
+        td.classList.add("col-producto-abbr");
+      }
+
       if (idx === 8 && value) {
         // caducidad
         const today = new Date().toISOString().slice(0, 10);
@@ -276,9 +298,13 @@ function renderTable() {
       renderTable();
     });
 
-    actionsTd.appendChild(viewBtn);
-    actionsTd.appendChild(editBtn);
-    actionsTd.appendChild(deleteBtn);
+    // Wrapper para asegurar que las acciones no hagan overflow y queden en una sola línea
+    const actionsWrap = document.createElement("div");
+    actionsWrap.className = "acciones";
+    actionsWrap.appendChild(viewBtn);
+    actionsWrap.appendChild(editBtn);
+    actionsWrap.appendChild(deleteBtn);
+    actionsTd.appendChild(actionsWrap);
     tr.appendChild(actionsTd);
 
     tbody.appendChild(tr);
