@@ -301,7 +301,13 @@ tr:nth-child(even) td {
 
 .table-lotes th:nth-child(2),
 .table-lotes td:nth-child(2) {
-  width: 170px;
+  width: calc(16ch + 0.8rem);
+  min-width: calc(16ch + 0.8rem);
+  max-width: calc(16ch + 0.8rem);
+  padding-left: 0.4rem;
+  padding-right: 0.4rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  letter-spacing: 0.02em;
 }
 
 .table-lotes th:nth-child(3),
@@ -317,7 +323,9 @@ tr:nth-child(even) td {
 
 .table-lotes th:nth-child(10),
 .table-lotes td:nth-child(10) {
-  width: 132px;
+  width: 120px;
+  min-width: 120px;
+  max-width: 120px;
   overflow: visible; /* permite que el flex interno no se recorte */
   text-overflow: clip;
 }
@@ -334,7 +342,7 @@ tr:nth-child(even) td {
 /* Acciones siempre dentro */
 .table-lotes .acciones {
   display: inline-flex;
-  gap: 6px;
+  gap: 4px;
   justify-content: flex-end;
   align-items: center;
   flex-wrap: nowrap;
@@ -348,10 +356,10 @@ tr:nth-child(even) td {
 /* Botones de acciones en modo compacto (icon-only) */
 .table-lotes .btn.icon {
   padding: 0;
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
-  min-height: 34px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
   font-size: 1rem;
   line-height: 1;
 }
