@@ -271,8 +271,7 @@ tr:nth-child(even) td {
 }
 
 .actions-cell {
-  display: flex;
-  gap: 0.25rem;
+  text-align: right;
 }
 
 /* --- Lotes Registrados: compactación para iPad PWA (sin tocar lógica) --- */
@@ -281,6 +280,46 @@ tr:nth-child(even) td {
 .table-lotes td,
 .table-lotes th {
   white-space: nowrap;
+}
+
+/* Hacer que la tabla “calce” en iPad sin scroll horizontal: fijar layout + elipsis */
+.table-lotes {
+  table-layout: fixed;
+}
+
+.table-lotes th,
+.table-lotes td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Anchos por columna (1-indexed): Fecha | Código | Vol | P | M | D | L | G | Caducidad | Acciones */
+.table-lotes th:nth-child(1),
+.table-lotes td:nth-child(1) {
+  width: 92px;
+}
+
+.table-lotes th:nth-child(2),
+.table-lotes td:nth-child(2) {
+  width: 170px;
+}
+
+.table-lotes th:nth-child(3),
+.table-lotes td:nth-child(3) {
+  width: 86px;
+  text-align: right;
+}
+
+.table-lotes th:nth-child(9),
+.table-lotes td:nth-child(9) {
+  width: 96px;
+}
+
+.table-lotes th:nth-child(10),
+.table-lotes td:nth-child(10) {
+  width: 132px;
+  overflow: visible; /* permite que el flex interno no se recorte */
+  text-overflow: clip;
 }
 
 /* Columna producto compacta */
@@ -294,7 +333,7 @@ tr:nth-child(even) td {
 
 /* Acciones siempre dentro */
 .table-lotes .acciones {
-  display: flex;
+  display: inline-flex;
   gap: 6px;
   justify-content: flex-end;
   align-items: center;
@@ -304,6 +343,17 @@ tr:nth-child(even) td {
 .table-lotes .acciones button {
   padding: 6px 8px;
   min-height: 32px;
+}
+
+/* Botones de acciones en modo compacto (icon-only) */
+.table-lotes .btn.icon {
+  padding: 0;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+  font-size: 1rem;
+  line-height: 1;
 }
 
 .app-footer {

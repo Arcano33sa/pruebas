@@ -269,16 +269,20 @@ function renderTable() {
 
     const viewBtn = document.createElement("button");
     viewBtn.type = "button";
-    viewBtn.textContent = "Ver";
-    viewBtn.className = "btn";
+    viewBtn.textContent = "👁";
+    viewBtn.title = "Ver";
+    viewBtn.setAttribute("aria-label", "Ver");
+    viewBtn.className = "btn icon";
     viewBtn.addEventListener("click", () => {
       showLoteDetails(lote);
     });
 
     const editBtn = document.createElement("button");
     editBtn.type = "button";
-    editBtn.textContent = "Editar";
-    editBtn.className = "btn secondary";
+    editBtn.textContent = "✎";
+    editBtn.title = "Editar";
+    editBtn.setAttribute("aria-label", "Editar");
+    editBtn.className = "btn secondary icon";
     editBtn.addEventListener("click", () => {
       populateForm(lote);
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -286,8 +290,10 @@ function renderTable() {
 
     const deleteBtn = document.createElement("button");
     deleteBtn.type = "button";
-    deleteBtn.textContent = "Borrar";
-    deleteBtn.className = "btn danger";
+    deleteBtn.textContent = "🗑";
+    deleteBtn.title = "Borrar";
+    deleteBtn.setAttribute("aria-label", "Borrar");
+    deleteBtn.className = "btn danger icon";
     deleteBtn.addEventListener("click", () => {
       if (!confirm(`¿Borrar el lote ${lote.codigo}?`)) return;
       const current = loadLotes().filter((l) => l.id !== lote.id);
