@@ -759,12 +759,86 @@
     </div>
   </section>
 
-  <section id="tab-ayuda" class="tab card" style="display:none">
-    <h2>Ayuda</h2>
-    <ul>
-      <li>Los <b>botones de producto</b> muestran <b>todos los Activos</b>. Tocar = seleccionar. Tocar de nuevo = +1 cantidad (venta rápida).</li>
-      <li>Al cerrar un evento: la app queda en blanco sin evento activo. El evento cerrado conserva su info y puedes verla con <b>VER</b> en la pestaña Eventos.</li>
-    </ul>
+  <section id="tab-calculadora" class="tab card" style="display:none">
+    <h2>Calculadora</h2>
+
+    <div class="calc-grid">
+      <div class="card inner calc-card">
+        <div class="calc-display" aria-label="Pantalla de calculadora">
+          <div id="calc-history" class="calc-history"></div>
+          <div id="calc-output" class="calc-output">0</div>
+        </div>
+
+        <div class="calc-keys" id="calc-keys" aria-label="Teclado numérico">
+          <button type="button" class="util" data-k="C">C</button>
+          <button type="button" class="util" data-k="back">⌫</button>
+          <button type="button" class="op" data-k="/">÷</button>
+          <button type="button" class="op" data-k="*">×</button>
+
+          <button type="button" data-k="7">7</button>
+          <button type="button" data-k="8">8</button>
+          <button type="button" data-k="9">9</button>
+          <button type="button" class="op" data-k="-">−</button>
+
+          <button type="button" data-k="4">4</button>
+          <button type="button" data-k="5">5</button>
+          <button type="button" data-k="6">6</button>
+          <button type="button" class="op" data-k="+">+</button>
+
+          <button type="button" data-k="1">1</button>
+          <button type="button" data-k="2">2</button>
+          <button type="button" data-k="3">3</button>
+          <button type="button" class="eq" data-k="=">=</button>
+
+          <button type="button" class="zero" data-k="0">0</button>
+          <button type="button" data-k=".">.</button>
+        </div>
+      </div>
+
+      <div class="card inner fx-card">
+        <h3 style="margin-top:0">Conversor USD ↔ C$</h3>
+        <div id="fx-meta" class="muted" style="margin-bottom:6px"></div>
+
+        <div class="row">
+          <div>
+            <label for="fx-rate">Tipo de cambio (USD → C$)</label>
+            <input id="fx-rate" type="number" inputmode="decimal" step="0.01" min="0" placeholder="C$ por 1 US$">
+          </div>
+          <div style="text-align:right">
+            <label>&nbsp;</label>
+            <button id="fx-refresh" class="btn-link" type="button">Actualizar desde Caja Chica</button>
+          </div>
+        </div>
+
+        <div id="fx-status" class="warn" style="display:none"></div>
+
+        <div class="row">
+          <div>
+            <label for="fx-usd">Monto en US$</label>
+            <input id="fx-usd" type="number" inputmode="decimal" step="0.01" placeholder="ej. 20">
+          </div>
+          <div>
+            <label for="fx-nio">Monto en C$</label>
+            <input id="fx-nio" type="number" inputmode="decimal" step="0.01" placeholder="ej. 740.00">
+          </div>
+        </div>
+
+        <div class="fx-quick" aria-label="Botones rápidos USD">
+          <span class="muted">Rápidos US$:</span>
+          <button type="button" class="btn-mini fx-q" data-usd="1">1</button>
+          <button type="button" class="btn-mini fx-q" data-usd="5">5</button>
+          <button type="button" class="btn-mini fx-q" data-usd="10">10</button>
+          <button type="button" class="btn-mini fx-q" data-usd="20">20</button>
+          <button type="button" class="btn-mini fx-q" data-usd="50">50</button>
+          <button type="button" class="btn-mini fx-q" data-usd="100">100</button>
+          <button type="button" class="btn-mini fx-clear" id="fx-clear" title="Limpiar">Limpiar</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="info" style="margin-top:10px">
+      <small><b>Regla:</b> si Caja Chica ya tiene tipo de cambio, aquí se usa en <b>solo lectura</b>. Si no existe, puedes usar uno <b>temporal</b> solo en esta pantalla (no se guarda).</small>
+    </div>
   </section>
 
 </div>
@@ -854,7 +928,7 @@
   <button data-tab="caja">Caja Chica</button>
   <button data-tab="resumen">Resumen</button>
   <button data-tab="productos">Productos</button>
-  <button data-tab="ayuda">Ayuda</button>
+  <button data-tab="calculadora">Calculadora</button>
 </nav>
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>

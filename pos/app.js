@@ -1936,6 +1936,7 @@ function setTab(name){
   if (name==='eventos') renderEventos();
   if (name==='inventario') renderInventario();
   if (name==='caja') renderCajaChica();
+  if (name==='calculadora') onOpenPosCalculatorTab().catch(err=>console.error(err));
 }
 
 // Event UI
@@ -7162,6 +7163,344 @@ async function exportCierreCajaChicaGrupoExcel(){
   const safeGroup = data.groupLabel.replace(/[\/:*?\[\]]/g,' ');
   const filename = `caja_chica_${safeGroup || 'grupo'}.xlsx`;
   XLSX.writeFile(wb, filename);
+}
+
+
+// -----------------------------
+// POS · Calculadora (tab) — lógica aislada
+// -----------------------------
+
+let __A33_POS_CALC_INIT = false;
+
+function posCalcTrimDec(s){
+  const t = String(s || '');
+  if (!t.includes('.')) return t || '0';
+  return t.replace(/0+$/,'').replace(/\.$/,'') || '0';
+}
+
+function posCalcReadNum(el){
+  if (!el) return null;
+  const raw = String(el.value || '').trim();
+  if (!raw) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function posCalcRound2(n){
+  const x = Number(n);
+  if (!Number.isFinite(x)) return null;
+  return Math.round(x * 100) / 100;
+}
+
+function posCalcFmt2(n){
+  const x = Number(n);
+  if (!Number.isFinite(x)) return '';
+  return (Math.round(x * 100) / 100).toFixed(2);
+}
+
+// REQUISITO CLAVE: source of truth = Caja Chica (solo lectura)
+// Devuelve el tipo de cambio actual usado por Caja Chica para el evento activo.
+async function getFxRateFromCajaChica(){
+  try{
+    const ev = await getActiveEventPOS();
+    if (!ev) return null;
+
+    const direct = Number(ev.fxRate || 0);
+    if (Number.isFinite(direct) && direct > 0) return direct;
+
+    const pc = await getPettyCash(ev.id);
+    const keys = listPcDayKeys(pc).sort((a,b)=> b.localeCompare(a));
+    for (const k of keys){
+      const day = pc && pc.days ? pc.days[k] : null;
+      const legacy = day ? Number(day.fxRate || 0) : 0;
+      if (Number.isFinite(legacy) && legacy > 0) return legacy;
+    }
+    return null;
+  }catch(err){
+    console.warn('getFxRateFromCajaChica error', err);
+    return null;
+  }
+}
+
+function initPosCalculatorTabOnce(){
+  if (__A33_POS_CALC_INIT) return;
+  __A33_POS_CALC_INIT = true;
+
+  const els = {
+    hist: document.getElementById('calc-history'),
+    out: document.getElementById('calc-output'),
+    keys: document.getElementById('calc-keys'),
+    fxRate: document.getElementById('fx-rate'),
+    fxUsd: document.getElementById('fx-usd'),
+    fxNio: document.getElementById('fx-nio'),
+    fxMeta: document.getElementById('fx-meta'),
+    fxStatus: document.getElementById('fx-status'),
+    fxRefresh: document.getElementById('fx-refresh'),
+    fxClear: document.getElementById('fx-clear')
+  };
+
+  const calc = {
+    acc: null,
+    op: null,
+    lastOp: null,
+    lastOperand: null,
+    newEntry: true,
+    display: '0'
+  };
+
+  const fx = {
+    lock: false,
+    lastEdited: 'usd'
+  };
+
+  function setHistory(txt){ if (els.hist) els.hist.textContent = txt || ''; }
+  function setOutput(txt){ if (els.out) els.out.textContent = (txt == null ? '0' : String(txt)); }
+
+  function setDisplay(txt){
+    calc.display = String(txt == null ? '0' : txt);
+    setOutput(calc.display);
+  }
+
+  function getDisplayNumber(){
+    const n = Number(calc.display);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function applyOp(a, b, op){
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return NaN;
+    if (op === '+') return a + b;
+    if (op === '-') return a - b;
+    if (op === '*') return a * b;
+    if (op === '/') return (b === 0) ? NaN : (a / b);
+    return b;
+  }
+
+  function formatResult(n){
+    if (!Number.isFinite(n)) return 'Error';
+    // Reduce ruido típico de floats sin ponernos poetas.
+    const rounded = Math.round(n * 1e12) / 1e12;
+    let s = String(rounded);
+    if (!s.includes('e')) s = posCalcTrimDec(s);
+    return s;
+  }
+
+  function pressDigit(d){
+    const ch = String(d);
+    if (calc.newEntry){
+      setDisplay(ch === '.' ? '0.' : ch);
+      calc.newEntry = false;
+      return;
+    }
+    if (ch === '.' && calc.display.includes('.')) return;
+    if (calc.display === '0' && ch !== '.') setDisplay(ch);
+    else setDisplay(calc.display + ch);
+  }
+
+  function clearAll(){
+    calc.acc = null;
+    calc.op = null;
+    calc.lastOp = null;
+    calc.lastOperand = null;
+    calc.newEntry = true;
+    setHistory('');
+    setDisplay('0');
+  }
+
+  function backspace(){
+    if (calc.newEntry) return;
+    if (calc.display.length <= 1) { setDisplay('0'); calc.newEntry = true; return; }
+    setDisplay(calc.display.slice(0, -1));
+  }
+
+  function setOp(op){
+    // Si el usuario está cambiando de operador sin ingresar el segundo número.
+    if (calc.op && calc.newEntry){
+      calc.op = op;
+      setHistory(posCalcTrimDec(calc.acc) + ' ' + op);
+      return;
+    }
+
+    const b = getDisplayNumber();
+    if (calc.acc == null){
+      calc.acc = b;
+    } else if (calc.op){
+      const r = applyOp(calc.acc, b, calc.op);
+      calc.acc = r;
+      setDisplay(formatResult(r));
+    }
+    calc.op = op;
+    calc.newEntry = true;
+    calc.lastOp = null;
+    calc.lastOperand = null;
+    setHistory(formatResult(calc.acc) + ' ' + op);
+  }
+
+  function equals(){
+    let b = getDisplayNumber();
+    let op = calc.op;
+
+    // Repetir "=" usa el último operando (comportamiento clásico)
+    if (!op && calc.lastOp){
+      op = calc.lastOp;
+      b = calc.lastOperand;
+    }
+
+    if (!op) return;
+    if (calc.acc == null) calc.acc = 0;
+    const r = applyOp(calc.acc, b, op);
+    calc.lastOp = op;
+    calc.lastOperand = b;
+    calc.op = null;
+    calc.acc = r;
+    calc.newEntry = true;
+    setHistory('');
+    setDisplay(formatResult(r));
+  }
+
+  function ensureRate(){
+    const rate = posCalcReadNum(els.fxRate);
+    if (!rate || !(rate > 0)) return null;
+    return rate;
+  }
+
+  function fxShowStatus(msg){
+    if (!els.fxStatus) return;
+    if (msg){
+      els.fxStatus.style.display = 'block';
+      els.fxStatus.textContent = msg;
+    } else {
+      els.fxStatus.style.display = 'none';
+      els.fxStatus.textContent = '';
+    }
+  }
+
+  function fxUpdateFromUSD(){
+    if (fx.lock) return;
+    fx.lastEdited = 'usd';
+    const rate = ensureRate();
+    const usd = posCalcReadNum(els.fxUsd);
+    fx.lock = true;
+    try{
+      if (!rate){
+        if (els.fxNio) els.fxNio.value = '';
+        fxShowStatus('Ingresa un tipo de cambio válido para convertir.');
+      } else {
+        fxShowStatus('');
+        if (els.fxNio) els.fxNio.value = (usd == null) ? '' : posCalcFmt2(usd * rate);
+      }
+    } finally {
+      fx.lock = false;
+    }
+  }
+
+  function fxUpdateFromNIO(){
+    if (fx.lock) return;
+    fx.lastEdited = 'nio';
+    const rate = ensureRate();
+    const nio = posCalcReadNum(els.fxNio);
+    fx.lock = true;
+    try{
+      if (!rate){
+        if (els.fxUsd) els.fxUsd.value = '';
+        fxShowStatus('Ingresa un tipo de cambio válido para convertir.');
+      } else {
+        fxShowStatus('');
+        if (els.fxUsd) els.fxUsd.value = (nio == null) ? '' : posCalcFmt2(nio / rate);
+      }
+    } finally {
+      fx.lock = false;
+    }
+  }
+
+  function fxRecompute(){
+    if (fx.lastEdited === 'nio') fxUpdateFromNIO();
+    else fxUpdateFromUSD();
+  }
+
+  // Bind teclado calculadora (delegación)
+  if (els.keys){
+    els.keys.addEventListener('click', (e)=>{
+      const b = e.target.closest('button');
+      if (!b) return;
+      const k = b.dataset.k;
+      if (!k) return;
+
+      if (/^\d$/.test(k)) return pressDigit(k);
+      if (k === '.') return pressDigit('.');
+      if (k === 'C') return clearAll();
+      if (k === 'back') return backspace();
+      if (k === '=') return equals();
+      if (k === '+' || k === '-' || k === '*' || k === '/') return setOp(k);
+    });
+  }
+
+  // Bind conversor FX
+  if (els.fxUsd) els.fxUsd.addEventListener('input', fxUpdateFromUSD);
+  if (els.fxNio) els.fxNio.addEventListener('input', fxUpdateFromNIO);
+  if (els.fxRate) els.fxRate.addEventListener('input', ()=>{ fxShowStatus(''); fxRecompute(); });
+
+  if (els.fxRefresh) els.fxRefresh.addEventListener('click', ()=>{ onOpenPosCalculatorTab().catch(err=>console.error(err)); });
+  if (els.fxClear) els.fxClear.addEventListener('click', ()=>{
+    if (els.fxUsd) els.fxUsd.value = '';
+    if (els.fxNio) els.fxNio.value = '';
+    fxShowStatus('');
+  });
+
+  document.querySelectorAll('.fx-q').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const usd = Number(btn.dataset.usd || 0);
+      if (els.fxUsd) els.fxUsd.value = (usd && usd > 0) ? String(usd) : '';
+      fxUpdateFromUSD();
+    });
+  });
+
+  // Render inicial
+  clearAll();
+  fxShowStatus('');
+}
+
+async function onOpenPosCalculatorTab(){
+  initPosCalculatorTabOnce();
+
+  const rateEl = document.getElementById('fx-rate');
+  const metaEl = document.getElementById('fx-meta');
+  const statusEl = document.getElementById('fx-status');
+  if (!rateEl || !metaEl || !statusEl) return;
+
+  const ev = await getActiveEventPOS();
+  const rate = await getFxRateFromCajaChica();
+
+  if (ev && rate && rate > 0){
+    rateEl.value = String(posCalcRound2(rate));
+    rateEl.readOnly = true;
+    rateEl.title = 'Tomado de Caja Chica (solo lectura)';
+    metaEl.textContent = `Evento activo: ${ev.name} · Tipo de cambio desde Caja Chica`;
+    statusEl.style.display = 'none';
+    statusEl.textContent = '';
+  } else {
+    rateEl.readOnly = false;
+    rateEl.title = 'Temporal (no se guarda en Caja Chica)';
+
+    if (ev){
+      metaEl.textContent = `Evento activo: ${ev.name} · Sin tipo de cambio guardado`;
+      statusEl.textContent = 'Caja Chica aún no tiene tipo de cambio. Puedes usar un valor temporal aquí (no se guarda).';
+    } else {
+      metaEl.textContent = 'Sin evento activo · No se puede leer Caja Chica';
+      statusEl.textContent = 'Activa un evento para leer el tipo de cambio de Caja Chica. Mientras tanto, puedes usar un valor temporal aquí (no se guarda).';
+    }
+
+    statusEl.style.display = 'block';
+  }
+
+  // Recalcular si hay montos escritos.
+  try{
+    const usdEl = document.getElementById('fx-usd');
+    const nioEl = document.getElementById('fx-nio');
+    const usd = usdEl ? String(usdEl.value||'').trim() : '';
+    const nio = nioEl ? String(nioEl.value||'').trim() : '';
+    if (nio && !usd && nioEl) nioEl.dispatchEvent(new Event('input', { bubbles:true }));
+    else if (usdEl) usdEl.dispatchEvent(new Event('input', { bubbles:true }));
+  }catch(e){ /* no-op */ }
 }
 
 
