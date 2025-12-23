@@ -2,10 +2,6 @@
 :root{--bg:#0f0f0f;--panel:#171717;--muted:#9a9a9a;--text:#f0f0f0;--accent:#ffd700;--ok:#1db954;--warn:#f0a31a;--danger:#e74c3c;--chip:#222;--chip-bd:#2d2d2d}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:100%}
-
-/* iPad (PWA desde Inicio): evita zoom por doble tap en controles clickeables */
-html{touch-action:manipulation;-webkit-text-size-adjust:100%}
-button,.chip,.btn-link,.tabbar button{touch-action:manipulation}
 /* Evita “sensación” de overflow horizontal por tablas/acciones que se estiran */
 body{overflow-x:hidden}
 /* Header compuesto */
@@ -469,4 +465,10 @@ small.muted{color:var(--muted)}
   gap:6px;
   flex-wrap:wrap;
   justify-content:flex-end;
+}
+
+/* iOS (PWA): reduce smart zoom / doble-tap en botones */
+button, .chip, .tabbar button{
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }

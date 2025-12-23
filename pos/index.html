@@ -2,7 +2,6 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<!-- iPad/PWA: evita zoom por doble-tap (kiosko POS) -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
 <link rel="manifest" href="manifest.webmanifest?v=3.20">
@@ -511,7 +510,13 @@
     
       <div class="card petty-final">
         <h3>Arqueo final</h3>
-        <div class="row">
+        
+
+        <div class="row" style="grid-template-columns:1fr; margin-top:8px">
+          <button id="pc-btn-copy-initial" class="btn-primary" type="button">Copiar Inicial</button>
+        </div>
+        <small class="muted">Copia las cantidades del saldo inicial al arqueo final.</small>
+<div class="row">
           <div class="petty-block">
             <h4>Córdobas (C$)</h4>
             <table class="pc-table" id="pc-table-fnio">
