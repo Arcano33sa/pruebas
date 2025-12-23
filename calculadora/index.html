@@ -63,9 +63,13 @@
     }
     th {
       background: #272727;
+      /* Nota:
+         Estas tablas viven dentro de contenedores con max-height + overflow.
+         En iPad/iOS, un `top` grande en headers sticky puede tapar filas (ej. Pulso/Media).
+         Aquí el sticky es relativo al scroll del contenedor, así que `top: 0` es lo correcto. */
       position: sticky;
-      top: var(--a33-header-sticky-offset, 0px);
-      z-index: 1;
+      top: 0;
+      z-index: 2;
     }
     input[type="number"],
     input[type="text"],
