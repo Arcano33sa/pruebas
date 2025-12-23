@@ -1,4 +1,3 @@
-
 const CACHE = 'a33-pos-v3_20_1';
 const ASSETS = [
   './',
@@ -8,9 +7,10 @@ const ASSETS = [
   './manifest.webmanifest?v=3.20.1',
   './logo.png',
   './brand_symbol.jpg',
-  './brand_wordmark.jpg'
-,
-  '/assets/js/a33-input-ux.js'];
+  './brand_wordmark.jpg',
+  '/assets/js/a33-input-ux.js',
+  '/assets/css/a33-header.css'
+];
 
 self.addEventListener('install', (e)=>{
   e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS.filter(Boolean))));

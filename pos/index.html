@@ -11,17 +11,14 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
 <link rel="stylesheet" href="styles.css?v=3.20">
+  <link rel="stylesheet" href="/assets/css/a33-header.css" />
 </head>
 <body>
-<header class="brandbar">
-  <div class="brandwrap">
-    <img src="logo.png" alt="Arcano 33" class="brand-left">
-  </div>
-  <h1 class="app-title">A33 POS <span class="badge">Offline</span></h1>
-</header>
-<div style="text-align:right; padding: 0.25rem 1rem 0;">
-  <button onclick="window.location.href='../index.html'" class="btn-ok" type="button">← Menú principal</button>
-</div>
+  <header class="a33-header" role="banner">
+    <a class="a33-btn-menu" href="../index.html" aria-label="Volver al Menú principal">← Menú principal</a>
+    <div class="a33-title">POS · Eventos</div>
+    <div class="a33-version">v4.20.1</div>
+  </header>
 <div id="offlineBar" class="offline">Trabajando sin conexión</div>
 <div class="container">
 

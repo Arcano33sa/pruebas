@@ -5,9 +5,10 @@ const ASSETS = [
   "./style.css",
   "./script.js",
   "./manifest.webmanifest",
-  "./images/logo.png"
-,
-  '/assets/js/a33-input-ux.js'];
+  "./images/logo.png",
+  "/assets/js/a33-input-ux.js",
+  "/assets/css/a33-header.css"
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
