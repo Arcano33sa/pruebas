@@ -466,9 +466,41 @@ small.muted{color:var(--muted)}
   flex-wrap:wrap;
   justify-content:flex-end;
 }
+/* A33 MICRO-ANIMACIONES */
+    /* Feedback táctil (iPad): micro “press” para que se sienta nativo */
+    button, .btn-mini, .btn-inline, .btn-small, .tabbar button, .actions button, .stepper button{
+      -webkit-tap-highlight-color: transparent;
+      transition: transform .08s ease, filter .12s ease, box-shadow .12s ease, background-color .12s ease, border-color .12s ease;
+    }
+    button:not(:disabled):active,
+    .tabbar button:not(:disabled):active,
+    .actions button:not(:disabled):active,
+    .stepper button:not(:disabled):active{
+      transform: scale(.98);
+    }
+    .chip{
+      -webkit-tap-highlight-color: transparent;
+    }
+    .chip:not(.disabled):active{
+      transform: scale(.98);
+    }
 
-/* iOS (PWA): reduce smart zoom / doble-tap en botones */
-button, .chip, .tabbar button{
-  touch-action: manipulation;
-  -webkit-tap-highlight-color: transparent;
-}
+    /* Transición suave entre tabs (fade + slide sutil) */
+    .tab{
+      transition: opacity .14s ease, transform .14s ease;
+    }
+    .tab.a33-tab-prep{
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    .tab.a33-tab-out{
+      opacity: 0;
+      transform: translateY(-6px);
+      pointer-events: none;
+    }
+
+    @media (prefers-reduced-motion: reduce){
+      button, .chip, .tab{
+        transition: none !important;
+      }
+    }

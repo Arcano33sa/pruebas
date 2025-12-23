@@ -1887,12 +1887,50 @@ document.addEventListener('click', async (e)=>{
 
 // Tabs
 function setTab(name){
-  $$('.tab').forEach(el=> el.style.display='none');
+  const tabs = $$('.tab');
   const target = document.getElementById('tab-'+name);
-  if (target) target.style.display='block';
+  if (!target) return;
+
+  // Botón activo en tabbar
   $$('.tabbar button').forEach(b=>b.classList.remove('active'));
   const btn = document.querySelector(`.tabbar button[data-tab="${name}"]`);
   if (btn) btn.classList.add('active');
+
+  // Tab actual visible (fallback robusto)
+  let current = null;
+  if (window.__A33_ACTIVE_TAB){
+    const el = document.getElementById('tab-'+window.__A33_ACTIVE_TAB);
+    if (el && el !== target && el.style.display !== 'none' && getComputedStyle(el).display !== 'none'){
+      current = el;
+    }
+  }
+  if (!current){
+    current = tabs.find(el => el !== target && el.style.display !== 'none' && getComputedStyle(el).display !== 'none') || null;
+  }
+
+  // Mostrar target con micro animación (sin reestructurar layout)
+  if (current && current !== target){
+    target.style.display = 'block';
+    target.classList.add('a33-tab-prep');
+    void target.offsetHeight; // reflow
+    target.classList.remove('a33-tab-prep');
+
+    current.classList.add('a33-tab-out');
+    setTimeout(()=>{
+      current.style.display = 'none';
+      current.classList.remove('a33-tab-out');
+    }, 160);
+  } else {
+    // Primer render / estado inconsistente: asegura solo uno visible
+    tabs.forEach(el=> el.style.display='none');
+    target.style.display='block';
+    target.classList.add('a33-tab-prep');
+    requestAnimationFrame(()=> target.classList.remove('a33-tab-prep'));
+  }
+
+  window.__A33_ACTIVE_TAB = name;
+
+  // Render específico por pestaña (misma lógica de antes)
   if (name==='resumen') renderSummary();
   if (name==='productos') renderProductos();
   if (name==='eventos') renderEventos();
@@ -4422,22 +4460,6 @@ async function restoreSeed(){
 }
 
 // Init & bindings
-function installNoSmartZoom(){
-  // iOS/Safari puede hacer “smart zoom” con doble tap en modo app (Añadir a inicio).
-  // Prevenimos el comportamiento por defecto del dblclick sin bloquear los clicks normales.
-  if (window.__a33NoSmartZoomInstalled) return;
-  window.__a33NoSmartZoomInstalled = true;
-
-  document.addEventListener('dblclick', (e)=>{
-    const t = e.target;
-    if (!t || !t.closest) return;
-
-    if (t.closest('button') || t.closest('.chip') || t.closest('.tabbar button')){
-      e.preventDefault();
-    }
-  }, { passive:false });
-}
-
 async function init(){
   // Paso 1: abrir base de datos POS
   try{
@@ -4447,9 +4469,6 @@ async function init(){
     console.error('INIT openDB ERROR', err);
     return;
   }
-
-  // iPad/iOS: evita zoom por doble tap en botones
-  try{ installNoSmartZoom(); }catch(_){ }
 
   // Helper para que cada paso falle de forma aislada sin tumbar todo el POS
   const runStep = async (name, fn) => {
@@ -5575,7 +5594,6 @@ function setPettyReadOnly(isReadOnly, allowReopen){
   [
     'pc-btn-save-initial','pc-btn-clear-initial',
     'pc-btn-save-final','pc-btn-clear-final',
-    'pc-btn-copy-initial',
     'pc-mov-type','pc-mov-adjust-kind','pc-mov-currency','pc-mov-amount','pc-mov-desc','pc-mov-add',
     'pc-btn-close-day','pc-btn-reopen-day'
   ].forEach(id => {
@@ -6202,61 +6220,6 @@ async function onSavePettyFinal(){
   toast('Arqueo final de Caja Chica guardado');
 }
 
-
-async function onCopyPettyInitialToFinal(){
-  if (isPettyHistoryMode()){
-    alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
-    return;
-  }
-
-  const evId = await getMeta('currentEventId');
-  if (!evId){
-    alert('Debes activar un evento en la pestaña Vender antes de copiar el saldo inicial.');
-    return;
-  }
-
-  if (!(await ensurePettyEnabledForEvent(evId))) return;
-
-  // Si el día ya está cerrado, no permitir modificaciones
-  const dayKey = getSelectedPcDay();
-  const pc = await getPettyCash(evId);
-  const day = ensurePcDay(pc, dayKey);
-  if (day && day.closedAt){
-    alert('Este día ya está cerrado. Reabre el día para editar el arqueo.');
-    return;
-  }
-
-  if (typeof NIO_DENOMS === 'undefined' || typeof USD_DENOMS === 'undefined'){
-    alert('No se pudo copiar (denominaciones no disponibles).');
-    return;
-  }
-
-  // Copiar C$ inicial -> C$ final
-  NIO_DENOMS.forEach(d=>{
-    const src = document.getElementById('pc-nio-q-'+d);
-    const dst = document.getElementById('pc-fnio-q-'+d);
-    if (!dst) return;
-    const raw = src ? Number(src.value || 0) : 0;
-    const qty = (Number.isFinite(raw) && raw > 0) ? Math.floor(raw) : 0;
-    dst.value = String(qty);
-  });
-
-  // Copiar US$ inicial -> US$ final
-  USD_DENOMS.forEach(d=>{
-    const src = document.getElementById('pc-usd-q-'+d);
-    const dst = document.getElementById('pc-fusd-q-'+d);
-    if (!dst) return;
-    const raw = src ? Number(src.value || 0) : 0;
-    const qty = (Number.isFinite(raw) && raw > 0) ? Math.floor(raw) : 0;
-    dst.value = String(qty);
-  });
-
-  // Recalcular totales/ subtotales del arqueo final
-  recalcPettyFinalTotalsFromInputs();
-
-  toast('Arqueo final copiado desde saldo inicial');
-}
-
 function renderPettyMovements(pc, dayKey, readOnly){
   const tbody = document.getElementById('pc-mov-tbody');
   if (!tbody) return;
@@ -6529,15 +6492,6 @@ function bindCajaChicaEvents(){
     btnClearFinal.addEventListener('click', (e)=>{
       e.preventDefault();
       resetPettyFinalInputs();
-    });
-  }
-
-
-  const btnCopyInitial = document.getElementById('pc-btn-copy-initial');
-  if (btnCopyInitial){
-    btnCopyInitial.addEventListener('click', (e)=>{
-      e.preventDefault();
-      onCopyPettyInitialToFinal();
     });
   }
 
