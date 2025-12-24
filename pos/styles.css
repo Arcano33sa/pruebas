@@ -190,6 +190,21 @@ small.muted{color:var(--muted)}
 .compact th, .compact td{font-size:13px}
 .info{padding:10px;border-radius:10px;background:#0f1b0f;border:1px solid #214021;color:#b6f0b6;margin-top:8px}
 .warn{padding:10px;border-radius:10px;background:#2a1b0f;border:1px solid #5a3d12;color:#ffd7a1;margin-top:8px}
+
+/* Banner premium: Día cerrado (Caja Chica) */
+.a33-guard-banner{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.a33-guard-text{min-width:220px}
+.a33-guard-title{font-weight:800;letter-spacing:.2px}
+.a33-guard-sub{font-size:13px;opacity:.92;margin-top:2px}
+.a33-guard-actions{flex:0 0 auto}
+
+/* Vender bloqueado por día cerrado: atenuar controles sin romper layout */
+.sell-locked #sell-block,
+.sell-locked .row4,
+.sell-locked #sale-bank-row,
+.sell-locked details.card,
+.sell-locked #cup-block{opacity:.55;filter:saturate(.88)}
+
 .actions{display:flex;gap:8px;flex-wrap:wrap}
 .actions button{padding:8px 10px;border-radius:10px;font-size:13px}
 .tag{display:inline-block;padding:3px 8px;border-radius:999px;background:#2a2a2a;color:#ddd;font-size:12px;margin-left:6px}

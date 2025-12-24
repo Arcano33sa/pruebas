@@ -1564,24 +1564,138 @@ window.addEventListener('online', setOfflineBar);
 window.addEventListener('offline', setOfflineBar);
 
 // Enable/disable selling block depending on current event
+// + Candado por Caja Chica: si el día está cerrado, NO se puede vender (UI + guard en lógica)
+let __A33_SELL_STATE = { enabled:false, dayKey: todayYMD(), dayClosed:false, pettyEnabled:false, eventId:null };
+
+function getSaleDayKeyPOS(){
+  try{
+    const v = document.getElementById('sale-date')?.value || '';
+    return safeYMD(v);
+  }catch(e){
+    return todayYMD();
+  }
+}
+
+function isSellEnabledNowPOS(){
+  try{
+    if (typeof window.__A33_SELL_ENABLED === 'boolean') return !!window.__A33_SELL_ENABLED;
+    if (typeof __A33_SELL_STATE === 'object' && __A33_SELL_STATE) return !!__A33_SELL_STATE.enabled;
+    return true;
+  }catch(e){ return true; }
+}
+
+function showSellDayClosedToastPOS(){
+  showToast('Día cerrado. Reabrí el día en Caja Chica para vender.', 'error', 5000);
+}
+
+function setSellControlsDisabledPOS(disabled){
+  const tab = document.getElementById('tab-venta');
+  if (tab) tab.classList.toggle('sell-locked', !!disabled);
+
+  const ids = [
+    'sale-product','sale-price','sale-qty','qty-minus','qty-plus','sale-discount',
+    'sale-payment','sale-bank','sale-courtesy','sale-return','sale-customer','sale-courtesy-to','sale-notes',
+    'btn-add','btn-add-sticky','btn-undo',
+    'btn-fraction','cup-fraction-gallons','cup-yield','cup-qty','cup-qty-minus','cup-qty-plus','cup-price','btn-sell-cups','btn-courtesy-cups'
+  ];
+  for (const id of ids){
+    const el = document.getElementById(id);
+    if (el) el.disabled = !!disabled;
+  }
+
+  // Chips (productos + extras)
+  document.querySelectorAll('#product-chips button.chip').forEach(btn=>{
+    btn.disabled = !!disabled;
+    btn.classList.toggle('disabled', !!disabled);
+  });
+
+  // Botones borrar en tabla del día
+  document.querySelectorAll('#tbl-day button.del-sale').forEach(btn=>{
+    btn.disabled = !!disabled;
+  });
+
+  // Bloque Venta por vaso
+  const cupBlock = document.getElementById('cup-block');
+  if (cupBlock){
+    cupBlock.classList.toggle('disabled', !!disabled);
+    cupBlock.querySelectorAll('input, button, select, textarea').forEach(el=>{
+      el.disabled = !!disabled;
+    });
+  }
+}
+
+function setSellDayClosedBannerPOS(show, dayKey){
+  const banner = document.getElementById('sell-day-closed-banner');
+  if (!banner) return;
+  if (show){
+    const t = document.getElementById('sell-day-closed-title');
+    if (t) t.textContent = `Día cerrado (${dayKey})`;
+    const s = document.getElementById('sell-day-closed-sub');
+    if (s) s.textContent = 'Para vender aquí, reabrí el día en Caja Chica.';
+    banner.style.display = 'flex';
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+async function computeSellDayLockPOS(curEvent, dayKey){
+  const dk = safeYMD(dayKey || getSaleDayKeyPOS());
+  if (!curEvent || !eventPettyEnabled(curEvent)) return { pettyEnabled:false, dayKey: dk, dayClosed:false, closedAt:null, created:false };
+
+  const pc = await getPettyCash(curEvent.id);
+  const existed = !!(pc && pc.days && pc.days[dk]);
+  const day = ensurePcDay(pc, dk);
+
+  // Día nuevo abierto: si no existía, lo persistimos como abierto
+  if (!existed){
+    try{ await savePettyCash(pc); }catch(e){}
+  }
+
+  const closedAt = day ? day.closedAt : null;
+  return { pettyEnabled:true, dayKey: dk, dayClosed: !!closedAt, closedAt: closedAt || null, created: !existed };
+}
+
+async function guardSellDayOpenOrToastPOS(curEvent, dayKey){
+  if (!curEvent || !eventPettyEnabled(curEvent)) return true;
+  const info = await computeSellDayLockPOS(curEvent, dayKey);
+  if (info.dayClosed){
+    showSellDayClosedToastPOS();
+    try{ await updateSellEnabled(); }catch(e){}
+    return false;
+  }
+  return true;
+}
+
 async function updateSellEnabled(){
   const current = await getMeta('currentEventId');
   const evs = await getAll('events');
-  const cur = evs.find(e=>e.id===current);
-  const enabled = !!(current && cur && !cur.closedAt);
-  const chips = $$('#product-chips .chip');
-  chips.forEach(c=> c.classList.toggle('disabled', !enabled));
-  $('#no-active-note').style.display = enabled ? 'none' : 'block';
+  const cur = evs.find(e=>e.id===current) || null;
 
-  // Bloque Venta por vaso: habilitar/inhabilitar según evento activo
-  const cupBlock = document.getElementById('cup-block');
-  if (cupBlock){
-    cupBlock.classList.toggle('disabled', !enabled);
-    cupBlock.querySelectorAll('input, button, select, textarea').forEach(el=>{
-      el.disabled = !enabled;
-    });
+  const hasEvent = !!(current && cur);
+  const eventOpen = !!(hasEvent && !cur.closedAt);
+
+  const dayKey = getSaleDayKeyPOS();
+  let lockInfo = { pettyEnabled:false, dayKey, dayClosed:false, closedAt:null, created:false };
+  if (eventOpen && cur && eventPettyEnabled(cur)) {
+    lockInfo = await computeSellDayLockPOS(cur, dayKey);
   }
 
+  const sellEnabled = !!(eventOpen && !(lockInfo.pettyEnabled && lockInfo.dayClosed));
+
+  __A33_SELL_STATE = { enabled: sellEnabled, dayKey: lockInfo.dayKey, dayClosed: lockInfo.dayClosed, pettyEnabled: lockInfo.pettyEnabled, eventId: (current || null) };
+  window.__A33_SELL_ENABLED = sellEnabled;
+
+  // Nota "sin evento activo": solo depende del evento (no del día)
+  const noActive = document.getElementById('no-active-note');
+  if (noActive) noActive.style.display = eventOpen ? 'none' : 'block';
+
+  // Banner: solo cuando el evento está abierto y Caja Chica está ON
+  setSellDayClosedBannerPOS(!!(eventOpen && lockInfo.pettyEnabled && lockInfo.dayClosed), lockInfo.dayKey);
+
+  // Candado real de controles
+  setSellControlsDisabledPOS(!sellEnabled);
+
+  // Refrescar cup-block labels/stock sin romper nada
   try{ await refreshCupBlock(); }catch(e){}
 }
 
@@ -1820,7 +1934,7 @@ async function renderProductChips(){
   const current = await getMeta('currentEventId');
   const evs = await getAll('events');
   const cur = evs.find(e=>e.id===current);
-  const enabled = !!(current && cur && !cur.closedAt);
+  const enabled = (typeof window.__A33_SELL_ENABLED === 'boolean') ? window.__A33_SELL_ENABLED : !!(current && cur && !cur.closedAt);
 
   const sel = $('#sale-product');
   const selected = parseSelectedSellItemValue(sel ? sel.value : '');
@@ -1836,7 +1950,7 @@ async function renderProductChips(){
     if (selected && selected.kind==='product' && p.id === selected.id) c.classList.add('active');
 
     c.onclick = async()=>{
-      if (!enabled) return;
+      if (!isSellEnabledNowPOS()) return;
       const prev = parseSelectedSellItemValue(sel.value);
       sel.value = String(p.id);
       const same = prev && prev.kind==='product' && prev.id === p.id;
@@ -1875,7 +1989,7 @@ async function renderProductChips(){
         if (selected && selected.kind==='extra' && Number(selected.id) === Number(x.id)) c.classList.add('active');
 
         c.onclick = async()=>{
-          if (!enabled) return;
+          if (!isSellEnabledNowPOS()) return;
           const prev = parseSelectedSellItemValue(sel.value);
           sel.value = `extra:${x.id}`;
           const same = prev && prev.kind==='extra' && prev.id === x.id;
@@ -2779,6 +2893,10 @@ async function fractionGallonsToCupsPOS(){
   if (!ev){ alert('Evento no encontrado'); return; }
   if (ev.closedAt){ alert('Este evento está cerrado. Reábrelo o activa otro.'); return; }
 
+  const saleDate = document.getElementById('sale-date')?.value || '';
+  // Candado: no permitir fraccionamiento ni operaciones de venta si el día está cerrado
+  if (!(await guardSellDayOpenOrToastPOS(ev, saleDate))) return;
+
   const gallonsToFraction = safeInt(document.getElementById('cup-fraction-gallons')?.value, 0);
   const yieldCupsPerGallon = safeInt(document.getElementById('cup-yield')?.value, 22);
 
@@ -2863,6 +2981,10 @@ async function sellCupsPOS(isCourtesy){
   if (!ev){ alert('Evento no encontrado'); return; }
   if (ev.closedAt){ alert('Este evento está cerrado. Reábrelo o activa otro.'); return; }
 
+  const saleDate = document.getElementById('sale-date')?.value || '';
+  // Candado: no permitir fraccionamiento ni operaciones de venta si el día está cerrado
+  if (!(await guardSellDayOpenOrToastPOS(ev, saleDate))) return;
+
   const qty = safeInt(document.getElementById('cup-qty')?.value, 0);
   if (!(qty >= 1)) { alert('Cantidad de vasos debe ser un entero >= 1'); return; }
 
@@ -2885,6 +3007,9 @@ async function sellCupsPOS(isCourtesy){
 
   const date = document.getElementById('sale-date')?.value || '';
   if (!date){ alert('Selecciona una fecha'); return; }
+
+  // Candado: si Caja Chica está activada y el día está cerrado, NO permitir ventas por vaso
+  if (!(await guardSellDayOpenOrToastPOS(ev, date))) return;
 
   const payment = document.getElementById('sale-payment')?.value || 'efectivo';
   const customer = (payment === 'credito') ? (document.getElementById('sale-customer')?.value || '').trim() : '';
@@ -4784,7 +4909,23 @@ async function init(){
     if (!isCred) $('#sale-customer').value='';
     await refreshSaleBankSelect();
   });
-  $('#sale-date').addEventListener('change', renderDay);
+  $('#sale-date').addEventListener('change', async()=>{
+    await renderDay();
+    await updateSellEnabled();
+    try{ await refreshSaleStockLabel(); }catch(e){}
+  });
+  const btnGoCaja = document.getElementById('btn-go-caja');
+  if (btnGoCaja){
+    btnGoCaja.addEventListener('click', ()=>{
+      try{
+        const dk = getSaleDayKeyPOS();
+        const pcDay = document.getElementById('pc-day');
+        if (pcDay) pcDay.value = dk;
+      }catch(e){}
+      setTab('caja');
+    });
+  }
+
   $('#btn-add').addEventListener('click', addSale);
   const stickyBtn = $('#btn-add-sticky');
   if (stickyBtn) {
@@ -4809,6 +4950,14 @@ async function init(){
       return;
     }
     const d = $('#sale-date').value;
+
+    // Candado: si Caja Chica está activada y el día está cerrado, NO permitir cambios de ventas
+    try{
+      const ev = await getEventByIdPOS(curId);
+      if (!ev || ev.closedAt){ alert('No hay un evento activo válido.'); return; }
+      if (!(await guardSellDayOpenOrToastPOS(ev, d))) return;
+    }catch(e){}
+
     const allSales = await getAll('sales');
     const filtered = allSales.filter(s => s.eventId === curId && s.date === d);
     if (!filtered.length) {
@@ -4843,6 +4992,17 @@ async function init(){
     }
 
     const saleToDelete = (await getAll('sales')).find(s=>s.id===id) || null;
+    if (!saleToDelete){
+      alert('No pude cargar la venta a eliminar. Recarga el POS y vuelve a intentar.');
+      return;
+    }
+
+    // Candado: si Caja Chica está activada y el día está cerrado, NO permitir cambios de ventas
+    try{
+      const ev = await getEventByIdPOS(saleToDelete.eventId);
+      if (!ev || ev.closedAt){ alert('No hay un evento activo válido.'); return; }
+      if (!(await guardSellDayOpenOrToastPOS(ev, saleToDelete.date))) return;
+    }catch(e){}
 
     if (!confirm('¿Eliminar esta venta?')) return;
 
@@ -5093,6 +5253,9 @@ async function addSale(){
   const event = events.find(e=>e.id===curId);
   if (!event || event.closedAt){ alert('Este evento está cerrado. Reábrelo o activa otro.'); return; }
 
+  // Candado: si Caja Chica está activada y el día está cerrado, NO permitir ventas
+  if (!(await guardSellDayOpenOrToastPOS(event, date))) return;
+
   const products = await getAll('products');
   const prod = products.find(p=>p.id===productId);
   const productName = prod ? prod.name : 'N/D';
@@ -5205,6 +5368,9 @@ async function addExtraSale(extraId){
   const notes = $('#sale-notes').value || '';
 
   if (!date || !qty) { alert('Completa fecha y cantidad'); return; }
+
+  // Candado: si Caja Chica está activada y el día está cerrado, NO permitir ventas
+  if (!(await guardSellDayOpenOrToastPOS(ev, date))) return;
   if (payment==='credito' && !customer){ alert('Ingresa el nombre del cliente (crédito)'); return; }
 
   // Banco (obligatorio si es Transferencia)
@@ -5620,6 +5786,7 @@ Esto bloqueará edición de Caja Chica para este día.`);
     }
     // Refrescar UI desde IDB
     await renderCajaChica();
+    try{ await updateSellEnabled(); }catch(e){}
     showToast('Día cerrado', 'ok', 5000);
   }catch(err){
     console.error('onClosePettyDay save/confirm error', err);
@@ -5650,16 +5817,28 @@ async function onReopenPettyDay(){
 Podrás editar Caja Chica y el cierre del día quedará removido.`);
   if (!ok) return;
 
+  const prevStamp = day.closedAt;
+
   day.closedAt = null;
   try{
     await savePettyCash(pc);
+
+    // Confirmar persistencia real (anti “falsos positivos”)
+    const pcReload = await getPettyCash(evId);
+    const persisted = ensurePcDay(pcReload, dayKey).closedAt;
+    if (persisted){
+      throw new Error('Persistencia no confirmada: closedAt sigue con valor.');
+    }
   }catch(err){
-    console.error('onReopenPettyDay save error', err);
-    showToast('No se pudo reabrir el día', 'error', 5000);
+    console.error('onReopenPettyDay save/confirm error', err);
+    // Revertir en memoria (y NO marcar abierto en UI)
+    try{ day.closedAt = prevStamp; }catch(e){}
+    showToast('No se pudo reabrir el día: ' + humanizeError(err), 'error', 5000);
     await renderCajaChica();
     return;
   }
   await renderCajaChica();
+  try{ await updateSellEnabled(); }catch(e){}
   showToast('Día reabierto', 'ok', 5000);
 }
 
