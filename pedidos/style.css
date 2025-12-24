@@ -277,18 +277,18 @@ tr:nth-child(even) td {
   align-items: center;
   flex-wrap: nowrap;
   white-space: nowrap;
-  overflow: hidden;
+  /* Importante: NO recortar los íconos (en iPad podía colapsar a ~0px y “desaparecer”). */
+  overflow: visible;
 }
 
 th.actions-col {
   text-align: right;
-  width: 1%;
   white-space: nowrap;
 }
 
 td.actions-cell {
-  width: 1%;
-  padding-inline: 0.4rem;
+  text-align: right;
+  padding-inline: 0.35rem;
 }
 
 /* Botones de acciones: compactos (iPad friendly) */
@@ -296,10 +296,10 @@ td.actions-cell {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   padding: 0;
-  border-radius: 12px;
+  border-radius: 10px;
   line-height: 1;
   font-size: 1rem;
   -webkit-tap-highlight-color: transparent;
@@ -321,6 +321,61 @@ td.actions-cell {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* En iPad / pantallas pequeñas: fuerza la tabla a “encajar” sin scroll horizontal */
+  .table-wrapper {
+    overflow-x: hidden;
+  }
+
+  #pedidos-table {
+    table-layout: fixed;
+  }
+
+  #pedidos-table th,
+  #pedidos-table td {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Anchos compactos por columna (deja “Cliente” como la columna flexible) */
+  #pedidos-table th:nth-child(1),
+  #pedidos-table td:nth-child(1) {
+    width: 88px;
+  }
+
+  #pedidos-table th:nth-child(2),
+  #pedidos-table td:nth-child(2) {
+    width: 92px;
+  }
+
+  #pedidos-table th:nth-child(4),
+  #pedidos-table td:nth-child(4) {
+    width: 88px;
+  }
+
+  #pedidos-table th:nth-child(5),
+  #pedidos-table td:nth-child(5) {
+    width: 86px;
+    text-align: right;
+  }
+
+  #pedidos-table th:nth-child(6),
+  #pedidos-table td:nth-child(6) {
+    width: 84px;
+    text-align: center;
+  }
+
+  #pedidos-table th.actions-col,
+  #pedidos-table td.actions-cell {
+    width: 148px;
+  }
+
+  /* Acciones: NO truncar/recortar los botones */
+  #pedidos-table td.actions-cell {
+    overflow: visible;
+    text-overflow: clip;
+  }
+
   .table-wrapper {
     max-height: none;
   }
@@ -330,10 +385,10 @@ td.actions-cell {
   }
 
   .actions-cell .a33-icon-btn {
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
     font-size: 0.95rem;
-    border-radius: 11px;
+    border-radius: 9px;
   }
 }
 
