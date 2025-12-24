@@ -190,7 +190,8 @@
       letter-spacing:0.04em;
       text-transform:uppercase;
     }
-    .field input[type="password"]{
+    .field input[type="password"],
+    .field input[type="text"]{
       width:100%;
       padding:0.45rem 0.65rem;
       border-radius:12px;
@@ -260,6 +261,16 @@
       color:var(--muted);
       margin:0 0 0.4rem;
     }
+
+
+    /* --- RESPALDO Y GUÍA: fila fija 3 tiles (iPad) --- */
+    .hidden{ display:none !important; }
+    #support-grid{ grid-template-columns:repeat(3,minmax(0,1fr)); }
+    #support-grid .card{ min-width:0; }
+    @media (max-width:720px){
+      #support-grid{ grid-template-columns:1fr; }
+    }
+
 
     /* --- Respaldo (Backup) --- */
     .modal-overlay{
@@ -607,29 +618,31 @@
         </div>
       </section>
 
+      
       <section class="menu-section">
         <h2 class="menu-title">RESPALDO Y GUÍA</h2>
-        <div class="grid">
-          <article class="card" id="card-export-backup">
-            <div class="pill"><span>💾</span><span>Backup</span></div>
-            <h2>Exportar Respaldo</h2>
-            <p>Descarga un archivo JSON con todos los datos (IndexedDB + localStorage) para moverlo a otro dispositivo.</p>
+        <div class="grid support-grid" id="support-grid">
+
+          <article class="card" id="card-backup-hub">
+            <div class="pill"><span>🗄️</span><span>Respaldo</span></div>
+            <h2>Respaldo</h2>
+            <p>Exporta o importa un JSON con todos los datos locales (IndexedDB + localStorage) de esta Suite.</p>
             <div class="footer-row">
-              <span>Manual (no sync).</span>
-              <button class="link-btn secondary"><span>Exportar</span> →</button>
+              <span>Exportar / Importar</span>
+              <button class="link-btn secondary"><span>Abrir</span> →</button>
             </div>
           </article>
 
-          <article class="card" id="card-import-backup">
-            <div class="pill"><span>📥</span><span>Backup</span></div>
-            <h2>Importar Respaldo</h2>
-            <p>Carga un respaldo previo y reemplaza todos los datos actuales de este navegador.</p>
+          <article class="card" id="card-user-panel">
+            <div class="pill"><span>👤</span><span>Usuario</span></div>
+            <h2>Usuario</h2>
+            <p>Nombre actual: <b id="user-card-name">—</b>. Cambia nombre o PIN sin borrar datos.</p>
             <div class="footer-row">
-              <span>Reemplaza todo.</span>
-              <button class="link-btn secondary"><span>Importar</span> →</button>
+              <span id="user-card-sub">Gestionar</span>
+              <button class="link-btn secondary"><span>Abrir</span> →</button>
             </div>
           </article>
-        
+
           <article class="card" id="card-user-manual">
             <div class="pill"><span>📘</span><span>Guía</span></div>
             <h2>Manual de Usuario</h2>
@@ -640,8 +653,13 @@
             </div>
           </article>
 
-</div>
+          <!-- Elementos ocultos (reuso de handlers existentes) -->
+          <button id="card-export-backup" class="hidden" type="button" aria-hidden="true"></button>
+          <button id="card-import-backup" class="hidden" type="button" aria-hidden="true"></button>
+
+        </div>
       </section>
+
 
       </div>
 
@@ -667,7 +685,7 @@
         </section>
       </div>
 
-    </main
+    </main>
   </div>
 
 
@@ -717,6 +735,87 @@
     function onlyDigits(str){
       return /^[0-9]{6}$/.test(str);
     }
+
+    // --- Auth (PIN + Usuario) ---
+    const AUTH_DEFAULT_NAME = 'Usuario';
+    const LEGACY_NAME_KEYS = [
+      'suite_a33_user',
+      'suite_a33_username',
+      'suite_a33_nombre',
+      'a33_user',
+      'a33_username',
+      'arcano33_user',
+      'arcano33_username'
+    ];
+
+    function readAuth(){
+      const raw = localStorage.getItem(PIN_KEY);
+      let pin = null;
+      let name = null;
+
+      if (raw){
+        // Formato legacy: solo "123456"
+        if (onlyDigits(raw)){
+          pin = raw;
+        } else {
+          // Formato nuevo: JSON { pin, name }
+          try{
+            const obj = JSON.parse(raw);
+            if (obj && typeof obj === 'object'){
+              if (onlyDigits(String(obj.pin || ''))){
+                pin = String(obj.pin);
+              }
+              if (obj.name != null){
+                name = String(obj.name).trim() || null;
+              }
+            }
+          }catch(e){
+            // Si se corrompió, lo tratamos como inexistente
+          }
+        }
+      }
+
+      if (!name){
+        // Compat: si algún día existió un key separado de nombre, lo leemos
+        for (const k of LEGACY_NAME_KEYS){
+          const v = localStorage.getItem(k);
+          if (v && String(v).trim()){
+            name = String(v).trim();
+            break;
+          }
+        }
+      }
+
+      return { raw, pin, name, hasPin: !!pin };
+    }
+
+    function writeAuth({ pin, name }){
+      const payload = {
+        pin: (pin && onlyDigits(String(pin))) ? String(pin) : null,
+        name: (name && String(name).trim()) ? String(name).trim() : null
+      };
+      localStorage.setItem(PIN_KEY, JSON.stringify(payload));
+    }
+
+    function getStoredPin(){
+      return readAuth().pin;
+    }
+
+    function getStoredName(){
+      const a = readAuth();
+      return a.name || AUTH_DEFAULT_NAME;
+    }
+
+    function setStoredName(newName){
+      const a = readAuth();
+      writeAuth({ pin: a.pin, name: (newName || '').trim() || AUTH_DEFAULT_NAME });
+    }
+
+    function setStoredPin(newPin){
+      const a = readAuth();
+      writeAuth({ pin: newPin, name: a.name || AUTH_DEFAULT_NAME });
+    }
+
 
     function showApp(){
       const overlay = document.getElementById('lock-overlay');
@@ -1783,7 +1882,7 @@ const overlay = document.getElementById('lock-overlay');
       const unlock = document.getElementById('lock-unlock');
       const modeSwitch = document.getElementById('pin-mode-switch');
 
-      const storedPin = localStorage.getItem(PIN_KEY);
+      const storedPin = getStoredPin();
       const sessionOk = sessionStorage.getItem(SESSION_KEY) === '1';
 
       if (!storedPin){
@@ -1813,7 +1912,7 @@ const overlay = document.getElementById('lock-overlay');
           alert('Los PIN no coinciden.');
           return;
         }
-        localStorage.setItem(PIN_KEY, p1);
+        setStoredPin(p1);
         sessionStorage.setItem(SESSION_KEY, '1');
         showApp();
         overlay.style.display = 'none';
@@ -1828,7 +1927,7 @@ const overlay = document.getElementById('lock-overlay');
 
       document.getElementById('btn-unlock').addEventListener('click', () => {
         const input = document.getElementById('pin-input').value.trim();
-        const stored = localStorage.getItem(PIN_KEY);
+        const stored = getStoredPin();
         if (input === stored){
           sessionStorage.setItem(SESSION_KEY, '1');
           showApp();
@@ -1856,7 +1955,7 @@ const overlay = document.getElementById('lock-overlay');
       });
 
       // Activar switch "Cambiar PIN" solo si existe PIN
-      if (localStorage.getItem(PIN_KEY)){
+      if (getStoredPin()){
         modeSwitch.style.display = 'block';
       }
 
@@ -1872,6 +1971,162 @@ const overlay = document.getElementById('lock-overlay');
       const exportCard = document.getElementById('card-export-backup');
       const importCard = document.getElementById('card-import-backup');
       const fileInput = document.getElementById('backup-file-input');
+
+      // Card: Respaldo (hub)
+      const backupHubCard = document.getElementById('card-backup-hub');
+      if (backupHubCard){
+        backupHubCard.addEventListener('click', () => {
+          showModal({
+            title: 'Respaldo',
+            bodyHtml: `
+              <div>Elegí una acción. Esto trabaja <b>solo en este dispositivo</b> (no hay sync).</div>
+              <div class="small-note">Tip: exportá antes de importar, por si acaso.</div>
+            `,
+            primaryText: 'Exportar',
+            onPrimary: () => {
+              hideModal();
+              if (exportCard) exportCard.click();
+            },
+            secondaryText: 'Importar',
+            onSecondary: () => {
+              hideModal();
+              if (importCard) importCard.click();
+            },
+            cancelText: 'Cerrar',
+            onCancel: hideModal
+          });
+        });
+      }
+
+      // Card: Usuario (panel)
+      const userPanelCard = document.getElementById('card-user-panel');
+      const userCardNameEl = document.getElementById('user-card-name');
+      const userCardSubEl = document.getElementById('user-card-sub');
+
+      function refreshUserCard(){
+        const a = readAuth();
+        const name = a.name || AUTH_DEFAULT_NAME;
+        if (userCardNameEl) userCardNameEl.textContent = name;
+        if (userCardSubEl) userCardSubEl.textContent = a.hasPin ? 'PIN activo' : 'Sin PIN';
+      }
+
+      function openChangeName(){
+        const current = getStoredName();
+        showModal({
+          title: 'Cambiar nombre',
+          bodyHtml: `
+            <div class="field">
+              <label for="user-name-input">Nombre</label>
+              <input id="user-name-input" type="text" maxlength="40" value="${escapeHtml(current)}" placeholder="Ej. El Alquimista">
+            </div>
+            <div class="small-note">Se guarda solo en este navegador. No afecta datos de módulos.</div>
+          `,
+          primaryText: 'Guardar',
+          onPrimary: () => {
+            const el = document.getElementById('user-name-input');
+            const v = (el && el.value ? el.value.trim() : '');
+            if (!v){
+              alert('Escribe un nombre.');
+              return;
+            }
+            setStoredName(v);
+            refreshUserCard();
+            hideModal();
+            alert('Nombre actualizado.');
+          },
+          cancelText: 'Cancelar',
+          onCancel: hideModal
+        });
+        setTimeout(() => {
+          const el = document.getElementById('user-name-input');
+          if (el){ el.focus(); el.select(); }
+        }, 0);
+      }
+
+      function openChangePin(){
+        const a = readAuth();
+        const needCurrent = a.hasPin;
+
+        const currentField = needCurrent ? `
+          <div class="field">
+            <label for="pin-current">PIN actual</label>
+            <input id="pin-current" type="password" inputmode="numeric" maxlength="6" placeholder="••••••">
+          </div>
+        ` : '';
+
+        showModal({
+          title: 'Cambiar PIN',
+          bodyHtml: `
+            ${currentField}
+            <div class="field">
+              <label for="pin-new-user">Nuevo PIN (6 dígitos)</label>
+              <input id="pin-new-user" type="password" inputmode="numeric" maxlength="6" placeholder="••••••">
+            </div>
+            <div class="field">
+              <label for="pin-confirm-user">Confirmar PIN</label>
+              <input id="pin-confirm-user" type="password" inputmode="numeric" maxlength="6" placeholder="••••••">
+            </div>
+            <div class="small-note">Al guardar, el próximo ingreso pedirá el nuevo PIN.</div>
+          `,
+          primaryText: 'Guardar PIN',
+          onPrimary: () => {
+            if (needCurrent){
+              const cur = (document.getElementById('pin-current')?.value || '').trim();
+              if (cur !== a.pin){
+                alert('PIN actual incorrecto.');
+                return;
+              }
+            }
+            const p1 = (document.getElementById('pin-new-user')?.value || '').trim();
+            const p2 = (document.getElementById('pin-confirm-user')?.value || '').trim();
+            if (!onlyDigits(p1)){
+              alert('El PIN debe tener exactamente 6 dígitos numéricos.');
+              return;
+            }
+            if (p1 !== p2){
+              alert('Los PIN no coinciden.');
+              return;
+            }
+            setStoredPin(p1);
+            refreshUserCard();
+            hideModal();
+            alert('PIN actualizado.');
+          },
+          cancelText: 'Cancelar',
+          onCancel: hideModal
+        });
+        setTimeout(() => {
+          const el = document.getElementById(needCurrent ? 'pin-current' : 'pin-new-user');
+          if (el){ el.focus(); }
+        }, 0);
+      }
+
+      if (userPanelCard){
+        userPanelCard.addEventListener('click', () => {
+          const a = readAuth();
+          const name = a.name || AUTH_DEFAULT_NAME;
+          const pinStatus = a.hasPin ? 'Configurado' : 'No configurado';
+          showModal({
+            title: 'Usuario',
+            bodyHtml: `
+              <div class="kv">
+                <div class="k">Nombre</div><div class="v">${escapeHtml(name)}</div>
+                <div class="k">PIN</div><div class="v">${escapeHtml(pinStatus)}</div>
+              </div>
+              <div class="small-note">Todo se guarda localmente en este navegador (modo app / PWA).</div>
+            `,
+            primaryText: 'Cambiar nombre',
+            onPrimary: () => openChangeName(),
+            secondaryText: 'Cambiar PIN',
+            onSecondary: () => openChangePin(),
+            cancelText: 'Cerrar',
+            onCancel: hideModal
+          });
+        });
+      }
+
+      // Inicializar UI de Usuario
+      refreshUserCard();
 
       
 
