@@ -5889,6 +5889,9 @@ async function renderCajaChica(){
   fillPettyInitialFromPc(pc, dayKey);
   fillPettyFinalFromPc(pc, dayKey);
 
+  
+  updateCopyInitialButtonState(pc, dayKey, cashSalesNio);
+
   const readOnlyDay = hist || !!day.closedAt;
   renderPettyMovements(pc, dayKey, readOnlyDay);
 
@@ -6065,6 +6068,65 @@ function fillPettyFinalFromPc(pc, dayKey){
   if (tu) tu.textContent = fmt(fin.totalUsd || 0);
 }
 
+function getPettyMovementsNet(day){
+  let netNio = 0;
+  let netUsd = 0;
+  let hasMov = false;
+
+  const movs = (day && Array.isArray(day.movements)) ? day.movements : [];
+  for (const m of movs){
+    if (!m || typeof m.amount === 'undefined') continue;
+    const amt = Number(m.amount) || 0;
+    if (!amt) continue;
+    hasMov = true;
+
+    const sign = (m.type === 'salida') ? -1 : 1; // entrada = +, salida = -
+    if (m.currency === 'USD') netUsd += sign * amt;
+    else netNio += sign * amt;
+  }
+
+  return { netNio: round2(netNio), netUsd: round2(netUsd), hasMov };
+}
+
+function updateCopyInitialButtonState(pc, dayKey, cashSalesNio){
+  const btn = document.getElementById('pc-btn-copy-initial');
+  if (!btn) return;
+
+  const day = (pc && dayKey) ? ensurePcDay(pc, dayKey) : null;
+
+  // Bloquear en histórico o cuando el día ya está cerrado.
+  const isRO = isPettyHistoryMode() || !!(day && day.closedAt);
+  if (isRO){
+    btn.disabled = true;
+    btn.title = isPettyHistoryMode()
+      ? 'Vista histórica (solo lectura).'
+      : 'Este día está cerrado. Reabre el día para editar.';
+    return;
+  }
+
+  const cash = Number(cashSalesNio || 0);
+  const hasCashSales = Number.isFinite(cash) && cash > 0.005;
+
+  const net = getPettyMovementsNet(day);
+  const hasNetMov = (Math.abs(net.netNio) > 0.005) || (Math.abs(net.netUsd) > 0.005);
+
+  if (hasCashSales){
+    btn.disabled = true;
+    btn.title = 'Copiar Inicial solo aplica para días sin ventas en efectivo.';
+    return;
+  }
+
+  // Si no hay ventas, permitir. Si hay movimientos netos, permitir pero avisar.
+  btn.disabled = false;
+  if (hasNetMov){
+    btn.title = `Hay movimientos de caja en este día (neto C$ ${fmt(net.netNio)} / neto US$ ${fmt(net.netUsd)}). Copiar Inicial puede no permitir cerrar.`;
+  } else {
+    btn.title = 'Copia el saldo inicial al arqueo final (ideal para días sin ventas).';
+  }
+}
+
+
+
 function recalcPettyInitialTotalsFromInputs(){
   if (typeof NIO_DENOMS === 'undefined' || typeof USD_DENOMS === 'undefined') return;
   let totalNio = 0;
@@ -6173,6 +6235,85 @@ async function onSavePettyInitial(){
   setPrevCierreUI(pc, dayKey);
   toast('Saldo inicial de Caja Chica guardado');
 }
+
+async function onCopyPettyInitialToFinal(){
+  if (isPettyHistoryMode()){
+    alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
+    return;
+  }
+
+  const evId = await getMeta('currentEventId');
+  if (!evId){
+    alert('Debes activar un evento en la pestaña Vender antes de usar “Copiar Inicial”.');
+    return;
+  }
+
+  if (!(await ensurePettyEnabledForEvent(evId))) return;
+
+  const dayKey = getSelectedPcDay();
+  const pc = await getPettyCash(evId);
+  const day = ensurePcDay(pc, dayKey);
+
+  if (day.closedAt){
+    alert('Este día está cerrado. Reabre el día para editar Caja Chica.');
+    return;
+  }
+
+  // Restricción: solo para día sin ventas en efectivo
+  const cashSalesNio = await getCashSalesNioForDay(evId, dayKey);
+  if (Number(cashSalesNio || 0) > 0.005){
+    alert('Copiar Inicial solo aplica para días sin ventas en efectivo.');
+    return;
+  }
+
+  // Si hay movimientos netos, avisar: copiar inicial al final podría dejar diferencia y no cerrar.
+  const net = getPettyMovementsNet(day);
+  const hasNetMov = (Math.abs(net.netNio) > 0.005) || (Math.abs(net.netUsd) > 0.005);
+  if (hasNetMov){
+    const ok = confirm(
+      `Hay movimientos de caja registrados en este día (neto C$ ${fmt(net.netNio)} / neto US$ ${fmt(net.netUsd)}).
+
+` +
+      `Copiar Inicial al arqueo final puede dejar diferencia y no permitirá cerrar.
+
+` +
+      `¿Deseas continuar?`
+    );
+    if (!ok) return;
+  }
+
+  // Si ya existe arqueo final guardado, confirmar reemplazo
+  if (day.finalCount && day.finalCount.savedAt){
+    const ok = confirm('Este día ya tiene un arqueo final guardado. ¿Reemplazarlo con el saldo inicial?');
+    if (!ok) return;
+  }
+
+  const init = day.initial ? normalizePettySection(day.initial) : normalizePettySection(null);
+
+  day.finalCount = normalizePettySection({
+    nio: { ...init.nio },
+    usd: { ...init.usd },
+    savedAt: new Date().toISOString()
+  });
+
+  await savePettyCash(pc);
+
+  // Refrescar UI inmediatamente
+  fillPettyFinalFromPc(pc, dayKey);
+  updatePettySummaryUI(pc, dayKey, { cashSalesNio });
+  setPrevCierreUI(pc, dayKey);
+
+  // Refrescar candado de cierre
+  const evs = await getAll('events');
+  const ev = (evs || []).find(e => e && e.id === evId);
+  const fx = ev ? Number(ev.fxRate || 0) : null;
+  const check = await getPettyCloseCheck(evId, pc, dayKey, cashSalesNio, fx);
+  renderPettyCloseUI(check, false);
+
+  updateCopyInitialButtonState(pc, dayKey, cashSalesNio);
+  toast('Arqueo final copiado desde el saldo inicial');
+}
+
 
 async function onSavePettyFinal(){
   if (isPettyHistoryMode()){
@@ -6496,7 +6637,18 @@ function bindCajaChicaEvents(){
     });
   }
 
-  const btnAddMov = document.getElementById('pc-mov-add');
+  
+
+  // Copiar Inicial → Arqueo final (solo para día sin ventas)
+  const btnCopyInitial = document.getElementById('pc-btn-copy-initial');
+  if (btnCopyInitial){
+    btnCopyInitial.addEventListener('click', (e)=>{
+      e.preventDefault();
+      onCopyPettyInitialToFinal().catch(err=>console.error(err));
+    });
+  }
+
+const btnAddMov = document.getElementById('pc-mov-add');
   if (btnAddMov){
     btnAddMov.addEventListener('click', (e)=>{
       e.preventDefault();
