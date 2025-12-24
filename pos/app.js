@@ -445,6 +445,279 @@ async function deleteFinanzasEntriesForSalePOS(saleId) {
   });
 }
 
+
+// ------------------------------
+// POS → Finanzas: Caja Chica (movimientos manuales)
+// ------------------------------
+async function ensureFinanzasPettyCashAccounts(preferredIncomeCode){
+  try{
+    await ensureFinanzasDB();
+  }catch(e){
+    return;
+  }
+  return new Promise((resolve)=>{
+    try{
+      const txa = finDb.transaction(['accounts'], 'readwrite');
+      const store = txa.objectStore('accounts');
+      const req = store.getAll();
+      req.onsuccess = ()=>{
+        const all = req.result || [];
+        const has = new Set(all.map(a => String(a && a.code || '')));
+        const reqAccounts = [
+          { code: '1100', nombre: 'Caja general', tipo: 'activo', systemProtected: true },
+          { code: '1110', nombre: 'Caja eventos', tipo: 'activo', systemProtected: true },
+          { code: '1200', nombre: 'Banco', tipo: 'activo', systemProtected: true },
+          { code: '6100', nombre: 'Gastos de eventos – generales', tipo: 'gasto', systemProtected: true },
+          { code: '6130', nombre: 'Gastos varios / ajuste caja', tipo: 'gasto', systemProtected: true },
+        ];
+        // Ingreso/reposición (si hace falta)
+        if (preferredIncomeCode === '4200' && !has.has('4200')){
+          reqAccounts.push({ code: '4200', nombre: 'Otros ingresos / reposición caja', tipo: 'ingreso', systemProtected: true });
+        }
+        for (const acc of reqAccounts){
+          if (!has.has(String(acc.code))) store.put(acc);
+        }
+      };
+      txa.oncomplete = ()=>resolve();
+      txa.onerror = ()=>resolve();
+      txa.onabort = ()=>resolve();
+    }catch(err){
+      resolve();
+    }
+  });
+}
+
+async function resolvePettyCashIncomeAccountCode(){
+  try{
+    await ensureFinanzasDB();
+  }catch(e){
+    return '4200';
+  }
+  return new Promise((resolve)=>{
+    let chosen = null;
+    try{
+      const txa = finDb.transaction(['accounts'], 'readwrite');
+      const store = txa.objectStore('accounts');
+      const req = store.getAll();
+      req.onsuccess = ()=>{
+        const all = req.result || [];
+        const hasCode = (c)=> all.some(a => a && String(a.code) === c);
+        // Preferir 7100 (suele ser "Otros ingresos varios") si existe, sino 4200.
+        if (hasCode('7100')) chosen = '7100';
+        else if (hasCode('4200')) chosen = '4200';
+        else {
+          const byName = all.find(a => {
+            const name = String(a && (a.nombre || a.name) || '').toLowerCase();
+            return name.includes('otros ingresos') || name.includes('reposición') || name.includes('reposicion') || name.includes('aporte') || name.includes('reembolso');
+          });
+          if (byName && byName.code != null) chosen = String(byName.code);
+          else {
+            chosen = '4200';
+            store.put({ code: '4200', nombre: 'Otros ingresos / reposición caja', tipo: 'ingreso', systemProtected: true });
+          }
+        }
+      };
+      txa.oncomplete = ()=>resolve(chosen || '4200');
+      txa.onerror = ()=>resolve(chosen || '4200');
+      txa.onabort = ()=>resolve(chosen || '4200');
+    }catch(err){
+      resolve(chosen || '4200');
+    }
+  });
+}
+
+async function postPettyCashMovementToFinanzas(eventId, dayKey, mov){
+  if (!eventId || !mov) return;
+
+  const mvDate = String(mov.date || dayKey || '').slice(0,10);
+  const stamp = (mov.createdAt != null) ? mov.createdAt : (mov.id != null ? mov.id : Date.now());
+  const sourceId = `pc_${eventId}_${mvDate}_${stamp}`;
+
+  // Abrir Finanzas (best-effort)
+  try{
+    await ensureFinanzasDB();
+  }catch(e){
+    return;
+  }
+
+  // Anti-duplicados (source/sourceId)
+  const exists = await new Promise((resolve)=>{
+    try{
+      const txr = finDb.transaction(['journalEntries'], 'readonly');
+      const store = txr.objectStore('journalEntries');
+      const req = store.getAll();
+      req.onsuccess = ()=>{
+        const all = req.result || [];
+        const ok = all.some(e => e && (
+          (e.source === 'pos_pettycash' && e.sourceId === sourceId) ||
+          (e.origen === 'POS' && e.origenId === sourceId) ||
+          (e.source === 'pos_pettycash' && e.origenId === sourceId)
+        ));
+        resolve(ok);
+      };
+      req.onerror = ()=>resolve(false);
+    }catch(err){
+      resolve(false);
+    }
+  });
+  if (exists) return;
+
+  // Evento (nombre + fxRate)
+  let eventName = 'Evento';
+  let fxRate = null;
+  try{
+    const evs = await getAll('events');
+    const ev = (evs || []).find(e => e && e.id === eventId);
+    if (ev){
+      eventName = (ev.name || ev.nombre || ev.title || ev.eventName || eventName);
+      const fx = Number(ev.fxRate);
+      if (Number.isFinite(fx) && fx > 0) fxRate = fx;
+    }
+  }catch(e){}
+
+  // Monto en C$ (Finanzas está en C$)
+  const amountOrig = Number(mov.amount) || 0;
+  if (!Number.isFinite(amountOrig) || amountOrig <= 0) return;
+
+  let amountNio = amountOrig;
+  let fxUsed = null;
+  if (mov.currency === 'USD'){
+    if (!fxRate){
+      notifyFinanzasBridge('⚠️ Movimiento guardado en POS, pero NO se registró en Finanzas: falta Tipo de Cambio del evento para convertir USD a C$.');
+      return;
+    }
+    fxUsed = fxRate;
+    amountNio = round2(amountOrig * fxRate);
+  }
+  amountNio = round2(amountNio);
+  if (!Number.isFinite(amountNio) || amountNio <= 0) return;
+
+  const incomeCode = await resolvePettyCashIncomeAccountCode();
+  await ensureFinanzasPettyCashAccounts(incomeCode);
+
+  // Mapeo contable DEFAULT fijo
+  const cashEvents = '1110';
+  const cashGeneral = '1100';
+  const bank = '1200';
+  const expenseEvents = '6100';
+  const adjustExpense = '6130';
+
+  const isTransfer = !!mov.isTransfer || mov.uiType === 'transferencia';
+  const isAdjust = !!mov.isAdjust;
+
+  let tipoMovimiento = 'egreso';
+  let debeCode = expenseEvents;
+  let haberCode = cashEvents;
+  let kindTag = 'EGRESO';
+
+  if (isTransfer){
+    tipoMovimiento = 'transferencia';
+    kindTag = 'TRANSFERENCIA';
+    const tk = mov.transferKind || 'to_bank';
+    if (tk === 'from_general'){
+      debeCode = cashEvents;
+      haberCode = cashGeneral;
+    } else if (tk === 'to_general'){
+      debeCode = cashGeneral;
+      haberCode = cashEvents;
+    } else {
+      debeCode = bank;
+      haberCode = cashEvents;
+    }
+  } else if (isAdjust){
+    tipoMovimiento = 'ajuste';
+    if (mov.type === 'entrada'){
+      kindTag = 'AJUSTE SOBRANTE';
+      debeCode = cashEvents;
+      haberCode = incomeCode;
+    } else {
+      kindTag = 'AJUSTE FALTANTE';
+      debeCode = adjustExpense;
+      haberCode = cashEvents;
+    }
+  } else if (mov.type === 'entrada'){
+    tipoMovimiento = 'ingreso';
+    kindTag = 'INGRESO';
+    debeCode = cashEvents;
+    haberCode = incomeCode;
+  } else {
+    tipoMovimiento = 'egreso';
+    kindTag = 'EGRESO';
+    debeCode = expenseEvents;
+    haberCode = cashEvents;
+  }
+
+  // Memo / descripción
+  let desc = String(mov.description || '').trim();
+  if (mov.currency === 'USD' && fxUsed){
+    desc = `${desc} (USD ${round2(amountOrig)} @ ${round2(fxUsed)} = C$ ${amountNio.toFixed(2)})`;
+  }
+  const memo = `[POS Caja Chica] ${kindTag} - ${desc || '—'} - ${eventName} - ${mvDate}`;
+
+  // Crear asiento + líneas (doble partida)
+  await new Promise((resolve)=>{
+    try{
+      const txw = finDb.transaction(['journalEntries','journalLines'], 'readwrite');
+      const eStore = txw.objectStore('journalEntries');
+      const lStore = txw.objectStore('journalLines');
+
+      const entry = {
+        fecha: mvDate,
+        date: mvDate,
+        tipoMovimiento,
+        descripcion: memo,
+        evento: eventName,
+        origen: 'POS',
+        origenId: sourceId,
+        source: 'pos_pettycash',
+        sourceId,
+        debeCode,
+        haberCode,
+        monto: amountNio,
+        totalDebe: amountNio,
+        totalHaber: amountNio,
+        createdAt: Date.now(),
+        meta: {
+          posEventId: eventId,
+          posDay: mvDate,
+          posMovement: {
+            id: mov.id,
+            createdAt: mov.createdAt,
+            uiType: mov.uiType,
+            type: mov.type,
+            isAdjust: !!mov.isAdjust,
+            adjustKind: mov.adjustKind || null,
+            isTransfer: !!mov.isTransfer,
+            transferKind: mov.transferKind || null,
+            currency: mov.currency || 'NIO',
+            amount: amountOrig,
+            fxRateUsed: fxUsed
+          }
+        }
+      };
+
+      const reqAdd = eStore.add(entry);
+      reqAdd.onsuccess = (ev)=>{
+        const entryId = ev.target.result;
+        try{
+          lStore.add({ idEntry: entryId, accountCode: debeCode, debe: amountNio, haber: 0 });
+          lStore.add({ idEntry: entryId, accountCode: haberCode, debe: 0, haber: amountNio });
+        }catch(e){}
+      };
+      reqAdd.onerror = ()=>{};
+
+      txw.oncomplete = ()=>resolve();
+      txw.onerror = ()=>resolve();
+      txw.onabort = ()=>resolve();
+    }catch(err){
+      resolve();
+    }
+  });
+
+  // Aviso discreto (solo si Finanzas está disponible)
+  // notifyFinanzasBridge('Movimiento registrado en Finanzas (Diario)');
+}
+
 function tx(name, mode='readonly'){ return db.transaction(name, mode).objectStore(name); }
 function getAll(name){ return new Promise((res,rej)=>{ const r=tx(name).getAll(); r.onsuccess=()=>res(r.result||[]); r.onerror=()=>rej(r.error); }); }
 function put(name, val){ return new Promise((res,rej)=>{ const r=tx(name,'readwrite').put(val); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
@@ -5724,9 +5997,11 @@ async function onSaveEventFxRate(){
 
 function updatePettyMovementTypeUI(){
   const typeSel = document.getElementById('pc-mov-type');
-  const wrap = document.getElementById('pc-adjust-kind-wrap');
-  if (!typeSel || !wrap) return;
-  wrap.style.display = (typeSel.value === 'ajuste') ? 'block' : 'none';
+  const adjustWrap = document.getElementById('pc-adjust-kind-wrap');
+  const transferWrap = document.getElementById('pc-transfer-kind-wrap');
+  if (!typeSel) return;
+  if (adjustWrap) adjustWrap.style.display = (typeSel.value === 'ajuste') ? 'block' : 'none';
+  if (transferWrap) transferWrap.style.display = (typeSel.value === 'transferencia') ? 'block' : 'none';
 }
 
 async function onClosePettyDay(){
@@ -5880,7 +6155,7 @@ function setPettyReadOnly(isReadOnly, allowReopen){
   [
     'pc-btn-save-initial','pc-btn-clear-initial',
     'pc-btn-save-final','pc-btn-clear-final',
-    'pc-mov-type','pc-mov-adjust-kind','pc-mov-currency','pc-mov-amount','pc-mov-desc','pc-mov-add',
+    'pc-mov-type','pc-mov-adjust-kind','pc-mov-transfer-kind','pc-mov-currency','pc-mov-amount','pc-mov-desc','pc-mov-add',
     'pc-btn-close-day','pc-btn-reopen-day'
   ].forEach(id => {
     const el = document.getElementById(id);
@@ -6708,6 +6983,11 @@ function renderPettyMovements(pc, dayKey, readOnly){
       const k = (m.adjustKind === 'sobrante') ? 'Sobrante' : 'Faltante';
       typeLabel = `Ajuste (${k})`;
     }
+    if (m && m.isTransfer){
+      const tk = m.transferKind || 'to_bank';
+      const t = (tk === 'from_general') ? 'De Caja general' : (tk === 'to_general') ? 'A Caja general' : 'A Banco';
+      typeLabel = `Transferencia (${t})`;
+    }
     tdType.textContent = typeLabel;
 
     const tdCur = document.createElement('td');
@@ -6758,6 +7038,7 @@ async function onAddPettyMovement(){
 
   const typeSel = document.getElementById('pc-mov-type');
   const kindSel = document.getElementById('pc-mov-adjust-kind');
+  const transferSel = document.getElementById('pc-mov-transfer-kind');
   const curSel  = document.getElementById('pc-mov-currency');
   const amtInput = document.getElementById('pc-mov-amount');
   const descInput = document.getElementById('pc-mov-desc');
@@ -6793,6 +7074,25 @@ async function onAddPettyMovement(){
     }
   }
 
+  // Nuevo tipo: Transferencia (se guarda internamente como entrada/salida, con bandera isTransfer)
+  let isTransfer = false;
+  let transferKind = null;
+
+  if (uiType === 'transferencia'){
+    isTransfer = true;
+    transferKind = transferSel ? transferSel.value : 'to_bank';
+    if (transferKind !== 'to_bank' && transferKind !== 'to_general' && transferKind !== 'from_general') transferKind = 'to_bank';
+
+    // Impacto en Caja Chica (entrada/salida)
+    type = (transferKind === 'from_general') ? 'entrada' : 'salida';
+
+    if (!description){
+      description = (transferKind === 'to_bank') ? 'Transferencia a banco'
+        : (transferKind === 'to_general') ? 'Transferencia a caja general'
+        : 'Transferencia desde caja general';
+    }
+  }
+
   if (type !== 'entrada' && type !== 'salida'){
     alert('Tipo de movimiento inválido.');
     return;
@@ -6806,7 +7106,9 @@ async function onAddPettyMovement(){
 
   const mov = {
     id: newId,
+    createdAt: Date.now(),
     date: dayKey,
+    uiType,
     type,
     currency,
     amount,
@@ -6816,6 +7118,11 @@ async function onAddPettyMovement(){
   if (isAdjust){
     mov.isAdjust = true;
     mov.adjustKind = adjustKind;
+  }
+
+  if (isTransfer){
+    mov.isTransfer = true;
+    mov.transferKind = transferKind;
   }
 
   day.movements.push(mov);
@@ -6828,6 +7135,14 @@ async function onAddPettyMovement(){
     await renderCajaChica();
     return;
   }
+
+  // Integración mínima: POS Caja Chica → Finanzas (Diario)
+  try{
+    await postPettyCashMovementToFinanzas(evId, dayKey, mov);
+  }catch(e){
+    console.warn('Finanzas bridge (pettycash) error', e);
+  }
+
   // Re-render completo para refrescar candado de cierre
   await renderCajaChica();
 

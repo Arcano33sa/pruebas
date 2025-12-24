@@ -461,6 +461,7 @@
               <option value="entrada">Ingreso</option>
               <option value="salida">Egreso</option>
               <option value="ajuste">Ajuste</option>
+                          <option value="transferencia">Transferencia</option>
             </select>
             <div id="pc-adjust-kind-wrap" style="display:none; margin-top:6px">
               <label for="pc-mov-adjust-kind" class="muted" style="font-size:0.8rem">Modo ajuste</label>
@@ -469,7 +470,16 @@
                 <option value="sobrante">Sobrante</option>
               </select>
             </div>
-          </div>
+          
+            <div id="pc-transfer-kind-wrap" style="display:none; margin-top:6px">
+              <label for="pc-mov-transfer-kind" class="muted" style="font-size:0.8rem">Tipo de transferencia</label>
+              <select id="pc-mov-transfer-kind">
+                <option value="to_bank">A Banco</option>
+                <option value="to_general">A Caja general</option>
+                <option value="from_general">De Caja general</option>
+              </select>
+            </div>
+</div>
           <div class="col">
             <label for="pc-mov-currency">Moneda</label>
             <select id="pc-mov-currency">
