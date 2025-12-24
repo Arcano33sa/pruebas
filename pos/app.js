@@ -884,22 +884,28 @@ async function savePettyCash(pc){
   }
 
   const putOnce = () => new Promise((resolve, reject)=>{
+    // Resolver SOLO cuando el put confirmó (tx.oncomplete) y fallar ante cualquier error.
+    let settled = false;
+    const ok = ()=>{ if (settled) return; settled = true; resolve(); };
+    const fail = (err)=>{ if (settled) return; settled = true; reject(err); };
+
     try{
       const tr = db.transaction('pettyCash', 'readwrite');
       const store = tr.objectStore('pettyCash');
 
-      tr.oncomplete = ()=> resolve();
-      tr.onabort = ()=> reject(tr.error || new Error('Transacción abortada (pettyCash).'));
-      tr.onerror = ()=> reject(tr.error || new Error('Error de transacción (pettyCash).'));
+      tr.oncomplete = ()=> ok();
+      tr.onabort = ()=> fail(tr.error || new Error('Transacción abortada (pettyCash).'));
+      tr.onerror = ()=> fail(tr.error || new Error('Error de transacción (pettyCash).'));
 
       const req = store.put(cleaned);
       req.onerror = ()=> {
-        // Normalmente la transacción se aborta y tr.onabort manejará el rechazo.
-        // Dejamos el error registrado para diagnóstico.
+        // Rechazo inmediato (sin “swallow errors”).
         console.error('Error guardando pettyCash (put)', req.error);
+        try{ tr.abort(); }catch(e){}
+        fail(req.error || new Error('Error guardando pettyCash (put).'));
       };
     }catch(err){
-      reject(err);
+      fail(err);
     }
   });
 
@@ -5570,9 +5576,14 @@ async function onClosePettyDay(){
 
   if (!(await ensurePettyEnabledForEvent(evId))) return;
   const dayKey = getSelectedPcDay();
-  const pc = await getPettyCash(evId);
-  const day = ensurePcDay(pc, dayKey);
-  if (day.closedAt){
+  let pc = await getPettyCash(evId);
+
+  // IMPORTANTE:
+  // ensurePcDay() normaliza y REEMPLAZA el objeto del día dentro de pc.days.
+  // Si guardamos una referencia (day) y luego otra función vuelve a llamar ensurePcDay(pc, dayKey),
+  // esa referencia puede quedar “stale” y los cambios (closedAt) NO se persistirán.
+  // Por eso, al mutar closedAt, siempre lo hacemos vía ensurePcDay(pc, dayKey) justo antes del save.
+  if (ensurePcDay(pc, dayKey).closedAt){
     alert('Este día ya está cerrado.');
     return;
   }
@@ -5594,18 +5605,30 @@ async function onClosePettyDay(){
 Esto bloqueará edición de Caja Chica para este día.`);
   if (!ok) return;
 
-  day.closedAt = new Date().toISOString();
+  const stamp = new Date().toISOString();
+  // Setear el flag de cierre en el objeto REAL que se va a persistir
+  ensurePcDay(pc, dayKey).closedAt = stamp;
+
   try{
     await savePettyCash(pc);
+
+    // Confirmar persistencia real (anti “falsos positivos”)
+    const pcReload = await getPettyCash(evId);
+    const persisted = ensurePcDay(pcReload, dayKey).closedAt;
+    if (!persisted){
+      throw new Error('Persistencia no confirmada: closedAt sigue null.');
+    }
+    // Refrescar UI desde IDB
+    await renderCajaChica();
+    showToast('Día cerrado', 'ok', 5000);
   }catch(err){
-    console.error('onClosePettyDay save error', err);
-    day.closedAt = null;
-    showToast('No se pudo cerrar el día', 'error', 5000);
+    console.error('onClosePettyDay save/confirm error', err);
+    // Revertir en memoria (y NO marcar cerrado en UI)
+    try{ ensurePcDay(pc, dayKey).closedAt = null; }catch(e){}
+    showToast('No se pudo cerrar el día: ' + humanizeError(err), 'error', 5000);
     await renderCajaChica();
     return;
   }
-  await renderCajaChica();
-  showToast('Día cerrado', 'ok', 5000);
 }
 
 async function onReopenPettyDay(){
@@ -5663,6 +5686,12 @@ function getClosedPcDayKeys(pc){
 }
 
 function setPettyReadOnly(isReadOnly, allowReopen){
+  // Bloqueo robusto por fieldsets (cubre inputs dinámicos y cualquier control nuevo)
+  const fsCount = document.getElementById('pc-count-fieldset');
+  const fsMov = document.getElementById('pc-mov-fieldset');
+  if (fsCount) fsCount.disabled = !!isReadOnly;
+  if (fsMov) fsMov.disabled = !!isReadOnly;
+
   const lockAll = (sel) => {
     document.querySelectorAll(sel).forEach(el => { el.disabled = !!isReadOnly; });
   };
@@ -5679,12 +5708,11 @@ function setPettyReadOnly(isReadOnly, allowReopen){
     if (el) el.disabled = !!isReadOnly;
   });
 
-  // El tipo de cambio es por evento: solo bloquear en modo histórico
+  // El tipo de cambio se edita dentro de Caja Chica: bloquear en histórico o día cerrado
   const fx = document.getElementById('pc-event-fx-rate');
   const fxBtn = document.getElementById('pc-btn-save-event-fx');
-  const hist = isPettyHistoryMode();
-  if (fx) fx.disabled = hist;
-  if (fxBtn) fxBtn.disabled = hist;
+  if (fx) fx.disabled = !!isReadOnly;
+  if (fxBtn) fxBtn.disabled = !!isReadOnly;
 
   if (allowReopen){
     const reopen = document.getElementById('pc-btn-reopen-day');

@@ -384,6 +384,8 @@
         </div>
       </div>
 
+      <!-- Bloque editable: se deshabilita completo cuando el día está cerrado o en vista histórica -->
+      <fieldset id="pc-count-fieldset" class="pc-lock-fieldset">
       <div class="card petty-inicial">
         <h3>Saldo inicial</h3>
         <div class="row">
@@ -435,6 +437,7 @@
         </div>
       </div>
 
+      <fieldset id="pc-mov-fieldset" class="pc-lock-fieldset">
       <div class="card petty-mov">
         <h3>Movimientos de Caja Chica</h3>
         <div class="row">
@@ -504,6 +507,7 @@
           </tbody>
         </table>
       </div>
+      </fieldset>
     
       <div class="card petty-final">
         <h3>Arqueo final</h3>
@@ -561,6 +565,8 @@
           <button id="pc-btn-clear-final" class="btn-warn">Limpiar</button>
         </div>
       </div>
+
+      </fieldset>
 
       <div class="card petty-close">
         <h3>Cierre del día</h3>
