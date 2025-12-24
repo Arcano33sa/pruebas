@@ -246,8 +246,10 @@ small.muted{color:var(--muted)}
 .pay-ef{background:#1f2b1f;color:#baf2ba}
 .pay-tr{background:#1f2230;color:#b3c6ff}
 .pay-cr{background:#2d1f2f;color:#ffb3d1}
-.toast{position:fixed;top:10px;left:50%;transform:translateX(-50%);background:#222;border:1px solid #333;padding:10px 14px;border-radius:10px;z-index:20;display:none}
-.toast.show{display:block;animation:fade 2s ease forwards}
+.toast{position:fixed;top:10px;left:50%;transform:translateX(-50%);background:#222;border:1px solid #333;padding:10px 14px;border-radius:12px;z-index:9999;display:none;max-width:calc(100vw - 24px);width:max-content;pointer-events:none}
+.toast.ok{border-color:#ddbf64}
+.toast.error{border-color:#7b1818}
+.toast.show{display:block;animation:fade var(--toast-duration, 1800ms) ease forwards}
 @keyframes fade{0%{opacity:0}10%{opacity:1}90%{opacity:1}100%{opacity:0}}
 .offline{position:fixed;top:72px;left:0;right:0;background:#2a2a2a;color:#ffd;display:none;padding:6px 10px;text-align:center;font-size:12px;z-index:10}
 .dim input,.dim select,.dim textarea,.dim button{opacity:.7}

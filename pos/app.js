@@ -1296,7 +1296,42 @@ async function seedMissingDefaults(force=false){
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 function fmt(n){ return (n||0).toLocaleString('es-NI', {minimumFractionDigits:2, maximumFractionDigits:2}); }
-function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'), 1800); }
+let toastTimerId = null;
+function showToast(msg, type='ok', durationMs=5000){
+  const t = document.getElementById('toast');
+  if (!t) return;
+  // Accesibilidad
+  if (!t.hasAttribute('role')) t.setAttribute('role','status');
+  if (!t.hasAttribute('aria-live')) t.setAttribute('aria-live','polite');
+  if (!t.hasAttribute('aria-atomic')) t.setAttribute('aria-atomic','true');
+
+  const d = Math.max(800, Number(durationMs || 0) || 0);
+
+  // Limpiar timeout previo si hay otro toast en curso
+  if (toastTimerId){
+    clearTimeout(toastTimerId);
+    toastTimerId = null;
+  }
+
+  // Reset clases de tipo
+  t.classList.remove('ok','error');
+  t.classList.add(type === 'error' ? 'error' : 'ok');
+
+  t.textContent = String(msg || '');
+  t.style.setProperty('--toast-duration', d + 'ms');
+
+  // Reiniciar animación
+  t.classList.remove('show');
+  void t.offsetWidth; // force reflow
+  t.classList.add('show');
+
+  toastTimerId = setTimeout(()=>{
+    t.classList.remove('show');
+  }, d);
+}
+
+// Compat: toasts rápidos existentes
+function toast(msg){ showToast(msg, 'ok', 1800); }
 
 // --- Helpers POS: hora/orden robustos (para listas y export)
 function pad2POS(n){
@@ -6229,11 +6264,18 @@ async function onSavePettyInitial(){
     savedAt: new Date().toISOString()
   });
 
+  try{
   await savePettyCash(pc);
-  updatePettySummaryUI(pc, dayKey);
+}catch(err){
+  console.error('onSavePettyInitial save error', err);
+  showToast('No se pudo guardar el saldo inicial', 'error', 5000);
+  return;
+}
+
+updatePettySummaryUI(pc, dayKey);
   fillPettyInitialFromPc(pc, dayKey);
   setPrevCierreUI(pc, dayKey);
-  toast('Saldo inicial de Caja Chica guardado');
+  showToast('Saldo inicial guardado', 'ok', 5000);
 }
 
 async function onCopyPettyInitialToFinal(){
@@ -6355,11 +6397,18 @@ async function onSavePettyFinal(){
     savedAt: new Date().toISOString()
   });
 
+  try{
   await savePettyCash(pc);
-  updatePettySummaryUI(pc, dayKey);
+}catch(err){
+  console.error('onSavePettyFinal save error', err);
+  showToast('No se pudo guardar el arqueo final', 'error', 5000);
+  return;
+}
+
+updatePettySummaryUI(pc, dayKey);
   fillPettyFinalFromPc(pc, dayKey);
   setPrevCierreUI(pc, dayKey);
-  toast('Arqueo final de Caja Chica guardado');
+  showToast('Arqueo final guardado', 'ok', 5000);
 }
 
 function renderPettyMovements(pc, dayKey, readOnly){
