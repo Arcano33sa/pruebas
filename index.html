@@ -1995,6 +1995,7 @@ const overlay = document.getElementById('lock-overlay');
             cancelText: 'Cerrar',
             onCancel: hideModal
           });
+
         });
       }
 
@@ -2108,13 +2109,32 @@ const overlay = document.getElementById('lock-overlay');
           const pinStatus = a.hasPin ? 'Configurado' : 'No configurado';
           showModal({
             title: 'Usuario',
-            bodyHtml: `
-              <div class="kv">
-                <div class="k">Nombre</div><div class="v">${escapeHtml(name)}</div>
-                <div class="k">PIN</div><div class="v">${escapeHtml(pinStatus)}</div>
+            bodyHtml: `              <div class=\"kv\">
+                <div class=\"k\">Nombre</div><div class=\"v\">${escapeHtml(name)}</div>
+                <div class=\"k\">PIN</div><div class=\"v\">${escapeHtml(pinStatus)}</div>
+                <div class=\"k\">Dominio</div><div class=\"v\"><span class=\"muted\">${escapeHtml(location.origin)}</span></div>
               </div>
-              <div class="small-note">Todo se guarda localmente en este navegador (modo app / PWA).</div>
-            `,
+
+              <hr>
+
+              <div><b>Autocompletado del navegador</b></div>
+              <div class=\"small-note\">Si al escribir el PIN te aparece <b>“Contraseña de este sitio — Chrome”</b> con un usuario viejo (ej. <b>a1</b>), eso está guardado en el navegador, no en la Suite.</div>
+
+              <div class=\"btn-row\" style=\"margin-top:0.55rem;\">
+                <button class=\"btn btn-ghost\" id=\"btn-open-pw-manager\">Abrir gestor</button>
+                <button class=\"btn btn-ghost\" id=\"btn-copy-domain\">Copiar dominio</button>
+              </div>
+
+              <details style=\"margin-top:0.55rem;\">
+                <summary>Ver pasos (iPad)</summary>
+                <div class=\"small-note\" style=\"margin-top:0.35rem;\">
+                  1) Abrí <b>Chrome</b> → Configuración → <b>Administrador de contraseñas</b>.<br>
+                  2) Buscá <b>${escapeHtml(location.host)}</b> y eliminá/editar la entrada guardada.<br>
+                  3) Si aún aparece, revisá <b>Ajustes del iPad</b> → <b>Contraseñas</b>.
+                </div>
+              </details>
+
+              <div class=\"small-note\">Todo se guarda localmente en este navegador (modo app / PWA).</div>`,
             primaryText: 'Cambiar nombre',
             onPrimary: () => openChangeName(),
             secondaryText: 'Cambiar PIN',
@@ -2122,6 +2142,37 @@ const overlay = document.getElementById('lock-overlay');
             cancelText: 'Cerrar',
             onCancel: hideModal
           });
+
+          setTimeout(() => {
+            const btnOpen = document.getElementById('btn-open-pw-manager');
+            if (btnOpen){
+              btnOpen.onclick = () => {
+                try{
+                  window.open('https://passwords.google.com', '_blank', 'noopener');
+                }catch(e){
+                  window.location.href = 'https://passwords.google.com';
+                }
+              };
+            }
+
+            const btnCopy = document.getElementById('btn-copy-domain');
+            if (btnCopy){
+              btnCopy.onclick = async () => {
+                const dom = location.origin;
+                try{
+                  if (navigator.clipboard && navigator.clipboard.writeText){
+                    await navigator.clipboard.writeText(dom);
+                    alert('Dominio copiado.');
+                  } else {
+                    prompt('Copiá el dominio:', dom);
+                  }
+                }catch(e){
+                  prompt('Copiá el dominio:', dom);
+                }
+              };
+            }
+          }, 0);
+
         });
       }
 
