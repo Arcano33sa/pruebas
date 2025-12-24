@@ -227,6 +227,32 @@
     .btn-primary{ background:var(--primary); color:#fff; }
     .btn-ghost{ background:transparent; border:1px solid rgba(255,255,255,0.18); color:var(--text); }
     .btn-danger{ background:transparent; border:1px solid rgba(176,0,32,0.8); color:#ff8a80; }
+
+    /* --- Toast (mensajes rápidos) --- */
+    .a33-toast{
+      position:fixed;
+      left:50%;
+      bottom:18px;
+      transform:translateX(-50%) translateY(0);
+      background:rgba(8,8,8,0.92);
+      border:1px solid rgba(221,191,100,0.35);
+      color:var(--text);
+      padding:0.55rem 0.85rem;
+      border-radius:14px;
+      font-size:0.82rem;
+      z-index:9999;
+      box-shadow:0 16px 40px rgba(0,0,0,0.65);
+      max-width:min(560px, calc(100vw - 24px));
+      opacity:0;
+      pointer-events:none;
+      transition:opacity 160ms ease, transform 160ms ease;
+      text-align:center;
+    }
+    .a33-toast.show{
+      opacity:1;
+      transform:translateX(-50%) translateY(-4px);
+    }
+
     .hint{
       font-size:0.72rem;
       color:var(--muted);
@@ -726,6 +752,8 @@
   </div>
 
   <input id="backup-file-input" type="file" accept="application/json" style="display:none;">
+  <input id="calc-only-file-input" type="file" accept="application/json" style="display:none;">
+  <div id="a33-toast" class="a33-toast" aria-live="polite"></div>
 
 
   <script>
@@ -1099,6 +1127,175 @@
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
+
+    // --- Toast ---
+    let __toastTimer = null;
+    function showToast(message, ms=4000){
+      const el = document.getElementById('a33-toast');
+      if (!el) { try{ alert(message); }catch(_){ } return; }
+      el.textContent = String(message || '');
+      el.classList.add('show');
+      if (__toastTimer) clearTimeout(__toastTimer);
+      __toastTimer = setTimeout(() => {
+        try{ el.classList.remove('show'); }catch(_){ }
+      }, Math.max(1500, Number(ms) || 4000));
+    }
+
+    // --- Calculadora (ONLY) : export + reset blindado ---
+    const CALC_ONLY_KEYS = [
+      'arcano33_recetas_v1',
+      'arcano33_inventario',
+      'arcano33_lote_actual',
+      'arcano33_fecha_produccion',
+      'arcano33_notas_lote',
+      'arcano33_lotes'
+    ];
+
+    function snapshotCalculatorLocalStorage(){
+      const data = {};
+      for (const k of CALC_ONLY_KEYS){
+        const v = localStorage.getItem(k);
+        if (v != null) data[k] = String(v);
+      }
+      return data;
+    }
+
+    function buildCalcOnlyFilename(){
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2,'0');
+      const stamp = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+      return `A33_Calculadora_ONLY_${stamp}.json`;
+    }
+
+    function buildCalculatorOnlyExport(){
+      return {
+        app: 'Suite A33',
+        module: 'calculadora',
+        exportedAt: new Date().toISOString(),
+        schemaVersion: 1,
+        data: {
+          localStorage: snapshotCalculatorLocalStorage()
+        }
+      };
+    }
+
+    function validateCalculatorOnlyBackup(obj){
+      if (!obj || typeof obj !== 'object') return { ok:false, reason:'Archivo inválido (no es un objeto JSON).' };
+
+      // metadata mínima (estricta)
+      const app = obj.app;
+      const module = obj.module;
+      if (app !== 'Suite A33') return { ok:false, reason:'Metadata inválida: app debe ser "Suite A33".' };
+      if (module !== 'calculadora') return { ok:false, reason:'Metadata inválida: module debe ser "calculadora".' };
+
+      const data = obj.data;
+      if (!data || typeof data !== 'object') return { ok:false, reason:'Falta data.' };
+
+      const ls = data.localStorage;
+      if (!ls || typeof ls !== 'object') return { ok:false, reason:'Falta data.localStorage.' };
+
+      // Debe contener solo claves permitidas (y al menos 1)
+      const keys = Object.keys(ls);
+      if (keys.length === 0) return { ok:false, reason:'data.localStorage está vacío.' };
+
+      for (const k of keys){
+        if (!CALC_ONLY_KEYS.includes(k)){
+          return { ok:false, reason:`Clave no permitida en data.localStorage: ${k}` };
+        }
+        const v = ls[k];
+        if (typeof v !== 'string'){
+          return { ok:false, reason:`Valor inválido para ${k}: se esperaba string.` };
+        }
+      }
+
+      return { ok:true, payload:{ app, module, exportedAt: obj.exportedAt, schemaVersion: obj.schemaVersion, localStorage: ls } };
+    }
+
+    function normalizeJsonText(s){
+      return String(s || '').replace(/^﻿/, '').trim();
+    }
+
+    function safeJsonParse(text){
+      const t = normalizeJsonText(text);
+      try{ return { ok:true, obj: JSON.parse(t) }; }catch(e){ return { ok:false, error:e }; }
+    }
+
+    function shallowEqualStringsObj(a,b){
+      const ak = Object.keys(a||{}).sort();
+      const bk = Object.keys(b||{}).sort();
+      if (ak.length !== bk.length) return false;
+      for (let i=0;i<ak.length;i++){
+        if (ak[i] !== bk[i]) return false;
+        if (String(a[ak[i]]) !== String(b[bk[i]])) return false;
+      }
+      return true;
+    }
+
+    async function deleteAllSuiteCaches(){
+      if (!('caches' in window)) return;
+      try{
+        const names = await caches.keys();
+        await Promise.all(names.map(n => caches.delete(n)));
+      }catch(_){ }
+    }
+
+    function clearSuiteStorageExceptCalculator(keepCalculator){
+      // localStorage: solo claves suite
+      const suiteKeys = getSuiteLocalStorageKeysInThisBrowser();
+      for (const k of suiteKeys){
+        if (keepCalculator && CALC_ONLY_KEYS.includes(k)) continue;
+        try{ localStorage.removeItem(k); }catch(_){ }
+      }
+
+      // sessionStorage: solo claves suite
+      try{
+        const toRemove = [];
+        for (let i = 0; i < sessionStorage.length; i++){
+          const k = sessionStorage.key(i);
+          if (k && isSuiteLocalStorageKey(k)) toRemove.push(k);
+        }
+        toRemove.forEach(k => { try{ sessionStorage.removeItem(k); }catch(_){ } });
+      }catch(_){ }
+    }
+
+    function restoreCalculatorLocalStorage(lsObj){
+      const entries = Object.entries(lsObj || {});
+      for (const [k,v] of entries){
+        if (!CALC_ONLY_KEYS.includes(k)) continue;
+        try{ localStorage.setItem(k, String(v)); }catch(_){ }
+      }
+    }
+
+    async function resetSuitePreservingCalculator(validCalcPayload){
+      // Anti-duplicado: si el respaldo coincide con lo actual, no borramos las claves de calculadora.
+      const currentCalc = snapshotCalculatorLocalStorage();
+      const incomingCalc = validCalcPayload?.localStorage || {};
+      const keepCalculator = shallowEqualStringsObj(currentCalc, incomingCalc);
+
+      // 1) IndexedDB (Suite)
+      const all = await safeListIndexedDBDatabases();
+      const suiteDbList = (Array.isArray(all) ? all : [])
+        .filter(d => d && d.name && isSuiteDbName(d.name))
+        .map(d => d.name);
+
+      for (const dbName of suiteDbList){
+        await deleteDatabase(dbName);
+      }
+
+      // 2) localStorage / sessionStorage
+      clearSuiteStorageExceptCalculator(keepCalculator);
+
+      // 3) caches (SW)
+      await deleteAllSuiteCaches();
+
+      // 4) Restaurar Calculadora (si no la mantuvimos)
+      if (!keepCalculator){
+        restoreCalculatorLocalStorage(incomingCalc);
+      }
+
+      return { kept: keepCalculator };
+    }
+
 
     function buildBackupFilename(){
       const d = new Date();
@@ -2102,81 +2299,278 @@ const overlay = document.getElementById('lock-overlay');
         }, 0);
       }
 
-      if (userPanelCard){
-        userPanelCard.addEventListener('click', () => {
-          const a = readAuth();
-          const name = a.name || AUTH_DEFAULT_NAME;
-          const pinStatus = a.hasPin ? 'Configurado' : 'No configurado';
-          showModal({
-            title: 'Usuario',
-            bodyHtml: `              <div class=\"kv\">
-                <div class=\"k\">Nombre</div><div class=\"v\">${escapeHtml(name)}</div>
-                <div class=\"k\">PIN</div><div class=\"v\">${escapeHtml(pinStatus)}</div>
-                <div class=\"k\">Dominio</div><div class=\"v\"><span class=\"muted\">${escapeHtml(location.origin)}</span></div>
-              </div>
+      // --- Usuario (panel) + Calculadora ONLY (export/reset) ---
+      const calcOnlyFileInput = document.getElementById('calc-only-file-input');
+      let calcOnlySelected = { fileName: '', valid: null, payload: null };
 
-              <hr>
-
-              <div><b>Autocompletado del navegador</b></div>
-              <div class=\"small-note\">Si al escribir el PIN te aparece <b>“Contraseña de este sitio — Chrome”</b> con un usuario viejo (ej. <b>a1</b>), eso está guardado en el navegador, no en la Suite.</div>
-
-              <div class=\"btn-row\" style=\"margin-top:0.55rem;\">
-                <button class=\"btn btn-ghost\" id=\"btn-open-pw-manager\">Abrir gestor</button>
-                <button class=\"btn btn-ghost\" id=\"btn-copy-domain\">Copiar dominio</button>
-              </div>
-
-              <details style=\"margin-top:0.55rem;\">
-                <summary>Ver pasos (iPad)</summary>
-                <div class=\"small-note\" style=\"margin-top:0.35rem;\">
-                  1) Abrí <b>Chrome</b> → Configuración → <b>Administrador de contraseñas</b>.<br>
-                  2) Buscá <b>${escapeHtml(location.host)}</b> y eliminá/editar la entrada guardada.<br>
-                  3) Si aún aparece, revisá <b>Ajustes del iPad</b> → <b>Contraseñas</b>.
-                </div>
-              </details>
-
-              <div class=\"small-note\">Todo se guarda localmente en este navegador (modo app / PWA).</div>`,
-            primaryText: 'Cambiar nombre',
-            onPrimary: () => openChangeName(),
-            secondaryText: 'Cambiar PIN',
-            onSecondary: () => openChangePin(),
-            cancelText: 'Cerrar',
-            onCancel: hideModal
-          });
-
-          setTimeout(() => {
-            const btnOpen = document.getElementById('btn-open-pw-manager');
-            if (btnOpen){
-              btnOpen.onclick = () => {
-                try{
-                  window.open('https://passwords.google.com', '_blank', 'noopener');
-                }catch(e){
-                  window.location.href = 'https://passwords.google.com';
-                }
-              };
-            }
-
-            const btnCopy = document.getElementById('btn-copy-domain');
-            if (btnCopy){
-              btnCopy.onclick = async () => {
-                const dom = location.origin;
-                try{
-                  if (navigator.clipboard && navigator.clipboard.writeText){
-                    await navigator.clipboard.writeText(dom);
-                    alert('Dominio copiado.');
-                  } else {
-                    prompt('Copiá el dominio:', dom);
-                  }
-                }catch(e){
-                  prompt('Copiá el dominio:', dom);
-                }
-              };
-            }
-          }, 0);
-
+      async function pickCalcOnlyFile(){
+        return new Promise((resolve) => {
+          if (!calcOnlyFileInput){
+            resolve(null);
+            return;
+          }
+          calcOnlyFileInput.value = '';
+          const onChange = async () => {
+            calcOnlyFileInput.removeEventListener('change', onChange);
+            const f = calcOnlyFileInput.files && calcOnlyFileInput.files[0];
+            resolve(f || null);
+          };
+          calcOnlyFileInput.addEventListener('change', onChange, { once:false });
+          calcOnlyFileInput.click();
         });
       }
 
-      // Inicializar UI de Usuario
+      async function readTextFile(file){
+        return new Promise((resolve, reject) => {
+          try{
+            const r = new FileReader();
+            r.onload = () => resolve(String(r.result || ''));
+            r.onerror = () => reject(r.error || new Error('No se pudo leer el archivo.'));
+            r.readAsText(file);
+          }catch(e){ reject(e); }
+        });
+      }
+
+      function renderCalcOnlyState(){
+        const status = document.getElementById('calc-only-status');
+        const resetBtn = document.getElementById('btn-reset-suite-keep-calc');
+        if (status){
+          if (calcOnlySelected && calcOnlySelected.valid && calcOnlySelected.valid.ok){
+            status.innerHTML = `✅ <b>${escapeHtml(calcOnlySelected.fileName || 'respaldo')}</b> (válido)`;
+          } else if (calcOnlySelected && calcOnlySelected.fileName){
+            status.innerHTML = `⚠️ <b>${escapeHtml(calcOnlySelected.fileName)}</b> — <span class="muted">${escapeHtml(calcOnlySelected.valid?.reason || 'inválido')}</span>`;
+          } else {
+            status.textContent = 'Sin archivo seleccionado.';
+          }
+        }
+        if (resetBtn){
+          resetBtn.disabled = !(calcOnlySelected && calcOnlySelected.valid && calcOnlySelected.valid.ok);
+        }
+      }
+
+      function openUserPanel(){
+        const a = readAuth();
+        const name = a.name || AUTH_DEFAULT_NAME;
+        const pinStatus = a.hasPin ? 'Configurado' : 'No configurado';
+
+        showModal({
+          title: 'Usuario',
+          bodyHtml: `
+            <div class="kv">
+              <div class="k">Nombre</div><div class="v">${escapeHtml(name)}</div>
+              <div class="k">PIN</div><div class="v">${escapeHtml(pinStatus)}</div>
+              <div class="k">Dominio</div><div class="v"><span class="muted">${escapeHtml(location.origin)}</span></div>
+            </div>
+
+            <hr>
+
+            <div><b>Calculadora</b></div>
+            <div class="small-note">Exporta SOLO la Calculadora para guardarla aparte o para restablecer la Suite.</div>
+
+            <div class="btn-row" style="margin-top:0.55rem;">
+              <button class="btn btn-ghost" id="btn-export-calc-only">Exportar Calculadora (JSON)</button>
+            </div>
+
+            <div style="height:0.35rem;"></div>
+
+            <div><b>Restablecer Suite (conservar Calculadora)</b></div>
+            <div class="small-note">Blindado: primero seleccioná un respaldo válido. Luego confirmación doble.</div>
+
+            <div class="btn-row" style="margin-top:0.55rem;">
+              <button class="btn btn-ghost" id="btn-pick-calc-only">Seleccionar respaldo Calculadora (JSON)</button>
+              <button class="btn btn-danger" id="btn-reset-suite-keep-calc" disabled>Restablecer…</button>
+            </div>
+
+            <div class="small-note" id="calc-only-status" style="margin-top:0.45rem;">Sin archivo seleccionado.</div>
+
+            <hr>
+
+            <div><b>Autocompletado del navegador</b></div>
+            <div class="small-note">Si al escribir el PIN te aparece <b>“Contraseña de este sitio — Chrome”</b> con un usuario viejo (ej. <b>a1</b>), eso está guardado en el navegador, no en la Suite.</div>
+
+            <div class="btn-row" style="margin-top:0.55rem;">
+              <button class="btn btn-ghost" id="btn-open-pw-manager">Abrir gestor</button>
+              <button class="btn btn-ghost" id="btn-copy-domain">Copiar dominio</button>
+            </div>
+
+            <details style="margin-top:0.55rem;">
+              <summary>Ver pasos (iPad)</summary>
+              <div class="small-note" style="margin-top:0.35rem;">
+                1) Abrí <b>Chrome</b> → Configuración → <b>Administrador de contraseñas</b>.<br>
+                2) Buscá <b>${escapeHtml(location.host)}</b> y eliminá/editar la entrada guardada.<br>
+                3) Si aún aparece, revisá <b>Ajustes del iPad</b> → <b>Contraseñas</b>.
+              </div>
+            </details>
+
+            <div class="small-note">Todo se guarda localmente en este navegador (modo app / PWA).</div>
+          `,
+          primaryText: 'Cambiar nombre',
+          onPrimary: () => openChangeName(),
+          secondaryText: 'Cambiar PIN',
+          onSecondary: () => openChangePin(),
+          cancelText: 'Cerrar',
+          onCancel: hideModal
+        });
+
+        setTimeout(() => {
+          // botones existentes
+          const btnOpen = document.getElementById('btn-open-pw-manager');
+          if (btnOpen){
+            btnOpen.onclick = () => {
+              try{ window.open('https://passwords.google.com', '_blank', 'noopener'); }
+              catch(e){ window.location.href = 'https://passwords.google.com'; }
+            };
+          }
+
+          const btnCopy = document.getElementById('btn-copy-domain');
+          if (btnCopy){
+            btnCopy.onclick = async () => {
+              const dom = location.origin;
+              try{
+                if (navigator.clipboard && navigator.clipboard.writeText){
+                  await navigator.clipboard.writeText(dom);
+                  showToast('Dominio copiado.', 3000);
+                } else {
+                  prompt('Copiá el dominio:', dom);
+                }
+              }catch(e){
+                prompt('Copiá el dominio:', dom);
+              }
+            };
+          }
+
+          // Calculadora: export
+          const btnExportCalc = document.getElementById('btn-export-calc-only');
+          if (btnExportCalc){
+            btnExportCalc.onclick = () => {
+              try{
+                const payload = buildCalculatorOnlyExport();
+                const json = JSON.stringify(payload, null, 2);
+                downloadTextFile(buildCalcOnlyFilename(), json);
+                showToast('✅ Calculadora exportada (JSON).', 4500);
+              }catch(e){
+                showToast(`⚠️ No se pudo exportar: ${e?.message || e}`, 5500);
+              }
+            };
+          }
+
+          // Calculadora: seleccionar archivo
+          const btnPick = document.getElementById('btn-pick-calc-only');
+          if (btnPick){
+            btnPick.onclick = async () => {
+              const f = await pickCalcOnlyFile();
+              if (!f) return;
+
+              calcOnlySelected = { fileName: f.name, valid: null, payload: null };
+              renderCalcOnlyState();
+
+              try{
+                const text = await readTextFile(f);
+                const parsed = safeJsonParse(text);
+                if (!parsed.ok){
+                  calcOnlySelected.valid = { ok:false, reason:'JSON inválido.' };
+                  renderCalcOnlyState();
+                  showToast('⚠️ JSON inválido.', 4500);
+                  return;
+                }
+
+                const v = validateCalculatorOnlyBackup(parsed.obj);
+                calcOnlySelected.valid = v;
+                calcOnlySelected.payload = v.ok ? v.payload : null;
+
+                renderCalcOnlyState();
+                if (v.ok) showToast('✅ Respaldo de Calculadora validado.', 3500);
+                else showToast(`⚠️ Respaldo inválido: ${v.reason}`, 6500);
+              }catch(e){
+                calcOnlySelected.valid = { ok:false, reason: e?.message || String(e) };
+                renderCalcOnlyState();
+                showToast(`⚠️ No se pudo leer/validar: ${e?.message || e}`, 6500);
+              }
+            };
+          }
+
+          // Restablecer Suite (blindado)
+          const btnReset = document.getElementById('btn-reset-suite-keep-calc');
+          if (btnReset){
+            btnReset.onclick = async () => {
+              if (!(calcOnlySelected && calcOnlySelected.valid && calcOnlySelected.valid.ok && calcOnlySelected.payload)){
+                showToast('Seleccioná un JSON válido de Calculadora primero.', 4500);
+                return;
+              }
+
+              const goBack = () => openUserPanel();
+
+              showModal({
+                title: 'Restablecer Suite',
+                bodyHtml: `
+                  <div class="badge-warn">⚠️ Esto borrará <b>TODO</b> en este navegador (POS, Finanzas, Pedidos, etc.).</div>
+                  <div class="small-note" style="margin-top:0.4rem;">Se conservará la Calculadora usando el JSON validado.</div>
+                  <div class="small-note">Tip: cerrá otras pestañas de la Suite para evitar bloqueo.</div>
+                `,
+                primaryText: 'Continuar',
+                onPrimary: () => {
+                  showModal({
+                    title: 'Confirmación final',
+                    bodyHtml: `
+                      <div class="small-note">Escribí exactamente <b>BORRAR</b> para confirmar.</div>
+                      <div class="field" style="margin-top:0.55rem;">
+                        <label for="confirm-borrar">Confirmación</label>
+                        <input id="confirm-borrar" type="text" placeholder="BORRAR" maxlength="12" style="letter-spacing:0.08em;text-align:center;">
+                      </div>
+                      <div class="small-note">Si te equivocas, no pasa nada: la Suite se queda intacta.</div>
+                    `,
+                    primaryText: 'Borrar todo y reiniciar',
+                    onPrimary: async () => {
+                      const v = (document.getElementById('confirm-borrar')?.value || '').trim();
+                      if (v !== 'BORRAR'){
+                        showToast('Confirmación incorrecta. Escribí BORRAR (tal cual).', 4500);
+                        return;
+                      }
+
+                      showModal({
+                        title: 'Restableciendo...',
+                        bodyHtml: '<div class="muted">Borrando datos y restaurando Calculadora. No cierres esta pestaña.</div>',
+                        disableCancel: true,
+                        disablePrimary: true
+                      });
+
+                      try{
+                        await resetSuitePreservingCalculator(calcOnlySelected.payload);
+                        location.reload();
+                      }catch(err){
+                        showModal({
+                          title: 'No se pudo restablecer',
+                          bodyHtml: `<div class="badge-warn">⚠️ ${escapeHtml(err?.message || err)}</div><div class="small-note">Cierra otras pestañas de la Suite y reintenta.</div>`,
+                          primaryText: 'Volver',
+                          onPrimary: () => goBack(),
+                          cancelText: 'Cerrar',
+                          onCancel: hideModal
+                        });
+                      }
+                    },
+                    cancelText: 'Cancelar',
+                    onCancel: () => goBack()
+                  });
+
+                  setTimeout(() => {
+                    const el = document.getElementById('confirm-borrar');
+                    if (el) el.focus();
+                  }, 0);
+                },
+                cancelText: 'Cancelar',
+                onCancel: () => goBack()
+              });
+            };
+          }
+
+          renderCalcOnlyState();
+        }, 0);
+      }
+
+      if (userPanelCard){
+        userPanelCard.addEventListener('click', openUserPanel);
+      }
+// Inicializar UI de Usuario
       refreshUserCard();
 
       
