@@ -866,35 +866,60 @@ function mergePettyDay(dayA, dayB){
 }
 
 async function savePettyCash(pc){
-  if (!pc || pc.eventId == null) {
-    return Promise.reject(new Error('pettyCash inválido'));
-  }
+  // IMPORTANTE: esta función debe FALLAR si no se pudo persistir en IndexedDB.
+  // Antes resolvía “silenciosamente” en error y eso hacía que “Cerrar día” pareciera funcionar,
+  // pero al recargar seguía “Día abierto” (closedAt null).
+  if (!pc || pc.eventId == null) throw new Error('pettyCash inválido');
   if (!db) await openDB();
 
-  return new Promise((resolve, reject)=>{
-    try{
-      const store = tx('pettyCash','readwrite');
-      const cleaned = { eventId: pc.eventId, version: 2, days: {} };
+  // Normalizar / limpiar para evitar basura y mantener esquema estable
+  const cleaned = { eventId: pc.eventId, version: 2, days: {} };
 
-      const days = pc.days && typeof pc.days === 'object' ? pc.days : {};
-      for (const k in days){
-        const dayKey = normalizePcDayKey(k, days[k]);
-        if (!dayKey) continue;
-        const norm = normalizePettyDay(days[k]);
-        cleaned.days[dayKey] = cleaned.days[dayKey] ? mergePettyDay(cleaned.days[dayKey], norm) : norm;
-      }
+  const days = pc.days && typeof pc.days === 'object' ? pc.days : {};
+  for (const k in days){
+    const dayKey = normalizePcDayKey(k, days[k]);
+    if (!dayKey) continue;
+    const norm = normalizePettyDay(days[k]);
+    cleaned.days[dayKey] = cleaned.days[dayKey] ? mergePettyDay(cleaned.days[dayKey], norm) : norm;
+  }
+
+  const putOnce = () => new Promise((resolve, reject)=>{
+    try{
+      const tr = db.transaction('pettyCash', 'readwrite');
+      const store = tr.objectStore('pettyCash');
+
+      tr.oncomplete = ()=> resolve();
+      tr.onabort = ()=> reject(tr.error || new Error('Transacción abortada (pettyCash).'));
+      tr.onerror = ()=> reject(tr.error || new Error('Error de transacción (pettyCash).'));
 
       const req = store.put(cleaned);
-      req.onsuccess = ()=>resolve(true);
-      req.onerror = ()=>{
-        console.error('Error guardando pettyCash', req.error);
-        reject(req.error || new Error('Error guardando pettyCash'));
+      req.onerror = ()=> {
+        // Normalmente la transacción se aborta y tr.onabort manejará el rechazo.
+        // Dejamos el error registrado para diagnóstico.
+        console.error('Error guardando pettyCash (put)', req.error);
       };
     }catch(err){
-      console.error('Error savePettyCash', err);
       reject(err);
     }
   });
+
+  try{
+    await putOnce();
+  }catch(err){
+    // Si la BD estaba cerrada / en estado inválido, reabrimos y reintentamos una vez.
+    const name = (err && err.name) ? err.name : '';
+    if (name === 'InvalidStateError' || name === 'TransactionInactiveError'){
+      try{
+        db = null;
+        await openDB();
+        await putOnce();
+        return;
+      }catch(e2){
+        throw e2;
+      }
+    }
+    throw err;
+  }
 }
 
 function ensurePcDay(pc, dayKey){
@@ -5569,22 +5594,18 @@ async function onClosePettyDay(){
 Esto bloqueará edición de Caja Chica para este día.`);
   if (!ok) return;
 
-const prevClosedAt = day.closedAt || null;
-day.closedAt = new Date().toISOString();
-
-try{
-  await savePettyCash(pc);
-}catch(err){
-  console.error('onClosePettyDay save error', err);
-  day.closedAt = prevClosedAt;
-  if (typeof showToast === 'function') showToast('No se pudo cerrar el día', 'error', 5000);
-  else toast('No se pudo cerrar el día');
-  return;
-}
-
-await renderCajaChica();
-if (typeof showToast === 'function') showToast('Día cerrado', 'ok', 5000);
-else toast('Día cerrado');
+  day.closedAt = new Date().toISOString();
+  try{
+    await savePettyCash(pc);
+  }catch(err){
+    console.error('onClosePettyDay save error', err);
+    day.closedAt = null;
+    showToast('No se pudo cerrar el día', 'error', 5000);
+    await renderCajaChica();
+    return;
+  }
+  await renderCajaChica();
+  showToast('Día cerrado', 'ok', 5000);
 }
 
 async function onReopenPettyDay(){
@@ -5606,22 +5627,17 @@ async function onReopenPettyDay(){
 Podrás editar Caja Chica y el cierre del día quedará removido.`);
   if (!ok) return;
 
-const prevClosedAt = day.closedAt || null;
-day.closedAt = null;
-
-try{
-  await savePettyCash(pc);
-}catch(err){
-  console.error('onReopenPettyDay save error', err);
-  day.closedAt = prevClosedAt;
-  if (typeof showToast === 'function') showToast('No se pudo reabrir el día', 'error', 5000);
-  else toast('No se pudo reabrir el día');
-  return;
-}
-
-await renderCajaChica();
-if (typeof showToast === 'function') showToast('Día reabierto', 'ok', 5000);
-else toast('Día reabierto');
+  day.closedAt = null;
+  try{
+    await savePettyCash(pc);
+  }catch(err){
+    console.error('onReopenPettyDay save error', err);
+    showToast('No se pudo reabrir el día', 'error', 5000);
+    await renderCajaChica();
+    return;
+  }
+  await renderCajaChica();
+  showToast('Día reabierto', 'ok', 5000);
 }
 
 // --- Caja Chica: histórico (solo lectura)
@@ -5816,16 +5832,15 @@ async function onUseHistoryFinalAsInitial(){
     savedAt: new Date().toISOString()
   });
 
-try{
-  await savePettyCash(pc);
-}catch(err){
-  console.error('onUseHistoryFinalAsInitial save error', err);
-  if (typeof showToast === 'function') showToast('No se pudo precargar el saldo inicial', 'error', 5000);
-  else toast('No se pudo precargar el saldo inicial');
-  return;
-}
-
-// Volver al día operativo (objetivo) y renderizar
+    try{
+    await savePettyCash(pc);
+  }catch(err){
+    console.error('onUseHistoryFinalAsInitial save error', err);
+    showToast('No se pudo precargar el saldo inicial', 'error', 5000);
+    await renderCajaChica();
+    return;
+  }
+ // Volver al día operativo (objetivo) y renderizar
   const dayInput = document.getElementById('pc-day');
   pettyHistoryMode = false;
   pettyHistoryDayKey = null;
@@ -6371,16 +6386,16 @@ async function onCopyPettyInitialToFinal(){
     savedAt: new Date().toISOString()
   });
 
-try{
-  await savePettyCash(pc);
-}catch(err){
-  console.error('onCopyPettyInitialToFinal save error', err);
-  if (typeof showToast === 'function') showToast('No se pudo copiar el saldo inicial al arqueo final', 'error', 5000);
-  else toast('No se pudo copiar el saldo inicial al arqueo final');
-  return;
-}
+    try{
+    await savePettyCash(pc);
+  }catch(err){
+    console.error('onCopyPettyInitialToFinal save error', err);
+    showToast('No se pudo guardar el arqueo final', 'error', 5000);
+    await renderCajaChica();
+    return;
+  }
 
-// Refrescar UI inmediatamente
+  // Refrescar UI inmediatamente
   fillPettyFinalFromPc(pc, dayKey);
   updatePettySummaryUI(pc, dayKey, { cashSalesNio });
   setPrevCierreUI(pc, dayKey);
@@ -6598,16 +6613,15 @@ async function onAddPettyMovement(){
 
   day.movements.push(mov);
 
-try{
-  await savePettyCash(pc);
-}catch(err){
-  console.error('onAddPettyMovement save error', err);
-  if (typeof showToast === 'function') showToast('No se pudo guardar el movimiento', 'error', 5000);
-  else toast('No se pudo guardar el movimiento');
-  await renderCajaChica(); // re-sync desde IDB
-  return;
-}
-// Re-render completo para refrescar candado de cierre
+  try{
+    await savePettyCash(pc);
+  }catch(err){
+    console.error('onAddPettyMovement save error', err);
+    showToast('No se pudo guardar el movimiento', 'error', 5000);
+    await renderCajaChica();
+    return;
+  }
+  // Re-render completo para refrescar candado de cierre
   await renderCajaChica();
 
   if (amtInput) amtInput.value = '0.00';
@@ -6631,16 +6645,15 @@ async function onDeletePettyMovement(id){
   if (!Array.isArray(day.movements)) day.movements = [];
   day.movements = day.movements.filter(m => m.id !== id);
 
-try{
-  await savePettyCash(pc);
-}catch(err){
-  console.error('onDeletePettyMovement save error', err);
-  if (typeof showToast === 'function') showToast('No se pudo eliminar el movimiento', 'error', 5000);
-  else toast('No se pudo eliminar el movimiento');
+  try{
+    await savePettyCash(pc);
+  }catch(err){
+    console.error('onDeletePettyMovement save error', err);
+    showToast('No se pudo eliminar el movimiento', 'error', 5000);
+    await renderCajaChica();
+    return;
+  }
   await renderCajaChica();
-  return;
-}
-await renderCajaChica();
 }
 
 
@@ -6680,19 +6693,18 @@ async function onUsePrevCierre(){
     savedAt: new Date().toISOString()
   });
 
-try{
-  await savePettyCash(pc);
-}catch(err){
-  console.error('onUsePrevCierre save error', err);
-  if (typeof showToast === 'function') showToast('No se pudo precargar el saldo inicial desde el cierre anterior', 'error', 5000);
-  else toast('No se pudo precargar el saldo inicial desde el cierre anterior');
-  return;
-}
-updatePettySummaryUI(pc, dayKey);
-fillPettyInitialFromPc(pc, dayKey);
-setPrevCierreUI(pc, dayKey);
-if (typeof showToast === 'function') showToast('Saldo inicial precargado desde el cierre anterior', 'ok', 5000);
-else toast('Saldo inicial precargado desde el cierre anterior');
+  try{
+    await savePettyCash(pc);
+  }catch(err){
+    console.error('onUsePrevCierre save error', err);
+    showToast('No se pudo precargar el saldo inicial', 'error', 5000);
+    await renderCajaChica();
+    return;
+  }
+  updatePettySummaryUI(pc, dayKey);
+  fillPettyInitialFromPc(pc, dayKey);
+  setPrevCierreUI(pc, dayKey);
+  toast('Saldo inicial precargado desde el cierre anterior');
 }
 
 function bindCajaChicaEvents(){
