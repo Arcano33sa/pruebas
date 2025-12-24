@@ -227,33 +227,38 @@ function renderTable() {
     tr.appendChild(entregadoTd);
 
     const accionesTd = document.createElement("td");
-    accionesTd.style.whiteSpace = "nowrap";
+    accionesTd.className = "actions-cell";
 
     const verBtn = document.createElement("button");
-    verBtn.textContent = "Ver";
-    verBtn.className = "btn-secondary";
+    verBtn.textContent = "👁";
+    verBtn.className = "btn-secondary a33-icon-btn";
     verBtn.type = "button";
+    verBtn.title = "Ver";
+    verBtn.setAttribute("aria-label", "Ver");
     verBtn.addEventListener("click", () => verPedido(p.id));
 
     const calBtn = document.createElement("button");
-    calBtn.textContent = "Calendario";
-    calBtn.className = "btn-secondary";
+    calBtn.textContent = "📅";
+    calBtn.className = "btn-secondary a33-icon-btn";
     calBtn.type = "button";
-    calBtn.style.marginLeft = "0.25rem";
+    calBtn.title = "Calendario";
+    calBtn.setAttribute("aria-label", "Calendario");
     calBtn.addEventListener("click", () => exportPedidoToCalendar(p.id));
 
     const editarBtn = document.createElement("button");
-    editarBtn.textContent = "Editar";
-    editarBtn.className = "btn-primary";
+    editarBtn.textContent = "✏️";
+    editarBtn.className = "btn-primary a33-icon-btn";
     editarBtn.type = "button";
-    editarBtn.style.marginLeft = "0.25rem";
+    editarBtn.title = "Editar";
+    editarBtn.setAttribute("aria-label", "Editar");
     editarBtn.addEventListener("click", () => editPedido(p.id));
 
     const borrarBtn = document.createElement("button");
-    borrarBtn.textContent = "Borrar";
-    borrarBtn.className = "btn-danger";
+    borrarBtn.textContent = "🗑";
+    borrarBtn.className = "btn-danger a33-icon-btn";
     borrarBtn.type = "button";
-    borrarBtn.style.marginLeft = "0.25rem";
+    borrarBtn.title = "Borrar";
+    borrarBtn.setAttribute("aria-label", "Borrar");
     borrarBtn.addEventListener("click", () => deletePedido(p.id));
 
     accionesTd.appendChild(verBtn);
