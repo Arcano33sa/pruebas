@@ -193,7 +193,9 @@ function renderLiquidos(inv) {
 
     const btnEntrada = document.createElement("button");
     btnEntrada.type = "button";
-    btnEntrada.textContent = "Entrada";
+    btnEntrada.textContent = "+";
+    btnEntrada.title = "Entrada";
+    btnEntrada.setAttribute("aria-label", "Entrada");
     btnEntrada.className = "btn-secondary btn-mini";
     btnEntrada.dataset.action = "entrada";
     btnEntrada.dataset.id = l.id;
@@ -201,7 +203,9 @@ function renderLiquidos(inv) {
 
     const btnSalida = document.createElement("button");
     btnSalida.type = "button";
-    btnSalida.textContent = "Salida";
+    btnSalida.textContent = "−";
+    btnSalida.title = "Salida";
+    btnSalida.setAttribute("aria-label", "Salida");
     btnSalida.className = "btn-danger btn-mini";
     btnSalida.dataset.action = "salida";
     btnSalida.dataset.id = l.id;
@@ -253,7 +257,9 @@ function renderBotellas(inv) {
 
     const btnEntrada = document.createElement("button");
     btnEntrada.type = "button";
-    btnEntrada.textContent = "Entrada";
+    btnEntrada.textContent = "+";
+    btnEntrada.title = "Entrada";
+    btnEntrada.setAttribute("aria-label", "Entrada");
     btnEntrada.className = "btn-secondary btn-mini";
     btnEntrada.dataset.action = "entrada";
     btnEntrada.dataset.id = bDef.id;
@@ -261,7 +267,9 @@ function renderBotellas(inv) {
 
     const btnSalida = document.createElement("button");
     btnSalida.type = "button";
-    btnSalida.textContent = "Salida";
+    btnSalida.textContent = "−";
+    btnSalida.title = "Salida";
+    btnSalida.setAttribute("aria-label", "Salida");
     btnSalida.className = "btn-danger btn-mini";
     btnSalida.dataset.action = "salida";
     btnSalida.dataset.id = bDef.id;
