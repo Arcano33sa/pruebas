@@ -1142,15 +1142,7 @@
     }
 
     // --- Calculadora (ONLY) : export + reset blindado ---
-    // Importante:
-    // "arcano33_inventario" se comparte entre Calculadora e Inventario.
-    // El reset "conservar Calculadora" debe borrar el Inventario (módulo),
-    // así que NO preservamos esa clave.
-    // Para compatibilidad con respaldos viejos, la aceptamos si viene en el JSON,
-    // pero la ignoramos al restaurar.
-
-    // Claves permitidas en el JSON (compatibilidad)
-    const CALC_BACKUP_KEYS = [
+    const CALC_ONLY_KEYS = [
       'arcano33_recetas_v1',
       'arcano33_inventario',
       'arcano33_lote_actual',
@@ -1159,18 +1151,9 @@
       'arcano33_lotes'
     ];
 
-    // Claves que realmente se exportan/preservan/restauran
-    const CALC_RESTORE_KEYS = [
-      'arcano33_recetas_v1',
-      'arcano33_lote_actual',
-      'arcano33_fecha_produccion',
-      'arcano33_notas_lote',
-      'arcano33_lotes'
-    ];
-
     function snapshotCalculatorLocalStorage(){
       const data = {};
-      for (const k of CALC_RESTORE_KEYS){
+      for (const k of CALC_ONLY_KEYS){
         const v = localStorage.getItem(k);
         if (v != null) data[k] = String(v);
       }
@@ -1215,12 +1198,8 @@
       const keys = Object.keys(ls);
       if (keys.length === 0) return { ok:false, reason:'data.localStorage está vacío.' };
 
-      // Debe incluir al menos 1 clave que sí restauramos
-      const hasRestorable = keys.some(k => CALC_RESTORE_KEYS.includes(k));
-      if (!hasRestorable) return { ok:false, reason:'Respaldo inválido: no contiene claves restaurables de Calculadora.' };
-
       for (const k of keys){
-        if (!CALC_BACKUP_KEYS.includes(k)){
+        if (!CALC_ONLY_KEYS.includes(k)){
           return { ok:false, reason:`Clave no permitida en data.localStorage: ${k}` };
         }
         const v = ls[k];
@@ -1264,7 +1243,7 @@
       // localStorage: solo claves suite
       const suiteKeys = getSuiteLocalStorageKeysInThisBrowser();
       for (const k of suiteKeys){
-        if (keepCalculator && CALC_RESTORE_KEYS.includes(k)) continue;
+        if (keepCalculator && CALC_ONLY_KEYS.includes(k)) continue;
         try{ localStorage.removeItem(k); }catch(_){ }
       }
 
@@ -1282,7 +1261,7 @@
     function restoreCalculatorLocalStorage(lsObj){
       const entries = Object.entries(lsObj || {});
       for (const [k,v] of entries){
-        if (!CALC_RESTORE_KEYS.includes(k)) continue;
+        if (!CALC_ONLY_KEYS.includes(k)) continue;
         try{ localStorage.setItem(k, String(v)); }catch(_){ }
       }
     }
@@ -1290,12 +1269,7 @@
     async function resetSuitePreservingCalculator(validCalcPayload){
       // Anti-duplicado: si el respaldo coincide con lo actual, no borramos las claves de calculadora.
       const currentCalc = snapshotCalculatorLocalStorage();
-      const incomingRaw = validCalcPayload?.localStorage || {};
-      // Filtrar a solo las claves que realmente restauramos/preservamos (ignora compatibilidad como arcano33_inventario)
-      const incomingCalc = {};
-      for (const k of CALC_RESTORE_KEYS){
-        if (incomingRaw[k] != null) incomingCalc[k] = String(incomingRaw[k]);
-      }
+      const incomingCalc = validCalcPayload?.localStorage || {};
       const keepCalculator = shallowEqualStringsObj(currentCalc, incomingCalc);
 
       // 1) IndexedDB (Suite)
