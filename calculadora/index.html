@@ -290,6 +290,13 @@
     <button id="btn-limpiar" class="btn-secondary">Limpiar cantidades (no borra recetas)</button>
   </div>
 
+  <script src="/assets/js/a33-storage.js"></script>
+  <script src="/assets/js/a33-auth.js"></script>
+  <script>
+    if (!(A33Auth.isConfigured() && A33Auth.isAuthenticated())){
+      location.href = "../index.html";
+    }
+  </script>
   <script>
     const INGREDIENTES = ["vino", "vodka", "jugo", "sirope", "agua"];
     const PRESENTACIONES = [
@@ -338,7 +345,7 @@
 
     function invLoad() {
       try {
-        const raw = localStorage.getItem(STORAGE_KEY_INVENTARIO);
+        const raw = A33Storage.getItem(STORAGE_KEY_INVENTARIO);
         let data = raw ? JSON.parse(raw) : null;
         if (!data || typeof data !== "object") data = invDefault();
         if (!data.liquids) data.liquids = {};
@@ -367,7 +374,7 @@
 
     function invSave(inv) {
       try {
-        localStorage.setItem(STORAGE_KEY_INVENTARIO, JSON.stringify(inv));
+        A33Storage.setItem(STORAGE_KEY_INVENTARIO, JSON.stringify(inv));
       } catch (e) {
         console.warn("No se pudo guardar el inventario.", e);
       }
@@ -633,12 +640,12 @@
         recetas,
         costosPresentacion
       };
-      localStorage.setItem(STORAGE_RECETAS_KEY, JSON.stringify(payload));
+      A33Storage.setItem(STORAGE_RECETAS_KEY, JSON.stringify(payload));
       alert("Recetas y costos guardados en este navegador ✅");
     }
 
     function cargarRecetas() {
-      const raw = localStorage.getItem(STORAGE_RECETAS_KEY);
+      const raw = A33Storage.getItem(STORAGE_RECETAS_KEY);
       if (!raw) return;
       try {
         const data = JSON.parse(raw);
@@ -680,13 +687,13 @@
       const fechaProdInput = document.getElementById("fecha-produccion");
       const notasInput = document.getElementById("notas");
       if (loteInput) {
-        localStorage.setItem(STORAGE_LOTE_KEY, loteInput.value || "");
+        A33Storage.setItem(STORAGE_LOTE_KEY, loteInput.value || "");
       }
       if (fechaProdInput) {
-        localStorage.setItem(STORAGE_FECHA_PROD_KEY, fechaProdInput.value || "");
+        A33Storage.setItem(STORAGE_FECHA_PROD_KEY, fechaProdInput.value || "");
       }
       if (notasInput) {
-        localStorage.setItem(STORAGE_NOTAS_KEY, notasInput.value || "");
+        A33Storage.setItem(STORAGE_NOTAS_KEY, notasInput.value || "");
       }
       actualizarTextoCaducidad();
     }
@@ -694,9 +701,9 @@
       const loteInput = document.getElementById("lote");
       const fechaProdInput = document.getElementById("fecha-produccion");
       const notasInput = document.getElementById("notas");
-      const loteVal = localStorage.getItem(STORAGE_LOTE_KEY);
-      const fechaVal = localStorage.getItem(STORAGE_FECHA_PROD_KEY);
-      const notasVal = localStorage.getItem(STORAGE_NOTAS_KEY);
+      const loteVal = A33Storage.getItem(STORAGE_LOTE_KEY);
+      const fechaVal = A33Storage.getItem(STORAGE_FECHA_PROD_KEY);
+      const notasVal = A33Storage.getItem(STORAGE_NOTAS_KEY);
       if (loteInput && loteVal !== null) loteInput.value = loteVal;
       if (fechaProdInput && fechaVal !== null) fechaProdInput.value = fechaVal;
       if (notasInput && notasVal !== null) notasInput.value = notasVal;
@@ -907,7 +914,7 @@
       }
       let lotes = [];
       try {
-        const raw = localStorage.getItem("arcano33_lotes");
+        const raw = A33Storage.getItem("arcano33_lotes");
         if (raw) lotes = JSON.parse(raw) || [];
         if (!Array.isArray(lotes)) lotes = [];
       } catch (e) {
@@ -952,7 +959,7 @@
       // Ajustar inventario global según este lote
       aplicarConsumoInventarioDesdeLote(datos, mapUnits);
       try {
-        localStorage.setItem("arcano33_lotes", JSON.stringify(lotes));
+        A33Storage.setItem("arcano33_lotes", JSON.stringify(lotes));
         alert("Lote guardado en el Control de Lotes interno.");
       } catch (e) {
         alert("No se pudo guardar el lote en el navegador.");

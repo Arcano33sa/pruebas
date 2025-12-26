@@ -96,6 +96,13 @@
     <p>Arcano 33 · Inventario interno de insumos, botellas y producto terminado</p>
   </footer>
 
+  <script src="/assets/js/a33-storage.js"></script>
+  <script src="/assets/js/a33-auth.js"></script>
+  <script>
+    if (!(A33Auth.isConfigured() && A33Auth.isAuthenticated())){
+      location.href = "../index.html";
+    }
+  </script>
   <script src="script.js"></script>
   <script src="/assets/js/a33-input-ux.js"></script>
 </body>
