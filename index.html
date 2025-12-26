@@ -488,10 +488,55 @@
       .pdf-topbar-actions{ justify-content:flex-start; }
     }
 
+    /* --- Boot splash (evita flashazo de login al volver al menú) --- */
+    .boot-splash{
+      position:fixed;
+      inset:0;
+      z-index:9998;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      background:radial-gradient(900px 480px at 30% 20%, rgba(221,191,100,0.12), transparent 60%),
+                 radial-gradient(700px 420px at 80% 0%, rgba(171,0,0,0.12), transparent 65%),
+                 linear-gradient(145deg,#0b0b0b,#151010);
+      color:#f2f2f2;
+    }
+    .boot-splash .boot-card{
+      width:min(520px, 92vw);
+      padding:1.15rem 1.15rem 1.0rem;
+      border-radius:20px;
+      border:1px solid rgba(221,191,100,0.45);
+      box-shadow:0 18px 40px rgba(0,0,0,0.92);
+      background:rgba(0,0,0,0.40);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      text-align:left;
+    }
+    .boot-splash .boot-title{
+      font-size:1.1rem;
+      margin:0;
+      letter-spacing:0.03em;
+    }
+    .boot-splash .boot-sub{
+      margin:0.35rem 0 0;
+      font-size:0.85rem;
+      color:var(--muted);
+      line-height:1.35;
+    }
+    .boot-splash .boot-dots{ display:inline-block; width:1.4em; text-align:left; }
+
 </style>
 </head>
 <body>
-  <div class="lock-overlay" id="lock-overlay">
+  <!-- Splash inicial: evita el "flashazo" del login al volver al menú principal -->
+  <div class="boot-splash" id="boot-splash" aria-live="polite">
+    <div class="boot-card">
+      <h2 class="boot-title">Suite A33</h2>
+      <p class="boot-sub">Verificando sesión<span class="boot-dots">…</span></p>
+    </div>
+  </div>
+
+  <div class="lock-overlay" id="lock-overlay" style="display:none;">
     <div class="lock-card">
       <div id="lock-setup">
         <h2 class="lock-title">Configurar acceso</h2>
@@ -788,7 +833,13 @@
       A33Auth.setDisplayName((newName || '').trim() || AUTH_DEFAULT_NAME);
     }
 
+    function hideBootSplash(){
+      const bs = document.getElementById('boot-splash');
+      if (bs) bs.style.display = 'none';
+    }
+
     function showApp(){
+      hideBootSplash();
       const overlay = document.getElementById('lock-overlay');
       const shell = document.getElementById('app-shell');
       overlay.style.display = 'none';
@@ -796,6 +847,7 @@
     }
 
     function showLock(){
+      hideBootSplash();
       const overlay = document.getElementById('lock-overlay');
       const shell = document.getElementById('app-shell');
       overlay.style.display = 'flex';
@@ -2054,7 +2106,10 @@
       }
 
       // --- Auth UI (usuario + contraseña) ---
-      initAuthUi();
+      initAuthUi().catch(err => {
+        console.error('Auth init failed:', err);
+        try { showLock(); } catch(e) {}
+      });
 
       const btnSetup = document.getElementById('btn-auth-setup');
       const btnLogin = document.getElementById('btn-login');
