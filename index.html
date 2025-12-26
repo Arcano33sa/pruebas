@@ -1142,14 +1142,19 @@
     }
 
     // --- Calculadora (ONLY) : export + reset blindado ---
+    // Claves estrictas de Calculadora (SIN Inventario)
     const CALC_ONLY_KEYS = [
       'arcano33_recetas_v1',
-      'arcano33_inventario',
       'arcano33_lote_actual',
       'arcano33_fecha_produccion',
       'arcano33_notas_lote',
       'arcano33_lotes'
     ];
+
+    // Claves aceptadas por compatibilidad (backups viejos pueden traer Inventario; se ignora al restaurar)
+    const CALC_ONLY_KEYS_ALLOWED = CALC_ONLY_KEYS.concat([
+      'arcano33_inventario'
+    ]);
 
     function snapshotCalculatorLocalStorage(){
       const data = {};
@@ -1172,7 +1177,7 @@
         app: 'Suite A33',
         module: 'calculadora',
         exportedAt: new Date().toISOString(),
-        schemaVersion: 1,
+        schemaVersion: 2,
         data: {
           localStorage: snapshotCalculatorLocalStorage()
         }
@@ -1199,7 +1204,7 @@
       if (keys.length === 0) return { ok:false, reason:'data.localStorage está vacío.' };
 
       for (const k of keys){
-        if (!CALC_ONLY_KEYS.includes(k)){
+        if (!CALC_ONLY_KEYS_ALLOWED.includes(k)){
           return { ok:false, reason:`Clave no permitida en data.localStorage: ${k}` };
         }
         const v = ls[k];
@@ -1208,7 +1213,14 @@
         }
       }
 
-      return { ok:true, payload:{ app, module, exportedAt: obj.exportedAt, schemaVersion: obj.schemaVersion, localStorage: ls } };
+      // Sanitizar: NO restauramos inventario aunque venga en respaldos viejos
+      const sanitizedLS = {};
+      for (const k of CALC_ONLY_KEYS){
+        if (typeof ls[k] === 'string') sanitizedLS[k] = ls[k];
+      }
+      if (Object.keys(sanitizedLS).length === 0) return { ok:false, reason:'Respaldo sin claves válidas de Calculadora.' };
+
+      return { ok:true, payload:{ app, module, exportedAt: obj.exportedAt, schemaVersion: obj.schemaVersion, localStorage: sanitizedLS } };
     }
 
     function normalizeJsonText(s){
