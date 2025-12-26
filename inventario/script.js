@@ -64,7 +64,7 @@ function markA33Num(input, { defaultValue = '0', mode = 'decimal' } = {}) {
 
 function loadInventario() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY_INVENTARIO);
+    const raw = A33Storage.getItem(STORAGE_KEY_INVENTARIO);
     let data = raw ? JSON.parse(raw) : null;
     if (!data || typeof data !== "object") data = defaultInventario();
 
@@ -104,7 +104,7 @@ function loadInventario() {
 }
 
 function saveInventario(inv) {
-  localStorage.setItem(STORAGE_KEY_INVENTARIO, JSON.stringify(inv));
+  A33Storage.setItem(STORAGE_KEY_INVENTARIO, JSON.stringify(inv));
 }
 
 function calcularEstadoLiquido(liq) {

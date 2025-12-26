@@ -1,4 +1,4 @@
-const CACHE_NAME = "arcano33-lotes-v4_20_2";
+const CACHE_NAME = "arcano33-lotes-v4_20_2_fix1";
 const ASSETS = [
   "./",
   "./index.html",
@@ -7,6 +7,8 @@ const ASSETS = [
   "./manifest.webmanifest",
   "./images/logo.png",
   "/assets/js/a33-input-ux.js",
+  "/assets/js/a33-storage.js",
+  "/assets/js/a33-auth.js",
   "/assets/css/a33-header.css"
 ];
 

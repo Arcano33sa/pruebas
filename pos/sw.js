@@ -1,4 +1,4 @@
-const CACHE = 'a33-pos-v4_20_2';
+const CACHE = 'a33-pos-v4_20_2_fix1';
 const ASSETS = [
   './',
   './index.html?v=4.20.2',
@@ -9,6 +9,8 @@ const ASSETS = [
   './brand_symbol.jpg',
   './brand_wordmark.jpg',
   '/assets/js/a33-input-ux.js',
+  '/assets/js/a33-storage.js',
+  '/assets/js/a33-auth.js',
   '/assets/css/a33-header.css'
 ];
 
