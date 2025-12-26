@@ -199,12 +199,12 @@
       background:#050505;
       color:var(--text);
       font-size:0.95rem;
-      letter-spacing:0.02em;
-      text-align:left;
+      letter-spacing:0.25em;
+      text-align:center;
     }
     .field input[type="password"]::placeholder{
       color:#444;
-      letter-spacing:0.02em;
+      letter-spacing:0.25em;
     }
     .btn-row{
       display:flex;
@@ -494,49 +494,40 @@
   <div class="lock-overlay" id="lock-overlay">
     <div class="lock-card">
       <div id="lock-setup">
-        <h2 class="lock-title">Configurar acceso</h2>
-        <p class="lock-sub">Crea <b>usuario</b> y <b>contraseña</b> para proteger la Suite A33 en este dispositivo.</p>
+        <h2 class="lock-title">Configurar PIN de acceso</h2>
+        <p class="lock-sub">Crea un PIN de 6 dígitos para proteger la Suite A33 en este dispositivo.</p>
         <div class="field">
-          <label for="auth-user">Usuario</label>
-          <input id="auth-user" type="text" autocomplete="username" placeholder="Ej: alquimista" />
+          <label for="pin-new">Nuevo PIN (6 dígitos)</label>
+          <input id="pin-new" type="password" inputmode="numeric" maxlength="6" placeholder="••••••">
         </div>
         <div class="field">
-          <label for="auth-pass">Contraseña</label>
-          <input id="auth-pass" type="password" autocomplete="new-password" placeholder="Tu contraseña" />
-        </div>
-        <div class="field">
-          <label for="auth-pass2">Confirmar contraseña</label>
-          <input id="auth-pass2" type="password" autocomplete="new-password" placeholder="Repite la contraseña" />
-        </div>
-        <div class="field">
-          <label for="auth-name">Nombre (opcional)</label>
-          <input id="auth-name" type="text" autocomplete="name" placeholder="Ej: El Alquimista" />
+          <label for="pin-confirm">Confirmar PIN</label>
+          <input id="pin-confirm" type="password" inputmode="numeric" maxlength="6" placeholder="••••••">
         </div>
         <div class="btn-row">
-          <button class="btn btn-primary" id="btn-auth-setup">Guardar acceso</button>
+          <button class="btn btn-primary" id="btn-save-pin">Guardar PIN</button>
+          <button class="btn btn-ghost" id="btn-skip-pin">Usar sin PIN</button>
         </div>
-        <p class="hint">Se guarda solo en este navegador (modo app/PWA). Si borras los datos, tendrás que configurarlo de nuevo.</p>
+        <p class="hint">Este PIN se guarda solo en este navegador. Si borras los datos, tendrás que volver a configurarlo.</p>
       </div>
 
       <div id="lock-unlock" style="display:none;">
-        <h2 class="lock-title">Iniciar sesión</h2>
-        <p class="lock-sub">Ingresa tus credenciales para acceder a los módulos.</p>
+        <h2 class="lock-title">Desbloquear Suite A33</h2>
+        <p class="lock-sub">Ingresa tu PIN de 6 dígitos para acceder a los módulos.</p>
         <div class="field">
-          <label for="login-user">Usuario</label>
-          <input id="login-user" type="text" autocomplete="username" placeholder="Tu usuario" />
-        </div>
-        <div class="field">
-          <label for="login-pass">Contraseña</label>
-          <input id="login-pass" type="password" autocomplete="current-password" placeholder="Tu contraseña" />
+          <label for="pin-input">PIN</label>
+          <input id="pin-input" type="password" inputmode="numeric" maxlength="6" placeholder="••••••">
         </div>
         <div class="btn-row">
-          <button class="btn btn-primary" id="btn-login">Entrar</button>
-          <button class="btn btn-danger" id="btn-reset-credentials">Resetear acceso</button>
+          <button class="btn btn-primary" id="btn-unlock">Entrar</button>
+          <button class="btn btn-danger" id="btn-reset">Resetear PIN y datos</button>
         </div>
-        <p class="hint">La sesión vive en este navegador y expira (por defecto) en 12 horas.</p>
+        <p class="hint">El PIN solo se pedirá de nuevo cuando cierres o recargues la Suite.</p>
       </div>
 
-      <div class="pin-mode-switch" id="pin-mode-switch" style="display:none;"></div>
+      <div class="pin-mode-switch" id="pin-mode-switch" style="display:none;">
+        <button id="btn-change-pin">Cambiar PIN</button>
+      </div>
     </div>
   </div>
 
@@ -671,7 +662,7 @@
           <article class="card" id="card-user-panel">
             <div class="pill"><span>👤</span><span>Usuario</span></div>
             <h2>Usuario</h2>
-            <p>Nombre actual: <b id="user-card-name">—</b>. Cambia nombre o contraseña sin borrar datos.</p>
+            <p>Nombre actual: <b id="user-card-name">—</b>. Cambia nombre o PIN sin borrar datos.</p>
             <div class="footer-row">
               <span id="user-card-sub">Gestionar</span>
               <button class="link-btn secondary"><span>Abrir</span> →</button>
@@ -765,71 +756,100 @@
   <div id="a33-toast" class="a33-toast" aria-live="polite"></div>
 
 
-  <script src="assets/js/a33-storage.js"></script>
-  <script src="assets/js/a33-auth.js"></script>
   <script>
-    // --- Auth (usuario + contraseña, 1 usuario) ---
+    const PIN_KEY = 'suite_a33_pin';
+    const SESSION_KEY = 'suite_a33_unlocked';
+
+    function onlyDigits(str){
+      return /^[0-9]{6}$/.test(str);
+    }
+
+    // --- Auth (PIN + Usuario) ---
     const AUTH_DEFAULT_NAME = 'Usuario';
+    const LEGACY_NAME_KEYS = [
+      'suite_a33_user',
+      'suite_a33_username',
+      'suite_a33_nombre',
+      'a33_user',
+      'a33_username',
+      'arcano33_user',
+      'arcano33_username'
+    ];
 
     function readAuth(){
-      return {
-        configured: A33Auth.isConfigured(),
-        authenticated: A33Auth.isAuthenticated(),
-        username: A33Auth.getUsername() || '',
-        name: A33Auth.getDisplayName() || AUTH_DEFAULT_NAME
+      const raw = localStorage.getItem(PIN_KEY);
+      let pin = null;
+      let name = null;
+
+      if (raw){
+        // Formato legacy: solo "123456"
+        if (onlyDigits(raw)){
+          pin = raw;
+        } else {
+          // Formato nuevo: JSON { pin, name }
+          try{
+            const obj = JSON.parse(raw);
+            if (obj && typeof obj === 'object'){
+              if (onlyDigits(String(obj.pin || ''))){
+                pin = String(obj.pin);
+              }
+              if (obj.name != null){
+                name = String(obj.name).trim() || null;
+              }
+            }
+          }catch(e){
+            // Si se corrompió, lo tratamos como inexistente
+          }
+        }
+      }
+
+      if (!name){
+        // Compat: si algún día existió un key separado de nombre, lo leemos
+        for (const k of LEGACY_NAME_KEYS){
+          const v = localStorage.getItem(k);
+          if (v && String(v).trim()){
+            name = String(v).trim();
+            break;
+          }
+        }
+      }
+
+      return { raw, pin, name, hasPin: !!pin };
+    }
+
+    function writeAuth({ pin, name }){
+      const payload = {
+        pin: (pin && onlyDigits(String(pin))) ? String(pin) : null,
+        name: (name && String(name).trim()) ? String(name).trim() : null
       };
+      localStorage.setItem(PIN_KEY, JSON.stringify(payload));
+    }
+
+    function getStoredPin(){
+      return readAuth().pin;
     }
 
     function getStoredName(){
-      return A33Auth.getDisplayName() || AUTH_DEFAULT_NAME;
+      const a = readAuth();
+      return a.name || AUTH_DEFAULT_NAME;
     }
 
     function setStoredName(newName){
-      A33Auth.setDisplayName((newName || '').trim() || AUTH_DEFAULT_NAME);
+      const a = readAuth();
+      writeAuth({ pin: a.pin, name: (newName || '').trim() || AUTH_DEFAULT_NAME });
     }
+
+    function setStoredPin(newPin){
+      const a = readAuth();
+      writeAuth({ pin: newPin, name: a.name || AUTH_DEFAULT_NAME });
+    }
+
 
     function showApp(){
       const overlay = document.getElementById('lock-overlay');
       const shell = document.getElementById('app-shell');
       overlay.style.display = 'none';
       shell.style.display = 'block';
-    }
-
-    function showLock(){
-      const overlay = document.getElementById('lock-overlay');
-      const shell = document.getElementById('app-shell');
-      overlay.style.display = 'flex';
-      shell.style.display = 'none';
-    }
-
-    async function initAuthUi(){
-      await A33Auth.ensureMigrated();
-      const overlay = document.getElementById('lock-overlay');
-      const setup = document.getElementById('lock-setup');
-      const unlock = document.getElementById('lock-unlock');
-      const modeSwitch = document.getElementById('pin-mode-switch');
-
-      const a = readAuth();
-      if (a.configured && a.authenticated){
-        overlay.style.display = 'none';
-        showApp();
-        if (modeSwitch) modeSwitch.style.display = 'none';
-        return;
-      }
-
-      showLock();
-      if (!a.configured){
-        setup.style.display = 'block';
-        unlock.style.display = 'none';
-        if (modeSwitch) modeSwitch.style.display = 'none';
-      } else {
-        setup.style.display = 'none';
-        unlock.style.display = 'block';
-        if (modeSwitch) modeSwitch.style.display = 'none';
-        const u = a.username;
-        const uEl = document.getElementById('login-user');
-        if (uEl && u) uEl.value = u;
-      }
     }
 
     // --- Respaldo manual (Exportar / Importar) ---
@@ -981,12 +1001,12 @@
     function getSuiteLocalStorageSnapshot(){
       const out = {};
       const keys = [];
-      const allKeys = A33Storage.keys({ scope: 'local' });
-      for (const k of allKeys){
+      for (let i = 0; i < localStorage.length; i++){
+        const k = localStorage.key(i);
         if (!k) continue;
         if (!isSuiteLocalStorageKey(k)) continue;
         keys.push(k);
-        out[k] = A33Storage.getItem(k);
+        out[k] = localStorage.getItem(k);
       }
       keys.sort();
       return { data: out, keys, count: keys.length };
@@ -1122,8 +1142,7 @@
     }
 
     // --- Calculadora (ONLY) : export + reset blindado ---
-    // Calculadora ONLY (estricto): NO incluye inventario.
-    // Compat: backups viejos podrían traer arcano33_inventario; lo aceptamos pero lo IGNORAMOS al restaurar.
+    // Claves estrictas de Calculadora (SIN Inventario)
     const CALC_ONLY_KEYS = [
       'arcano33_recetas_v1',
       'arcano33_lote_actual',
@@ -1131,13 +1150,16 @@
       'arcano33_notas_lote',
       'arcano33_lotes'
     ];
-    const CALC_ONLY_LEGACY_IGNORED_KEYS = ['arcano33_inventario'];
-    const CALC_ONLY_ALLOWED_KEYS = CALC_ONLY_KEYS.concat(CALC_ONLY_LEGACY_IGNORED_KEYS);
+
+    // Claves aceptadas por compatibilidad (backups viejos pueden traer Inventario; se ignora al restaurar)
+    const CALC_ONLY_KEYS_ALLOWED = CALC_ONLY_KEYS.concat([
+      'arcano33_inventario'
+    ]);
 
     function snapshotCalculatorLocalStorage(){
       const data = {};
       for (const k of CALC_ONLY_KEYS){
-        const v = A33Storage.getItem(k);
+        const v = localStorage.getItem(k);
         if (v != null) data[k] = String(v);
       }
       return data;
@@ -1155,7 +1177,7 @@
         app: 'Suite A33',
         module: 'calculadora',
         exportedAt: new Date().toISOString(),
-        schemaVersion: 1,
+        schemaVersion: 2,
         data: {
           localStorage: snapshotCalculatorLocalStorage()
         }
@@ -1182,7 +1204,7 @@
       if (keys.length === 0) return { ok:false, reason:'data.localStorage está vacío.' };
 
       for (const k of keys){
-        if (!CALC_ONLY_ALLOWED_KEYS.includes(k)){
+        if (!CALC_ONLY_KEYS_ALLOWED.includes(k)){
           return { ok:false, reason:`Clave no permitida en data.localStorage: ${k}` };
         }
         const v = ls[k];
@@ -1191,12 +1213,14 @@
         }
       }
 
-      // Filtrar solo lo estrictamente permitido (sin inventario)
-      const filtered = {};
+      // Sanitizar: NO restauramos inventario aunque venga en respaldos viejos
+      const sanitizedLS = {};
       for (const k of CALC_ONLY_KEYS){
-        if (typeof ls[k] === 'string') filtered[k] = ls[k];
+        if (typeof ls[k] === 'string') sanitizedLS[k] = ls[k];
       }
-      return { ok:true, payload:{ app, module, exportedAt: obj.exportedAt, schemaVersion: obj.schemaVersion, localStorage: filtered } };
+      if (Object.keys(sanitizedLS).length === 0) return { ok:false, reason:'Respaldo sin claves válidas de Calculadora.' };
+
+      return { ok:true, payload:{ app, module, exportedAt: obj.exportedAt, schemaVersion: obj.schemaVersion, localStorage: sanitizedLS } };
     }
 
     function normalizeJsonText(s){
@@ -1232,13 +1256,17 @@
       const suiteKeys = getSuiteLocalStorageKeysInThisBrowser();
       for (const k of suiteKeys){
         if (keepCalculator && CALC_ONLY_KEYS.includes(k)) continue;
-        try{ A33Storage.removeItem(k); }catch(_){ }
+        try{ localStorage.removeItem(k); }catch(_){ }
       }
 
       // sessionStorage: solo claves suite
       try{
-        const toRemove = A33Storage.keys({ scope:'session' }).filter(k => k && isSuiteLocalStorageKey(k));
-        toRemove.forEach(k => { try{ A33Storage.removeItem(k, 'session'); }catch(_){ } });
+        const toRemove = [];
+        for (let i = 0; i < sessionStorage.length; i++){
+          const k = sessionStorage.key(i);
+          if (k && isSuiteLocalStorageKey(k)) toRemove.push(k);
+        }
+        toRemove.forEach(k => { try{ sessionStorage.removeItem(k); }catch(_){ } });
       }catch(_){ }
     }
 
@@ -1246,7 +1274,7 @@
       const entries = Object.entries(lsObj || {});
       for (const [k,v] of entries){
         if (!CALC_ONLY_KEYS.includes(k)) continue;
-        try{ A33Storage.setItem(k, String(v)); }catch(_){ }
+        try{ localStorage.setItem(k, String(v)); }catch(_){ }
       }
     }
 
@@ -1405,7 +1433,12 @@
 
 
     function getSuiteLocalStorageKeysInThisBrowser(){
-      return A33Storage.keys({ scope: 'local' }).filter(k => k && isSuiteLocalStorageKey(k));
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++){
+        const k = localStorage.key(i);
+        if (k && isSuiteLocalStorageKey(k)) keys.push(k);
+      }
+      return keys;
     }
 
     function deleteDatabase(dbName){
@@ -1542,13 +1575,13 @@
       // 4) Restaurar localStorage (solo keys Suite)
       const currentLsKeys = getSuiteLocalStorageKeysInThisBrowser();
       for (const k of currentLsKeys){
-        try{ A33Storage.removeItem(k); }catch(_){}
+        try{ localStorage.removeItem(k); }catch(_){}
       }
 
       const incoming = obj?.data?.localStorage || {};
       for (const [k, v] of Object.entries(incoming)){
         if (!isSuiteLocalStorageKey(k)) continue;
-        try{ A33Storage.setItem(k, String(v ?? '')); }catch(_){}
+        try{ localStorage.setItem(k, String(v ?? '')); }catch(_){}
       }
 
       return true;
@@ -2053,63 +2086,87 @@
         });
       }
 
-      // --- Auth UI (usuario + contraseña) ---
-      initAuthUi();
+const overlay = document.getElementById('lock-overlay');
+      const setup = document.getElementById('lock-setup');
+      const unlock = document.getElementById('lock-unlock');
+      const modeSwitch = document.getElementById('pin-mode-switch');
 
-      const btnSetup = document.getElementById('btn-auth-setup');
-      const btnLogin = document.getElementById('btn-login');
-      const btnResetCred = document.getElementById('btn-reset-credentials');
+      const storedPin = getStoredPin();
+      const sessionOk = sessionStorage.getItem(SESSION_KEY) === '1';
 
-      async function doSetup(){
-        const user = (document.getElementById('auth-user')?.value || '').trim();
-        const pass = (document.getElementById('auth-pass')?.value || '');
-        const pass2 = (document.getElementById('auth-pass2')?.value || '');
-        const name = (document.getElementById('auth-name')?.value || '').trim();
-
-        if (!user){ alert('Usuario requerido.'); return; }
-        if (!pass || pass.length < 4){ alert('Contraseña muy corta (mínimo 4).'); return; }
-        if (pass !== pass2){ alert('Las contraseñas no coinciden.'); return; }
-
-        try{
-          await A33Auth.setup({ username: user, password: pass, displayName: name });
-          await A33Auth.login({ username: user, password: pass });
-          showApp();
-        }catch(err){
-          alert(err?.message || String(err));
-        }
+      if (!storedPin){
+        // No hay PIN, mostrar configuración
+        setup.style.display = 'block';
+        unlock.style.display = 'none';
+        modeSwitch.style.display = 'none';
+      } else if (sessionOk){
+        // Sesión ya desbloqueada
+        overlay.style.display = 'none';
+        showApp();
+      } else {
+        // Hay PIN guardado pero no sesión
+        setup.style.display = 'none';
+        unlock.style.display = 'block';
+        modeSwitch.style.display = 'block';
       }
 
-      async function doLogin(){
-        const user = (document.getElementById('login-user')?.value || '').trim();
-        const pass = (document.getElementById('login-pass')?.value || '');
-        if (!user){ alert('Usuario requerido.'); return; }
-        if (!pass){ alert('Contraseña requerida.'); return; }
-        try{
-          await A33Auth.login({ username: user, password: pass });
-          showApp();
-        }catch(err){
-          alert('Credenciales incorrectas.');
+      document.getElementById('btn-save-pin').addEventListener('click', () => {
+        const p1 = document.getElementById('pin-new').value.trim();
+        const p2 = document.getElementById('pin-confirm').value.trim();
+        if (!onlyDigits(p1)){
+          alert('El PIN debe tener exactamente 6 dígitos numéricos.');
+          return;
         }
-      }
+        if (p1 !== p2){
+          alert('Los PIN no coinciden.');
+          return;
+        }
+        setStoredPin(p1);
+        sessionStorage.setItem(SESSION_KEY, '1');
+        showApp();
+        overlay.style.display = 'none';
+      });
 
-      if (btnSetup) btnSetup.addEventListener('click', doSetup);
-      if (btnLogin) btnLogin.addEventListener('click', doLogin);
-      if (btnResetCred) btnResetCred.addEventListener('click', () => {
-        if (!confirm('Esto resetea solo el ACCESO (usuario/contraseña) de este navegador. No borra datos de módulos. ¿Continuar?')) return;
-        A33Auth.resetCredentials();
+      document.getElementById('btn-skip-pin').addEventListener('click', () => {
+        // Usar sin PIN: solo se desbloquea la sesión actual
+        sessionStorage.setItem(SESSION_KEY, '1');
+        overlay.style.display = 'none';
+        showApp();
+      });
+
+      document.getElementById('btn-unlock').addEventListener('click', () => {
+        const input = document.getElementById('pin-input').value.trim();
+        const stored = getStoredPin();
+        if (input === stored){
+          sessionStorage.setItem(SESSION_KEY, '1');
+          showApp();
+        } else {
+          alert('PIN incorrecto.');
+        }
+      });
+
+      document.getElementById('btn-reset').addEventListener('click', () => {
+        if (!confirm('Esto borrará el PIN y los datos locales de la Suite A33 en este navegador (lotes, configuraciones, etc.). ¿Continuar?')) return;
+        try{
+          localStorage.clear();
+          sessionStorage.clear();
+        }catch(e){}
         location.reload();
       });
 
-      // Enter = entrar
-      ['auth-user','auth-pass','auth-pass2','auth-name','login-user','login-pass'].forEach(id => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.addEventListener('keydown', (e) => {
-          if (e.key !== 'Enter') return;
-          const a = readAuth();
-          if (!a.configured) doSetup(); else doLogin();
-        });
+      document.getElementById('btn-change-pin').addEventListener('click', () => {
+        // Volver al modo de configuración para cambiar PIN
+        document.getElementById('pin-new').value = '';
+        document.getElementById('pin-confirm').value = '';
+        document.getElementById('pin-input').value = '';
+        setup.style.display = 'block';
+        unlock.style.display = 'none';
       });
+
+      // Activar switch "Cambiar PIN" solo si existe PIN
+      if (getStoredPin()){
+        modeSwitch.style.display = 'block';
+      }
 
       // Navegación por tarjetas
       document.querySelectorAll('.card[data-link]').forEach(card => {
@@ -2160,10 +2217,7 @@
         const a = readAuth();
         const name = a.name || AUTH_DEFAULT_NAME;
         if (userCardNameEl) userCardNameEl.textContent = name;
-        if (userCardSubEl){
-          if (!a.configured) userCardSubEl.textContent = 'Sin acceso';
-          else userCardSubEl.textContent = a.authenticated ? 'Sesión activa' : 'Sesión expirada';
-        }
+        if (userCardSubEl) userCardSubEl.textContent = a.hasPin ? 'PIN activo' : 'Sin PIN';
       }
 
       function openChangeName(){
@@ -2199,96 +2253,60 @@
         }, 0);
       }
 
-      function openChangePassword(){
+      function openChangePin(){
         const a = readAuth();
-        if (!a.configured){
-          alert('No hay acceso configurado todavía.');
-          return;
-        }
+        const needCurrent = a.hasPin;
+
+        const currentField = needCurrent ? `
+          <div class="field">
+            <label for="pin-current">PIN actual</label>
+            <input id="pin-current" type="password" inputmode="numeric" maxlength="6" placeholder="••••••">
+          </div>
+        ` : '';
 
         showModal({
-          title: 'Cambiar contraseña',
+          title: 'Cambiar PIN',
           bodyHtml: `
+            ${currentField}
             <div class="field">
-              <label for="pw-current">Contraseña actual</label>
-              <input id="pw-current" type="password" autocomplete="current-password" placeholder="Actual">
+              <label for="pin-new-user">Nuevo PIN (6 dígitos)</label>
+              <input id="pin-new-user" type="password" inputmode="numeric" maxlength="6" placeholder="••••••">
             </div>
             <div class="field">
-              <label for="pw-new">Nueva contraseña</label>
-              <input id="pw-new" type="password" autocomplete="new-password" placeholder="Nueva">
+              <label for="pin-confirm-user">Confirmar PIN</label>
+              <input id="pin-confirm-user" type="password" inputmode="numeric" maxlength="6" placeholder="••••••">
             </div>
-            <div class="field">
-              <label for="pw-new2">Confirmar nueva contraseña</label>
-              <input id="pw-new2" type="password" autocomplete="new-password" placeholder="Repite">
-            </div>
-            <div class="small-note">Por seguridad se cerrará la sesión y tendrás que iniciar de nuevo.</div>
+            <div class="small-note">Al guardar, el próximo ingreso pedirá el nuevo PIN.</div>
           `,
-          primaryText: 'Guardar',
-          onPrimary: async () => {
-            const cur = (document.getElementById('pw-current')?.value || '');
-            const p1 = (document.getElementById('pw-new')?.value || '');
-            const p2 = (document.getElementById('pw-new2')?.value || '');
-            if (!cur){ alert('Escribe la contraseña actual.'); return; }
-            if (!p1 || p1.length < 4){ alert('Nueva contraseña muy corta (mínimo 4).'); return; }
-            if (p1 !== p2){ alert('Las contraseñas no coinciden.'); return; }
-            try{
-              await A33Auth.changePassword({ currentUsername: A33Auth.getUsername(), password: cur, newPassword: p1 });
-              hideModal();
-              alert('Contraseña actualizada. Inicia sesión de nuevo.');
-              await initAuthUi();
-            }catch(e){
-              alert(e?.message || 'No se pudo cambiar la contraseña.');
+          primaryText: 'Guardar PIN',
+          onPrimary: () => {
+            if (needCurrent){
+              const cur = (document.getElementById('pin-current')?.value || '').trim();
+              if (cur !== a.pin){
+                alert('PIN actual incorrecto.');
+                return;
+              }
             }
-          },
-          cancelText: 'Cancelar',
-          onCancel: hideModal
-        });
-
-        setTimeout(() => {
-          const el = document.getElementById('pw-current');
-          if (el){ el.focus(); }
-        }, 0);
-      }
-
-      function openChangeUsername(){
-        const a = readAuth();
-        if (!a.configured){
-          alert('No hay acceso configurado todavía.');
-          return;
-        }
-        showModal({
-          title: 'Cambiar usuario',
-          bodyHtml: `
-            <div class="field">
-              <label for="u-current-pw">Contraseña actual</label>
-              <input id="u-current-pw" type="password" autocomplete="current-password" placeholder="Actual">
-            </div>
-            <div class="field">
-              <label for="u-new">Nuevo usuario</label>
-              <input id="u-new" type="text" autocomplete="username" maxlength="40" placeholder="Nuevo usuario">
-            </div>
-            <div class="small-note">Es 1 solo usuario: al cambiarlo, el login pedirá el nuevo nombre.</div>
-          `,
-          primaryText: 'Guardar',
-          onPrimary: async () => {
-            const curPw = (document.getElementById('u-current-pw')?.value || '');
-            const newU = (document.getElementById('u-new')?.value || '').trim();
-            if (!curPw){ alert('Escribe la contraseña actual.'); return; }
-            if (!newU){ alert('Escribe un usuario.'); return; }
-            try{
-              await A33Auth.changeUsername({ currentUsername: A33Auth.getUsername(), password: curPw, newUsername: newU });
-              hideModal();
-              alert('Usuario actualizado. Inicia sesión de nuevo.');
-              await initAuthUi();
-            }catch(e){
-              alert(e?.message || 'No se pudo cambiar el usuario.');
+            const p1 = (document.getElementById('pin-new-user')?.value || '').trim();
+            const p2 = (document.getElementById('pin-confirm-user')?.value || '').trim();
+            if (!onlyDigits(p1)){
+              alert('El PIN debe tener exactamente 6 dígitos numéricos.');
+              return;
             }
+            if (p1 !== p2){
+              alert('Los PIN no coinciden.');
+              return;
+            }
+            setStoredPin(p1);
+            refreshUserCard();
+            hideModal();
+            alert('PIN actualizado.');
           },
           cancelText: 'Cancelar',
           onCancel: hideModal
         });
         setTimeout(() => {
-          const el = document.getElementById('u-current-pw');
+          const el = document.getElementById(needCurrent ? 'pin-current' : 'pin-new-user');
           if (el){ el.focus(); }
         }, 0);
       }
@@ -2345,18 +2363,14 @@
       function openUserPanel(){
         const a = readAuth();
         const name = a.name || AUTH_DEFAULT_NAME;
-        const accessStatus = a.configured ? 'Configurado' : 'No configurado';
-        const sessionStatus = a.configured ? (a.authenticated ? 'Activa' : 'Expirada') : 'N/A';
-        const username = a.username || '—';
+        const pinStatus = a.hasPin ? 'Configurado' : 'No configurado';
 
         showModal({
           title: 'Usuario',
           bodyHtml: `
             <div class="kv">
               <div class="k">Nombre</div><div class="v">${escapeHtml(name)}</div>
-              <div class="k">Usuario</div><div class="v">${escapeHtml(username)}</div>
-              <div class="k">Acceso</div><div class="v">${escapeHtml(accessStatus)}</div>
-              <div class="k">Sesión</div><div class="v">${escapeHtml(sessionStatus)}</div>
+              <div class="k">PIN</div><div class="v">${escapeHtml(pinStatus)}</div>
               <div class="k">Dominio</div><div class="v"><span class="muted">${escapeHtml(location.origin)}</span></div>
             </div>
 
@@ -2383,18 +2397,8 @@
 
             <hr>
 
-            <div><b>Seguridad</b></div>
-            <div class="small-note">Acceso local (PWA). Si querés, podés cambiar el usuario/contraseña o cerrar la sesión.</div>
-
-            <div class="btn-row" style="margin-top:0.55rem;">
-              <button class="btn btn-ghost" id="btn-change-username">Cambiar usuario</button>
-              <button class="btn btn-ghost" id="btn-logout">Cerrar sesión</button>
-            </div>
-
-            <hr>
-
             <div><b>Autocompletado del navegador</b></div>
-            <div class="small-note">Si al escribir la contraseña te aparece <b>“Contraseña de este sitio — Chrome”</b> con un usuario viejo (ej. <b>a1</b>), eso está guardado en el navegador, no en la Suite.</div>
+            <div class="small-note">Si al escribir el PIN te aparece <b>“Contraseña de este sitio — Chrome”</b> con un usuario viejo (ej. <b>a1</b>), eso está guardado en el navegador, no en la Suite.</div>
 
             <div class="btn-row" style="margin-top:0.55rem;">
               <button class="btn btn-ghost" id="btn-open-pw-manager">Abrir gestor</button>
@@ -2414,8 +2418,8 @@
           `,
           primaryText: 'Cambiar nombre',
           onPrimary: () => openChangeName(),
-          secondaryText: 'Cambiar contraseña',
-          onSecondary: () => openChangePassword(),
+          secondaryText: 'Cambiar PIN',
+          onSecondary: () => openChangePin(),
           cancelText: 'Cerrar',
           onCancel: hideModal
         });
@@ -2444,19 +2448,6 @@
               }catch(e){
                 prompt('Copiá el dominio:', dom);
               }
-            };
-          }
-
-          const btnChangeU = document.getElementById('btn-change-username');
-          if (btnChangeU){
-            btnChangeU.onclick = () => openChangeUsername();
-          }
-
-          const btnLogout = document.getElementById('btn-logout');
-          if (btnLogout){
-            btnLogout.onclick = () => {
-              A33Auth.logout();
-              location.reload();
             };
           }
 

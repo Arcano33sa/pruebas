@@ -7,8 +7,6 @@ const ASSETS = [
   "./manifest.webmanifest",
   "./images/logo.png",
   "/assets/js/a33-input-ux.js",
-  "/assets/js/a33-storage.js",
-  "/assets/js/a33-auth.js",
   "/assets/css/a33-header.css"
 ];
 

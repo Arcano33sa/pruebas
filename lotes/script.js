@@ -24,7 +24,7 @@ function $(id) {
 
 function loadLotes() {
   try {
-    const raw = A33Storage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -36,7 +36,7 @@ function loadLotes() {
 }
 
 function saveLotes(data) {
-  A33Storage.setItem(STORAGE_KEY, JSON.stringify(data));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
 
 function formatDate(value) {
@@ -429,7 +429,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   $("clear-all-btn").addEventListener("click", () => {
     if (!confirm("¿Borrar todos los lotes registrados?")) return;
-    A33Storage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(STORAGE_KEY);
     clearForm();
     renderTable();
   });

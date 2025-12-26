@@ -7,7 +7,7 @@ function $(id) {
 
 function loadPedidos() {
   try {
-    const raw = A33Storage.getItem(STORAGE_KEY_PEDIDOS);
+    const raw = localStorage.getItem(STORAGE_KEY_PEDIDOS);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
@@ -18,7 +18,7 @@ function loadPedidos() {
 }
 
 function savePedidos(list) {
-  A33Storage.setItem(STORAGE_KEY_PEDIDOS, JSON.stringify(list));
+  localStorage.setItem(STORAGE_KEY_PEDIDOS, JSON.stringify(list));
 }
 
 function formatDate(d) {
@@ -599,7 +599,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("export-btn").addEventListener("click", () => exportToCSV());
   $("clear-all-btn").addEventListener("click", () => {
     if (!confirm("¿Borrar todos los pedidos registrados?")) return;
-    A33Storage.removeItem(STORAGE_KEY_PEDIDOS);
+    localStorage.removeItem(STORAGE_KEY_PEDIDOS);
     renderTable();
     clearForm();
   });

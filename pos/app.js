@@ -839,7 +839,7 @@ const HIDDEN_GROUPS_KEY = 'a33_pos_hiddenGroups';
 
 function getLastGroupName() {
   try {
-    return A33Storage.getItem(LAST_GROUP_KEY) || '';
+    return localStorage.getItem(LAST_GROUP_KEY) || '';
   } catch (e) {
     return '';
   }
@@ -847,7 +847,7 @@ function getLastGroupName() {
 
 function setLastGroupName(name) {
   try {
-    A33Storage.setItem(LAST_GROUP_KEY, name || '');
+    localStorage.setItem(LAST_GROUP_KEY, name || '');
   } catch (e) {
     console.warn('No se pudo guardar último grupo usado', e);
   }
@@ -855,7 +855,7 @@ function setLastGroupName(name) {
 
 function getHiddenGroups() {
   try {
-    const raw = A33Storage.getItem(HIDDEN_GROUPS_KEY);
+    const raw = localStorage.getItem(HIDDEN_GROUPS_KEY);
     if (!raw) return [];
     const arr = JSON.parse(raw);
     return Array.isArray(arr) ? arr : [];
@@ -868,7 +868,7 @@ function getHiddenGroups() {
 function setHiddenGroups(list) {
   try {
     const clean = Array.from(new Set((list || []).filter(Boolean)));
-    A33Storage.setItem(HIDDEN_GROUPS_KEY, JSON.stringify(clean));
+    localStorage.setItem(HIDDEN_GROUPS_KEY, JSON.stringify(clean));
   } catch (e) {
     console.warn('No se pudieron guardar grupos ocultos', e);
   }
@@ -1454,7 +1454,7 @@ function invCentralDefaultPOS(){
 }
 function invCentralLoadPOS(){
   try{
-    const raw = A33Storage.getItem(STORAGE_KEY_INVENTARIO);
+    const raw = localStorage.getItem(STORAGE_KEY_INVENTARIO);
     let data = raw ? JSON.parse(raw) : null;
     if (!data || typeof data !== 'object') data = invCentralDefaultPOS();
     if (!data.liquids) data.liquids = {};
@@ -1473,7 +1473,7 @@ function invCentralLoadPOS(){
 }
 function invCentralSavePOS(inv){
   try{
-    A33Storage.setItem(STORAGE_KEY_INVENTARIO, JSON.stringify(inv));
+    localStorage.setItem(STORAGE_KEY_INVENTARIO, JSON.stringify(inv));
   }catch(e){
     console.warn('Error guardando inventario central', e);
   }
@@ -1530,7 +1530,7 @@ async function renderCentralFinishedPOS(){
 
 function leerCostosPresentacion() {
   try {
-    const raw = A33Storage.getItem(RECETAS_KEY);
+    const raw = localStorage.getItem(RECETAS_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw);
     if (data && data.costosPresentacion) {
@@ -3476,7 +3476,7 @@ async function importFromLoteToInventory(){
   }
   let lotes = [];
   try {
-    const raw = A33Storage.getItem('arcano33_lotes');
+    const raw = localStorage.getItem('arcano33_lotes');
     if (raw) lotes = JSON.parse(raw) || [];
     if (!Array.isArray(lotes)) lotes = [];
   } catch (e) {
