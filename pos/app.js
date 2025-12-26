@@ -2390,8 +2390,444 @@ function setTab(name){
   if (name==='productos') renderProductos();
   if (name==='eventos') renderEventos();
   if (name==='inventario') renderInventario();
-  if (name==='caja') renderCajaChica();
+    if (name==='checklist') renderChecklist();
   if (name==='calculadora') onOpenPosCalculatorTab().catch(err=>console.error(err));
+}
+
+
+
+// --- Checklist POS (v1) ---
+// Persistencia: store 'events' → event.days[YYYY-MM-DD].checklist = { schema:1, items:{...}, notes:"", updatedAt: ISO }
+const CHECKLIST_SCHEMA_V1 = 1;
+const CHECKLIST_V1_SECTIONS = [
+  {
+    id: 'pre',
+    title: 'Pre-evento',
+    items: [
+      { key: 'pre_hielo', label: 'Hielo' },
+      { key: 'pre_vasos', label: 'Vasos' },
+      { key: 'pre_servilletas', label: 'Servilletas' },
+      { key: 'pre_inventario', label: 'Inventario cargado' },
+      { key: 'pre_cambio', label: 'Dinero de cambio' },
+      { key: 'pre_tc', label: 'Tipo de cambio definido' },
+    ]
+  },
+  {
+    id: 'dur',
+    title: 'Durante',
+    items: [
+      { key: 'dur_reposicion', label: 'Reposición' },
+      { key: 'dur_limpieza', label: 'Limpieza' },
+      { key: 'dur_promo', label: 'Promo activa' },
+    ]
+  },
+  {
+    id: 'cie',
+    title: 'Cierre',
+    items: [
+      { key: 'cie_arqueo', label: 'Arqueo final' },
+      { key: 'cie_cierre_dia', label: 'Cierre del día' },
+      { key: 'cie_inv_rapido', label: 'Conteo rápido inventario' },
+      { key: 'cie_notas', label: 'Notas' },
+    ]
+  }
+];
+
+function checklistDefaultsV1(){
+  const items = {};
+  for (const sec of CHECKLIST_V1_SECTIONS){
+    for (const it of (sec.items || [])) items[it.key] = false;
+  }
+  return { schema: CHECKLIST_SCHEMA_V1, items, notes: '', updatedAt: null };
+}
+
+function normalizeChecklistPOS(raw){
+  const base = checklistDefaultsV1();
+  if (!raw || typeof raw !== 'object') return base;
+
+  const items = { ...base.items };
+  try{
+    const rItems = (raw.items && typeof raw.items === 'object') ? raw.items : {};
+    for (const k of Object.keys(items)) items[k] = !!rItems[k];
+  }catch(e){}
+
+  const notes = (typeof raw.notes === 'string') ? raw.notes : '';
+  const updatedAt = raw.updatedAt ? String(raw.updatedAt) : null;
+  const schema = Number(raw.schema || CHECKLIST_SCHEMA_V1);
+
+  return { schema, items, notes, updatedAt };
+}
+
+function computeChecklistProgressPOS(chk){
+  const items = (chk && chk.items && typeof chk.items === 'object') ? chk.items : {};
+  const keys = Object.keys(items);
+  const total = keys.length;
+  const done = keys.reduce((a,k)=> a + (items[k] ? 1 : 0), 0);
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  return { done, total, pct };
+}
+
+function fmtTimeHM(iso){
+  try{
+    if (!iso) return '';
+    const dt = new Date(iso);
+    if (!isFinite(dt.getTime())) return '';
+    return dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }catch(e){
+    return '';
+  }
+}
+
+let __A33_CHECKLIST_UI_BOUND = false;
+let __A33_CHECKLIST_STATE = {
+  eventId: null,
+  date: todayYMD(),
+  checklist: checklistDefaultsV1(),
+  saveTimer: null,
+  notesTimer: null,
+};
+
+function updateChecklistProgressUI_POS(){
+  const el = document.getElementById('chk-progress');
+  if (!el) return;
+  const p = computeChecklistProgressPOS(__A33_CHECKLIST_STATE.checklist);
+  if (!p.total) { el.textContent = '—'; return; }
+  el.textContent = `${p.done}/${p.total} (${p.pct}%)`;
+}
+
+function updateChecklistSavedHint_POS(msg){
+  const el = document.getElementById('chk-saved-hint');
+  if (!el) return;
+  if (msg){
+    el.textContent = msg;
+    return;
+  }
+  const iso = __A33_CHECKLIST_STATE?.checklist?.updatedAt || null;
+  if (!iso) {
+    el.textContent = 'Sin cambios guardados aún.';
+    return;
+  }
+  el.textContent = `Guardado: ${fmtTimeHM(iso)}`;
+}
+
+async function loadChecklistFromEventDay_POS(eventId, dayKey){
+  const ev = await getEventByIdPOS(eventId);
+  if (!ev) return { ev: null, checklist: checklistDefaultsV1() };
+
+  const raw = (ev.days && ev.days[dayKey] && ev.days[dayKey].checklist) ? ev.days[dayKey].checklist : null;
+  const checklist = normalizeChecklistPOS(raw);
+  return { ev, checklist };
+}
+
+async function saveChecklistToEventDay_POS(eventId, dayKey, checklist){
+  const ev = await getEventByIdPOS(eventId);
+  if (!ev) throw new Error('Evento no encontrado');
+
+  if (!ev.days || typeof ev.days !== 'object') ev.days = {};
+  if (!ev.days[dayKey] || typeof ev.days[dayKey] !== 'object') ev.days[dayKey] = {};
+
+  const payload = {
+    schema: CHECKLIST_SCHEMA_V1,
+    items: (checklist && checklist.items && typeof checklist.items === 'object') ? checklist.items : {},
+    notes: (checklist && typeof checklist.notes === 'string') ? checklist.notes : '',
+    updatedAt: new Date().toISOString(),
+  };
+
+  ev.days[dayKey].checklist = payload;
+  await put('events', ev);
+  return payload;
+}
+
+function scheduleChecklistSave_POS({ fast = false } = {}){
+  try{
+    if (__A33_CHECKLIST_STATE.saveTimer) clearTimeout(__A33_CHECKLIST_STATE.saveTimer);
+  }catch(e){}
+
+  __A33_CHECKLIST_STATE.saveTimer = setTimeout(()=>{
+    saveChecklistNow_POS().catch(err=>{
+      console.error('Checklist save error', err);
+      updateChecklistSavedHint_POS('No se pudo guardar: ' + humanizeError(err));
+    });
+  }, fast ? 150 : 450);
+}
+
+async function saveChecklistNow_POS(){
+  const st = __A33_CHECKLIST_STATE;
+  const eventId = Number(st.eventId || 0);
+  const dayKey = safeYMD(st.date || todayYMD());
+  if (!eventId || !dayKey) return;
+
+  const payload = await saveChecklistToEventDay_POS(eventId, dayKey, st.checklist);
+  st.checklist.updatedAt = payload.updatedAt;
+  updateChecklistSavedHint_POS();
+}
+
+function buildChecklistSectionsDOM_POS(container){
+  container.innerHTML = '';
+  for (const sec of CHECKLIST_V1_SECTIONS){
+    const card = document.createElement('div');
+    card.className = 'card checklist-section';
+
+    const h = document.createElement('h3');
+    h.textContent = sec.title;
+    card.appendChild(h);
+
+    const list = document.createElement('div');
+    list.className = 'chk-list';
+
+    for (const it of (sec.items || [])){
+      const lab = document.createElement('label');
+      lab.className = 'chk-item';
+
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.setAttribute('data-chk', it.key);
+
+      const span = document.createElement('span');
+      span.textContent = it.label;
+
+      lab.appendChild(cb);
+      lab.appendChild(span);
+      list.appendChild(lab);
+    }
+
+    card.appendChild(list);
+    container.appendChild(card);
+  }
+}
+
+async function renderChecklist(){
+  const wrap = document.getElementById('chk-sections');
+  const selEvent = document.getElementById('chk-event');
+  const inpDate = document.getElementById('chk-date');
+  const notesEl = document.getElementById('chk-notes');
+  const resetBtn = document.getElementById('chk-reset');
+
+  if (!wrap || !selEvent || !inpDate || !notesEl) return;
+
+  // Fecha default (usa la fecha de ventas si existe)
+  const dayKey = safeYMD(inpDate.value || getSaleDayKeyPOS() || todayYMD());
+  inpDate.value = dayKey;
+
+  // Cargar eventos para selector
+  let evs = [];
+  try{ evs = await getAll('events'); }catch(e){ evs = []; }
+
+  evs.sort((a,b)=>{
+    const at = (a.createdAt || '');
+    const bt = (b.createdAt || '');
+    if (at && bt) return bt.localeCompare(at);
+    return (Number(b.id)||0) - (Number(a.id)||0);
+  });
+
+  const prevVal = selEvent.value;
+  selEvent.innerHTML = '';
+  const opt0 = document.createElement('option');
+  opt0.value = '';
+  opt0.textContent = evs.length ? '— Selecciona evento —' : '— Sin eventos —';
+  selEvent.appendChild(opt0);
+
+  for (const ev of evs){
+    const opt = document.createElement('option');
+    opt.value = String(ev.id);
+    const n = (ev.name || ('Evento ' + ev.id));
+    const g = (ev.groupName || '').trim();
+    opt.textContent = g ? `${n} · ${g}` : n;
+    selEvent.appendChild(opt);
+  }
+
+  let selectedId = parseInt(prevVal || '0', 10);
+  if (!selectedId){
+    try{
+      const cur = await getMeta('currentEventId');
+      selectedId = parseInt(cur || '0', 10);
+    }catch(e){}
+  }
+  if (!selectedId && evs.length) selectedId = Number(evs[0].id);
+
+  selEvent.value = selectedId ? String(selectedId) : '';
+
+  if (!selectedId){
+    // Estado vacío
+    wrap.innerHTML = '';
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <div class="warn">Aún no hay eventos. Creá uno en <b>POS → Eventos</b>.</div>
+      <div class="row" style="margin-top:10px">
+        <button id="chk-go-events" class="btn-ok" type="button">Ir a Eventos</button>
+      </div>
+    `;
+    wrap.appendChild(card);
+    const go = document.getElementById('chk-go-events');
+    if (go) go.onclick = ()=> setTab('eventos');
+
+    notesEl.value = '';
+    updateChecklistSavedHint_POS('—');
+    updateChecklistProgressUI_POS();
+    if (resetBtn) resetBtn.disabled = true;
+    return;
+  }
+
+  if (resetBtn) resetBtn.disabled = false;
+
+  // Cargar checklist de evento/día
+  const loaded = await loadChecklistFromEventDay_POS(selectedId, dayKey);
+  const checklist = loaded.checklist;
+
+  __A33_CHECKLIST_STATE.eventId = selectedId;
+  __A33_CHECKLIST_STATE.date = dayKey;
+  __A33_CHECKLIST_STATE.checklist = checklist;
+
+  // Construir DOM si aún no existe
+  buildChecklistSectionsDOM_POS(wrap);
+
+  // Aplicar checks
+  for (const sec of CHECKLIST_V1_SECTIONS){
+    for (const it of (sec.items || [])){
+      const cb = wrap.querySelector(`input[type="checkbox"][data-chk="${it.key}"]`);
+      if (!cb) continue;
+      cb.checked = !!checklist.items[it.key];
+    }
+  }
+
+  // Notas
+  notesEl.value = checklist.notes || '';
+
+  updateChecklistProgressUI_POS();
+  updateChecklistSavedHint_POS();
+}
+
+function initChecklistUI(){
+  if (__A33_CHECKLIST_UI_BOUND) return;
+  __A33_CHECKLIST_UI_BOUND = true;
+
+  const wrap = document.getElementById('chk-sections');
+  const selEvent = document.getElementById('chk-event');
+  const inpDate = document.getElementById('chk-date');
+  const notesEl = document.getElementById('chk-notes');
+  const resetBtn = document.getElementById('chk-reset');
+
+  if (!wrap || !selEvent || !inpDate || !notesEl) return;
+
+  // Default de fecha
+  try{
+    if (!inpDate.value) inpDate.value = safeYMD(getSaleDayKeyPOS() || todayYMD());
+  }catch(e){}
+
+  // Delegación de checkbox
+  wrap.addEventListener('change', (e)=>{
+    const cb = e.target;
+    if (!cb || cb.tagName !== 'INPUT' || cb.type !== 'checkbox') return;
+    const key = cb.getAttribute('data-chk');
+    if (!key) return;
+
+    if (!__A33_CHECKLIST_STATE.checklist || typeof __A33_CHECKLIST_STATE.checklist !== 'object') {
+      __A33_CHECKLIST_STATE.checklist = checklistDefaultsV1();
+    }
+    if (!__A33_CHECKLIST_STATE.checklist.items || typeof __A33_CHECKLIST_STATE.checklist.items !== 'object') {
+      __A33_CHECKLIST_STATE.checklist.items = checklistDefaultsV1().items;
+    }
+
+    __A33_CHECKLIST_STATE.checklist.items[key] = !!cb.checked;
+    updateChecklistProgressUI_POS();
+    updateChecklistSavedHint_POS('Guardando…');
+    scheduleChecklistSave_POS();
+  });
+
+  // Notas (debounce)
+  notesEl.addEventListener('input', ()=>{
+    if (!__A33_CHECKLIST_STATE.checklist || typeof __A33_CHECKLIST_STATE.checklist !== 'object') {
+      __A33_CHECKLIST_STATE.checklist = checklistDefaultsV1();
+    }
+    __A33_CHECKLIST_STATE.checklist.notes = String(notesEl.value || '');
+    updateChecklistSavedHint_POS('Guardando…');
+
+    try{
+      if (__A33_CHECKLIST_STATE.notesTimer) clearTimeout(__A33_CHECKLIST_STATE.notesTimer);
+    }catch(e){}
+
+    __A33_CHECKLIST_STATE.notesTimer = setTimeout(()=>{
+      scheduleChecklistSave_POS({ fast: true });
+    }, 450);
+  });
+
+  // Cambio de evento
+  selEvent.addEventListener('change', ()=>{
+    // Sincronizar con el selector global (evento activo)
+    try{
+      const id = parseInt(selEvent.value || '0', 10);
+      if (id){
+        const globalSel = document.getElementById('sale-event');
+        if (globalSel && String(globalSel.value) !== String(id)){
+          globalSel.value = String(id);
+          globalSel.dispatchEvent(new Event('change'));
+        }
+      }
+    }catch(e){}
+
+    renderChecklist().catch(err=>console.error(err));
+  });
+
+  // Cambio de fecha
+  inpDate.addEventListener('change', ()=>{
+    renderChecklist().catch(err=>console.error(err));
+  });
+
+  // Reiniciar
+  if (resetBtn){
+    resetBtn.addEventListener('click', async ()=>{
+      const eventId = parseInt(selEvent.value || '0', 10);
+      const dayKey = safeYMD(inpDate.value || todayYMD());
+      if (!eventId) { alert('Selecciona un evento'); return; }
+
+      if (!confirm('¿Reiniciar checklist del día para este evento?')) return;
+
+      const base = checklistDefaultsV1();
+      __A33_CHECKLIST_STATE.eventId = eventId;
+      __A33_CHECKLIST_STATE.date = dayKey;
+      __A33_CHECKLIST_STATE.checklist = base;
+
+      try{
+        updateChecklistSavedHint_POS('Guardando…');
+        const payload = await saveChecklistToEventDay_POS(eventId, dayKey, base);
+        __A33_CHECKLIST_STATE.checklist.updatedAt = payload.updatedAt;
+        await renderChecklist();
+        toast('Checklist reiniciada');
+      }catch(err){
+        console.error('Checklist reset error', err);
+        alert('No se pudo reiniciar la checklist.\n\nDetalle: ' + humanizeError(err));
+      }
+    });
+  }
+
+  // Primer render (si el usuario entra directo por hash)
+  renderChecklist().catch(err=>console.error(err));
+}
+
+function initHashTabRouting(){
+  const map = {
+    venta: 'venta',
+    vender: 'venta',
+    inventario: 'inventario',
+    caja: 'caja',
+    cajachica: 'caja',
+    resumen: 'resumen',
+    productos: 'productos',
+    calculadora: 'calculadora',
+    checklist: 'checklist',
+    eventos: 'eventos',
+  };
+
+  const apply = ()=>{
+    const raw = (location.hash || '').replace('#','').trim().toLowerCase();
+    if (!raw) return;
+    const tab = map[raw];
+    if (tab) setTab(tab);
+  };
+
+  window.addEventListener('hashchange', apply);
+  apply();
 }
 
 // Event UI
@@ -5444,6 +5880,13 @@ async function exportEventosExcel(){
   $('#btn-inv-csv').addEventListener('click', async()=>{ const id = parseInt($('#inv-event').value||'0',10); if (!id) return alert('Selecciona un evento'); await generateInventoryCSV(id); });
   const btnFromLote = document.getElementById('btn-inv-from-lote');
   if (btnFromLote) btnFromLote.addEventListener('click', importFromLoteToInventory);
+
+  
+  // Checklist tab (por evento y por día)
+  initChecklistUI();
+
+  // Navegación por hash (desde Centro de Mando)
+  initHashTabRouting();
 
 }
 

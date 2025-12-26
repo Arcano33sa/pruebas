@@ -155,7 +155,7 @@ tfoot td{font-weight:700}
   background:var(--tab-gold);
 }
 
-/* Si el ancho es insuficiente: 2 filas 4 + 3 (sin overflow-x) */
+/* Si el ancho es insuficiente: 2 filas 4 + 4 (sin overflow-x) */
 @media (max-width: 620px){
   .tabbar{
     grid-template-columns:repeat(12, minmax(0,1fr));
@@ -166,9 +166,6 @@ tfoot td{font-weight:700}
     grid-column: span 3; /* 4 botones (12/3) */
     font-size:10.5px;
     border-radius:14px;
-  }
-  .tabbar button:nth-child(n+5){
-    grid-column: span 4; /* 3 botones (12/4) */
   }
   .tabbar button.active::after{width:16px}
 }
@@ -759,3 +756,58 @@ small.muted{color:var(--muted)}
 
 .fx-quick{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
 .fx-quick button{width:auto}
+
+/* =====================
+   Checklist (POS)
+   ===================== */
+.checklist-grid{
+  display:grid;
+  grid-template-columns:repeat(3, 1fr);
+  gap:10px;
+}
+
+.checklist-section{
+  padding:12px;
+}
+
+.checklist-section h3{
+  margin:0 0 10px 0;
+}
+
+.chk-list{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+
+.chk-item{
+  display:flex;
+  gap:10px;
+  align-items:flex-start;
+  padding:10px;
+  border-radius:12px;
+  border:1px solid rgba(255,255,255,.10);
+  background:rgba(255,255,255,.02);
+}
+
+.chk-item input{ margin-top:3px; }
+
+.chk-item .lbl{
+  flex:1;
+  line-height:1.2;
+}
+
+.chk-item.done{
+  border-color: rgba(210,178,76,.35);
+  background: rgba(210,178,76,.06);
+}
+
+#chk-notes{
+  width:100%;
+  min-height:90px;
+  resize:vertical;
+}
+
+@media (max-width: 900px){
+  .checklist-grid{grid-template-columns:1fr}
+}
