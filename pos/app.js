@@ -2395,6 +2395,28 @@ function setTab(name){
   if (name==='checklist') renderChecklistTab().catch(err=>console.error(err));
 }
 
+// --- Deep-link mínimo (Centro de Mando -> POS)
+// Soporta: ?tab=vender | #tab=vender (sin librerías, sin romper navegación existente)
+function getTabFromUrlPOS(){
+  try{
+    const allowed = new Set(['vender','inventario','eventos','caja','resumen','productos','calculadora','checklist']);
+    // Querystring
+    const qs = new URLSearchParams(window.location.search || '');
+    const qTab = (qs.get('tab') || '').trim();
+    if (qTab && allowed.has(qTab)) return qTab;
+
+    // Hash: #tab=vender o #vender
+    const h = (window.location.hash || '').replace(/^#/, '').trim();
+    if (!h) return null;
+    if (h.startsWith('tab=')){
+      const ht = h.slice(4).trim();
+      if (allowed.has(ht)) return ht;
+    }
+    if (allowed.has(h)) return h;
+  }catch(_){ }
+  return null;
+}
+
 // --- Checklist (POS)
 const CHECKLIST_SECTIONS_POS = [
   { key: 'pre', listId: 'chk-pre', addId: 'chk-add-pre' },
@@ -5395,6 +5417,12 @@ async function init(){
       if (tab) setTab(tab);
     });
   }
+
+  // Deep-link desde Centro de Mando: abrir pestaña específica si viene en la URL
+  try{
+    const deepTab = getTabFromUrlPOS();
+    if (deepTab) setTab(deepTab);
+  }catch(_){ }
 
   // Vender tab
 
