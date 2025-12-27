@@ -2091,6 +2091,27 @@
         });
       }
 
+      // --- Boot: verificar sesión y decidir si mostrar la app o el lock ---
+      // Nota: si esto no corre, el splash de "Verificando sesión..." queda pegado.
+      (async () => {
+        try{
+          await initAuthUi();
+        }catch(e){
+          console.error('Error al verificar sesión:', e);
+          // Fail-safe: no dejar el splash colgado.
+          try{ showLock(); }catch(_){ hideBootSplash(); }
+        }
+      })();
+
+      // Fail-safe extra: por si algún await se cuelga (ej. storage/crypto), nunca bloquear el acceso.
+      setTimeout(() => {
+        const bs = document.getElementById('boot-splash');
+        if (bs && bs.style.display !== 'none'){
+          console.warn('Fail-safe: ocultando splash de arranque.');
+          try{ showLock(); }catch(_){ hideBootSplash(); }
+        }
+      }, 2500);
+
     });
   </script>
   <script src="/assets/js/a33-input-ux.js"></script>
