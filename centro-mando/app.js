@@ -691,7 +691,7 @@ async function init(){
   const list = $('eventList');
 
   if (input){
-    input.addEventListener('focus', ()=>{ renderEventList(''); showEventList(); try{ input.setSelectionRange(0, input.value.length); }catch(_){ } });
+    input.addEventListener('focus', ()=>{ renderEventList(input.value); showEventList(); });
     input.addEventListener('input', ()=>{ renderEventList(input.value); showEventList(); });
     input.addEventListener('keydown', (e)=>{
       if (e.key === 'Escape') hideEventList();
@@ -701,7 +701,7 @@ async function init(){
     btn.addEventListener('click', ()=>{
       if (!list) return;
       if (list.hidden){
-        renderEventList('');
+        renderEventList(input ? input.value : '');
         showEventList();
         try{ input && input.focus(); }catch(_){ }
       } else {
