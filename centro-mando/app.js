@@ -1,24 +1,15 @@
-/*
-  Suite A33 v4.20.4 — Centro de Mando (OPERATIVO v1)
-
-  Fuentes reales (descubiertas en /pos/app.js dentro de esta ZIP):
-  - DB_NAME: 'a33-pos'
-  - Stores: meta, events, sales, pettyCash, products, inventory, banks
-  - Meta key del evento actual: id='currentEventId' (value = number|null)
-
-  Regla clave: NO inventar números.
-  Si no se puede leer/calcular fácil y seguro, mostrar “—” + “No disponible”.
+/* Centro de Mando — Suite A33 (v4.20.4)
+   Radar ligero por evento (POS).
+   - No inventa números: si algo no se puede calcular fácil, muestra "—".
 */
 
-// --- Constantes (descubiertas, no adivinadas)
-const POS_DB_NAME = 'a33-pos';
-const LS_FOCUS_KEY = 'a33_cmd_focusEventId';
-const SAFE_SCAN_LIMIT = 4000; // seguridad: evitar loops gigantes
+const POS_DB = 'a33-pos';
 
-// --- DOM helpers
-const $ = (id)=> document.getElementById(id);
+const LS_FOCUS_EVENT = 'a33_cmd_focusEventId';
 
-function todayYMD(){
+const $ = (id) => document.getElementById(id);
+
+function todayISO(){
   const d = new Date();
   const y = d.getFullYear();
   const m = String(d.getMonth()+1).padStart(2,'0');
@@ -26,754 +17,519 @@ function todayYMD(){
   return `${y}-${m}-${day}`;
 }
 
-function ymdAddDays(ymd, delta){
+function dateAddDays(iso, delta){
+  const [y,m,d] = iso.split('-').map(n => parseInt(n,10));
+  const dt = new Date(y, m-1, d);
+  dt.setDate(dt.getDate()+delta);
+  const yy = dt.getFullYear();
+  const mm = String(dt.getMonth()+1).padStart(2,'0');
+  const dd = String(dt.getDate()).padStart(2,'0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+async function openPosDB(){
+  // Centro de Mando NO crea ni migra la DB del POS.
+  // Si la DB no existe o requiere upgrade, abortamos y pedimos abrir POS primero.
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const req = indexedDB.open(POS_DB);
+
+    req.onsuccess = () => {
+      if (settled) return;
+      settled = true;
+      resolve(req.result);
+    };
+
+    req.onerror = () => {
+      if (settled) return;
+      settled = true;
+      reject(req.error || new Error('No se pudo abrir POS DB'));
+    };
+
+    req.onupgradeneeded = () => {
+      // DB no inicializada o requiere upgrade.
+      try{ req.transaction && req.transaction.abort(); }catch(_){ }
+      try{ req.result && req.result.close && req.result.close(); }catch(_){ }
+      if (settled) return;
+      settled = true;
+      reject(new Error('POS no inicializado/actualizado. Abre POS una vez y reintenta.'));
+    };
+  });
+}
+
+function setTodayTag(){
+  const el = $('todayTag');
+  if (el) el.textContent = `Hoy: ${todayISO()}`;
+}
+
+function txGetAll(db, storeName, indexName=null, keyRange=null){
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readonly');
+    const store = tx.objectStore(storeName);
+    const source = indexName ? store.index(indexName) : store;
+    const req = keyRange ? source.getAll(keyRange) : source.getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function txGet(db, storeName, key){
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readonly');
+    const store = tx.objectStore(storeName);
+    const req = store.get(key);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function txPut(db, storeName, value){
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite');
+    const store = tx.objectStore(storeName);
+    const req = store.put(value);
+    req.onsuccess = () => resolve(true);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function readCurrentEventId(db){
   try{
-    const [y,m,d] = ymd.split('-').map(n=>parseInt(n,10));
-    const dt = new Date(y, (m||1)-1, d||1);
-    dt.setDate(dt.getDate() + delta);
-    const yy = dt.getFullYear();
-    const mm = String(dt.getMonth()+1).padStart(2,'0');
-    const dd = String(dt.getDate()).padStart(2,'0');
-    return `${yy}-${mm}-${dd}`;
+    const rec = await txGet(db, 'meta', 'currentEventId');
+    const v = rec && typeof rec.value !== 'undefined' ? rec.value : null;
+    return (typeof v === 'number' || typeof v === 'string') ? v : null;
   }catch(_){
-    return ymd;
+    return null;
   }
 }
 
-function fmtMoneyNIO(n){
-  if (typeof n !== 'number' || !isFinite(n)) return '—';
-  // 2 decimales, sin locales raros (consistencia iPad)
-  const s = n.toFixed(2);
-  // separador de miles simple
-  const parts = s.split('.');
-  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  return `C$ ${parts.join('.')}`;
-}
-
-function safeStr(x){
-  const s = (x == null) ? '' : String(x);
-  return s.trim();
-}
-
-function uniq(arr){
-  const out = [];
-  const s = new Set();
-  for (const it of (Array.isArray(arr) ? arr : [])){
-    const k = String(it);
-    if (s.has(k)) continue;
-    s.add(k);
-    out.push(it);
+async function writeCurrentEventId(db, eventId){
+  try{
+    await txPut(db, 'meta', { id:'currentEventId', value: eventId });
+  }catch(_){
+    // silencioso
   }
-  return out;
 }
 
-// --- IDB helpers (robustos)
-async function openPosDB(opts){
-  const timeoutMs = (opts && opts.timeoutMs) ? opts.timeoutMs : 3500;
+function normalizeEventName(e){
+  return e?.name || e?.title || e?.nombre || (e?.id != null ? `Evento ${e.id}` : 'Evento');
+}
 
-  return new Promise((resolve, reject)=>{
-    let done = false;
-    let req;
-    const fail = (err)=>{
-      if (done) return;
-      done = true;
-      reject(err instanceof Error ? err : new Error(String(err || 'Error abriendo IndexedDB')));
-    };
-    const ok = (db)=>{
-      if (done) return;
-      done = true;
-      resolve(db);
-    };
+function sortEventsRecentFirst(events){
+  return (events || []).slice().sort((a,b)=>{
+    const ak = Number(b?.updatedAt || b?.createdAt || b?.id || 0);
+    const bk = Number(a?.updatedAt || a?.createdAt || a?.id || 0);
+    return ak - bk;
+  });
+}
 
-    const t = setTimeout(()=>{
-      // No bloquea la suite: fallamos y mostramos “No disponible”
-      fail(new Error('Timeout abriendo IndexedDB del POS'));
-    }, timeoutMs);
+function bindFocusPicker({ events, getFocusId, setFocusId }){
+  const picker = $('focusPicker');
+  const input = $('focusSearch');
+  const btn = $('focusToggle');
+  const dd = $('focusDropdown');
+  const list = $('focusList');
+  const empty = $('focusEmpty');
+  const hid = $('focusEventId');
 
-    try{
-      req = indexedDB.open(POS_DB_NAME);
-    }catch(err){
-      clearTimeout(t);
-      fail(err);
+  if (!picker || !input || !dd || !list || !empty || !hid) return;
+
+  let open = false;
+
+  const setOpen = (v)=>{
+    open = !!v;
+    dd.hidden = !open;
+    picker.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+
+  const filtered = ()=>{
+    const q = String(input.value||'').trim().toLowerCase();
+    if (!q) return events;
+    return events.filter(e => normalizeEventName(e).toLowerCase().includes(q));
+  };
+
+  const render = ()=>{
+    const curId = getFocusId();
+    const arr = filtered();
+    list.innerHTML = '';
+    if (!arr.length){
+      empty.hidden = false;
+      list.hidden = true;
+      return;
+    }
+    empty.hidden = true;
+    list.hidden = false;
+    for (const e of arr){
+      const id = Number(e.id);
+      const nm = normalizeEventName(e);
+      const it = document.createElement('div');
+      it.className = 'dd-item' + (Number(curId) === id ? ' active' : '');
+      it.setAttribute('role','option');
+      it.dataset.id = String(id);
+      it.innerHTML = `<div class="name">${escapeHtml(nm)}</div><div class="meta">#${id}</div>`;
+      it.addEventListener('click', ()=>{
+        setFocusId(id);
+        hid.value = String(id);
+        input.value = nm;
+        setOpen(false);
+      });
+      list.appendChild(it);
+    }
+  };
+
+  const syncInputToCurrent = ()=>{
+    const curId = getFocusId();
+    const ev = events.find(x => Number(x.id) === Number(curId));
+    input.value = ev ? normalizeEventName(ev) : '';
+    hid.value = curId ? String(curId) : '';
+  };
+
+  // Open / close behavior
+  const openAndRender = ()=>{ setOpen(true); render(); };
+  const close = ()=> setOpen(false);
+
+  input.addEventListener('focus', openAndRender);
+  input.addEventListener('input', ()=>{ openAndRender(); });
+  btn && btn.addEventListener('click', ()=>{ open ? close() : openAndRender(); input.focus(); });
+
+  input.addEventListener('keydown', (ev)=>{
+    if (ev.key === 'Escape') { close(); return; }
+    if (ev.key === 'Enter'){
+      const arr = filtered();
+      if (arr.length){
+        const first = arr[0];
+        const id = Number(first.id);
+        const nm = normalizeEventName(first);
+        setFocusId(id);
+        hid.value = String(id);
+        input.value = nm;
+      }
+      close();
+      ev.preventDefault();
+    }
+  });
+
+  document.addEventListener('click', (ev)=>{
+    const t = ev.target;
+    if (!t) return;
+    if (picker.contains(t) || dd.contains(t)) return;
+    close();
+  });
+
+  // Initial render
+  syncInputToCurrent();
+  render();
+}
+
+function money(v){
+  const n = Number(v || 0);
+  if (!isFinite(n)) return '—';
+  return n.toLocaleString('es-NI', { maximumFractionDigits: 0 });
+}
+
+function safeText(v){
+  return (v === null || typeof v === 'undefined' || v === '') ? '—' : String(v);
+}
+
+function setHints(lines){
+  const ul = $('hints');
+  if (!ul) return;
+  ul.innerHTML = '';
+  (lines || []).forEach(t => {
+    const li = document.createElement('li');
+    li.textContent = String(t);
+    ul.appendChild(li);
+  });
+}
+
+function setEventDetailSub(text){
+  const el = $('eventDetailSub');
+  if (el) el.textContent = text || '—';
+}
+
+function renderKpi(kpis){
+  const grid = $('globalRadar');
+  if (!grid) return;
+  grid.innerHTML = kpis.map(k => `
+    <div class="kpi">
+      <div class="label">${k.label}</div>
+      <div class="value">${k.value}</div>
+      <div class="muted" style="margin-top:6px">${k.sub || ''}</div>
+    </div>
+  `).join('');
+}
+
+function renderFocusCards(cards){
+  const wrap = $('eventCards');
+  if (!wrap) return;
+  wrap.innerHTML = cards.map(c => `
+    <div class="tile">
+      <h3>${c.title}</h3>
+      <div class="muted">${c.body}</div>
+    </div>
+  `).join('');
+}
+
+function buildTopProducts(lines){
+  // lines: [{name, qty, amount}]
+  if (!lines || !lines.length) return '—';
+  const top = lines.slice(0,5).map(x => `${x.name}: ${x.qty}`).join(' · ');
+  return top || '—';
+}
+
+async function computeRadarGlobal(db){
+  const today = todayISO();
+  const start7 = dateAddDays(today, -6);
+
+  let totalEvents = '—';
+  let salesToday = '—';
+  let sales7 = '—';
+  let lastSale = '—';
+
+  try{
+    const events = await txGetAll(db, 'events');
+    totalEvents = String(events.length);
+  }catch(_){ }
+
+  try{
+    // Ventas hoy (usamos índice por fecha)
+    const todaySales = await txGetAll(db, 'sales', 'by_date', IDBKeyRange.only(today));
+    const tSum = todaySales.reduce((acc, s) => acc + (Number(s.total) || 0), 0);
+    salesToday = money(tSum);
+  }catch(_){ }
+
+  try{
+    // Ventas últimos 7 días (lowerBound)
+    const recentSales = await txGetAll(db, 'sales', 'by_date', IDBKeyRange.lowerBound(start7));
+    // filtrar por <= hoy, por si hay fechas futuras
+    const filtered = recentSales.filter(s => (s.date || '') >= start7 && (s.date || '') <= today);
+    const sum = filtered.reduce((acc, s) => acc + (Number(s.total) || 0), 0);
+    sales7 = money(sum);
+
+    // última venta
+    const latest = filtered.sort((a,b) => String(b.createdAt||'').localeCompare(String(a.createdAt||'')))[0];
+    if (latest){
+      lastSale = safeText(latest.date || '—');
+    }
+  }catch(_){ }
+
+  return {
+    today,
+    kpis: [
+      { label:'Eventos', value: totalEvents, sub:'Registrados en POS' },
+      { label:'Ventas hoy', value: salesToday, sub:'C$ (total)' },
+      { label:'Ventas 7 días', value: sales7, sub:'C$ (total)' },
+      { label:'Última venta', value: lastSale, sub:'Fecha' },
+    ]
+  };
+}
+
+async function computeFocused(db, eventId){
+  const today = todayISO();
+
+  let caja = '—';
+  let ventasHoy = '—';
+  let top = '—';
+  let inv = '—';
+
+  // Caja Chica (si existe)
+  try{
+    const pc = await txGet(db, 'pettyCash', Number(eventId));
+    if (pc && pc.days && pc.days[today]){
+      const d = pc.days[today];
+      caja = d.closedAt ? `Cerrada · ${new Date(d.closedAt).toLocaleTimeString('es-NI',{hour:'2-digit',minute:'2-digit'})}` : 'Abierta';
+    }else if (pc){
+      caja = 'Sin día creado';
+    }
+  }catch(_){ }
+
+  // Ventas (hoy)
+  try{
+    const all = await txGetAll(db, 'sales', 'by_event', Number(eventId));
+    const todays = all.filter(s => (s.date||'') === today);
+    const sum = todays.reduce((acc,s) => acc + (Number(s.total)||0), 0);
+    ventasHoy = money(sum);
+
+    // Top productos por qty
+    const byName = new Map();
+    for (const sale of todays){
+      const items = Array.isArray(sale.items) ? sale.items : [];
+      for (const it of items){
+        const name = it.name || it.productName || it.sku || 'Producto';
+        const qty = Number(it.qty || it.quantity || 0) || 0;
+        const amount = Number(it.total || it.amount || 0) || 0;
+        const prev = byName.get(name) || { name, qty:0, amount:0 };
+        prev.qty += qty;
+        prev.amount += amount;
+        byName.set(name, prev);
+      }
+    }
+    const topArr = Array.from(byName.values()).sort((a,b) => b.qty - a.qty);
+    top = buildTopProducts(topArr);
+  }catch(_){ }
+
+  // Inventario crítico — si no es fácil, mostramos "—"
+  // (Se deja gancho para futura mejora sin romper nada)
+
+  return {
+    today,
+    cards: [
+      { title:'Caja Chica', body: safeText(caja) },
+      { title:'Ventas de hoy', body: ventasHoy === '—' ? '—' : `C$ ${ventasHoy}` },
+      { title:'Top productos (hoy)', body: safeText(top) },
+      { title:'Inventario crítico', body: safeText(inv) },
+    ]
+  };
+}
+
+function bindQuickButtons(eventId){
+  const goSell = $('goSell');
+  const goCash = $('goPetty');
+
+  // Los tabs reales del POS son: vender | caja | checklist | etc.
+  // POS usa data-tab="venta" (y aceptamos vender como alias en POS por compatibilidad).
+  const sellUrl = `../pos/index.html?tab=venta&eventId=${encodeURIComponent(eventId||'')}`;
+  const cashUrl = `../pos/index.html?tab=caja&eventId=${encodeURIComponent(eventId||'')}`;
+
+  if (goSell) goSell.setAttribute('href', sellUrl);
+  if (goCash) goCash.setAttribute('href', cashUrl);
+}
+
+async function init(){
+  // Auth
+  try{
+    if (window.A33Auth && A33Auth.isConfigured && A33Auth.isAuthenticated){
+      if (A33Auth.isConfigured() && !A33Auth.isAuthenticated()){
+        window.location.href = '../index.html';
+        return;
+      }
+    }
+  }catch(_){ }
+
+  setTodayTag();
+
+  let db;
+  try{
+    db = await openPosDB();
+  }catch(e){
+    setHints([
+      'No pude abrir la base del POS.',
+      'Abre primero el módulo POS una vez (para inicializar/actualizar la DB) y vuelve a intentar.'
+    ]);
+    setEventDetailSub('POS no disponible');
+    renderKpi([
+      {label:'Eventos', value:'—', sub:'POS no disponible'},
+      {label:'Ventas hoy', value:'—'},
+      {label:'Ventas 7 días', value:'—'},
+      {label:'Última venta', value:'—'},
+    ]);
+    renderFocusCards([
+      {title:'Evento enfocado', body:'—'},
+      {title:'Caja Chica', body:'—'},
+      {title:'Ventas de hoy', body:'—'},
+      {title:'Top productos', body:'—'},
+    ]);
+    return;
+  }
+
+  // hints base
+  setHints(['Si algo no se puede calcular rápido, se muestra “—”. Mejor vacío que inventado.']);
+
+  // Validación rápida de esquema (evita pantallas vacías si la DB se creó sin stores)
+  try{
+    if (!db.objectStoreNames.contains('events')){
+      setHints([
+        'La base del POS existe, pero no tiene los stores esperados (events).',
+        'Abre el módulo POS una vez para que cree/actualice la base de datos.',
+        'Si aún queda vacío, borra los datos del sitio (Safari → Avanzado → Datos de sitios web) y vuelve a abrir POS.'
+      ]);
+      setEventDetailSub('POS no inicializado');
+      renderKpi([
+        {label:'Eventos', value:'—', sub:'DB sin esquema'},
+        {label:'Ventas hoy', value:'—'},
+        {label:'Ventas 7 días', value:'—'},
+        {label:'Última venta', value:'—'},
+      ]);
+      renderFocusCards([
+        {title:'Evento enfocado', body:'—'},
+        {title:'Caja Chica', body:'—'},
+        {title:'Ventas de hoy', body:'—'},
+        {title:'Top productos', body:'—'},
+      ]);
+      return;
+    }
+  }catch(_){ }
+
+  // cargar eventos
+  let events = [];
+  try{ events = await txGetAll(db, 'events'); }catch(_){ events = []; }
+  events = sortEventsRecentFirst(events);
+
+  if (!events.length){
+    setHints([
+      'No hay eventos aún en POS.',
+      'Crea un evento en POS → pestaña Eventos, y vuelve aquí.'
+    ]);
+  }
+
+  // elegir eventId enfocado
+  const saved = localStorage.getItem(LS_FOCUS_EVENT);
+  let focusId = saved ? Number(saved) : null;
+  if (!focusId || !events.some(e => Number(e.id) === Number(focusId))){
+    const current = await readCurrentEventId(db);
+    focusId = current ? Number(current) : (events[0] ? Number(events[0].id) : null);
+  }
+
+  // Selector con búsqueda (input + lista)
+  const setFocusId = (id)=>{ focusId = id ? Number(id) : null; };
+  bindFocusPicker({
+    events,
+    getFocusId: ()=>focusId,
+    setFocusId: (id)=>{ setFocusId(id); refreshAll(); }
+  });
+
+  async function refreshAll(){
+    const eid = focusId ? Number(focusId) : null;
+
+    // Radar global
+    const radar = await computeRadarGlobal(db);
+    renderKpi(radar.kpis);
+
+    // Detalle enfocado
+    if (!eid){
+      setEventDetailSub('Selecciona un evento para ver el detalle.');
+      renderFocusCards([
+        {title:'Evento enfocado', body:'Selecciona un evento arriba.'},
+        {title:'Caja Chica', body:'—'},
+        {title:'Ventas de hoy', body:'—'},
+        {title:'Top productos (hoy)', body:'—'},
+      ]);
+      bindQuickButtons('');
       return;
     }
 
-    req.onerror = ()=>{ clearTimeout(t); fail(req.error || new Error('IndexedDB error')); };
-    req.onblocked = ()=>{
-      // No es fatal, pero suele indicar otro tab viejo abierto.
-      console.warn('Centro de Mando: open blocked. Cierra otras pestañas de Suite A33.');
-    };
-    req.onsuccess = ()=>{
-      clearTimeout(t);
-      const db = req.result;
-      try{
-        db.onversionchange = ()=>{
-          try{ db.close(); }catch(_){ }
-        };
-      }catch(_){ }
-      ok(db);
-    };
-  });
-}
+    localStorage.setItem(LS_FOCUS_EVENT, String(eid));
+    await writeCurrentEventId(db, eid);
 
-function hasStore(db, name){
-  try{
-    return !!(db && db.objectStoreNames && db.objectStoreNames.contains(name));
-  }catch(_){
-    return false;
+    const ev = events.find(x => Number(x.id) === Number(eid));
+    const title = ev ? normalizeEventName(ev) : `Evento ${eid}`;
+
+    setEventDetailSub(`${title} · ${todayISO()}`);
+
+    const focus = await computeFocused(db, eid);
+    renderFocusCards([
+      {title:'Evento enfocado', body: escapeHtml(title)},
+      ...focus.cards
+    ]);
+
+    bindQuickButtons(eid);
   }
-}
-
-function tx(db, storeName, mode){
-  return db.transaction(storeName, mode || 'readonly').objectStore(storeName);
-}
-
-async function idbGet(db, storeName, key){
-  if (!db || !hasStore(db, storeName)) return null;
-  return new Promise((resolve)=>{
-    try{
-      const req = tx(db, storeName, 'readonly').get(key);
-      req.onsuccess = ()=> resolve(req.result ?? null);
-      req.onerror = ()=>{ console.warn('idbGet error', storeName, req.error); resolve(null); };
-    }catch(err){
-      console.warn('idbGet exception', storeName, err);
-      resolve(null);
-    }
-  });
-}
-
-async function idbPut(db, storeName, value){
-  if (!db || !hasStore(db, storeName)) return false;
-  return new Promise((resolve)=>{
-    try{
-      const tr = db.transaction(storeName, 'readwrite');
-      tr.oncomplete = ()=> resolve(true);
-      tr.onerror = ()=>{ console.warn('idbPut tx error', storeName, tr.error); resolve(false); };
-      tr.onabort = ()=>{ console.warn('idbPut tx abort', storeName, tr.error); resolve(false); };
-      tr.objectStore(storeName).put(value);
-    }catch(err){
-      console.warn('idbPut exception', storeName, err);
-      resolve(false);
-    }
-  });
-}
-
-async function idbGetAll(db, storeName){
-  if (!db || !hasStore(db, storeName)) return [];
-  return new Promise((resolve)=>{
-    try{
-      const req = tx(db, storeName, 'readonly').getAll();
-      req.onsuccess = ()=> resolve(Array.isArray(req.result) ? req.result : []);
-      req.onerror = ()=>{ console.warn('idbGetAll error', storeName, req.error); resolve([]); };
-    }catch(err){
-      console.warn('idbGetAll exception', storeName, err);
-      resolve([]);
-    }
-  });
-}
-
-async function idbGetAllByIndex(db, storeName, indexName, keyRange){
-  if (!db || !hasStore(db, storeName)) return null;
-  return new Promise((resolve)=>{
-    try{
-      const store = tx(db, storeName, 'readonly');
-      if (!store.indexNames || !store.indexNames.contains(indexName)) return resolve(null);
-      const idx = store.index(indexName);
-      const req = idx.getAll(keyRange);
-      req.onsuccess = ()=> resolve(Array.isArray(req.result) ? req.result : []);
-      req.onerror = ()=>{ console.warn('idbGetAllByIndex error', storeName, indexName, req.error); resolve(null); };
-    }catch(err){
-      console.warn('idbGetAllByIndex exception', storeName, indexName, err);
-      resolve(null);
-    }
-  });
-}
-
-async function idbCountByIndex(db, storeName, indexName, keyRange){
-  if (!db || !hasStore(db, storeName)) return null;
-  return new Promise((resolve)=>{
-    try{
-      const store = tx(db, storeName, 'readonly');
-      if (!store.indexNames || !store.indexNames.contains(indexName)) return resolve(null);
-      const idx = store.index(indexName);
-      const req = idx.count(keyRange);
-      req.onsuccess = ()=> resolve(typeof req.result === 'number' ? req.result : null);
-      req.onerror = ()=>{ console.warn('idbCountByIndex error', storeName, indexName, req.error); resolve(null); };
-    }catch(err){
-      console.warn('idbCountByIndex exception', storeName, indexName, err);
-      resolve(null);
-    }
-  });
-}
-
-// --- POS meta helpers
-async function getMeta(db, key){
-  const row = await idbGet(db, 'meta', key);
-  return row ? row.value : null;
-}
-
-async function setMeta(db, key, value){
-  return idbPut(db, 'meta', { id: key, value });
-}
-
-// --- Checklist helpers (estructura real en POS: ev.checklistTemplate + ev.days[YYYY-MM-DD].checklistState)
-function computeChecklistProgress(ev, dayKey){
-  if (!ev || typeof ev !== 'object') return { ok:false, text:'—', checked:null, total:null, reason:'No disponible' };
-
-  const tpl = (ev.checklistTemplate && typeof ev.checklistTemplate === 'object') ? ev.checklistTemplate : null;
-  if (!tpl) return { ok:false, text:'—', checked:null, total:null, reason:'No disponible' };
-
-  const arr = (x)=> Array.isArray(x) ? x : [];
-  const total = arr(tpl.pre).length + arr(tpl.evento).length + arr(tpl.cierre).length;
-  if (!(total > 0)) return { ok:false, text:'—', checked:0, total:0, reason:'Sin plantilla' };
-
-  const day = (ev.days && typeof ev.days === 'object') ? ev.days[dayKey] : null;
-  const st = (day && day.checklistState && typeof day.checklistState === 'object') ? day.checklistState : null;
-  const checkedIds = st ? uniq(st.checkedIds) : [];
-  const checked = checkedIds.length;
-  return { ok:true, text:`${checked}/${total}`, checked, total, reason:'' };
-}
-
-function hasPettyDayActivity(day){
-  if (!day || typeof day !== 'object') return false;
-  if (day.initial && day.initial.savedAt) return true;
-  if (day.finalCount && day.finalCount.savedAt) return true;
-  if (Array.isArray(day.movements) && day.movements.length) return true;
-  if (day.fxRate != null) return true;
-  return false;
-}
-
-// --- State
-const state = {
-  db: null,
-  events: [],
-  eventsById: new Map(),
-  focusId: null,
-  focusEvent: null,
-  today: todayYMD(),
-};
-
-// --- UI render
-function setText(id, text){
-  const el = $(id);
-  if (!el) return;
-  el.textContent = (text == null || text === '') ? '—' : String(text);
-}
-
-function setHidden(id, hidden){
-  const el = $(id);
-  if (!el) return;
-  el.hidden = !!hidden;
-}
-
-function setDisabled(id, disabled){
-  const el = $(id);
-  if (!el) return;
-  el.disabled = !!disabled;
-}
-
-function renderRadarBasics(){
-  setText('radarEvents', state.events.length ? String(state.events.length) : (state.db ? '0' : '—'));
-  setText('radarEventName', state.focusEvent ? (safeStr(state.focusEvent.name) || '—') : '—');
-  // productos sin stock: intencionalmente “—” (cálculo no trivial)
-  setText('radarNoStock', '—');
-}
-
-function renderFocusHint(){
-  const ev = state.focusEvent;
-  if (!ev){
-    setText('focusHint', '—');
-    setText('navNote', 'Selecciona un evento para habilitar navegación contextual.');
-    return;
-  }
-  const g = safeStr(ev.groupName);
-  const created = safeStr(ev.createdAt);
-  const parts = [];
-  if (g) parts.push(`Grupo: ${g}`);
-  if (created) parts.push(`Creado: ${created.slice(0,10)}`);
-  setText('focusHint', parts.length ? parts.join(' · ') : 'Evento listo.');
-  setText('navNote', `Navegación enfocada en: ${safeStr(ev.name) || '—'}`);
-}
-
-function renderEmpty(){
-  setHidden('emptyState', state.events.length > 0);
-  // si no hay eventos, escondemos el resto para no mostrar “—” por todos lados
-  setHidden('todayPanel', state.events.length === 0);
-  setHidden('alerts', true);
-}
-
-function clearMetricsToDash(){
-  setText('salesToday', '—');
-  setText('salesTodaySub', '—');
-  setText('salesTodayHint', 'No disponible');
-  setText('pettyState', '—');
-  setText('pettyDayState', '—');
-  setText('pettyHint', 'No disponible');
-  setText('checklistProgress', '—');
-  setText('checklistHint', 'No disponible');
-  setText('topProducts', '—');
-  setText('topHint', '—');
-  setText('topProductsHint', 'No disponible');
-  setText('radarUnclosed', '—');
-}
-
-function renderAlerts(alerts){
-  const wrap = $('alerts');
-  const list = $('alertList');
-  if (!wrap || !list) return;
-  list.innerHTML = '';
-  if (!alerts || !alerts.length){
-    wrap.hidden = true;
-    return;
-  }
-  wrap.hidden = false;
-
-  for (const a of alerts){
-    const row = document.createElement('div');
-    row.className = 'cmd-alert';
-    row.innerHTML = `
-      <div class="cmd-alert-icon">${a.icon || '⚠️'}</div>
-      <div class="cmd-alert-text">
-        <div class="cmd-alert-title">${a.title}</div>
-        <div class="cmd-alert-sub">${a.sub || ''}</div>
-      </div>
-      <button class="cmd-btn" type="button" data-tab="${a.tab}">${a.cta}</button>
-    `;
-    const btn = row.querySelector('button[data-tab]');
-    if (btn){
-      btn.addEventListener('click', ()=> navigateToPOS(a.tab));
-    }
-    list.appendChild(row);
-  }
-}
-
-function renderTop3(items){
-  const el = $('topProducts');
-  if (!el) return;
-  if (!Array.isArray(items) || !items.length){
-    el.textContent = '—';
-    return;
-  }
-  el.innerHTML = '';
-  items.slice(0,3).forEach((it, idx)=>{
-    const span = document.createElement('span');
-    span.textContent = `${idx+1}. ${it.name} · ${it.qty}`;
-    el.appendChild(span);
-  });
-}
-
-// --- Data compute
-async function computeSalesToday(eventId, dayKey){
-  const db = state.db;
-  if (!db || !hasStore(db, 'sales')) return { ok:false, total:null, count:null, top:null, reason:'No disponible' };
-
-  // Preferir índice by_date (más liviano: solo “hoy”)
-  let rows = await idbGetAllByIndex(db, 'sales', 'by_date', IDBKeyRange.only(dayKey));
-
-  if (rows === null){
-    // No hay index by_date, fallback (potencialmente pesado)
-    const c = await idbCountByIndex(db, 'sales', 'by_event', IDBKeyRange.only(eventId));
-    if (typeof c === 'number' && c > SAFE_SCAN_LIMIT) {
-      return { ok:false, total:null, count:null, top:null, reason:'No disponible' };
-    }
-    const allByEvent = await idbGetAllByIndex(db, 'sales', 'by_event', IDBKeyRange.only(eventId));
-    if (allByEvent === null) return { ok:false, total:null, count:null, top:null, reason:'No disponible' };
-    rows = allByEvent.filter(r => r && String(r.date||'') === dayKey);
-  }
-
-  if (!Array.isArray(rows)) return { ok:false, total:null, count:null, top:null, reason:'No disponible' };
-  if (rows.length > SAFE_SCAN_LIMIT) return { ok:false, total:null, count:null, top:null, reason:'No disponible' };
-
-  const filtered = rows.filter(r => r && Number(r.eventId) === Number(eventId));
-  let total = 0;
-  const topMap = new Map();
-  for (const s of filtered){
-    total += Number(s.total || 0);
-    const name = safeStr(s.productName) || 'N/D';
-    const q = Number(s.qty || 0);
-    // para Top: contar solo ventas (qty > 0)
-    if (q > 0){
-      topMap.set(name, (topMap.get(name) || 0) + q);
-    }
-  }
-  const top = Array.from(topMap.entries())
-    .map(([name, qty])=>({ name, qty }))
-    .sort((a,b)=> (b.qty - a.qty))
-    .slice(0,3);
-
-  return { ok:true, total, count: filtered.length, top, reason:'' };
-}
-
-async function computePettyStatus(ev, dayKey){
-  const db = state.db;
-  if (!db || !ev) return { ok:false, enabled:null, dayState:null, fxMissing:null, closedAt:null, reason:'No disponible' };
-  const enabled = !!ev.pettyEnabled;
-  if (!enabled) return { ok:true, enabled:false, dayState:'No aplica', fxMissing:false, closedAt:null, reason:'' };
-  if (!hasStore(db, 'pettyCash')) return { ok:false, enabled:true, dayState:null, fxMissing:null, closedAt:null, reason:'No disponible' };
-
-  const pc = await idbGet(db, 'pettyCash', Number(ev.id));
-  if (!pc || !pc.days || typeof pc.days !== 'object'){
-    return { ok:false, enabled:true, dayState:null, fxMissing:null, closedAt:null, reason:'No disponible' };
-  }
-  const day = pc.days[dayKey];
-  if (!day || typeof day !== 'object'){
-    return { ok:false, enabled:true, dayState:null, fxMissing:null, closedAt:null, reason:'No disponible' };
-  }
-  const closedAt = day.closedAt || null;
-  const dayState = closedAt ? 'Cerrado' : 'Abierto';
-  const fx = day.fxRate;
-  const fxMissing = (fx == null || fx === '' || (typeof fx === 'number' && !isFinite(fx)));
-  return { ok:true, enabled:true, dayState, fxMissing, closedAt, pcDay: day, reason:'' };
-}
-
-async function computeUnclosed7d(ev, pcDayKey){
-  if (!ev || !ev.pettyEnabled) return { ok:true, value:'—', reason:'' };
-  const db = state.db;
-  if (!db || !hasStore(db, 'pettyCash')) return { ok:false, value:'—', reason:'No disponible' };
-
-  const pc = await idbGet(db, 'pettyCash', Number(ev.id));
-  if (!pc || !pc.days || typeof pc.days !== 'object') return { ok:false, value:'—', reason:'No disponible' };
-
-  // últimos 7 días incluyendo hoy
-  let cnt = 0;
-  for (let i = 0; i < 7; i++){
-    const d = ymdAddDays(pcDayKey, -i);
-    const day = pc.days[d];
-    if (!day || typeof day !== 'object') continue;
-    // Contar solo si hay actividad (evitar “inventar”)
-    if (!hasPettyDayActivity(day)) continue;
-    if (!day.closedAt) cnt += 1;
-  }
-  return { ok:true, value: String(cnt), reason:'' };
-}
-
-// --- Navigation
-async function navigateToPOS(tab){
-  const ev = state.focusEvent;
-  if (!ev || !state.db) return;
-  try{
-    await setMeta(state.db, 'currentEventId', Number(ev.id));
-  }catch(_){ }
-  const t = safeStr(tab) || 'vender';
-  window.location.href = `../pos/index.html?tab=${encodeURIComponent(t)}`;
-}
-
-// --- Picker
-function eventSortKey(ev){
-  // Preferir updatedAt, luego createdAt, luego id (todos reales del objeto)
-  const u = Number(ev.updatedAt || 0);
-  if (u) return u;
-  const c = safeStr(ev.createdAt);
-  if (c) {
-    const ts = Date.parse(c);
-    if (isFinite(ts)) return ts;
-  }
-  return Number(ev.id || 0);
-}
-
-function filterEvents(query){
-  const q = safeStr(query).toLowerCase();
-  if (!q) return state.events.slice(0, 40);
-  return state.events
-    .filter(ev => {
-      const name = safeStr(ev.name).toLowerCase();
-      const group = safeStr(ev.groupName).toLowerCase();
-      return name.includes(q) || group.includes(q);
-    })
-    .slice(0, 40);
-}
-
-function renderEventList(query){
-  const list = $('eventList');
-  if (!list) return;
-  const items = filterEvents(query);
-  list.innerHTML = '';
-
-  if (!items.length){
-    const empty = document.createElement('div');
-    empty.className = 'cmd-item';
-    empty.innerHTML = `<div class="cmd-item-title">Sin resultados</div><div class="cmd-item-sub">Prueba otro término.</div>`;
-    list.appendChild(empty);
-    return;
-  }
-
-  for (const ev of items){
-    const row = document.createElement('div');
-    const selected = state.focusId != null && Number(state.focusId) === Number(ev.id);
-    row.className = 'cmd-item' + (selected ? ' cmd-item-selected' : '');
-    const g = safeStr(ev.groupName);
-    row.innerHTML = `
-      <div class="cmd-item-title">${safeStr(ev.name) || '—'}</div>
-      <div class="cmd-item-sub">${g ? ('Grupo: ' + g) : 'Sin grupo'}</div>
-    `;
-    row.addEventListener('click', ()=> setFocusEvent(Number(ev.id)));
-    list.appendChild(row);
-  }
-}
-
-function showEventList(){
-  const list = $('eventList');
-  if (!list) return;
-  list.hidden = false;
-}
-
-function hideEventList(){
-  const list = $('eventList');
-  if (!list) return;
-  list.hidden = true;
-}
-
-async function setFocusEvent(eventId){
-  const id = Number(eventId);
-  if (!id || !state.eventsById.has(id)) return;
-  state.focusId = id;
-  state.focusEvent = state.eventsById.get(id) || null;
-
-  // Persistencia: meta + localStorage (robusto)
-  try{ localStorage.setItem(LS_FOCUS_KEY, String(id)); }catch(_){ }
-  try{
-    if (state.db && hasStore(state.db, 'meta')){
-      await setMeta(state.db, 'currentEventId', id);
-    }
-  }catch(err){
-    console.warn('No se pudo persistir currentEventId en meta', err);
-  }
-
-  // UI
-  const input = $('eventSearch');
-  if (input) input.value = safeStr(state.focusEvent.name) || '';
-  renderEventList('');
-  hideEventList();
-  renderFocusHint();
-  renderRadarBasics();
 
   await refreshAll();
 }
 
-// --- Main refresh
-async function refreshAll(){
-  clearMetricsToDash();
-  renderAlerts([]);
-
-  const ev = state.focusEvent;
-  if (!ev || !state.db) {
-    setDisabled('btnGoSell', true);
-    setDisabled('btnGoCaja', true);
-    setDisabled('btnGoResumen', true);
-    setDisabled('btnGoChecklist', true);
-    setDisabled('btnOpenChecklist', true);
-    return;
-  }
-
-  setDisabled('btnGoSell', false);
-  setDisabled('btnGoResumen', false);
-  setDisabled('btnGoChecklist', false);
-  setDisabled('btnOpenChecklist', false);
-
-  const dk = state.today;
-
-  // Checklist
-  const chk = computeChecklistProgress(ev, dk);
-  setText('checklistProgress', chk.text);
-  setText('checklistHint', chk.ok ? 'Hoy' : chk.reason);
-
-  // Caja chica
-  const pc = await computePettyStatus(ev, dk);
-  if (pc.ok && pc.enabled === false){
-    setText('pettyState', 'No aplica');
-    setText('pettyDayState', '—');
-    setText('pettyHint', 'Caja Chica desactivada en este evento.');
-    setDisabled('btnGoCaja', true);
-  } else if (pc.ok && pc.enabled === true){
-    setText('pettyState', 'Activa');
-    setText('pettyDayState', pc.dayState || '—');
-    setText('pettyHint', pc.dayState ? `Día ${dk}: ${pc.dayState}` : 'No disponible');
-    setDisabled('btnGoCaja', false);
-  } else if (pc.enabled === true){
-    // enabled pero no se pudo leer
-    setText('pettyState', 'Activa');
-    setText('pettyDayState', '—');
-    setText('pettyHint', pc.reason || 'No disponible');
-    setDisabled('btnGoCaja', false);
-  } else {
-    setText('pettyState', '—');
-    setText('pettyDayState', '—');
-    setText('pettyHint', pc.reason || 'No disponible');
-    setDisabled('btnGoCaja', true);
-  }
-
-  // Ventas hoy + Top productos
-  const sales = await computeSalesToday(Number(ev.id), dk);
-  if (sales.ok){
-    setText('salesToday', fmtMoneyNIO(sales.total));
-    setText('salesTodaySub', (typeof sales.count === 'number') ? (`Registros: ${sales.count}`) : '—');
-    setText('salesTodayHint', dk);
-    // Top
-    if (Array.isArray(sales.top) && sales.top.length){
-      renderTop3(sales.top);
-      setText('topHint', 'Top 3');
-      setText('topProductsHint', dk);
-    } else {
-      renderTop3([]);
-      setText('topHint', '—');
-      setText('topProductsHint', 'Sin datos hoy');
-    }
-  } else {
-    setText('salesToday', '—');
-    setText('salesTodaySub', '—');
-    setText('salesTodayHint', sales.reason || 'No disponible');
-    renderTop3([]);
-    setText('topHint', '—');
-    setText('topProductsHint', 'No disponible');
-  }
-
-  // Radar unclosed 7d
-  const unc = await computeUnclosed7d(ev, dk);
-  setText('radarUnclosed', (unc && unc.ok) ? unc.value : '—');
-
-  // Alertas (solo con señal real)
-  const alerts = [];
-  // 1) Caja chica activa y el día no está cerrado
-  if (pc && pc.ok && pc.enabled === true && pc.dayState === 'Abierto'){
-    alerts.push({
-      icon: '🧾',
-      title: 'Caja Chica activa y el día no está cerrado',
-      sub: `Hoy (${dk}): Día abierto`,
-      cta: 'Ir a Caja Chica',
-      tab: 'caja'
-    });
-  }
-  // 2) Tipo de cambio vacío hoy
-  if (pc && pc.ok && pc.enabled === true && pc.fxMissing === true){
-    alerts.push({
-      icon: '💱',
-      title: 'Tipo de cambio vacío hoy',
-      sub: `Hoy (${dk}): falta tipo de cambio en Caja Chica`,
-      cta: 'Ir a Caja Chica',
-      tab: 'caja'
-    });
-  }
-  // 3) Checklist incompleto
-  if (chk && chk.ok && typeof chk.checked === 'number' && typeof chk.total === 'number' && chk.total > 0 && chk.checked < chk.total){
-    alerts.push({
-      icon: '✅',
-      title: 'Checklist hoy incompleto',
-      sub: `Hoy (${dk}): ${chk.checked}/${chk.total}`,
-      cta: 'Abrir Checklist',
-      tab: 'checklist'
-    });
-  }
-  // 4) Inventario crítico (NO implementado v1: no hay cálculo “fácil/seguro”)
-
-  renderAlerts(alerts);
+function escapeHtml(str){
+  return String(str || '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }
 
-// --- Init
-async function init(){
-  // Header: hoy
-  setText('cmdToday', state.today);
-
-  // Buttons
-  const bind = (id, tab)=>{
-    const el = $(id);
-    if (!el) return;
-    el.addEventListener('click', ()=> navigateToPOS(tab));
-  };
-  bind('btnGoSell', 'vender');
-  bind('btnGoCaja', 'caja');
-  bind('btnGoResumen', 'resumen');
-  bind('btnGoChecklist', 'checklist');
-  bind('btnOpenChecklist', 'checklist');
-
-  // Picker events
-  const input = $('eventSearch');
-  const btn = $('eventPickerBtn');
-  const list = $('eventList');
-
-  if (input){
-    input.addEventListener('focus', ()=>{ renderEventList(input.value); showEventList(); });
-    input.addEventListener('input', ()=>{ renderEventList(input.value); showEventList(); });
-    input.addEventListener('keydown', (e)=>{
-      if (e.key === 'Escape') hideEventList();
-    });
-  }
-  if (btn){
-    btn.addEventListener('click', ()=>{
-      if (!list) return;
-      if (list.hidden){
-        renderEventList(input ? input.value : '');
-        showEventList();
-        try{ input && input.focus(); }catch(_){ }
-      } else {
-        hideEventList();
-      }
-    });
-  }
-  document.addEventListener('click', (e)=>{
-    const picker = $('eventPicker');
-    if (!picker || !list) return;
-    if (!picker.contains(e.target)) hideEventList();
-  });
-
-  clearMetricsToDash();
-  renderAlerts([]);
-
-  // Open DB
-  let db;
-  try{
-    db = await openPosDB({ timeoutMs: 3500 });
-    state.db = db;
-  }catch(err){
-    console.warn('Centro de Mando: no se pudo abrir DB del POS', err);
-    // Sin DB: dejar todo en “No disponible”, pero nunca bloquear la suite.
-    state.db = null;
-    state.events = [];
-    state.eventsById = new Map();
-    renderRadarBasics();
-    renderEmpty();
-    return;
-  }
-
-  // Load events
-  try{
-    const evs = await idbGetAll(db, 'events');
-    state.events = Array.isArray(evs) ? evs.slice() : [];
-    state.events.sort((a,b)=> eventSortKey(b) - eventSortKey(a));
-    state.eventsById = new Map(state.events.map(e=> [Number(e.id), e]));
-  }catch(err){
-    console.warn('Centro de Mando: error cargando eventos', err);
-    state.events = [];
-    state.eventsById = new Map();
-  }
-
-  renderRadarBasics();
-  renderEmpty();
-  if (!state.events.length){
-    return;
-  }
-
-  // Default focus: POS currentEventId → localStorage → más reciente
-  let focusId = null;
-  try{
-    focusId = await getMeta(db, 'currentEventId');
-  }catch(_){ }
-  if (!focusId){
-    try{
-      const raw = localStorage.getItem(LS_FOCUS_KEY);
-      const parsed = parseInt(raw || '0', 10);
-      if (parsed) focusId = parsed;
-    }catch(_){ }
-  }
-  if (!focusId || !state.eventsById.has(Number(focusId))){
-    focusId = Number(state.events[0].id);
-  }
-
-  // Pre-render list
-  if (input) input.value = safeStr(state.eventsById.get(Number(focusId))?.name || '');
-  renderEventList('');
-  hideEventList();
-
-  await setFocusEvent(Number(focusId));
-}
-
-document.addEventListener('DOMContentLoaded', init);
+window.addEventListener('DOMContentLoaded', init);

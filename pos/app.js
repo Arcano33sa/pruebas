@@ -2395,28 +2395,6 @@ function setTab(name){
   if (name==='checklist') renderChecklistTab().catch(err=>console.error(err));
 }
 
-// --- Deep-link mínimo (Centro de Mando -> POS)
-// Soporta: ?tab=vender | #tab=vender (sin librerías, sin romper navegación existente)
-function getTabFromUrlPOS(){
-  try{
-    const allowed = new Set(['vender','inventario','eventos','caja','resumen','productos','calculadora','checklist']);
-    // Querystring
-    const qs = new URLSearchParams(window.location.search || '');
-    const qTab = (qs.get('tab') || '').trim();
-    if (qTab && allowed.has(qTab)) return qTab;
-
-    // Hash: #tab=vender o #vender
-    const h = (window.location.hash || '').replace(/^#/, '').trim();
-    if (!h) return null;
-    if (h.startsWith('tab=')){
-      const ht = h.slice(4).trim();
-      if (allowed.has(ht)) return ht;
-    }
-    if (allowed.has(h)) return h;
-  }catch(_){ }
-  return null;
-}
-
 // --- Checklist (POS)
 const CHECKLIST_SECTIONS_POS = [
   { key: 'pre', listId: 'chk-pre', addId: 'chk-add-pre' },
@@ -5355,6 +5333,36 @@ async function init(){
     return;
   }
 
+  // --- Deep link mínimo (Centro de Mando / accesos rápidos)
+  // Soporta: ?tab=venta|vender|caja|resumen|checklist|eventos|inventario|productos|calculadora
+  // y también #tab=...
+  let deeplinkTab = null;
+  let deeplinkEventId = null;
+  try{
+    const sp = new URLSearchParams(window.location.search || '');
+    deeplinkTab = (sp.get('tab') || '').trim();
+    const evp = (sp.get('eventId') || '').trim();
+    if (evp){
+      const n = Number(evp);
+      if (Number.isFinite(n)) deeplinkEventId = parseInt(String(n), 10);
+    }
+
+    if (!deeplinkTab && window.location.hash){
+      const h = String(window.location.hash || '').replace(/^#/, '');
+      // Si viene como tab=venta
+      if (h.includes('=')){
+        const hp = new URLSearchParams(h);
+        deeplinkTab = (hp.get('tab') || '').trim();
+      } else {
+        // Si viene como #venta
+        deeplinkTab = h.trim();
+      }
+    }
+  }catch(_){ }
+
+  // Alias: "vender" -> "venta" (Centro de Mando v1)
+  if (deeplinkTab === 'vender') deeplinkTab = 'venta';
+
   // Helper para que cada paso falle de forma aislada sin tumbar todo el POS
   const runStep = async (name, fn) => {
     try{
@@ -5366,6 +5374,13 @@ async function init(){
 
   // Paso 2: defaults y migraciones
   await runStep('ensureDefaults', ensureDefaults);
+
+  // Si viene un eventId en la URL, lo seteamos como evento actual ANTES de renderizar.
+  if (deeplinkEventId != null){
+    await runStep('deeplinkEventId', async()=>{
+      await setMeta('currentEventId', deeplinkEventId);
+    });
+  }
 
   // Paso 3: preparar fecha por defecto
   try{
@@ -5394,6 +5409,13 @@ async function init(){
   await runStep('renderCajaChica', renderCajaChica);
   await runStep('updateSellEnabled', updateSellEnabled);
 
+  // Abrir pestaña específica si se pidió (después de que todo exista)
+  if (deeplinkTab){
+    await runStep('deeplinkTab', async()=>{
+      setTab(deeplinkTab);
+    });
+  }
+
   // Paso 5: barra offline y eventos de Caja Chica
   try{
     setOfflineBar();
@@ -5417,12 +5439,6 @@ async function init(){
       if (tab) setTab(tab);
     });
   }
-
-  // Deep-link desde Centro de Mando: abrir pestaña específica si viene en la URL
-  try{
-    const deepTab = getTabFromUrlPOS();
-    if (deepTab) setTab(deepTab);
-  }catch(_){ }
 
   // Vender tab
 
