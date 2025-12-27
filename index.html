@@ -1454,6 +1454,90 @@
       });
 
 
+      // --- Auth UI (Setup + Login) ---
+      const btnAuthSetup = document.getElementById('btn-auth-setup');
+      const btnLogin = document.getElementById('btn-login');
+      const btnResetCred = document.getElementById('btn-reset-credentials');
+
+      async function safeRun(btn, fn){
+        if (btn){ btn.disabled = true; btn.classList.add('is-loading'); }
+        try{ await fn(); }
+        finally{
+          if (btn){ btn.disabled = false; btn.classList.remove('is-loading'); }
+        }
+      }
+
+      async function doSetup(){
+        const u = (document.getElementById('auth-user')?.value || '').trim();
+        const p1 = String(document.getElementById('auth-pass')?.value || '');
+        const p2 = String(document.getElementById('auth-pass2')?.value || '');
+        const name = (document.getElementById('auth-name')?.value || '').trim();
+
+        if (!u){ alert('Usuario requerido.'); return; }
+        if (p1.length < 4){ alert('Contraseña muy corta (mínimo 4).'); return; }
+        if (p1 !== p2){ alert('Las contraseñas no coinciden.'); return; }
+
+        await A33Auth.setup({ username: u, password: p1, displayName: name || AUTH_DEFAULT_NAME });
+        // Iniciar sesión de inmediato para evitar doble paso
+        await A33Auth.login({ username: u, password: p1 });
+
+        // Limpieza y refresco UI
+        const pEl = document.getElementById('auth-pass'); if (pEl) pEl.value = '';
+        const p2El = document.getElementById('auth-pass2'); if (p2El) p2El.value = '';
+        await initAuthUi();
+      }
+
+      async function doLogin(){
+        const u = (document.getElementById('login-user')?.value || '').trim();
+        const p = String(document.getElementById('login-pass')?.value || '');
+
+        if (!u){ alert('Usuario requerido.'); return; }
+        if (!p){ alert('Contraseña requerida.'); return; }
+
+        await A33Auth.login({ username: u, password: p });
+        const pEl = document.getElementById('login-pass'); if (pEl) pEl.value = '';
+        await initAuthUi();
+      }
+
+      if (btnAuthSetup){
+        btnAuthSetup.addEventListener('click', () => safeRun(btnAuthSetup, async () => {
+          try{ await doSetup(); }
+          catch(e){ alert(e?.message || 'No se pudo configurar el acceso.'); }
+        }));
+      }
+
+      if (btnLogin){
+        btnLogin.addEventListener('click', () => safeRun(btnLogin, async () => {
+          try{ await doLogin(); }
+          catch(e){ alert(e?.message || 'Credenciales incorrectas.'); }
+        }));
+      }
+
+      if (btnResetCred){
+        btnResetCred.addEventListener('click', () => {
+          const ok = confirm('¿Resetear acceso? Esto eliminará usuario/contraseña de este dispositivo.');
+          if (!ok) return;
+          try{ A33Auth.resetCredentials(); }catch(_){}
+          initAuthUi();
+        });
+      }
+
+      // Enter-to-submit (iPad friendly)
+      const authPass2 = document.getElementById('auth-pass2');
+      if (authPass2){
+        authPass2.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter'){ e.preventDefault(); btnAuthSetup?.click(); }
+        });
+      }
+      const loginPass = document.getElementById('login-pass');
+      if (loginPass){
+        loginPass.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter'){ e.preventDefault(); btnLogin?.click(); }
+        });
+      }
+
+
+
       // --- Respaldo: Exportar / Importar ---
       const exportCard = document.getElementById('card-export-backup');
       const importCard = document.getElementById('card-import-backup');
