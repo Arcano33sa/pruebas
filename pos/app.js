@@ -2616,7 +2616,8 @@ function bindChecklistEventsOncePOS(){
 
   // + Agregar ítem (por sección)
   for (const sec of CHECKLIST_SECTIONS_POS){
-    const btn = document.getElementById(sec.addId);
+    // Soporta tanto IDs fijos (recomendado) como botones por clase/data-section (fallback)
+    const btn = document.getElementById(sec.addId) || document.querySelector(`#tab-checklist .chk-add[data-section="${sec.key}"]`);
     if (!btn) continue;
     btn.addEventListener('click', async ()=>{
       const current = await getMeta('currentEventId');

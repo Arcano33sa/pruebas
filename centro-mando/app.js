@@ -4,7 +4,7 @@
 */
 
 const POS_DB = 'a33-pos';
-const POS_DB_VER = 23; // igual que POS actual
+
 
 const $ = (id) => document.getElementById(id);
 
@@ -27,13 +27,31 @@ function dateAddDays(iso, delta){
 }
 
 async function openPosDB(){
+  // Centro de Mando NO crea ni migra la DB del POS.
+  // Si la DB no existe o requiere upgrade, abortamos y pedimos abrir POS primero.
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(POS_DB, POS_DB_VER);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error || new Error('No se pudo abrir POS DB'));
+    let settled = false;
+    const req = indexedDB.open(POS_DB);
+
+    req.onsuccess = () => {
+      if (settled) return;
+      settled = true;
+      resolve(req.result);
+    };
+
+    req.onerror = () => {
+      if (settled) return;
+      settled = true;
+      reject(req.error || new Error('No se pudo abrir POS DB'));
+    };
+
     req.onupgradeneeded = () => {
-      // No hacemos migraciones aquí.
-      // Si se abre con upgrade, dejamos que POS sea el que maneje.
+      // DB no inicializada o requiere upgrade.
+      try{ req.transaction && req.transaction.abort(); }catch(_){ }
+      try{ req.result && req.result.close && req.result.close(); }catch(_){ }
+      if (settled) return;
+      settled = true;
+      reject(new Error('POS no inicializado/actualizado. Abre POS una vez y reintenta.'));
     };
   });
 }
@@ -97,23 +115,39 @@ function safeText(v){
   return (v === null || typeof v === 'undefined' || v === '') ? '—' : String(v);
 }
 
+function setHints(lines){
+  const ul = $('hints');
+  if (!ul) return;
+  ul.innerHTML = '';
+  (lines || []).forEach(t => {
+    const li = document.createElement('li');
+    li.textContent = String(t);
+    ul.appendChild(li);
+  });
+}
+
+function setEventDetailSub(text){
+  const el = $('eventDetailSub');
+  if (el) el.textContent = text || '—';
+}
+
 function renderKpi(kpis){
-  const grid = $('kpi-grid');
+  const grid = $('globalRadar');
   if (!grid) return;
   grid.innerHTML = kpis.map(k => `
     <div class="kpi">
-      <div class="kpi-label">${k.label}</div>
-      <div class="kpi-value">${k.value}</div>
-      <div class="kpi-sub">${k.sub || ''}</div>
+      <div class="label">${k.label}</div>
+      <div class="value">${k.value}</div>
+      <div class="muted" style="margin-top:6px">${k.sub || ''}</div>
     </div>
   `).join('');
 }
 
 function renderFocusCards(cards){
-  const wrap = $('focus-cards');
+  const wrap = $('eventCards');
   if (!wrap) return;
   wrap.innerHTML = cards.map(c => `
-    <div class="card mini">
+    <div class="tile">
       <h3>${c.title}</h3>
       <div class="muted">${c.body}</div>
     </div>
@@ -233,21 +267,15 @@ async function computeFocused(db, eventId){
 }
 
 function bindQuickButtons(eventId){
-  const goSell = $('btn-go-sell');
-  const goCash = $('btn-go-cash');
+  const goSell = $('goSell');
+  const goCash = $('goPetty');
 
-  if (goSell){
-    goSell.onclick = () => {
-      const url = `../pos/index.html?tab=venta&eventId=${encodeURIComponent(eventId||'')}`;
-      window.location.href = url;
-    };
-  }
-  if (goCash){
-    goCash.onclick = () => {
-      const url = `../pos/index.html?tab=caja&eventId=${encodeURIComponent(eventId||'')}`;
-      window.location.href = url;
-    };
-  }
+  // Los tabs reales del POS son: vender | caja | checklist | etc.
+  const sellUrl = `../pos/index.html?tab=vender&eventId=${encodeURIComponent(eventId||'')}`;
+  const cashUrl = `../pos/index.html?tab=caja&eventId=${encodeURIComponent(eventId||'')}`;
+
+  if (goSell) goSell.setAttribute('href', sellUrl);
+  if (goCash) goCash.setAttribute('href', cashUrl);
 }
 
 async function init(){
@@ -261,14 +289,17 @@ async function init(){
     }
   }catch(_){ }
 
-  const msg = $('cmd-msg');
-  const focusSelect = $('focus-event');
+  const focusSelect = $('focusEvent');
 
   let db;
   try{
     db = await openPosDB();
   }catch(e){
-    if (msg) msg.textContent = 'No pude abrir la base del POS. Abre primero POS una vez y reintenta.';
+    setHints([
+      'No pude abrir la base del POS.',
+      'Abre primero el módulo POS una vez (para inicializar/actualizar la DB) y vuelve a intentar.'
+    ]);
+    setEventDetailSub('POS no disponible');
     renderKpi([
       {label:'Eventos', value:'—', sub:'POS no disponible'},
       {label:'Ventas hoy', value:'—'},
@@ -284,10 +315,45 @@ async function init(){
     return;
   }
 
+  // hints base
+  setHints(['Si algo no se puede calcular rápido, se muestra “—”. Mejor vacío que inventado.']);
+
+  // Validación rápida de esquema (evita pantallas vacías si la DB se creó sin stores)
+  try{
+    if (!db.objectStoreNames.contains('events')){
+      setHints([
+        'La base del POS existe, pero no tiene los stores esperados (events).',
+        'Abre el módulo POS una vez para que cree/actualice la base de datos.',
+        'Si aún queda vacío, borra los datos del sitio (Safari → Avanzado → Datos de sitios web) y vuelve a abrir POS.'
+      ]);
+      setEventDetailSub('POS no inicializado');
+      renderKpi([
+        {label:'Eventos', value:'—', sub:'DB sin esquema'},
+        {label:'Ventas hoy', value:'—'},
+        {label:'Ventas 7 días', value:'—'},
+        {label:'Última venta', value:'—'},
+      ]);
+      renderFocusCards([
+        {title:'Evento enfocado', body:'—'},
+        {title:'Caja Chica', body:'—'},
+        {title:'Ventas de hoy', body:'—'},
+        {title:'Top productos', body:'—'},
+      ]);
+      return;
+    }
+  }catch(_){ }
+
   // cargar eventos
   let events = [];
   try{ events = await txGetAll(db, 'events'); }catch(_){ events = []; }
   events = events.sort((a,b) => Number(b.updatedAt||b.createdAt||b.id||0) - Number(a.updatedAt||a.createdAt||a.id||0));
+
+  if (!events.length){
+    setHints([
+      'No hay eventos aún en POS.',
+      'Crea un evento en POS → pestaña Eventos, y vuelve aquí.'
+    ]);
+  }
 
   // elegir eventId enfocado
   const saved = localStorage.getItem('a33_cmd_focusEventId');
@@ -315,6 +381,7 @@ async function init(){
 
     // Detalle enfocado
     if (!eid){
+      setEventDetailSub('Selecciona un evento para ver el detalle.');
       renderFocusCards([
         {title:'Evento enfocado', body:'Selecciona un evento arriba.'},
         {title:'Caja Chica', body:'—'},
@@ -330,6 +397,8 @@ async function init(){
 
     const ev = events.find(x => Number(x.id) === Number(eid));
     const title = ev ? (ev.name || ev.title || `Evento ${eid}`) : `Evento ${eid}`;
+
+    setEventDetailSub(`${title} · ${todayISO()}`);
 
     const focus = await computeFocused(db, eid);
     renderFocusCards([
