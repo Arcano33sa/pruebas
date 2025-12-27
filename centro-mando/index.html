@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Arcano 33 · Centro de Mando</title>
+  <meta name="description" content="Centro de Mando: radar por evento (Caja Chica, ventas, top productos e inventario crítico)." />
+  <meta name="theme-color" content="#7b1818" />
+
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="/assets/css/a33-header.css" />
+</head>
+<body>
+  <header class="a33-header" role="banner">
+    <a class="a33-btn-menu" href="../index.html" aria-label="Volver al Menú principal">← Menú principal</a>
+    <div class="a33-title">Centro de Mando</div>
+    <div class="a33-version">v4.20.4</div>
+  </header>
+
+  <main class="app-main">
+    <section class="card">
+      <div class="row" style="justify-content:space-between; align-items:flex-end; gap:12px;">
+        <div>
+          <h2 style="margin:0;">Enfocado</h2>
+          <div class="muted" style="margin-top:6px;">El evento enfocado también actualiza el evento actual del POS.</div>
+        </div>
+
+        <div class="field" style="min-width:260px;">
+          <label for="focusEvent">Evento</label>
+          <select id="focusEvent"></select>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid kpis" id="globalRadar">
+      <!-- se llena por JS -->
+    </section>
+
+    <section class="grid details">
+      <article class="card" id="eventDetail">
+        <h2 style="margin-top:0;">Detalle del evento</h2>
+        <div class="muted" id="eventDetailSub">—</div>
+        <div class="divider"></div>
+        <div class="grid cols2" id="eventCards"></div>
+        <div class="divider"></div>
+        <div class="row" style="gap:10px; flex-wrap:wrap;">
+          <a class="btn" id="goSell" href="../pos/index.html">Ir a POS (Vender)</a>
+          <a class="btn btn-ghost" id="goPetty" href="../pos/index.html">Ir a Caja Chica</a>
+        </div>
+      </article>
+
+      <article class="card" id="notes">
+        <h2 style="margin-top:0;">Notas rápidas</h2>
+        <div class="muted">Si algo no se puede calcular rápido, se muestra “—”. Mejor vacío que inventado.</div>
+        <div class="divider"></div>
+        <ul class="bullet" id="hints"></ul>
+      </article>
+    </section>
+  </main>
+
+  <script src="/assets/js/a33-auth.js"></script>
+  <script src="/assets/js/a33-storage.js"></script>
+  <script>
+    // Gate simple (mismo patrón del POS)
+    try{
+      if (window.A33Auth && A33Auth.isConfigured && A33Auth.isConfigured()){
+        if (!A33Auth.isAuthenticated()){
+          window.location.href = '../index.html';
+        }
+      }
+    }catch(_){ }
+  </script>
+  <script src="app.js"></script>
+</body>
+</html>

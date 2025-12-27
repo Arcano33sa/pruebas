@@ -2392,6 +2392,387 @@ function setTab(name){
   if (name==='inventario') renderInventario();
   if (name==='caja') renderCajaChica();
   if (name==='calculadora') onOpenPosCalculatorTab().catch(err=>console.error(err));
+  if (name==='checklist') renderChecklistTab().catch(err=>console.error(err));
+}
+
+// --- Checklist (POS)
+const CHECKLIST_SECTIONS_POS = [
+  { key: 'pre', listId: 'chk-pre', addId: 'chk-add-pre' },
+  { key: 'evento', listId: 'chk-evento', addId: 'chk-add-evento' },
+  { key: 'cierre', listId: 'chk-cierre', addId: 'chk-add-cierre' },
+];
+
+function makeChecklistItemIdPOS(){
+  try{ return (crypto && crypto.randomUUID) ? crypto.randomUUID() : null; }catch(e){}
+  return 'chk_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+}
+
+function normalizeChecklistTemplatePOS(t){
+  const out = (t && typeof t === 'object') ? t : {};
+  const normArr = (arr)=>{
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter(x=>x && typeof x === 'object')
+      .map(x=>({ id: String(x.id || makeChecklistItemIdPOS()), text: String(x.text || '').trim() }))
+      .filter(x=>x.text.length>0 || x.id);
+  };
+  return {
+    pre: normArr(out.pre),
+    evento: normArr(out.evento),
+    cierre: normArr(out.cierre),
+  };
+}
+
+function ensureChecklistDataPOS(ev, dayKey){
+  let changed = false;
+  if (!ev || typeof ev !== 'object') return { changed:false, template:{pre:[],evento:[],cierre:[]}, state:{checkedIds:[], notes:''} };
+
+  if (!ev.checklistTemplate || typeof ev.checklistTemplate !== 'object') {
+    ev.checklistTemplate = { pre: [], evento: [], cierre: [] };
+    changed = true;
+  }
+  const tpl = normalizeChecklistTemplatePOS(ev.checklistTemplate);
+  // Persistir normalización si cambia estructura
+  if (JSON.stringify(tpl) !== JSON.stringify(ev.checklistTemplate)) {
+    ev.checklistTemplate = tpl;
+    changed = true;
+  }
+
+  if (!ev.days || typeof ev.days !== 'object') {
+    ev.days = {};
+    changed = true;
+  }
+  if (!ev.days[dayKey] || typeof ev.days[dayKey] !== 'object') {
+    ev.days[dayKey] = {};
+    changed = true;
+  }
+  if (!ev.days[dayKey].checklistState || typeof ev.days[dayKey].checklistState !== 'object') {
+    ev.days[dayKey].checklistState = { checkedIds: [], notes: '' };
+    changed = true;
+  }
+  const st = ev.days[dayKey].checklistState;
+  if (!Array.isArray(st.checkedIds)) { st.checkedIds = []; changed = true; }
+  if (typeof st.notes !== 'string') { st.notes = String(st.notes || ''); changed = true; }
+
+  // Limpieza: checkedIds solo válidos según template
+  const allIds = new Set([
+    ...tpl.pre.map(x=>x.id),
+    ...tpl.evento.map(x=>x.id),
+    ...tpl.cierre.map(x=>x.id),
+  ]);
+  const filtered = st.checkedIds.map(String).filter(id=>allIds.has(id));
+  if (filtered.length !== st.checkedIds.length) {
+    st.checkedIds = filtered;
+    changed = true;
+  }
+
+  return { changed, template: tpl, state: st };
+}
+
+function renderChecklistSectionPOS(sectionKey, listEl, items, checkedSet){
+  if (!listEl) return;
+  listEl.innerHTML = '';
+
+  if (!items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'muted';
+    empty.style.padding = '8px 4px';
+    empty.textContent = 'Sin ítems. Usa “+ Agregar ítem”.';
+    listEl.appendChild(empty);
+    return;
+  }
+
+  items.forEach((it, idx)=>{
+    const row = document.createElement('div');
+    row.className = 'chk-row';
+    row.dataset.section = sectionKey;
+    row.dataset.id = it.id;
+    row.dataset.idx = String(idx);
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'chk-box';
+    cb.checked = checkedSet.has(it.id);
+    cb.dataset.section = sectionKey;
+    cb.dataset.id = it.id;
+
+    const txt = document.createElement('input');
+    txt.type = 'text';
+    txt.className = 'chk-text';
+    txt.value = it.text || '';
+    txt.placeholder = 'Ítem…';
+    txt.dataset.section = sectionKey;
+    txt.dataset.id = it.id;
+
+    const actions = document.createElement('div');
+    actions.className = 'chk-actions';
+
+    const up = document.createElement('button');
+    up.type = 'button';
+    up.className = 'btn-mini chk-mini chk-up';
+    up.textContent = '↑';
+    up.disabled = idx === 0;
+    up.dataset.section = sectionKey;
+    up.dataset.id = it.id;
+
+    const down = document.createElement('button');
+    down.type = 'button';
+    down.className = 'btn-mini chk-mini chk-down';
+    down.textContent = '↓';
+    down.disabled = idx === items.length - 1;
+    down.dataset.section = sectionKey;
+    down.dataset.id = it.id;
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'btn-mini chk-mini chk-del';
+    del.textContent = '✕';
+    del.dataset.section = sectionKey;
+    del.dataset.id = it.id;
+
+    actions.appendChild(up);
+    actions.appendChild(down);
+    actions.appendChild(del);
+
+    row.appendChild(cb);
+    row.appendChild(txt);
+    row.appendChild(actions);
+
+    listEl.appendChild(row);
+  });
+}
+
+async function renderChecklistTab(){
+  bindChecklistEventsOncePOS();
+
+  const empty = document.getElementById('checklist-empty');
+  const grid = document.getElementById('checklist-grid');
+  const sel = document.getElementById('checklist-event');
+
+  const current = await getMeta('currentEventId');
+  const currentId = (current === null || current === undefined || current === '') ? null : parseInt(current, 10);
+
+  if (sel) sel.value = currentId ? String(currentId) : '';
+
+  if (!currentId) {
+    if (empty) empty.style.display = 'block';
+    if (grid) grid.style.display = 'none';
+    return;
+  }
+
+  const ev = await getEventByIdPOS(currentId);
+  if (!ev) {
+    if (empty) empty.style.display = 'block';
+    if (grid) grid.style.display = 'none';
+    return;
+  }
+
+  const dayKey = safeYMD(getSaleDayKeyPOS());
+  const { changed, template, state } = ensureChecklistDataPOS(ev, dayKey);
+  if (changed) {
+    try{ await put('events', ev); }catch(e){ console.error('Checklist: no se pudo persistir inicialización', e); }
+  }
+
+  if (empty) empty.style.display = 'none';
+  if (grid) grid.style.display = 'grid';
+
+  const checkedSet = new Set((state.checkedIds || []).map(String));
+
+  // Render columnas
+  for (const sec of CHECKLIST_SECTIONS_POS){
+    const listEl = document.getElementById(sec.listId);
+    renderChecklistSectionPOS(sec.key, listEl, template[sec.key] || [], checkedSet);
+  }
+
+  const notes = document.getElementById('checklist-notes');
+  if (notes) notes.value = state.notes || '';
+}
+
+function bindChecklistEventsOncePOS(){
+  if (window.__A33_CHECKLIST_BOUND) return;
+  window.__A33_CHECKLIST_BOUND = true;
+
+  const sel = document.getElementById('checklist-event');
+  if (sel){
+    sel.addEventListener('change', async ()=>{
+      const val = (sel.value || '').trim();
+      if (!val) {
+        await setMeta('currentEventId', null);
+      } else {
+        await setMeta('currentEventId', parseInt(val,10));
+      }
+      await refreshEventUI();
+      try{ await refreshSaleStockLabel(); }catch(e){}
+      try{ await renderDay(); }catch(e){}
+      try{ await renderChecklistTab(); }catch(e){}
+      try{ showToast('Evento actualizado en todo el POS.'); }catch(e){}
+    });
+  }
+
+  const go = document.getElementById('checklist-go-events');
+  if (go){
+    go.addEventListener('click', ()=> setTab('eventos'));
+  }
+
+  // + Agregar ítem (por sección)
+  for (const sec of CHECKLIST_SECTIONS_POS){
+    const btn = document.getElementById(sec.addId);
+    if (!btn) continue;
+    btn.addEventListener('click', async ()=>{
+      const current = await getMeta('currentEventId');
+      const currentId = current ? parseInt(current,10) : null;
+      if (!currentId){
+        try{ showToast('Selecciona un evento primero.'); }catch(e){}
+        return;
+      }
+      const dayKey = safeYMD(getSaleDayKeyPOS());
+      const ev = await getEventByIdPOS(currentId);
+      if (!ev) return;
+      const { template } = ensureChecklistDataPOS(ev, dayKey);
+      const id = makeChecklistItemIdPOS();
+      template[sec.key] = Array.isArray(template[sec.key]) ? template[sec.key] : [];
+      template[sec.key].push({ id, text: 'Nuevo ítem' });
+      ev.checklistTemplate = template;
+      await put('events', ev);
+      await renderChecklistTab();
+      const input = document.querySelector(`#${sec.listId} .chk-text[data-id="${CSS.escape(id)}"]`);
+      if (input){
+        input.focus();
+        try{ input.select(); }catch(e){}
+      }
+    });
+  }
+
+  // Delegación de acciones dentro del tab
+  const tab = document.getElementById('tab-checklist');
+  if (tab){
+    tab.addEventListener('click', async (e)=>{
+      const up = e.target.closest('.chk-up');
+      const down = e.target.closest('.chk-down');
+      const del = e.target.closest('.chk-del');
+      const reset = e.target.closest('#checklist-reset-day');
+
+      if (reset){
+        const cur = await getMeta('currentEventId');
+        const curId = cur ? parseInt(cur,10) : null;
+        if (!curId) return;
+        const ok = confirm('¿Reiniciar checks del día? (solo desmarca)');
+        if (!ok) return;
+        const dayKey = safeYMD(getSaleDayKeyPOS());
+        const ev = await getEventByIdPOS(curId);
+        if (!ev) return;
+        const { state } = ensureChecklistDataPOS(ev, dayKey);
+        state.checkedIds = [];
+        ev.days[dayKey].checklistState = state;
+        await put('events', ev);
+        await renderChecklistTab();
+        try{ showToast('Checks reiniciados.'); }catch(e){}
+        return;
+      }
+
+      if (!(up || down || del)) return;
+      const btn = up || down || del;
+      const sectionKey = btn.dataset.section;
+      const id = btn.dataset.id;
+      const cur = await getMeta('currentEventId');
+      const curId = cur ? parseInt(cur,10) : null;
+      if (!curId || !sectionKey || !id) return;
+
+      const dayKey = safeYMD(getSaleDayKeyPOS());
+      const ev = await getEventByIdPOS(curId);
+      if (!ev) return;
+      const { template, state } = ensureChecklistDataPOS(ev, dayKey);
+
+      const arr = Array.isArray(template[sectionKey]) ? template[sectionKey] : [];
+      const idx = arr.findIndex(x=>String(x.id)===String(id));
+      if (idx < 0) return;
+
+      if (del){
+        const ok = confirm('¿Eliminar este ítem?');
+        if (!ok) return;
+        arr.splice(idx,1);
+        template[sectionKey] = arr;
+        // limpiar del estado del día
+        state.checkedIds = (state.checkedIds||[]).map(String).filter(cid=>cid!==String(id));
+        ev.checklistTemplate = template;
+        ev.days[dayKey].checklistState = state;
+        await put('events', ev);
+        await renderChecklistTab();
+        try{ showToast('Ítem eliminado.'); }catch(e){}
+        return;
+      }
+
+      const dir = up ? -1 : 1;
+      const j = idx + dir;
+      if (j < 0 || j >= arr.length) return;
+      [arr[idx], arr[j]] = [arr[j], arr[idx]];
+      template[sectionKey] = arr;
+      ev.checklistTemplate = template;
+      await put('events', ev);
+      await renderChecklistTab();
+    });
+
+    tab.addEventListener('change', async (e)=>{
+      const cb = e.target.closest('.chk-box');
+      const txt = e.target.closest('.chk-text');
+      if (!(cb || txt)) return;
+      const cur = await getMeta('currentEventId');
+      const curId = cur ? parseInt(cur,10) : null;
+      if (!curId) return;
+      const dayKey = safeYMD(getSaleDayKeyPOS());
+      const ev = await getEventByIdPOS(curId);
+      if (!ev) return;
+      const { template, state } = ensureChecklistDataPOS(ev, dayKey);
+
+      if (cb){
+        const id = cb.dataset.id;
+        if (!id) return;
+        const set = new Set((state.checkedIds||[]).map(String));
+        if (cb.checked) set.add(String(id));
+        else set.delete(String(id));
+        state.checkedIds = Array.from(set);
+        ev.days[dayKey].checklistState = state;
+        await put('events', ev);
+        return;
+      }
+
+      if (txt){
+        const id = txt.dataset.id;
+        const sectionKey = txt.dataset.section;
+        const val = (txt.value || '').trim();
+        if (!id || !sectionKey) return;
+        const arr = Array.isArray(template[sectionKey]) ? template[sectionKey] : [];
+        const it = arr.find(x=>String(x.id)===String(id));
+        if (!it) return;
+        it.text = val || it.text || 'Ítem';
+        template[sectionKey] = arr;
+        ev.checklistTemplate = template;
+        await put('events', ev);
+        return;
+      }
+    });
+  }
+
+  // Notas (debounced)
+  const notes = document.getElementById('checklist-notes');
+  if (notes){
+    let t = null;
+    notes.addEventListener('input', ()=>{
+      clearTimeout(t);
+      t = setTimeout(async ()=>{
+        const cur = await getMeta('currentEventId');
+        const curId = cur ? parseInt(cur,10) : null;
+        if (!curId) return;
+        const dayKey = safeYMD(getSaleDayKeyPOS());
+        const ev = await getEventByIdPOS(curId);
+        if (!ev) return;
+        const { state } = ensureChecklistDataPOS(ev, dayKey);
+        state.notes = notes.value || '';
+        ev.days[dayKey].checklistState = state;
+        await put('events', ev);
+      }, 350);
+    });
+  }
 }
 
 // Event UI
@@ -2499,6 +2880,20 @@ async function refreshEventUI(){
     }
     if (current) invSel.value = current;
     else if (evs.length) invSel.value = evs[0].id;
+  }
+
+  // Selector de evento en Checklist (usa el mismo evento activo global del POS)
+  const chkSel = document.getElementById('checklist-event');
+  if (chkSel){
+    chkSel.innerHTML = '<option value="">— Selecciona evento —</option>';
+    for (const ev of evs){
+      const o = document.createElement('option');
+      o.value = ev.id;
+      o.textContent = ev.name + (ev.closedAt ? ' (cerrado)' : '');
+      chkSel.appendChild(o);
+    }
+    if (current) chkSel.value = current;
+    else chkSel.value = '';
   }
 
   await updateSellEnabled();
@@ -5186,6 +5581,7 @@ async function init(){
     await renderDay();
     await updateSellEnabled();
     try{ await refreshSaleStockLabel(); }catch(e){}
+    try{ if (window.__A33_ACTIVE_TAB === 'checklist') await renderChecklistTab(); }catch(e){}
   });
   const btnGoCaja = document.getElementById('btn-go-caja');
   if (btnGoCaja){
@@ -6061,6 +6457,7 @@ Esto bloqueará edición de Caja Chica para este día.`);
     }
     // Refrescar UI desde IDB
     await renderCajaChica();
+
     try{ await updateSellEnabled(); }catch(e){}
     showToast('Día cerrado', 'ok', 5000);
   }catch(err){
@@ -6113,6 +6510,7 @@ Podrás editar Caja Chica y el cierre del día quedará removido.`);
     return;
   }
   await renderCajaChica();
+
   try{ await updateSellEnabled(); }catch(e){}
   showToast('Día reabierto', 'ok', 5000);
 }

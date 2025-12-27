@@ -89,7 +89,7 @@ button{cursor:pointer}
 .btn-danger{background:var(--danger);color:#fff;font-weight:700}
 .badge{display:inline-block;padding:4px 8px;border-radius:999px;background:#2a2a2a;color:var(--accent);font-weight:600}
 table{width:100%;border-collapse:collapse;margin-top:10px}
-th,td{border-bottom:1px solid #2a2a2a;padding:10px;text-align:left;font-size:14px;white-space:nowrap}
+th,td{border-bottom:1px solid #2a2a2a;padding:9px;text-align:left;font-size:14px;white-space:nowrap}
 tfoot td{font-weight:700}
 /* -----------------------------
    A33 · Barra inferior (Tabs) — Premium
@@ -116,19 +116,19 @@ tfoot td{font-weight:700}
 
   /* Grid */
   display:grid;
-  grid-template-columns:repeat(7, minmax(0,1fr));
+  grid-template-columns:repeat(8, minmax(0,1fr));
   gap:6px;
-  padding:10px;
+  padding:9px;
 }
 
 .tabbar button{
   min-height:44px;
   border:none;
   border-radius:16px;
-  padding:10px 6px 8px;
+  padding:9px 5px 7px;
   background:transparent;
   color:rgba(255,255,255,.84);
-  font-size:11px;
+  font-size:10px;
   line-height:1.1;
   letter-spacing:.2px;
   font-weight:600;
@@ -166,11 +166,7 @@ tfoot td{font-weight:700}
     grid-column: span 3; /* 4 botones (12/3) */
     font-size:10.5px;
     border-radius:14px;
-  }
-  .tabbar button:nth-child(n+5){
-    grid-column: span 4; /* 3 botones (12/4) */
-  }
-  .tabbar button.active::after{width:16px}
+  }.tabbar button.active::after{width:16px}
 }
 
 /* Espaciador para que el contenido no quede debajo de la barra */
@@ -188,8 +184,8 @@ small.muted{color:var(--muted)}
 .flag{display:flex;align-items:center;gap:8px}
 .flag input[type="checkbox"]{width:auto}
 .compact th, .compact td{font-size:13px}
-.info{padding:10px;border-radius:10px;background:#0f1b0f;border:1px solid #214021;color:#b6f0b6;margin-top:8px}
-.warn{padding:10px;border-radius:10px;background:#2a1b0f;border:1px solid #5a3d12;color:#ffd7a1;margin-top:8px}
+.info{padding:9px;border-radius:10px;background:#0f1b0f;border:1px solid #214021;color:#b6f0b6;margin-top:8px}
+.warn{padding:9px;border-radius:10px;background:#2a1b0f;border:1px solid #5a3d12;color:#ffd7a1;margin-top:8px}
 
 /* Banner premium: Día cerrado (Caja Chica) */
 .a33-guard-banner{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
@@ -319,7 +315,7 @@ small.muted{color:var(--muted)}
   position:absolute;
   top:10px;
   right:10px;
-  font-size:11px;
+  font-size:10px;
   letter-spacing:.14em;
   text-transform:uppercase;
   color:#cfcfcf;
@@ -387,7 +383,7 @@ small.muted{color:var(--muted)}
 }
 
 .btn-small{
-  font-size:11px;
+  font-size:10px;
   padding:2px 6px;
 }
 .petty-final h3{
@@ -544,7 +540,7 @@ small.muted{color:var(--muted)}
   margin-left:8px;
   padding:2px 8px;
   border-radius:999px;
-  font-size:11px;
+  font-size:10px;
   font-weight:700;
   line-height:1.6;
   border:1px solid #333;
@@ -759,3 +755,87 @@ small.muted{color:var(--muted)}
 
 .fx-quick{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
 .fx-quick button{width:auto}
+
+/* =============================
+   Checklist (POS) — UI
+   ============================= */
+
+.checklist-grid{
+  display:grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.chk-head{
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.chk-head h3{
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+}
+
+.chk-list{
+  display:flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chk-row{
+  display:grid;
+  grid-template-columns: 22px 1fr auto auto auto;
+  gap: 8px;
+  align-items:center;
+  padding: 8px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  background: rgba(0,0,0,0.18);
+}
+
+.chk-row input[type="checkbox"]{
+  width: 18px;
+  height: 18px;
+  accent-color: #d8b15f;
+}
+
+.chk-text{
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.20);
+  color: #f2f2f2;
+}
+
+.chk-text:focus{
+  outline: none;
+  border-color: rgba(216,177,95,0.55);
+  box-shadow: 0 0 0 2px rgba(216,177,95,0.18);
+}
+
+.chk-mini{
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.06);
+  color: #f2f2f2;
+  font-size: 12px;
+}
+
+.chk-mini:active{ transform: translateY(1px); }
+
+#checklist-notes{
+  width: 100%;
+  resize: vertical;
+  min-height: 78px;
+}
+
+@media (max-width: 820px){
+  .checklist-grid{ grid-template-columns: 1fr; }
+}
