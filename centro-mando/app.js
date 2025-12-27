@@ -691,7 +691,14 @@ async function init(){
   const list = $('eventList');
 
   if (input){
-    input.addEventListener('focus', ()=>{ renderEventList(input.value); showEventList(); });
+    // iOS/Keychain + UX: el input suele estar prellenado con el evento actual.
+    // Si filtramos con ese texto al abrir, parece que "solo existe" un evento.
+    // Regla operativa: al abrir (focus) mostramos TODOS; al escribir, filtramos.
+    input.addEventListener('focus', ()=>{
+      renderEventList('');
+      showEventList();
+      try{ input.select(); }catch(_){ }
+    });
     input.addEventListener('input', ()=>{ renderEventList(input.value); showEventList(); });
     input.addEventListener('keydown', (e)=>{
       if (e.key === 'Escape') hideEventList();
@@ -701,9 +708,11 @@ async function init(){
     btn.addEventListener('click', ()=>{
       if (!list) return;
       if (list.hidden){
-        renderEventList(input ? input.value : '');
+        // Al abrir por botón, mostrar TODO (sin filtrar por el evento actual prellenado)
+        renderEventList('');
         showEventList();
         try{ input && input.focus(); }catch(_){ }
+        try{ input && input.select(); }catch(_){ }
       } else {
         hideEventList();
       }
