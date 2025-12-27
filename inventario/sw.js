@@ -1,4 +1,4 @@
-const CACHE_NAME = "a33-inventario-cache-v4_20_3_fix1";
+const CACHE_NAME = "a33-inventario-cache-v4_20_2_fix1";
 const ASSETS = [
   "./",
   "./index.html",

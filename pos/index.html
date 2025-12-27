@@ -4,20 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.3">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.2">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.3">
+<link rel="stylesheet" href="styles.css?v=4.20.2">
   <link rel="stylesheet" href="/assets/css/a33-header.css" />
 </head>
 <body>
   <header class="a33-header" role="banner">
     <a class="a33-btn-menu" href="../index.html" aria-label="Volver al Menú principal">← Menú principal</a>
     <div class="a33-title">POS · Eventos</div>
-    <div class="a33-version">v4.20.3</div>
+    <div class="a33-version">v4.20.2</div>
   </header>
 <div id="offlineBar" class="offline">Trabajando sin conexión</div>
 <div class="container">
@@ -602,39 +602,6 @@
 </div>
   </section>
 
-  <section id="tab-checklist" class="tab card" style="display:none">
-    <h2>Checklist</h2>
-
-    <div class="card">
-      <div class="row3 checklist-top">
-        <div>
-          <label>Evento</label>
-          <select id="chk-event"></select>
-        </div>
-        <div>
-          <label>Fecha</label>
-          <input id="chk-date" type="date">
-        </div>
-        <div>
-          <label>Progreso</label>
-          <div id="chk-progress" class="info-strong">—</div>
-        </div>
-      </div>
-      <div class="info"><small>Se guarda automáticamente por <b>evento</b> y por <b>día</b>. (La disciplina también vende.)</small></div>
-    </div>
-
-    <div class="checklist-grid" id="chk-sections"></div>
-
-    <div class="card">
-      <h3>Notas del día</h3>
-      <textarea id="chk-notes" rows="3" placeholder="Notas rápidas: faltantes, ajustes, anécdotas (las buenas cuentan doble)."></textarea>
-      <div class="row" style="margin-top:10px">
-        <button id="chk-reset" class="btn-warn" type="button">Reiniciar checklist del día</button>
-      </div>
-      <div class="info"><small id="chk-saved-hint">—</small></div>
-    </div>
-  </section>
-
 <section id="tab-resumen" class="tab card" style="display:none">
     <h2>Resumen</h2>
     <div class="summary-controls">
@@ -985,7 +952,6 @@
   <button data-tab="inventario">Inventario</button>
   <button data-tab="eventos">Eventos</button>
   <button data-tab="caja">Caja Chica</button>
-  <button data-tab="checklist">Checklist</button>
   <button data-tab="resumen">Resumen</button>
   <button data-tab="productos">Productos</button>
   <button data-tab="calculadora">Calculadora</button>
@@ -999,10 +965,10 @@
     location.href = "../index.html";
   }
 </script>
-<script src="app.js?v=4.20.3"></script>
+<script src="app.js?v=4.20.2"></script>
 <script src="/assets/js/a33-input-ux.js"></script>
 <script>
-  if ('serviceWorker' in navigator) { navigator.serviceWorker.register('./sw.js?v=4.20.3'); }
+  if ('serviceWorker' in navigator) { navigator.serviceWorker.register('./sw.js?v=4.20.2'); }
 </script>
 </body>
 </html>
