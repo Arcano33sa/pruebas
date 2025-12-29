@@ -251,6 +251,7 @@ const state = {
   focusId: null,
   focusEvent: null,
   today: todayYMD(),
+  currentAlerts: [],
 };
 
 // --- UI render
@@ -321,21 +322,36 @@ function renderAlerts(alerts){
   const wrap = $('alerts');
   const list = $('alertList');
   if (!wrap || !list) return;
-  list.innerHTML = '';
-  if (!alerts || !alerts.length){
+
+  // null => ocultar completamente el bloque
+  if (alerts === null){
     wrap.hidden = true;
+    list.innerHTML = '';
+    state.currentAlerts = [];
     return;
   }
+
+  const arr = Array.isArray(alerts) ? alerts : [];
+  // snapshot en memoria (para diff en "Sincronizar")
+  state.currentAlerts = arr.map(a=> (a && typeof a === 'object') ? ({...a}) : a);
+
+  list.innerHTML = '';
   wrap.hidden = false;
 
-  for (const a of alerts){
+  if (!arr.length){
+    list.innerHTML = '<div class="cmd-muted">Sin alertas accionables.</div>';
+    return;
+  }
+
+  for (const a of arr){
     const row = document.createElement('div');
     row.className = 'cmd-alert';
+    if (a && a.key) row.dataset.key = String(a.key);
     row.innerHTML = `
-      <div class="cmd-alert-icon">${a.icon || '⚠️'}</div>
-      <div class="cmd-alert-text">
+      <div class="cmd-alert-ic">${a.icon}</div>
+      <div class="cmd-alert-main">
         <div class="cmd-alert-title">${a.title}</div>
-        <div class="cmd-alert-sub">${a.sub || ''}</div>
+        <div class="cmd-alert-sub">${a.sub}</div>
       </div>
       <button class="cmd-btn" type="button" data-tab="${a.tab}">${a.cta}</button>
     `;
@@ -447,6 +463,231 @@ async function computeUnclosed7d(ev, pcDayKey){
   return { ok:true, value: String(cnt), reason:'' };
 }
 
+// --- Alertas (motor + Sincronizar)
+const ALERT_LABELS = {
+  'petty-open': 'Caja Chica: día abierto',
+  'fx-missing': 'Tipo de cambio vacío hoy',
+  'checklist-incomplete': 'Checklist hoy incompleto',
+  'inventory-critical': 'Inventario crítico',
+};
+
+function labelForAlertKey(k){
+  try{ return ALERT_LABELS[k] || String(k || '—'); }catch(_){ return '—'; }
+}
+
+function buildActionableAlerts(ev, dayKey, pc){
+  const alerts = [];
+  const unavailable = [];
+
+  // 1) Caja Chica activa y hoy NO está cerrado (solo con señal real)
+  if (pc && pc.enabled === true){
+    if (pc.ok){
+      if (pc.dayState === 'Abierto'){
+        alerts.push({
+          key: 'petty-open',
+          icon: '🔓',
+          title: 'Caja Chica activa y hoy NO está cerrado',
+          sub: `Hoy (${dayKey}): día abierto en Caja Chica`,
+          cta: 'Ir a Caja Chica',
+          tab: 'caja'
+        });
+      }
+      // 2) Tipo de cambio vacío hoy
+      if (pc.fxMissing === true){
+        alerts.push({
+          key: 'fx-missing',
+          icon: '💱',
+          title: 'Tipo de cambio vacío hoy',
+          sub: `Hoy (${dayKey}): falta tipo de cambio en Caja Chica`,
+          cta: 'Ir a Caja Chica',
+          tab: 'caja'
+        });
+      }
+    } else {
+      const reason = pc.reason || 'No disponible';
+      unavailable.push({ key: 'petty-open', label: labelForAlertKey('petty-open'), reason });
+      unavailable.push({ key: 'fx-missing', label: labelForAlertKey('fx-missing'), reason });
+    }
+  }
+
+  // 3) Checklist hoy incompleto (solo si existe plantilla)
+  if (ev && ev.checklistTemplate && typeof ev.checklistTemplate === 'object'){
+    const chk = computeChecklistProgress(ev, dayKey);
+    if (chk && chk.ok && typeof chk.checked === 'number' && typeof chk.total === 'number' && chk.total > 0){
+      if (chk.checked < chk.total){
+        alerts.push({
+          key: 'checklist-incomplete',
+          icon: '✅',
+          title: 'Checklist hoy incompleto',
+          sub: `Hoy (${dayKey}): ${chk.checked}/${chk.total}`,
+          cta: 'Abrir Checklist',
+          tab: 'checklist'
+        });
+      }
+    } else if (chk && !chk.ok){
+      unavailable.push({ key: 'checklist-incomplete', label: labelForAlertKey('checklist-incomplete'), reason: chk.reason || 'No disponible' });
+    }
+  }
+
+  // 4) Inventario crítico — v1: no hay cálculo “fácil/seguro” en esta ZIP
+  unavailable.push({ key: 'inventory-critical', label: labelForAlertKey('inventory-critical'), reason: 'No disponible' });
+
+  return { alerts, unavailable };
+}
+
+function getRenderedAlertKeys(){
+  try{
+    const arr = Array.isArray(state.currentAlerts) ? state.currentAlerts : [];
+    return arr.map(a=> (a && a.key) ? String(a.key) : '').filter(Boolean);
+  }catch(_){
+    return [];
+  }
+}
+
+function diffAlertKeys(beforeKeys, afterKeys){
+  const b = new Set(Array.isArray(beforeKeys) ? beforeKeys : []);
+  const a = new Set(Array.isArray(afterKeys) ? afterKeys : []);
+  const hidden = [];
+  const pending = [];
+  const added = [];
+  for (const k of b){ if (!a.has(k)) hidden.push(k); else pending.push(k); }
+  for (const k of a){ if (!b.has(k)) added.push(k); }
+  return { hidden, pending, added };
+}
+
+function showToast(msg, ms){
+  const el = $('cmdToast');
+  if (!el) return;
+  el.textContent = String(msg || '');
+  el.hidden = false;
+  try{ clearTimeout(state.__toastT); }catch(_){ }
+  state.__toastT = setTimeout(()=>{ el.hidden = true; }, Math.max(700, ms || 1800));
+}
+
+function showSyncReport(payload){
+  const modal = $('syncReport');
+  const body = $('syncReportBody');
+  const title = $('syncReportTitle');
+  if (!modal || !body || !title) return;
+
+  const esc = (s)=> String(s||'').replace(/[&<>"']/g, (c)=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+  title.textContent = payload && payload.title ? String(payload.title) : 'Resumen';
+
+  const msg = (payload && payload.message) ? `<div class="cmd-muted">${esc(payload.message)}</div>` : '';
+
+  const section = (h, items, fmt)=>{
+    if (!items || !items.length) return '';
+    const li = items.map(x=> `<li>${fmt ? fmt(x) : esc(x)}</li>`).join('');
+    return `<h4>${esc(h)}</h4><ul>${li}</ul>`;
+  };
+
+  const hidden = payload && payload.hidden ? payload.hidden : [];
+  const pending = payload && payload.pending ? payload.pending : [];
+  const added = payload && payload.added ? payload.added : [];
+  const unavailable = payload && payload.unavailable ? payload.unavailable : [];
+
+  const fmtKey = (k)=> esc(labelForAlertKey(k));
+  const fmtUn = (u)=> `${esc(u.label || labelForAlertKey(u.key))} <span class="cmd-muted">— ${esc(u.reason || 'No disponible')}</span>`;
+
+  body.innerHTML =
+    msg +
+    section('Ocultadas (resueltas)', hidden, fmtKey) +
+    section('Siguen pendientes', pending, fmtKey) +
+    section('Nuevas', added, fmtKey) +
+    section('No disponibles (—)', unavailable, fmtUn);
+
+  modal.hidden = false;
+}
+
+function hideSyncReport(){
+  const modal = $('syncReport');
+  if (modal) modal.hidden = true;
+}
+
+async function syncAlerts(){
+  const btn = $('btnSyncAlerts');
+  const focusId = state.focusId;
+
+  if (!focusId){
+    showToast('No hay evento enfocado.', 2000);
+    showSyncReport({ title:'Resumen', message:'No hay eventos disponibles.' });
+    return;
+  }
+
+  const before = getRenderedAlertKeys();
+
+  if (btn) btn.disabled = true;
+  showToast('Sincronizando…', 1200);
+
+  try{
+    // Fecha local actual (evita quedarse “ayer” en iPad PWA)
+    state.today = todayYMD();
+    const dayKey = state.today;
+
+    // Asegurar DB abierta
+    if (!state.db){
+      state.db = await openPosDB({ timeoutMs: 3500 });
+    }
+
+    // Releer evento REAL del store 'events'
+    let evFresh = null;
+    if (state.db && hasStore(state.db, 'events')){
+      try{ evFresh = await idbGet(state.db, 'events', Number(focusId)); }catch(_){ }
+    }
+    const ev = (evFresh && typeof evFresh === 'object') ? evFresh : state.focusEvent;
+
+    // Respetar evento enfocado
+    if (state.focusId !== focusId){
+      showToast('El evento enfocado cambió. Intenta de nuevo.', 2200);
+      return;
+    }
+
+    // Recalcular señales (solo lectura)
+    let pc;
+    try{
+      pc = await computePettyStatus(ev, dayKey);
+    }catch(err){
+      pc = { ok:false, enabled: (ev && ev.pettyEnabled) ? true : null, reason:'No disponible' };
+    }
+
+    const al = buildActionableAlerts(ev, dayKey, pc);
+    renderAlerts(al.alerts);
+
+    const after = (al.alerts || []).map(a=> a && a.key ? String(a.key) : '').filter(Boolean);
+    const diff = diffAlertKeys(before, after);
+
+    const noChange = diff.hidden.length === 0 && diff.added.length === 0 && (before.join('|') === after.join('|'));
+    if (noChange){
+      showSyncReport({ title:'Resumen', message:'Sin cambios. Todo sigue igual.', unavailable: al.unavailable || [] });
+    } else {
+      showSyncReport({ title:'Resumen', hidden: diff.hidden, pending: diff.pending, added: diff.added, unavailable: al.unavailable || [] });
+    }
+
+    // Refrescar cache en memoria
+    if (evFresh && state.eventsById && state.eventsById.set){
+      try{ state.eventsById.set(Number(focusId), evFresh); }catch(_){ }
+      state.focusEvent = evFresh;
+    }
+  }catch(err){
+    console.warn('Sincronizar: error', err);
+    showSyncReport({
+      title:'Resumen',
+      message:'No disponible.',
+      unavailable:[
+        { key:'petty-open', label: labelForAlertKey('petty-open'), reason:'No disponible' },
+        { key:'fx-missing', label: labelForAlertKey('fx-missing'), reason:'No disponible' },
+        { key:'checklist-incomplete', label: labelForAlertKey('checklist-incomplete'), reason:'No disponible' },
+        { key:'inventory-critical', label: labelForAlertKey('inventory-critical'), reason:'No disponible' },
+      ]
+    });
+  }finally{
+    if (btn) btn.disabled = false;
+  }
+}
+
+
+
 // --- Navigation
 async function navigateToPOS(tab){
   const ev = state.focusEvent;
@@ -553,7 +794,7 @@ async function setFocusEvent(eventId){
 // --- Main refresh
 async function refreshAll(){
   clearMetricsToDash();
-  renderAlerts([]);
+  renderAlerts(null);
 
   const ev = state.focusEvent;
   if (!ev || !state.db) {
@@ -631,41 +872,9 @@ async function refreshAll(){
   const unc = await computeUnclosed7d(ev, dk);
   setText('radarUnclosed', (unc && unc.ok) ? unc.value : '—');
 
-  // Alertas (solo con señal real)
-  const alerts = [];
-  // 1) Caja chica activa y el día no está cerrado
-  if (pc && pc.ok && pc.enabled === true && pc.dayState === 'Abierto'){
-    alerts.push({
-      icon: '🧾',
-      title: 'Caja Chica activa y el día no está cerrado',
-      sub: `Hoy (${dk}): Día abierto`,
-      cta: 'Ir a Caja Chica',
-      tab: 'caja'
-    });
-  }
-  // 2) Tipo de cambio vacío hoy
-  if (pc && pc.ok && pc.enabled === true && pc.fxMissing === true){
-    alerts.push({
-      icon: '💱',
-      title: 'Tipo de cambio vacío hoy',
-      sub: `Hoy (${dk}): falta tipo de cambio en Caja Chica`,
-      cta: 'Ir a Caja Chica',
-      tab: 'caja'
-    });
-  }
-  // 3) Checklist incompleto
-  if (chk && chk.ok && typeof chk.checked === 'number' && typeof chk.total === 'number' && chk.total > 0 && chk.checked < chk.total){
-    alerts.push({
-      icon: '✅',
-      title: 'Checklist hoy incompleto',
-      sub: `Hoy (${dk}): ${chk.checked}/${chk.total}`,
-      cta: 'Abrir Checklist',
-      tab: 'checklist'
-    });
-  }
-  // 4) Inventario crítico (NO implementado v1: no hay cálculo “fácil/seguro”)
-
-  renderAlerts(alerts);
+  // Alertas accionables (solo con señal real)
+  const al = buildActionableAlerts(ev, dk, pc);
+  renderAlerts(al.alerts);
 }
 
 // --- Init
@@ -684,6 +893,26 @@ async function init(){
   bind('btnGoResumen', 'resumen');
   bind('btnGoChecklist', 'checklist');
   bind('btnOpenChecklist', 'checklist');
+
+  // Alertas accionables: Sincronizar (pastilla)
+  const syncBtn = $('btnSyncAlerts');
+  if (syncBtn){
+    syncBtn.addEventListener('click', syncAlerts);
+  }
+
+  // Modal resumen: cerrar con overlay / botón / Aceptar
+  const syncModal = $('syncReport');
+  if (syncModal){
+    syncModal.addEventListener('click', (e)=>{
+      const t = e.target;
+      if (!t) return;
+      const hit = (t.matches && t.matches('[data-close="1"]')) || (t.closest && t.closest('[data-close="1"]'));
+      if (hit) hideSyncReport();
+    });
+  }
+  document.addEventListener('keydown', (e)=>{
+    if (e.key === 'Escape') hideSyncReport();
+  });
 
   // Picker events
   const input = $('eventSearch');
@@ -725,7 +954,7 @@ async function init(){
   });
 
   clearMetricsToDash();
-  renderAlerts([]);
+  renderAlerts(null);
 
   // Open DB
   let db;

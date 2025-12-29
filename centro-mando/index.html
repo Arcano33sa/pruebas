@@ -43,7 +43,13 @@
     <!-- ALERTAS ACCIONABLES -->
     <section class="cmd-alerts" id="alerts" aria-label="Alertas accionables" hidden>
       <div class="cmd-card cmd-alerts-inner">
-        <div class="cmd-section-title" style="margin-bottom:10px;">Alertas accionables</div>
+        <div class="cmd-section-head">
+          <div class="cmd-section-title">Alertas accionables</div>
+          <button class="cmd-pill" id="btnSyncAlerts" type="button" aria-label="Sincronizar alertas">
+            <span class="cmd-pill-ico" aria-hidden="true">⟳</span>
+            <span>Sincronizar</span>
+          </button>
+        </div>
         <div class="cmd-alert-list" id="alertList"></div>
       </div>
     </section>
@@ -139,5 +145,21 @@
     }catch(_){ }
   </script>
   <script src="app.js"></script>
+  <!-- Sync report modal -->
+  <div class="cmd-modal" id="syncReport" hidden>
+    <div class="cmd-modal-overlay" data-close="1"></div>
+    <div class="cmd-modal-card" role="dialog" aria-modal="true" aria-labelledby="syncReportTitle">
+      <div class="cmd-modal-head">
+        <div class="cmd-modal-title" id="syncReportTitle">Resumen</div>
+        <button class="cmd-icon-btn" type="button" data-close="1" aria-label="Cerrar">✕</button>
+      </div>
+      <div class="cmd-modal-body" id="syncReportBody"></div>
+      <div class="cmd-modal-actions">
+        <button class="cmd-pill" id="syncReportOk" type="button" data-close="1">Aceptar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="cmd-toast" id="cmdToast" aria-live="polite" aria-atomic="true" hidden></div>
 </body>
 </html>
