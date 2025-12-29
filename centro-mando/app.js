@@ -422,89 +422,158 @@ async function computeSalesToday(eventId, dayKey){
 
 async function computePettyStatus(ev, dayKey){
   const db = state.db;
-  if (!db || !ev) return { ok:false, enabled:null, dayState:null, fxMissing:null, closedAt:null, reason:'No disponible' };
+
+  // Nota: en el POS actual de esta ZIP, el Tipo de Cambio se guarda de forma PERSISTENTE en el EVENTO (ev.fxRate).
+  // Caja Chica (pettyCash.days[dayKey]) sigue siendo la fuente para closedAt (día abierto/cerrado).
+  if (!db || !ev) return {
+    ok:false,
+    enabled:null,
+    dayState:null,
+    fxMissing:null,
+    closedAt:null,
+    reason:'No disponible',
+    dayKnown:false,
+    dayReason:'No disponible',
+    fxEvalOk:false,
+    fxReason:'No disponible'
+  };
+
   const enabled = !!ev.pettyEnabled;
-  if (!enabled) return { ok:true, enabled:false, dayState:'No aplica', fxMissing:false, closedAt:null, reason:'' };
-  if (!hasStore(db, 'pettyCash')) return { ok:false, enabled:true, dayState:null, fxMissing:null, closedAt:null, reason:'No disponible' };
+  if (!enabled) return {
+    ok:true,
+    enabled:false,
+    dayState:'No aplica',
+    fxMissing:false,
+    closedAt:null,
+    reason:'',
+    dayKnown:true,
+    dayReason:'',
+    fxEvalOk:true,
+    fxReason:''
+  };
 
-  const pc = await idbGet(db, 'pettyCash', Number(ev.id));
-  if (!pc || !pc.days || typeof pc.days !== 'object'){
-    return { ok:false, enabled:true, dayState:null, fxMissing:null, closedAt:null, reason:'No disponible' };
+  // --- Fx (preferir EVENTO, fallback a legado en Caja Chica si existe)
+  const fxEventRaw = (ev.fxRate != null) ? Number(ev.fxRate) : NaN;
+  const fxEvent = (Number.isFinite(fxEventRaw) && fxEventRaw > 0) ? fxEventRaw : null;
+
+  // --- Estado del día (Caja Chica)
+  let dayKnown = false;
+  let dayReason = '';
+  let dayState = null;
+  let closedAt = null;
+  let day = null;
+
+  if (!hasStore(db, 'pettyCash')){
+    dayKnown = false;
+    dayReason = 'No disponible';
+  } else {
+    let pc = null;
+    try{ pc = await idbGet(db, 'pettyCash', Number(ev.id)); }catch(_){ pc = null; }
+
+    if (!pc || !pc.days || typeof pc.days !== 'object'){
+      dayKnown = false;
+      dayReason = 'No disponible';
+    } else {
+      day = pc.days[dayKey];
+      if (!day || typeof day !== 'object'){
+        dayKnown = false;
+        dayReason = 'No disponible';
+      } else {
+        dayKnown = true;
+        closedAt = day.closedAt || null;
+        dayState = closedAt ? 'Cerrado' : 'Abierto';
+      }
+    }
   }
-  const day = pc.days[dayKey];
-  if (!day || typeof day !== 'object'){
-    return { ok:false, enabled:true, dayState:null, fxMissing:null, closedAt:null, reason:'No disponible' };
-  }
-  const closedAt = day.closedAt || null;
-  const dayState = closedAt ? 'Cerrado' : 'Abierto';
-  const fx = day.fxRate;
-  const fxMissing = (fx == null || fx === '' || (typeof fx === 'number' && !isFinite(fx)));
-  return { ok:true, enabled:true, dayState, fxMissing, closedAt, pcDay: day, reason:'' };
-}
 
-async function computeUnclosed7d(ev, pcDayKey){
-  if (!ev || !ev.pettyEnabled) return { ok:true, value:'—', reason:'' };
-  const db = state.db;
-  if (!db || !hasStore(db, 'pettyCash')) return { ok:false, value:'—', reason:'No disponible' };
+  const fxDayRaw = (day && day.fxRate != null) ? Number(day.fxRate) : NaN;
+  const fxDay = (Number.isFinite(fxDayRaw) && fxDayRaw > 0) ? fxDayRaw : null;
 
-  const pc = await idbGet(db, 'pettyCash', Number(ev.id));
-  if (!pc || !pc.days || typeof pc.days !== 'object') return { ok:false, value:'—', reason:'No disponible' };
+  const fxEffective = (fxEvent != null) ? fxEvent : fxDay;
 
-  // últimos 7 días incluyendo hoy
-  let cnt = 0;
-  for (let i = 0; i < 7; i++){
-    const d = ymdAddDays(pcDayKey, -i);
-    const day = pc.days[d];
-    if (!day || typeof day !== 'object') continue;
-    // Contar solo si hay actividad (evitar “inventar”)
-    if (!hasPettyDayActivity(day)) continue;
-    if (!day.closedAt) cnt += 1;
-  }
-  return { ok:true, value: String(cnt), reason:'' };
-}
+  // fxEvalOk = podemos evaluar el T/C (aunque esté “vacío”, eso ES una señal real)
+  const fxEvalOk = true;
+  const fxMissing = !(fxEffective && fxEffective > 0);
+  const fxReason = '';
 
-// --- Alertas (motor + Sincronizar)
-const ALERT_LABELS = {
-  'petty-open': 'Caja Chica: día abierto',
-  'fx-missing': 'Tipo de cambio vacío hoy',
-  'checklist-incomplete': 'Checklist hoy incompleto',
-  'inventory-critical': 'Inventario crítico',
-};
-
-function labelForAlertKey(k){
-  try{ return ALERT_LABELS[k] || String(k || '—'); }catch(_){ return '—'; }
-}
-
-function buildActionableAlerts(ev, dayKey, pc){
+  return {
+    ok:true,
+    enabled:true,
+    dayState,
+    fxMissing,
+    closedAt,
+    pcDay: day || null,
+    reason:'',
+    dayKnown,
+    dayReason: dayKnown ? '' : (dafunction buildActionableAlerts(ev, dayKey, pc){
   const alerts = [];
   const unavailable = [];
 
   // 1) Caja Chica activa y hoy NO está cerrado (solo con señal real)
   if (pc && pc.enabled === true){
     if (pc.ok){
-      if (pc.dayState === 'Abierto'){
-        alerts.push({
-          key: 'petty-open',
-          icon: '🔓',
-          title: 'Caja Chica activa y hoy NO está cerrado',
-          sub: `Hoy (${dayKey}): día abierto en Caja Chica`,
-          cta: 'Ir a Caja Chica',
-          tab: 'caja'
-        });
+      if (pc.dayKnown === true){
+        if (pc.dayState === 'Abierto'){
+          alerts.push({
+            key: 'petty-open',
+            icon: '🔓',
+            title: 'Caja Chica activa y hoy NO está cerrado',
+            sub: `Hoy (${dayKey}): día abierto en Caja Chica`,
+            cta: 'Ir a Caja Chica',
+            tab: 'caja'
+          });
+        }
+      } else {
+        unavailable.push({ key:'petty-open', label: labelForAlertKey('petty-open'), reason: pc.dayReason || 'No disponible' });
       }
-      // 2) Tipo de cambio vacío hoy
-      if (pc.fxMissing === true){
-        alerts.push({
-          key: 'fx-missing',
-          icon: '💱',
-          title: 'Tipo de cambio vacío hoy',
-          sub: `Hoy (${dayKey}): falta tipo de cambio en Caja Chica`,
-          cta: 'Ir a Caja Chica',
-          tab: 'caja'
-        });
+
+      // 2) Tipo de cambio vacío hoy (en POS actual: T/C persistente por evento, fallback legado en Caja Chica)
+      if (pc.fxEvalOk === true){
+        if (pc.fxMissing === true){
+          alerts.push({
+            key: 'fx-missing',
+            icon: '💱',
+            title: 'Tipo de cambio vacío hoy',
+            sub: `Hoy (${dayKey}): falta tipo de cambio en Caja Chica`,
+            cta: 'Ir a Caja Chica',
+            tab: 'caja'
+          });
+        }
+      } else {
+        unavailable.push({ key:'fx-missing', label: labelForAlertKey('fx-missing'), reason: pc.fxReason || 'No disponible' });
       }
     } else {
       const reason = pc.reason || 'No disponible';
+      unavailable.push({ key:'petty-open', label: labelForAlertKey('petty-open'), reason });
+      unavailable.push({ key:'fx-missing', label: labelForAlertKey('fx-missing'), reason });
+    }
+  }
+
+  // 3) Checklist hoy incompleto (solo si existe plantilla)
+  if (ev && ev.checklistTemplate && typeof ev.checklistTemplate === 'object'){
+    const chk = computeChecklistProgress(ev, dayKey);
+    if (chk && chk.ok && typeof chk.checked === 'number' && typeof chk.total === 'number' && chk.total > 0){
+      if (chk.checked < chk.total){
+        alerts.push({
+          key: 'checklist-incomplete',
+          icon: '☑️',
+          title: 'Checklist hoy incompleto',
+          sub: `Hoy (${dayKey}): ${chk.checked}/${chk.total} completado`,
+          cta: 'Abrir Checklist',
+          tab: 'checklist'
+        });
+      }
+    } else if (chk && !chk.ok){
+      unavailable.push({ key:'checklist-incomplete', label: labelForAlertKey('checklist-incomplete'), reason: chk.reason || 'No disponible' });
+    }
+  }
+
+  // 4) Inventario crítico — v1: no hay cálculo “fácil/seguro” en esta ZIP
+  unavailable.push({ key: 'inventory-critical', label: labelForAlertKey('inventory-critical'), reason: 'No disponible' });
+
+  return { alerts, unavailable };
+}
+
       unavailable.push({ key: 'petty-open', label: labelForAlertKey('petty-open'), reason });
       unavailable.push({ key: 'fx-missing', label: labelForAlertKey('fx-missing'), reason });
     }
