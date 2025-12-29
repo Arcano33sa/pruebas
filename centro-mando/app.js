@@ -438,7 +438,7 @@ function normalizePedido(p){
   const id = (p && p.id != null) ? String(p.id) : '';
   const cliente = (p && p.clienteNombre != null) ? String(p.clienteNombre) : '—';
   const entrega = normalizeYMD(p && p.fechaEntrega);
-  const fab = normalizeYMD(p && (p.fechaFabricacion || p.fechaFabricación)); // soportar variación si existiera
+  const fab = normalizeYMD(p && (p.fechaFabricacion || p.fechaFabricación || p.fechaCreacion)); // usa fechaCreacion como fabricación por compatibilidad
   const cre = normalizeYMD(p && p.fechaCreacion);
   return { id, cliente, entrega, fab, cre, raw:p };
 }

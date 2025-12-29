@@ -122,7 +122,7 @@ function clearForm() {
   $("entregado").checked = false;
   editingId = null;
 
-  // fecha de creación por defecto hoy
+  // fecha de fabricación por defecto hoy
   const hoy = new Date().toISOString().slice(0, 10);
   $("fechaCreacion").value = hoy;
   if (!$("fechaEntrega").value) $("fechaEntrega").value = hoy;
@@ -279,7 +279,7 @@ function verPedido(id) {
   const lines = [];
 
   lines.push(`Código: ${p.codigo || ""}`);
-  lines.push(`Fecha creación: ${formatDate(p.fechaCreacion)}`);
+  lines.push(`Fecha fabricación: ${formatDate(p.fechaCreacion)}`);
   lines.push(`Fecha entrega: ${formatDate(p.fechaEntrega)}`);
   lines.push(`Prioridad: ${p.prioridad || "normal"}`);
   lines.push("");
@@ -444,7 +444,7 @@ function exportToCSV() {
   }
 
   const headers = [
-    "Fecha creación",
+    "Fecha fabricación",
     "Fecha entrega",
     "Código",
     "Cliente",
