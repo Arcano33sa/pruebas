@@ -89,6 +89,59 @@ input[type="date"]{padding:10px}
 .btn-pill:disabled{opacity:.55; box-shadow:none}
 .btn-pill:not(:disabled):active{filter:brightness(.98)}
 
+/* Vasos panel (colapsable persistente) */
+.is-collapsed{display:none !important}
+
+.vasos-panel{margin:12px 0}
+
+.vasos-panel-toggle{
+  background:var(--panel);
+  color:var(--text);
+  border:1px solid rgba(212,175,55,0.35);
+  box-shadow:0 6px 16px rgba(0,0,0,0.22);
+  justify-content:space-between;
+  padding:10px 14px;
+}
+
+.vasos-panel-toggle .vasos-panel-title{
+  font-weight:800;
+  letter-spacing:.2px;
+}
+
+.vasos-panel-toggle .vasos-panel-meta{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  color:var(--muted);
+  font-weight:700;
+}
+
+.vasos-panel-toggle .vasos-panel-caret{
+  color:var(--accent);
+  font-weight:900;
+}
+
+.vasos-panel-body{
+  margin-top:10px;
+}
+
+.vasos-panel-actions{
+  display:flex;
+  justify-content:flex-end;
+  margin:0 0 8px;
+}
+
+.vasos-panel-close{
+  width:auto;
+  border-radius:999px;
+  padding:7px 10px;
+  border:1px solid rgba(212,175,55,0.25);
+  background:#141414;
+  color:var(--accent);
+  font-weight:800;
+  box-shadow:0 6px 16px rgba(0,0,0,0.18);
+}
+
 .btn-mini{width:auto; padding:8px 10px; border-radius:10px; font-size:13px}
 
 /* Eventos: la celda de acciones NO debe forzar scroll horizontal en iPad */

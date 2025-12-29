@@ -2393,6 +2393,93 @@ function setTab(name){
   if (name==='caja') renderCajaChica();
   if (name==='calculadora') onOpenPosCalculatorTab().catch(err=>console.error(err));
   if (name==='checklist') renderChecklistTab().catch(err=>console.error(err));
+  if (name==='vender') initVasosPanelPOS().catch(err=>console.error(err));
+}
+
+// --- Vasos panel (colapsable persistente)
+async function syncVasosPanelKeyPOS(){
+  const toggle = document.getElementById('vasosPanelToggle');
+  if (!toggle) return 'pos_vasos_panel_open';
+
+  let evId = null;
+  try{
+    if (window.__A33_SELL_STATE && window.__A33_SELL_STATE.eventId != null){
+      evId = parseInt(window.__A33_SELL_STATE.eventId, 10);
+    }
+  }catch(_){ }
+
+  if (!evId){
+    try{
+      const cur = await getMeta('currentEventId');
+      if (cur != null && cur !== '') evId = parseInt(cur, 10);
+    }catch(_){ }
+  }
+
+  const key = (evId && Number.isFinite(evId)) ? `pos_vasos_panel_open_${evId}` : 'pos_vasos_panel_open';
+  toggle.dataset.storageKey = key;
+  return key;
+}
+
+function setVasosPanelStatePOS(isOpen, opts){
+  const o = (opts || {});
+  const save = (o.save !== false);
+  const toggle = document.getElementById('vasosPanelToggle');
+  const body = document.getElementById('vasosPanelBody');
+  if (!toggle || !body) return;
+
+  const open = !!isOpen;
+  body.classList.toggle('is-collapsed', !open);
+  body.setAttribute('aria-hidden', open ? 'false' : 'true');
+  toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+
+  const caret = toggle.querySelector('.vasos-panel-caret');
+  if (caret) caret.textContent = open ? '▾' : '▸';
+  const stateLbl = toggle.querySelector('.vasos-panel-state');
+  if (stateLbl) stateLbl.textContent = open ? 'Ocultar' : 'Mostrar';
+
+  if (save){
+    const key = toggle.dataset.storageKey || 'pos_vasos_panel_open';
+    try{ localStorage.setItem(key, open ? '1' : '0'); }catch(_){ }
+  }
+}
+
+async function loadVasosPanelStatePOS(){
+  const toggle = document.getElementById('vasosPanelToggle');
+  const body = document.getElementById('vasosPanelBody');
+  if (!toggle || !body) return;
+
+  const key = await syncVasosPanelKeyPOS();
+  let raw = null;
+  try{ raw = localStorage.getItem(key); }catch(_){ raw = null; }
+  const isOpen = (raw === '1');
+  setVasosPanelStatePOS(isOpen, { save:false });
+}
+
+function bindVasosPanelOncePOS(){
+  // Re-render safe: se enlaza por elemento (no global)
+  const toggle = document.getElementById('vasosPanelToggle');
+  if (toggle && !toggle.dataset.bound){
+    toggle.dataset.bound = '1';
+    toggle.addEventListener('click', async ()=>{
+      await syncVasosPanelKeyPOS();
+      const expanded = (toggle.getAttribute('aria-expanded') === 'true');
+      setVasosPanelStatePOS(!expanded, { save:true });
+    });
+  }
+
+  const closeBtn = document.getElementById('vasosPanelCloseBtn');
+  if (closeBtn && !closeBtn.dataset.bound){
+    closeBtn.dataset.bound = '1';
+    closeBtn.addEventListener('click', async ()=>{
+      await syncVasosPanelKeyPOS();
+      setVasosPanelStatePOS(false, { save:true });
+    });
+  }
+}
+
+async function initVasosPanelPOS(){
+  bindVasosPanelOncePOS();
+  await loadVasosPanelStatePOS();
 }
 
 // --- Deep-link mínimo (Centro de Mando -> POS)
@@ -2923,6 +3010,7 @@ async function refreshEventUI(){
   try{ await refreshProductSelect({ keepSelection:true }); }catch(e){ try{ await renderProductChips(); }catch(_){ } }
   try{ await renderExtrasUI(); }catch(e){}
   try{ await renderCajaChica(); }catch(e){}
+  try{ await initVasosPanelPOS(); }catch(e){}
 }
 
 // --- Caja Chica por evento (toggle + helpers)
@@ -5393,6 +5481,7 @@ async function init(){
   await runStep('renderInventario', renderInventario);
   await runStep('renderCajaChica', renderCajaChica);
   await runStep('updateSellEnabled', updateSellEnabled);
+  await runStep('initVasosPanel', initVasosPanelPOS);
 
   // Paso 5: barra offline y eventos de Caja Chica
   try{
