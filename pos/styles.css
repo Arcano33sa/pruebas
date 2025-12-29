@@ -56,14 +56,44 @@ input[type="date"]{padding:10px}
 }
 #tbl-day thead th:last-child, #tbl-eventos thead th:last-child{z-index:4}
 
-/* Acciones dentro de tablas: que sean compactas y wrap sin empujar el ancho */
-.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
-.actions button{width:auto}
+/* Acciones / toolbars: wrap ordenado, sin estirar botones */
+.actions{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:flex-start;
+}
+.actions.end{justify-content:flex-end}
+.actions.center{justify-content:center}
+.actions button{width:auto; flex:0 0 auto}
+
+/* Pastilla premium A33 (solo forma + borde + sombra; colores vienen de variantes existentes) */
+.btn-pill{
+  width:auto;
+  flex:0 0 auto;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  padding:8px 12px;
+  border-radius:999px;
+  max-width:100%;
+  white-space:normal;
+  font-size:14px;
+  font-weight:700;
+  line-height:1.1;
+  border:1px solid rgba(212,175,55,0.35);
+  box-shadow:0 6px 16px rgba(0,0,0,0.25);
+}
+.btn-pill:disabled{opacity:.55; box-shadow:none}
+.btn-pill:not(:disabled):active{filter:brightness(.98)}
+
 .btn-mini{width:auto; padding:8px 10px; border-radius:10px; font-size:13px}
 
 /* Eventos: la celda de acciones NO debe forzar scroll horizontal en iPad */
-#tbl-eventos td.actions{white-space:normal}
-#tbl-eventos td.actions .actions{justify-content:flex-end}
+#tbl-eventos td.actions{white-space:normal; justify-content:flex-end}
+#tbl-inv td.actions{white-space:normal; justify-content:flex-end}
 
 /* iPad/Tablet: permitir que columnas largas (fechas) rompan línea y no obliguen a scroll */
 @media (max-width: 1024px){
@@ -79,7 +109,7 @@ input[type="date"]{padding:10px}
   .container{padding-left:10px;padding-right:10px}
   .topbar > *{flex-basis:140px}
   .topbar > select{min-width:140px}
-  .actions button{font-size:12px;padding:8px 9px}
+  .actions button:not(.btn-pill){font-size:12px;padding:8px 9px}
   .btn-mini{font-size:12px;padding:7px 9px}
 }
 button{cursor:pointer}
@@ -201,8 +231,6 @@ small.muted{color:var(--muted)}
 .sell-locked details.card,
 .sell-locked #cup-block{opacity:.55;filter:saturate(.88)}
 
-.actions{display:flex;gap:8px;flex-wrap:wrap}
-.actions button{padding:8px 10px;border-radius:10px;font-size:13px}
 .tag{display:inline-block;padding:3px 8px;border-radius:999px;background:#2a2a2a;color:#ddd;font-size:12px;margin-left:6px}
 .tag.closed{background:#3a2222;color:#ffb3b3}
 .tag.open{background:#223a22;color:#b3ffb3}
@@ -403,6 +431,10 @@ small.muted{color:var(--muted)}
 
 
 .btn-link {
+  width:auto;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
   background: none;
   border: none;
   padding: 4px 0;

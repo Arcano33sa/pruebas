@@ -31,7 +31,7 @@
         <div class="a33-guard-sub" id="sell-day-closed-sub">Para vender aquí, reabrí el día en Caja Chica.</div>
       </div>
       <div class="a33-guard-actions">
-        <button id="btn-go-caja" class="btn-primary btn-inline" type="button">Ir a Caja Chica</button>
+        <button id="btn-go-caja" class="btn-primary btn-pill" type="button">Ir a Caja Chica</button>
       </div>
     </div>
 
@@ -55,16 +55,16 @@
   </select>
   <input id="event-group-new" placeholder="Nombre de nuevo grupo" style="display:none">
 </div>
-<div class="row">
+<div class="actions">
   <button type="button" id="btn-manage-groups" class="btn-link">Gestionar grupos</button>
 </div>
 <small class="muted">Usa el mismo nombre de grupo para todos los días del mismo evento maestro. Puedes ocultar grupos antiguos desde “Gestionar grupos”.</small>
 
-        <div class="row">
-          <button id="btn-add-event" class="btn-primary">+ Crear y activar evento</button>
-          <button id="btn-close-event" class="btn-warn">Cerrar evento (Corte)</button>
-          <button id="btn-reopen-event" class="btn-ok">Reabrir evento</button>
-        </div>
+        <div class="actions">
+  <button id="btn-add-event" class="btn-primary btn-pill">+ Crear y activar evento</button>
+  <button id="btn-close-event" class="btn-warn btn-pill">Cerrar evento (Corte)</button>
+  <button id="btn-reopen-event" class="btn-ok btn-pill">Reabrir evento</button>
+</div>
 	        <div class="row" style="grid-template-columns:1fr; align-items:center">
 	          <div class="petty-toggle-wrap">
 	            <span class="petty-toggle-title">Caja Chica</span>
@@ -176,7 +176,7 @@
         </div>
         <div>
           <label>&nbsp;</label>
-          <button id="btn-fraction" class="btn-primary">Fraccionar</button>
+          <button id="btn-fraction" class="btn-primary btn-pill">Fraccionar</button>
         </div>
       </div>
 
@@ -235,11 +235,11 @@
         <label>Evento</label>
         <select id="inv-event"></select>
       </div>
-      <div class="row">
-        <button id="btn-inv-csv" class="btn-primary">CSV Inventario</button>
-        <button id="btn-inv-ref" class="btn-ok">Actualizar</button>
-        <button id="btn-inv-from-lote" class="btn-ok" type="button">Agregar desde lote</button>
-      </div>
+      <div class="actions end">
+  <button id="btn-inv-csv" class="btn-primary btn-pill">CSV Inventario</button>
+  <button id="btn-inv-ref" class="btn-ok btn-pill">Actualizar</button>
+  <button id="btn-inv-from-lote" class="btn-ok btn-pill" type="button">Agregar desde lote</button>
+</div>
     </div>
     <div id="lotes-evento-block" class="lotes-block">
       <div class="lotes-block-head">
@@ -288,8 +288,8 @@
       <select id="filtro-grupo">
         <option value="">Grupos: Todos</option>
       </select>
-      <button id="btn-exportar-eventos" class="btn-primary">Exportar lista (Excel)</button>
-      <button id="btn-exportar-evento-excel" class="btn-ok">Exportar evento activo (Excel)</button>
+      <button id="btn-exportar-eventos" class="btn-primary btn-pill">Exportar lista (Excel)</button>
+      <button id="btn-exportar-evento-excel" class="btn-ok btn-pill">Exportar evento activo (Excel)</button>
     </div>
     <div class="table-scroll">
     <table id="tbl-eventos">
@@ -300,20 +300,20 @@
     <div id="cierre-total-card" class="card inner">
       <h3>Cierre Total por grupo</h3>
       <p class="muted">Selecciona un grupo arriba y genera un corte consolidado de todos sus eventos diarios.</p>
-      <div class="row">
-        <button id="btn-cierre-total" class="btn-ok">Cierre Total del grupo</button>
-        <button id="btn-cierre-total-excel" class="btn-primary">Exportar Cierre Total (Excel)</button>
-      </div>
+      <div class="actions">
+  <button id="btn-cierre-total" class="btn-ok btn-pill">Cierre Total del grupo</button>
+  <button id="btn-cierre-total-excel" class="btn-primary btn-pill">Exportar Cierre Total (Excel)</button>
+</div>
       <div id="cierre-total-resumen" class="summary"></div>
       <div id="cierre-total-presentaciones" class="table-wrapper"></div>
     </div>
     <div id="cierre-caja-card" class="card inner">
       <h3>Caja Chica · Cierre Total por grupo</h3>
       <p class="muted">Usa este resumen para ver la caja chica consolidada de todos los días del mismo evento maestro.</p>
-      <div class="row">
-        <button id="btn-cierre-caja-grupo" class="btn-ok">Cierre Caja Chica del grupo</button>
-        <button id="btn-cierre-caja-excel" class="btn-primary">Exportar Caja Chica (Excel)</button>
-      </div>
+      <div class="actions">
+  <button id="btn-cierre-caja-grupo" class="btn-ok btn-pill">Cierre Caja Chica del grupo</button>
+  <button id="btn-cierre-caja-excel" class="btn-primary btn-pill">Exportar Caja Chica (Excel)</button>
+</div>
       <div id="cierre-caja-resumen" class="summary"></div>
       <div id="cierre-caja-eventos" class="table-wrapper"></div>
     </div>
@@ -328,7 +328,7 @@
 
     <div id="pc-disabled-banner" class="warn" style="display:none">
       Caja Chica está <b>desactivada</b> para este evento.
-      <button id="pc-btn-activate" class="btn-ok btn-inline" type="button">Activar Caja Chica</button>
+      <button id="pc-btn-activate" class="btn-ok btn-inline btn-pill" type="button">Activar Caja Chica</button>
     </div>
     <div class="row" id="pc-day-row">
       <div>
@@ -354,8 +354,8 @@
       <div style="text-align:right">
         <label>&nbsp;</label>
         <div class="pc-history-actions">
-          <button id="pc-history-back" class="btn-warn" type="button" style="display:none">Volver al día operativo</button>
-          <button id="pc-history-use" class="btn-primary" type="button" style="display:none">Usar este cierre como inicio</button>
+          <button id="pc-history-back" class="btn-warn btn-pill" type="button" style="display:none">Volver al día operativo</button>
+          <button id="pc-history-use" class="btn-primary btn-pill" type="button" style="display:none">Usar este cierre como inicio</button>
         </div>
         <div id="pc-history-note" class="muted" style="margin-top:6px"></div>
       </div>
@@ -441,10 +441,10 @@
             </table>
           </div>
         </div>
-        <div class="row">
-          <button id="pc-btn-save-initial" class="btn-ok">Guardar saldo inicial</button>
-          <button id="pc-btn-clear-initial" class="btn-warn">Limpiar</button>
-        </div>
+        <div class="actions end">
+  <button id="pc-btn-save-initial" class="btn-ok btn-pill" type="button">Guardar saldo inicial</button>
+  <button id="pc-btn-clear-initial" class="btn-danger btn-pill" type="button">Limpiar</button>
+</div>
       </div>
 
       <fieldset id="pc-mov-fieldset" class="pc-lock-fieldset">
@@ -496,7 +496,7 @@
             <input id="pc-mov-desc" type="text" placeholder="Detalle del movimiento">
           </div>
           <div class="col">
-            <button id="pc-mov-add" class="btn-ok">Agregar movimiento</button>
+            <button id="pc-mov-add" class="btn-ok btn-pill">Agregar movimiento</button>
           </div>
         </div>
 
@@ -508,7 +508,7 @@
           </div>
           <div class="col" style="min-width:160px">
             <label>&nbsp;</label>
-            <button id="pc-btn-save-event-fx" class="btn-primary" type="button">Guardar T/C</button>
+            <button id="pc-btn-save-event-fx" class="btn-primary btn-pill" type="button">Guardar T/C</button>
           </div>
         </div>
 
@@ -533,9 +533,9 @@
         <h3>Arqueo final</h3>
         
 
-        <div class="row" style="grid-template-columns:1fr; margin-top:8px">
-          <button id="pc-btn-copy-initial" class="btn-primary" type="button">Copiar Inicial</button>
-        </div>
+        <div class="actions" style="margin-top:8px">
+  <button id="pc-btn-copy-initial" class="btn-primary btn-pill" type="button">Copiar Inicial</button>
+</div>
         <small class="muted">Copia las cantidades del saldo inicial al arqueo final.</small>
 <div class="row">
           <div class="petty-block">
@@ -580,10 +580,10 @@
             </table>
           </div>
         </div>
-        <div class="row">
-          <button id="pc-btn-save-final" class="btn-ok">Guardar arqueo final</button>
-          <button id="pc-btn-clear-final" class="btn-warn">Limpiar</button>
-        </div>
+        <div class="actions end">
+  <button id="pc-btn-save-final" class="btn-ok btn-pill" type="button">Guardar arqueo final</button>
+  <button id="pc-btn-clear-final" class="btn-danger btn-pill" type="button">Limpiar</button>
+</div>
       </div>
 
       </fieldset>
@@ -593,10 +593,10 @@
         <div id="pc-close-status" class="info" style="margin-top:8px"></div>
         <div id="pc-close-blocker" class="warn" style="display:none; margin-top:8px"></div>
 
-        <div class="row" style="margin-top:10px">
-          <button id="pc-btn-close-day" class="btn-ok" type="button">Cerrar día</button>
-          <button id="pc-btn-reopen-day" class="btn-warn" type="button" style="display:none">Reabrir día</button>
-        </div>
+        <div class="actions end">
+  <button id="pc-btn-close-day" class="btn-warn btn-pill" type="button">Cerrar día</button>
+  <button id="pc-btn-reopen-day" class="btn-ok btn-pill" type="button" style="display:none">Reabrir día</button>
+</div>
         <small class="muted">Regla: si existe diferencia entre el efectivo contado y el esperado, registra movimientos faltantes o un <b>Ajuste</b> igual a la diferencia antes de poder cerrar.</small>
       </div>
 </div>
@@ -614,9 +614,9 @@
         </div>
         <small id="summary-period-hint" class="muted">Filtra el Resumen por mes. Puedes ver “Todo” cuando lo necesites.</small>
       </div>
-      <div class="summary-controls-right">
-        <button id="btn-summary-export" class="btn-ok" type="button">Exportar Excel</button>
-        <button id="btn-summary-close-period" class="btn-warn" type="button">Cerrar período</button>
+      <div class="summary-controls-right actions end">
+        <button id="btn-summary-export" class="btn-ok btn-pill" type="button">Exportar Excel</button>
+        <button id="btn-summary-close-period" class="btn-warn btn-pill" type="button">Cerrar período</button>
         <button id="btn-summary-archive" class="btn-link" type="button">Archivo</button>
         <button id="btn-summary-back-live" class="btn-link" type="button" style="display:none">Volver a en vivo</button>
       </div>
@@ -755,10 +755,10 @@
         </div>
       </div>
 
-      <div class="row">
-        <button id="btn-save-extra" class="btn-ok">+ Agregar extra</button>
-        <button id="btn-cancel-extra" class="btn-warn" style="display:none">Cancelar edición</button>
-      </div>
+      <div class="actions end">
+  <button id="btn-save-extra" class="btn-ok btn-pill">+ Agregar extra</button>
+  <button id="btn-cancel-extra" class="btn-warn btn-pill" style="display:none">Cancelar edición</button>
+</div>
 
       <div id="extras-list"></div>
       <div class="warn" id="extras-disabled-note" style="display:none"></div>
@@ -768,10 +768,10 @@
       <input id="new-name" placeholder="Nombre">
       <input id="new-price" type="number" inputmode="decimal" step="0.01" placeholder="Precio">
     </div>
-    <div class="row">
-      <button id="btn-add-prod" class="btn-ok">+ Agregar producto</button>
-      <button id="btn-restore-seed" class="btn-warn">Restaurar productos base (A33)</button>
-    </div>
+    <div class="actions end">
+  <button id="btn-add-prod" class="btn-ok btn-pill">+ Agregar producto</button>
+  <button id="btn-restore-seed" class="btn-warn btn-pill">Restaurar productos base (A33)</button>
+</div>
     <div class="info"><small>Si por cualquier razón solo ves “Vaso”, usa el botón <b>Restaurar productos base (A33)</b>. No borra ventas.</small></div>
 
     <div class="card">
@@ -779,7 +779,7 @@
       <div id="banks-list"></div>
       <div class="row">
         <input id="bank-new-name" placeholder="Nombre del banco">
-        <button id="btn-add-bank" class="btn-ok">+ Agregar banco</button>
+        <button id="btn-add-bank" class="btn-ok btn-pill">+ Agregar banco</button>
       </div>
       <div class="info"><small>Consejo: mejor <b>desactivar</b> bancos en lugar de borrarlos, para que el historial no quede huérfano.</small></div>
     </div>
@@ -832,7 +832,7 @@
           </div>
           <div style="text-align:right">
             <label>&nbsp;</label>
-            <button id="fx-refresh" class="btn-link" type="button">Actualizar desde Caja Chica</button>
+            <button id="fx-refresh" class="btn-pill" type="button">Actualizar desde Caja Chica</button>
           </div>
         </div>
 
@@ -878,7 +878,7 @@
           <label for="checklist-event">Evento</label>
           <select id="checklist-event"></select>
         </div>
-        <button id="checklist-go-events" class="btn-link" type="button" title="Ir a Eventos">Eventos</button>
+        <button id="checklist-go-events" class="btn-pill" type="button" title="Ir a Eventos">Eventos</button>
       </div>
     </div>
 
@@ -918,7 +918,7 @@
         </div>
         <div style="min-width:220px">
           <label>&nbsp;</label>
-          <button id="checklist-reset-day" type="button" class="btn-warn">Reiniciar checks del día</button>
+          <button id="checklist-reset-day" type="button" class="btn-warn btn-pill">Reiniciar checks del día</button>
           <div class="info"><small>Solo desmarca. No borra ítems.</small></div>
         </div>
       </div>
@@ -930,7 +930,7 @@
 <!-- Modal VER evento -->
 <div id="event-view" class="modal">
   <div class="panel">
-    <button id="ev-close" class="close btn-warn">Cerrar</button>
+    <button id="ev-close" class="close btn-warn btn-pill">Cerrar</button>
     <h3 id="ev-title">Evento</h3>
     <div class="grid">
       <div class="card" id="ev-meta"></div>
@@ -962,7 +962,7 @@
 <!-- Modal Cerrar Período (Resumen) -->
 <div id="summary-close-modal" class="modal">
   <div class="panel">
-    <button id="summary-close-cancel" class="close btn-warn">Cancelar</button>
+    <button id="summary-close-cancel" class="close btn-warn btn-pill">Cancelar</button>
     <h3>Cerrar período</h3>
     <div class="info"><small>Período: <b><span id="summary-close-period-label"></span></b></small></div>
 
@@ -970,10 +970,10 @@
       <input id="summary-close-name" placeholder="Nombre del cierre (ej: Diciembre 2025)">
     </div>
 
-    <div class="row" style="gap:8px">
-      <button id="summary-close-export" class="btn-ok" type="button">Exportar Excel (obligatorio)</button>
-      <button id="summary-close-confirm" class="btn-primary" type="button" disabled>Cerrar y archivar</button>
-    </div>
+    <div class="actions end" style="gap:8px; margin-top:10px">
+  <button id="summary-close-export" class="btn-ok btn-pill" type="button">Exportar Excel (obligatorio)</button>
+  <button id="summary-close-confirm" class="btn-primary btn-pill" type="button" disabled>Cerrar y archivar</button>
+</div>
 
     <div id="summary-close-status" class="muted"></div>
     <div class="warn"><small>Regla: sin exportación no hay cierre. Así evitamos “ups… no hice backup”.</small></div>
@@ -983,12 +983,12 @@
 <!-- Modal Archivo de Resúmenes -->
 <div id="summary-archive-modal" class="modal">
   <div class="panel">
-    <button id="summary-archive-close" class="close btn-warn">Cerrar</button>
+    <button id="summary-archive-close" class="close btn-warn btn-pill">Cerrar</button>
     <h3>Archivo de Resúmenes</h3>
 
     <div class="row" style="gap:8px">
       <input id="summary-archive-search" placeholder="Buscar (ej: Diciembre 2025)">
-      <button id="summary-archive-refresh" class="btn-link" type="button">Actualizar</button>
+      <button id="summary-archive-refresh" class="btn-pill" type="button">Actualizar</button>
     </div>
 
     <div class="scroll">
