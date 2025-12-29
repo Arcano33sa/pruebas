@@ -448,3 +448,84 @@ html, body{
 
 /* hidden enforce */
 [hidden]{ display:none !important; }
+
+
+/* --- Pedidos operativo (Hoy + Mañana) --- */
+.cmd-ops{ margin-top: 12px; }
+
+.cmd-ops-grid{
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.cmd-op{ min-width: 0; }
+
+.cmd-op-kpi{
+  margin-top: 10px;
+  font-weight: 900;
+  font-size: 16px;
+  letter-spacing: -0.2px;
+}
+
+.cmd-op-rows{
+  margin-top: 10px;
+  display:flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cmd-op-row{
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(0,0,0,0.14);
+  min-width: 0;
+}
+
+.cmd-op-row span{ color: var(--muted); font-size: 12px; }
+.cmd-op-row strong{ font-weight: 900; }
+
+.cmd-order-list{
+  margin-top: 10px;
+  display:flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cmd-order-item{
+  padding: 10px 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(0,0,0,0.18);
+  min-width: 0;
+}
+
+.cmd-order-client{
+  font-weight: 850;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cmd-order-dates{
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* botón pastilla compacto para CTA */
+button.cmd-pill{ cursor: pointer; }
+
+@media (max-width: 560px){
+  .cmd-ops-grid{ grid-template-columns: 1fr; }
+}

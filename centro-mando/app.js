@@ -13,6 +13,8 @@
 // --- Constantes (descubiertas, no adivinadas)
 const POS_DB_NAME = 'a33-pos';
 const LS_FOCUS_KEY = 'a33_cmd_focusEventId';
+const ORDERS_LS_KEY = 'arcano33_pedidos';
+const ORDERS_ROUTE = '../pedidos/index.html';
 const SAFE_SCAN_LIMIT = 4000; // seguridad: evitar loops gigantes
 
 // --- DOM helpers
@@ -335,30 +337,58 @@ function renderAlerts(alerts){
   // snapshot en memoria (para diff en "Sincronizar")
   state.currentAlerts = arr.map(a=> (a && typeof a === 'object') ? ({...a}) : a);
 
-  list.innerHTML = '';
-  wrap.hidden = false;
-
+  // Si no hay nada que atender, ocultar el bloque (evita ruido visual)
   if (!arr.length){
-    list.innerHTML = '<div class="cmd-muted">Sin alertas accionables.</div>';
+    wrap.hidden = true;
+    list.innerHTML = '';
     return;
   }
+
+  list.innerHTML = '';
+  wrap.hidden = false;
 
   for (const a of arr){
     const row = document.createElement('div');
     row.className = 'cmd-alert';
     if (a && a.key) row.dataset.key = String(a.key);
-    row.innerHTML = `
-      <div class="cmd-alert-ic">${a.icon}</div>
-      <div class="cmd-alert-main">
-        <div class="cmd-alert-title">${a.title}</div>
-        <div class="cmd-alert-sub">${a.sub}</div>
-      </div>
-      <button class="cmd-btn" type="button" data-tab="${a.tab}">${a.cta}</button>
-    `;
-    const btn = row.querySelector('button[data-tab]');
-    if (btn){
+
+    const ic = document.createElement('div');
+    ic.className = 'cmd-alert-ic';
+    ic.textContent = (a && a.icon != null) ? String(a.icon) : '';
+
+    const main = document.createElement('div');
+    main.className = 'cmd-alert-main';
+
+    const title = document.createElement('div');
+    title.className = 'cmd-alert-title';
+    title.textContent = (a && a.title != null) ? String(a.title) : '—';
+
+    const sub = document.createElement('div');
+    sub.className = 'cmd-alert-sub';
+    sub.textContent = (a && a.sub != null) ? String(a.sub) : '';
+
+    main.appendChild(title);
+    main.appendChild(sub);
+
+    const btn = document.createElement('button');
+    btn.className = 'cmd-btn';
+    btn.type = 'button';
+    btn.textContent = (a && a.cta) ? String(a.cta) : 'Ver';
+
+    if (a && a.go === 'pedidos'){
+      btn.addEventListener('click', navigateToPedidos);
+    } else if (a && a.tab){
       btn.addEventListener('click', ()=> navigateToPOS(a.tab));
+    } else if (a && a.href){
+      btn.addEventListener('click', ()=> { try{ window.location.href = String(a.href); }catch(_){ } });
+    } else {
+      btn.disabled = true;
     }
+
+    row.appendChild(ic);
+    row.appendChild(main);
+    row.appendChild(btn);
+
     list.appendChild(row);
   }
 }
@@ -376,6 +406,300 @@ function renderTop3(items){
     span.textContent = `${idx+1}. ${it.name} · ${it.qty}`;
     el.appendChild(span);
   });
+}
+
+
+// --- Pedidos (operativo, fuente real: localStorage/A33Storage -> arcano33_pedidos)
+function normalizeYMD(s){
+  const v = (s == null) ? '' : String(s).trim();
+  return /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(v) ? v : '';
+}
+
+function loadPedidosSafe(){
+  try{
+    const storage = (typeof A33Storage !== 'undefined' && A33Storage && typeof A33Storage.getItem === 'function')
+      ? A33Storage
+      : null;
+
+    const raw = storage ? storage.getItem(ORDERS_LS_KEY) : localStorage.getItem(ORDERS_LS_KEY);
+    if (!raw) return { ok:true, items:[], reason:'' };
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return { ok:false, items:[], reason:'No disponible' };
+
+    return { ok:true, items: parsed, reason:'' };
+  }catch(err){
+    console.warn('Centro de Mando: error leyendo pedidos', err);
+    return { ok:false, items:[], reason:'No disponible' };
+  }
+}
+
+function normalizePedido(p){
+  const id = (p && p.id != null) ? String(p.id) : '';
+  const cliente = (p && p.clienteNombre != null) ? String(p.clienteNombre) : '—';
+  const entrega = normalizeYMD(p && p.fechaEntrega);
+  const fab = normalizeYMD(p && (p.fechaFabricacion || p.fechaFabricación)); // soportar variación si existiera
+  const cre = normalizeYMD(p && p.fechaCreacion);
+  return { id, cliente, entrega, fab, cre, raw:p };
+}
+
+function computeOrdersOperative(){
+  const res = loadPedidosSafe();
+  const today = state.today;
+  const tomorrow = ymdAddDays(today, 1);
+
+  const unavailable = [];
+  const alerts = [];
+
+  if (!res.ok){
+    unavailable.push({ key:'orders', label:'Pedidos', reason: res.reason || 'No disponible' });
+    return {
+      ok:false,
+      reason: res.reason || 'No disponible',
+      today, tomorrow,
+      pendingCount: null,
+      topToday: [],
+      topTomorrow: [],
+      tomorrowShow: false,
+      tomorrowMake: null,
+      tomorrowDeliver: null,
+      alerts,
+      unavailable,
+      hasFabField: false,
+    };
+  }
+
+  const all = Array.isArray(res.items) ? res.items.slice(0, SAFE_SCAN_LIMIT) : [];
+  const pending = [];
+  let skippedUnknownStatus = 0;
+
+  for (const o of all){
+    if (!o || typeof o !== 'object') continue;
+
+    if (typeof o.entregado !== 'boolean'){
+      skippedUnknownStatus += 1;
+      continue;
+    }
+    if (o.entregado === false){
+      pending.push(normalizePedido(o));
+    }
+  }
+
+  const hasFabField = pending.some(x=> !!x.fab);
+
+  // Conteos por fecha de entrega
+  const deliverToday = pending.filter(x=> x.entrega && x.entrega === today);
+  const overdue = pending.filter(x=> x.entrega && x.entrega < today);
+
+  // Producción (solo si existe fab real)
+  const makeToday = hasFabField ? pending.filter(x=> x.fab && x.fab === today) : [];
+
+  // Mañana
+  const deliverTomorrow = pending.filter(x=> x.entrega && x.entrega === tomorrow);
+  const makeTomorrow = hasFabField ? pending.filter(x=> x.fab && x.fab === tomorrow) : [];
+
+  // Alerts (solo con señal real)
+  if (deliverToday.length){
+    alerts.push({
+      key: 'orders-deliver-today',
+      icon: '📦',
+      title: `Entregas hoy: ${deliverToday.length}`,
+      sub: `Entrega hoy (${today}) · Pendientes`,
+      cta: 'Ver Pedidos',
+      go: 'pedidos'
+    });
+  }
+  if (overdue.length){
+    alerts.push({
+      key: 'orders-overdue',
+      icon: '⏰',
+      title: `Entregas vencidas: ${overdue.length}`,
+      sub: `Pendientes con entrega antes de hoy (${today})`,
+      cta: 'Ver Pedidos',
+      go: 'pedidos'
+    });
+  }
+
+  if (makeToday.length){
+    const top3 = makeToday.slice(0, 3);
+    const extra = Math.max(0, makeToday.length - top3.length);
+
+    top3.forEach((x, idx)=>{
+      const tail = (idx === top3.length - 1 && extra) ? ` · +${extra} más` : '';
+      alerts.push({
+        key: `orders-make-today:${x.id || String(idx)}`,
+        icon: '🧪',
+        title: `Hacer sangría hoy: ${x.cliente}`,
+        sub: `Fab: ${x.fab || '—'} · Ent: ${x.entrega || '—'}${tail}`,
+        cta: 'Ver Pedidos',
+        go: 'pedidos'
+      });
+    });
+  }
+
+  // Sort helpers
+  const MAX = '9999-99-99';
+  const sortGeneral = (a,b)=>{
+    const ae = a.entrega || MAX;
+    const be = b.entrega || MAX;
+    if (ae !== be) return ae.localeCompare(be);
+    const af = a.fab || MAX;
+    const bf = b.fab || MAX;
+    if (af !== bf) return af.localeCompare(bf);
+    const ac = a.cre || MAX;
+    const bc = b.cre || MAX;
+    if (ac !== bc) return ac.localeCompare(bc);
+    return String(a.id || '').localeCompare(String(b.id || ''));
+  };
+
+  const topToday = pending.slice().sort(sortGeneral).slice(0, 5);
+
+  // Tomorrow top: priorizar entregar mañana, luego fabricar mañana
+  const tomorrowSubset = pending.filter(x=> (x.entrega === tomorrow) || (hasFabField && x.fab === tomorrow));
+  const sortTomorrow = (a,b)=>{
+    const ap = (a.entrega === tomorrow) ? 0 : 1;
+    const bp = (b.entrega === tomorrow) ? 0 : 1;
+    if (ap !== bp) return ap - bp;
+    return sortGeneral(a,b);
+  };
+  const topTomorrow = tomorrowSubset.slice().sort(sortTomorrow).slice(0, 5);
+
+  const tomorrowShow = (deliverTomorrow.length > 0) || (hasFabField && makeTomorrow.length > 0);
+
+  // Nota: si hay pedidos con estado desconocido, no inventar conteo total
+  const pendingCount = (skippedUnknownStatus > 0) ? null : pending.length;
+
+  const tomorrowMakeVal = hasFabField ? makeTomorrow.length : null;
+  const tomorrowDeliverVal = deliverTomorrow.length;
+
+  return {
+    ok:true,
+    reason:'',
+    today, tomorrow,
+    pendingCount,
+    topToday,
+    topTomorrow,
+    tomorrowShow,
+    tomorrowMake: tomorrowMakeVal,
+    tomorrowDeliver: tomorrowDeliverVal,
+    alerts,
+    unavailable,
+    hasFabField,
+    skippedUnknownStatus
+  };
+}
+
+function clearOrdersToDash(){
+  setText('ordersPending', 'Pendientes: —');
+  setText('ordersTodayHint', 'No disponible');
+  const elToday = $('ordersTopToday');
+  if (elToday) elToday.innerHTML = '';
+  const cardT = $('ordersTomorrowCard');
+  if (cardT) cardT.hidden = true;
+  setText('ordersTomorrowDate', '—');
+  setText('tomorrowMake', '—');
+  setText('tomorrowDeliver', '—');
+  const elTom = $('ordersTopTomorrow');
+  if (elTom) elTom.innerHTML = '';
+}
+
+function renderOrdersOperative(ctx){
+  if (!ctx || typeof ctx !== 'object'){
+    clearOrdersToDash();
+    return { alerts: [], unavailable: [{ key:'orders', label:'Pedidos', reason:'No disponible' }] };
+  }
+
+  const listToday = $('ordersTopToday');
+  const listTom = $('ordersTopTomorrow');
+  const cardTom = $('ordersTomorrowCard');
+
+  const mkRow = (x)=>{
+    const item = document.createElement('div');
+    item.className = 'cmd-order-item';
+
+    const c = document.createElement('div');
+    c.className = 'cmd-order-client';
+    c.textContent = String(x.cliente || '—');
+
+    const d = document.createElement('div');
+    d.className = 'cmd-order-dates';
+    const fab = x.fab ? x.fab : '—';
+    const ent = x.entrega ? x.entrega : '—';
+    d.textContent = `Fab: ${fab} · Ent: ${ent}`;
+
+    item.appendChild(c);
+    item.appendChild(d);
+    return item;
+  };
+
+  if (!ctx.ok){
+    setText('ordersPending', 'Pendientes: —');
+    setText('ordersTodayHint', ctx.reason || 'No disponible');
+    if (listToday) listToday.innerHTML = '';
+    if (cardTom) cardTom.hidden = true;
+    return { alerts: [], unavailable: Array.isArray(ctx.unavailable) ? ctx.unavailable : [] };
+  }
+
+  // Pending line
+  if (typeof ctx.pendingCount === 'number'){
+    setText('ordersPending', `Pendientes: ${ctx.pendingCount}`);
+  } else {
+    setText('ordersPending', 'Pendientes: —');
+  }
+
+  // Hint
+  if (ctx.pendingCount === 0){
+    setText('ordersTodayHint', 'No hay pedidos pendientes');
+  } else if (ctx.pendingCount === null && ctx.skippedUnknownStatus){
+    setText('ordersTodayHint', 'No disponible (hay pedidos sin estado)');
+  } else {
+    setText('ordersTodayHint', (ctx.topToday && ctx.topToday.length) ? 'Top (más urgentes primero)' : '—');
+  }
+
+  // Top today list
+  if (listToday){
+    listToday.innerHTML = '';
+    const top = Array.isArray(ctx.topToday) ? ctx.topToday.slice(0, 5) : [];
+    if (!top.length){
+      const empty = document.createElement('div');
+      empty.className = 'cmd-muted';
+      empty.textContent = (ctx.pendingCount === 0) ? '—' : 'Sin datos';
+      listToday.appendChild(empty);
+    } else {
+      top.forEach(x=> listToday.appendChild(mkRow(x)));
+    }
+  }
+
+  // Tomorrow card
+  setText('ordersTomorrowDate', `(${ctx.tomorrow || '—'})`);
+  if (cardTom){
+    cardTom.hidden = !ctx.tomorrowShow;
+  }
+  if (ctx.tomorrowShow){
+    if (ctx.hasFabField && typeof ctx.tomorrowMake === 'number'){
+      setText('tomorrowMake', String(ctx.tomorrowMake));
+    } else {
+      setText('tomorrowMake', '—');
+    }
+    setText('tomorrowDeliver', (typeof ctx.tomorrowDeliver === 'number') ? String(ctx.tomorrowDeliver) : '—');
+
+    if (listTom){
+      listTom.innerHTML = '';
+      const topT = Array.isArray(ctx.topTomorrow) ? ctx.topTomorrow.slice(0, 5) : [];
+      if (!topT.length){
+        const empty = document.createElement('div');
+        empty.className = 'cmd-muted';
+        empty.textContent = '—';
+        listTom.appendChild(empty);
+      } else {
+        topT.forEach(x=> listTom.appendChild(mkRow(x)));
+      }
+    }
+  } else {
+    if (listTom) listTom.innerHTML = '';
+  }
+
+  return { alerts: Array.isArray(ctx.alerts) ? ctx.alerts : [], unavailable: Array.isArray(ctx.unavailable) ? ctx.unavailable : [] };
 }
 
 // --- Data compute
@@ -499,11 +823,21 @@ const ALERT_LABELS = {
   'fx-missing': 'Tipo de cambio vacío hoy',
   'checklist-incomplete': 'Checklist hoy incompleto',
   'inventory-critical': 'Inventario crítico',
+  'orders-deliver-today': 'Entregas hoy',
+  'orders-overdue': 'Entregas vencidas',
+  'orders-make-today': 'Hacer sangría hoy',
 };
 
 function labelForAlertKey(k){
-  try{ return ALERT_LABELS[k] || String(k || '—'); }catch(_){ return '—'; }
+  try{
+    const key = String(k || '');
+    if (key.startsWith('orders-make-today:')) return ALERT_LABELS['orders-make-today'];
+    return ALERT_LABELS[key] || (key || '—');
+  }catch(_){
+    return '—';
+  }
 }
+
 
 function buildActionableAlerts(ev, dayKey, pc){
   const alerts = [];
@@ -650,14 +984,6 @@ function hideSyncReport(){
 
 async function syncAlerts(){
   const btn = $('btnSyncAlerts');
-  const focusId = state.focusId;
-
-  if (!focusId){
-    showToast('No hay evento enfocado.', 2000);
-    showSyncReport({ title:'Resumen', message:'No hay eventos disponibles.' });
-    return;
-  }
-
   const before = getRenderedAlertKeys();
 
   if (btn) btn.disabled = true;
@@ -668,62 +994,72 @@ async function syncAlerts(){
     state.today = todayYMD();
     const dayKey = state.today;
 
-    // Asegurar DB abierta
+    // Pedidos: fuente real (localStorage/A33Storage)
+    const ordersCtx = computeOrdersOperative();
+
+    // Asegurar DB POS abierta (si existe)
     if (!state.db){
-      state.db = await openPosDB({ timeoutMs: 3500 });
+      try{
+        state.db = await openPosDB({ timeoutMs: 3500 });
+      }catch(_){
+        state.db = null;
+      }
     }
 
-    // Releer evento REAL del store 'events'
-    let evFresh = null;
-    if (state.db && hasStore(state.db, 'events')){
-      try{ evFresh = await idbGet(state.db, 'events', Number(focusId)); }catch(_){ }
-    }
-    const ev = (evFresh && typeof evFresh === 'object') ? evFresh : state.focusEvent;
-
-    // Respetar evento enfocado
-    if (state.focusId !== focusId){
-      showToast('El evento enfocado cambió. Intenta de nuevo.', 2200);
-      return;
+    // Si hay evento enfocado, intentar sincronizarlo (sin bloquear si falla)
+    let ev = null;
+    if (state.db && state.focusId){
+      try{
+        await setFocusEvent(Number(state.focusId));
+        ev = state.focusEvent;
+      }catch(_){
+        ev = state.focusEvent;
+      }
     }
 
-    // Recalcular señales (solo lectura)
-    let pc;
-    try{
-      pc = await computePettyStatus(ev, dayKey);
-    }catch(err){
-      pc = { ok:false, enabled: (ev && ev.pettyEnabled) ? true : null, reason:'No disponible' };
-    }
+    // Recalcular UI completa (incluye pedidos)
+    await refreshAll();
 
-    const al = buildActionableAlerts(ev, dayKey, pc);
-    renderAlerts(al.alerts);
-
-    const after = (al.alerts || []).map(a=> a && a.key ? String(a.key) : '').filter(Boolean);
+    const after = getRenderedAlertKeys();
     const diff = diffAlertKeys(before, after);
 
-    const noChange = diff.hidden.length === 0 && diff.added.length === 0 && (before.join('|') === after.join('|'));
-    if (noChange){
-      showSyncReport({ title:'Resumen', message:'Sin cambios. Todo sigue igual.', unavailable: al.unavailable || [] });
-    } else {
-      showSyncReport({ title:'Resumen', hidden: diff.hidden, pending: diff.pending, added: diff.added, unavailable: al.unavailable || [] });
+    // Unavailable (—) para reporte
+    const unavailable = [];
+    if (ordersCtx && Array.isArray(ordersCtx.unavailable) && ordersCtx.unavailable.length){
+      unavailable.push(...ordersCtx.unavailable);
     }
 
-    // Refrescar cache en memoria
-    if (evFresh && state.eventsById && state.eventsById.set){
-      try{ state.eventsById.set(Number(focusId), evFresh); }catch(_){ }
-      state.focusEvent = evFresh;
+    if (ev && state.db){
+      let pc;
+      try{
+        pc = await computePettyStatus(ev, dayKey);
+      }catch(err){
+        pc = { ok:false, enabled: (ev && ev.pettyEnabled) ? true : null, reason:'No disponible' };
+      }
+      const al = buildActionableAlerts(ev, dayKey, pc);
+      if (al && Array.isArray(al.unavailable) && al.unavailable.length){
+        unavailable.push(...al.unavailable);
+      }
+    }
+
+    const noChange = diff.hidden.length === 0 && diff.added.length === 0 && (before.join('|') === after.join('|'));
+    const evName = (ev && ev.name) ? String(ev.name) : '—';
+
+    if (noChange){
+      showSyncReport({ title:'Resumen', message:`Sin cambios. Evento: ${evName}`, unavailable });
+    } else {
+      showSyncReport({
+        title:'Resumen',
+        message:`Evento: ${evName}`,
+        hidden: diff.hidden,
+        pending: diff.pending,
+        added: diff.added,
+        unavailable
+      });
     }
   }catch(err){
-    console.warn('Sincronizar: error', err);
-    showSyncReport({
-      title:'Resumen',
-      message:'No disponible.',
-      unavailable:[
-        { key:'petty-open', label: labelForAlertKey('petty-open'), reason:'No disponible' },
-        { key:'fx-missing', label: labelForAlertKey('fx-missing'), reason:'No disponible' },
-        { key:'checklist-incomplete', label: labelForAlertKey('checklist-incomplete'), reason:'No disponible' },
-        { key:'inventory-critical', label: labelForAlertKey('inventory-critical'), reason:'No disponible' },
-      ]
-    });
+    console.warn('Sincronizar alertas: error', err);
+    showSyncReport({ title:'Resumen', message:'No disponible. Revisa consola.' });
   }finally{
     if (btn) btn.disabled = false;
   }
@@ -731,7 +1067,15 @@ async function syncAlerts(){
 
 
 
+
+
 // --- Navigation
+function navigateToPedidos(){
+  try{
+    window.location.href = ORDERS_ROUTE;
+  }catch(_){ }
+}
+
 async function navigateToPOS(tab){
   const ev = state.focusEvent;
   if (!ev || !state.db) return;
@@ -837,15 +1181,24 @@ async function setFocusEvent(eventId){
 // --- Main refresh
 async function refreshAll(){
   clearMetricsToDash();
-  renderAlerts(null);
+  clearOrdersToDash();
+
+  // Pedidos (operativo: hoy + mañana)
+  const ordersCtx = computeOrdersOperative();
+  const ordersOut = renderOrdersOperative(ordersCtx);
 
   const ev = state.focusEvent;
+
+  // Si no hay evento enfocado o no hay DB POS, NO bloquear entrada: solo deshabilitar navegación POS
   if (!ev || !state.db) {
     setDisabled('btnGoSell', true);
     setDisabled('btnGoCaja', true);
     setDisabled('btnGoResumen', true);
     setDisabled('btnGoChecklist', true);
     setDisabled('btnOpenChecklist', true);
+
+    const onlyOrders = (ordersOut && Array.isArray(ordersOut.alerts)) ? ordersOut.alerts : [];
+    renderAlerts(onlyOrders.length ? onlyOrders : null);
     return;
   }
 
@@ -917,7 +1270,10 @@ async function refreshAll(){
 
   // Alertas accionables (solo con señal real)
   const al = buildActionableAlerts(ev, dk, pc);
-  renderAlerts(al.alerts);
+  const mergedAlerts = ([]
+    .concat((ordersOut && Array.isArray(ordersOut.alerts)) ? ordersOut.alerts : [])
+    .concat(Array.isArray(al.alerts) ? al.alerts : []));
+  renderAlerts(mergedAlerts.length ? mergedAlerts : null);
 }
 
 // --- Init
@@ -936,6 +1292,15 @@ async function init(){
   bind('btnGoResumen', 'resumen');
   bind('btnGoChecklist', 'checklist');
   bind('btnOpenChecklist', 'checklist');
+
+  // Pedidos: CTA
+  const bindPedidos = (id)=>{
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener('click', navigateToPedidos);
+  };
+  bindPedidos('btnGoPedidosToday');
+  bindPedidos('btnGoPedidosTomorrow');
 
   // Alertas accionables: Sincronizar (pastilla)
   const syncBtn = $('btnSyncAlerts');

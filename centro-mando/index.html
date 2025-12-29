@@ -102,6 +102,38 @@
       </article>
     </section>
 
+
+    <!-- PEDIDOS OPERATIVO (HOY + MAÑANA) -->
+    <section class="cmd-ops" id="ordersOps" aria-label="Pedidos operativo">
+      <div class="cmd-ops-grid">
+        <article class="cmd-card cmd-op" aria-label="Pedidos (Hoy)">
+          <div class="cmd-section-head">
+            <div class="cmd-section-title">Pedidos</div>
+            <button class="cmd-pill cmd-pill-btn" id="btnGoPedidosToday" type="button">Ver Pedidos</button>
+          </div>
+
+          <div class="cmd-op-kpi" id="ordersPending">Pendientes: —</div>
+          <div class="cmd-muted" id="ordersTodayHint">No disponible</div>
+
+          <div class="cmd-order-list" id="ordersTopToday"></div>
+        </article>
+
+        <article class="cmd-card cmd-op" id="ordersTomorrowCard" aria-label="Mañana" hidden>
+          <div class="cmd-section-head">
+            <div class="cmd-section-title">Mañana <span class="cmd-muted" id="ordersTomorrowDate">—</span></div>
+            <button class="cmd-pill cmd-pill-btn" id="btnGoPedidosTomorrow" type="button">Ver Pedidos</button>
+          </div>
+
+          <div class="cmd-op-rows">
+            <div class="cmd-op-row"><span>Fabricar mañana:</span><strong id="tomorrowMake">—</strong></div>
+            <div class="cmd-op-row"><span>Entregar mañana:</span><strong id="tomorrowDeliver">—</strong></div>
+          </div>
+
+          <div class="cmd-order-list" id="ordersTopTomorrow"></div>
+        </article>
+      </div>
+    </section>
+
     <!-- BOTONES RÁPIDOS -->
     <section class="cmd-card cmd-quick" aria-label="Botones rápidos">
       <div class="cmd-quick-grid">
