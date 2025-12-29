@@ -570,25 +570,33 @@ function showSyncReport(payload){
   const title = $('syncReportTitle');
   if (!modal || !body || !title) return;
 
-  const esc = (s)=> String(s||'').replace(/[&<>"']/g, (c)=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  const escMap = { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' };
+  const esc = (s)=> String(s ?? '').replace(/[&<>"']/g, (c)=> escMap[c] || c);
 
-  title.textContent = payload && payload.title ? String(payload.title) : 'Resumen';
+  title.textContent = (payload && payload.title) ? String(payload.title) : 'Resumen';
 
-  const msg = (payload && payload.message) ? `<div class="cmd-muted">${esc(payload.message)}</div>` : '';
+  const msg = (payload && payload.message)
+    ? `<div class="cmd-muted">${esc(payload.message)}</div>`
+    : '';
 
   const section = (h, items, fmt)=>{
-    if (!items || !items.length) return '';
+    if (!Array.isArray(items) || items.length === 0) return '';
     const li = items.map(x=> `<li>${fmt ? fmt(x) : esc(x)}</li>`).join('');
     return `<h4>${esc(h)}</h4><ul>${li}</ul>`;
   };
 
-  const hidden = payload && payload.hidden ? payload.hidden : [];
-  const pending = payload && payload.pending ? payload.pending : [];
-  const added = payload && payload.added ? payload.added : [];
-  const unavailable = payload && payload.unavailable ? payload.unavailable : [];
+  const hidden = (payload && payload.hidden) ? payload.hidden : [];
+  const pending = (payload && payload.pending) ? payload.pending : [];
+  const added = (payload && payload.added) ? payload.added : [];
+  const unavailable = (payload && payload.unavailable) ? payload.unavailable : [];
 
   const fmtKey = (k)=> esc(labelForAlertKey(k));
-  const fmtUn = (u)=> `${esc(u.label || labelForAlertKey(u.key))} <span class="cmd-muted">— ${esc(u.reason || 'No disponible')}</span>`;
+  const fmtUn = (u)=>{
+    const key = u && (u.key || u.id) ? String(u.key || u.id) : '';
+    const label = (u && u.label) ? String(u.label) : labelForAlertKey(key);
+    const reason = (u && u.reason) ? String(u.reason) : 'No disponible';
+    return `${esc(label)} <span class="cmd-muted">— ${esc(reason)}</span>`;
+  };
 
   body.innerHTML =
     msg +
