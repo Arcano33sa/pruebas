@@ -137,12 +137,17 @@
 
     <!-- INVENTARIO EN RIESGO -->
     <section class="cmd-inv-risk" id="invRiskBlock" aria-label="Inventario en riesgo">
-      <div class="cmd-section-head">
-        <div>
-          <div class="cmd-section-title">INVENTARIO EN RIESGO</div>
-          <div class="cmd-muted">Semáforo: <b>OK</b> (verde), <b>Cerca</b> (amarillo), <b>Bajo</b> (rojo). Por defecto muestra solo accionables (rojo/amarillo).</div>
+      <div class="cmd-section-head cmd-inv-risk-head">
+        <div class="cmd-section-title">INVENTARIO EN RIESGO</div>
+        <div class="cmd-inv-risk-tools">
+          <span class="cmd-inv-updated">Actualizado: <b id="invRiskUpdatedAt">--:--</b></span>
+          <button class="cmd-pill cmd-pill-mini" id="invRiskRecalcBtn" type="button" aria-label="Recalcular inventario en riesgo">
+            <span class="cmd-pill-ico" aria-hidden="true">⟲</span>
+            <span>Recalcular</span>
+          </button>
         </div>
       </div>
+      <div class="cmd-muted cmd-inv-risk-desc">Semáforo: <b>OK</b> (verde), <b>Cerca</b> (amarillo), <b>Bajo</b> (rojo). Por defecto muestra solo accionables (rojo/amarillo).</div>
 
       <div class="cmd-inv-risk-grid" role="group" aria-label="Listas de inventario en riesgo">
         <article class="cmd-card cmd-inv-card" aria-label="Líquidos en riesgo">

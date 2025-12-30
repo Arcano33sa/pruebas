@@ -20,6 +20,8 @@ const SAFE_SCAN_LIMIT = 4000; // seguridad: evitar loops gigantes
 // --- Inventario (localStorage) — solo lectura (NO tocar estructura)
 const INV_LS_KEY = 'arcano33_inventario';
 const INV_ROUTE = '../inventario/index.html';
+const CALC_ROUTE = '../calculadora/index.html';
+let calcRouteAvailable = true;
 
 // UI state (se queda abierto hasta que el usuario lo cierre)
 const invViewState = {
@@ -331,8 +333,36 @@ function renderInvList(listEl, res, expanded){
     meta.appendChild(stock);
     meta.appendChild(chip);
 
+    const right = document.createElement('div');
+    right.className = 'cmd-inv-right';
+    right.appendChild(meta);
+
+    // Acciones rápidas SOLO en rojo/amarillo
+    if (status === 'red' || status === 'yellow'){
+      const acts = document.createElement('div');
+      acts.className = 'cmd-inv-row-actions';
+
+      const aView = document.createElement('a');
+      aView.href = INV_ROUTE;
+      aView.className = 'cmd-inv-act';
+      aView.setAttribute('aria-label', 'Ver en Inventario');
+      aView.textContent = '👁';
+      acts.appendChild(aView);
+
+      if (calcRouteAvailable){
+        const aFab = document.createElement('a');
+        aFab.href = CALC_ROUTE;
+        aFab.className = 'cmd-inv-act';
+        aFab.setAttribute('aria-label', 'Ir a Calculadora (Fabricar)');
+        aFab.textContent = '⚗️';
+        acts.appendChild(aFab);
+      }
+
+      right.appendChild(acts);
+    }
+
     row.appendChild(name);
-    row.appendChild(meta);
+    row.appendChild(right);
 
     listEl.appendChild(row);
   }
@@ -386,6 +416,7 @@ function refreshInvRiskBlock(){
   const inv = readInventorySafe();
   if (!inv){
     renderInvRiskBlock(null, null);
+    setInvRiskUpdatedAt(new Date());
     return;
   }
 
@@ -393,12 +424,49 @@ function refreshInvRiskBlock(){
   const bot = computeBottlesTraffic(inv);
 
   renderInvRiskBlock(liq, bot);
+  setInvRiskUpdatedAt(new Date());
 }
 
 
 // --- DOM helpers
 
 const $ = (id)=> document.getElementById(id);
+
+function fmtHHMM(dt){
+  try{
+    const d = dt instanceof Date ? dt : new Date();
+    const hh = String(d.getHours()).padStart(2,'0');
+    const mm = String(d.getMinutes()).padStart(2,'0');
+    return `${hh}:${mm}`;
+  }catch(_){
+    return '--:--';
+  }
+}
+
+function setInvRiskUpdatedAt(dt){
+  const el = $('invRiskUpdatedAt');
+  if (!el) return;
+  el.textContent = fmtHHMM(dt);
+}
+
+async function checkRouteExists(url){
+  // Evitar falsos negativos en modo offline: si falla el fetch, asumimos que existe.
+  try{
+    const res = await fetch(url, { method:'GET', cache:'no-cache' });
+    return !!(res && res.ok);
+  }catch(_){
+    return true;
+  }
+}
+
+async function probeCalcRoute(){
+  try{
+    const ok = await checkRouteExists(CALC_ROUTE);
+    calcRouteAvailable = !!ok;
+    // Rerender para mostrar/ocultar acción "Fabricar"
+    refreshInvRiskBlock();
+  }catch(_){ }
+}
 
 function todayYMD(){
   const d = new Date();
@@ -1682,6 +1750,16 @@ async function init(){
       refreshInvRiskBlock();
     });
   }
+
+  // Inventario: recalcular (sin recargar página)
+  const recalcBtn = $('invRiskRecalcBtn');
+  if (recalcBtn){
+    recalcBtn.addEventListener('click', ()=>{ refreshInvRiskBlock(); });
+  }
+
+  // Detectar si existe Calculadora (si no existe, ocultar "Fabricar")
+  // No bloquea la UI: si falla el fetch, asumimos que existe (modo offline).
+  probeCalcRoute();
 
   // Buttons
   const bind = (id, tab)=>{

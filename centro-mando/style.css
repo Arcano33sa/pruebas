@@ -559,6 +559,85 @@ button.cmd-pill{ cursor: pointer; }
 
 .cmd-inv-link{ text-decoration:none; }
 
+/* --- Inventario en riesgo: header (Actualizado + Recalcular) --- */
+.cmd-inv-risk-head{
+  flex-wrap: wrap;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.cmd-inv-risk-tools{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.cmd-inv-updated{
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.cmd-inv-risk-desc{
+  margin-bottom: 10px;
+}
+
+.cmd-pill-mini{
+  padding: 7px 10px;
+  font-size: 12.5px;
+}
+
+.cmd-pill-mini .cmd-pill-ico{
+  width: 12px;
+  height: 12px;
+  line-height: 12px;
+  font-size: 12px;
+}
+
+/* --- Inventario en riesgo: acciones por fila --- */
+.cmd-inv-right{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.cmd-inv-row-actions{
+  display:inline-flex;
+  align-items:center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.cmd-inv-act{
+  width: 28px;
+  height: 28px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  border-radius: 999px;
+  border: 1px solid rgba(221,191,100,0.26);
+  background: rgba(0,0,0,0.18);
+  color: #fefefe;
+  text-decoration:none;
+  font-size: 14px;
+  box-shadow: 0 8px 16px rgba(0,0,0,0.20);
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.cmd-inv-act:hover{ filter: brightness(1.06); }
+.cmd-inv-act:active{ transform: scale(0.97); }
+
 .cmd-inv-actions{
   display:flex;
   align-items:center;
