@@ -190,10 +190,13 @@ async function createJournalEntryForSalePOS(sale) {
     const prodName = (sale.productName || '').toString();
     const eventName = (sale.eventName || '').toString();
     const courtesyTo = (sale.courtesyTo || '').toString().trim();
+    // Etapa 5: referencia de cliente (NO CxC / no afecta montos ni cuentas)
+    const customerName = (sale.customerName || '').toString().trim();
 
     const baseParts = [];
     if (prodName) baseParts.push(prodName);
     if (sale && sale.seqId) baseParts.push('N° ' + sale.seqId);
+    if (customerName) baseParts.push('Cliente: ' + customerName);
     if (courtesyTo) baseParts.push('Para: ' + courtesyTo);
     const descripcionBase = baseParts.join(' | ');
 
