@@ -17,6 +17,241 @@ const ORDERS_LS_KEY = 'arcano33_pedidos';
 const ORDERS_ROUTE = '../pedidos/index.html';
 const SAFE_SCAN_LIMIT = 4000; // seguridad: evitar loops gigantes
 
+// --- Inventario (localStorage) — solo lectura (NO tocar estructura)
+const INV_LS_KEY = 'arcano33_inventario';
+const INV_ROUTE = '../inventario/index.html';
+
+// Nombres (alineados al módulo Inventario; si hay claves nuevas, se muestran por id)
+const INV_LIQUIDS_META = [
+  { id:'vino',   name:'Vino' },
+  { id:'vodka',  name:'Vodka' },
+  { id:'jugo',   name:'Jugo' },
+  { id:'sirope', name:'Sirope' },
+  { id:'agua',   name:'Agua pura' },
+];
+
+const INV_BOTTLES_META = [
+  { id:'pulso', name:'Pulso 250 ml' },
+  { id:'media', name:'Media 375 ml' },
+  { id:'djeba', name:'Djeba 750 ml' },
+  { id:'litro', name:'Litro 1000 ml' },
+  { id:'galon', name:'Galón 3800 ml' },
+];
+
+function invNum(x){
+  const n = parseFloat(String(x ?? '').replace(',', '.'));
+  return (typeof n === 'number' && isFinite(n)) ? n : 0;
+}
+
+function invNameFor(metaArr, id){
+  const hit = (Array.isArray(metaArr) ? metaArr : []).find(x=> x && x.id === id);
+  return hit && hit.name ? hit.name : String(id || '');
+}
+
+function readInventorySafe(){
+  let raw = null;
+  try{
+    if (window.A33Storage && typeof A33Storage.getItem === 'function') raw = A33Storage.getItem(INV_LS_KEY);
+    else raw = localStorage.getItem(INV_LS_KEY);
+  }catch(_){
+    raw = null;
+  }
+  if (!raw) return null;
+
+  try{
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object') return null;
+    return data;
+  }catch(_){
+    return null;
+  }
+}
+
+function computeLiquidsRisk(inv){
+  const src = (inv && inv.liquids && typeof inv.liquids === 'object') ? inv.liquids : {};
+  const keys = new Set([...(INV_LIQUIDS_META.map(x=> x.id)), ...Object.keys(src || {})]);
+
+  const items = [];
+  let critical = 0;
+  let low = 0;
+
+  for (const id of keys){
+    const row = (src && src[id]) ? src[id] : {};
+    const stock = invNum(row.stock);
+    const max = invNum(row.max);
+
+    let level = null;
+    if (stock <= 0){
+      level = 'critical';
+      critical++;
+    } else if (max > 0 && (stock / max) <= 0.20){
+      level = 'low';
+      low++;
+    }
+
+    if (level){
+      items.push({
+        id,
+        name: invNameFor(INV_LIQUIDS_META, id) || String(id),
+        stock,
+        max,
+        level
+      });
+    }
+  }
+
+  items.sort((a,b)=>{
+    const pr = (x)=> (x.level === 'critical' ? 0 : 1);
+    const d = pr(a) - pr(b);
+    if (d) return d;
+    return String(a.name).localeCompare(String(b.name));
+  });
+
+  return { items, total: items.length, critical, low };
+}
+
+function computeBottlesRisk(inv){
+  const src = (inv && inv.bottles && typeof inv.bottles === 'object') ? inv.bottles : {};
+  const keys = new Set([...(INV_BOTTLES_META.map(x=> x.id)), ...Object.keys(src || {})]);
+
+  const items = [];
+  let critical = 0;
+  let low = 0;
+
+  for (const id of keys){
+    const row = (src && src[id]) ? src[id] : {};
+    const stock = invNum(row.stock);
+
+    let level = null;
+    if (stock <= 0){
+      level = 'critical';
+      critical++;
+    } else if (stock <= 10){
+      level = 'low';
+      low++;
+    }
+
+    if (level){
+      items.push({
+        id,
+        name: invNameFor(INV_BOTTLES_META, id) || String(id),
+        stock,
+        level
+      });
+    }
+  }
+
+  items.sort((a,b)=>{
+    const pr = (x)=> (x.level === 'critical' ? 0 : 1);
+    const d = pr(a) - pr(b);
+    if (d) return d;
+    return String(a.name).localeCompare(String(b.name));
+  });
+
+  return { items, total: items.length, critical, low };
+}
+
+function renderInvRiskList(listId, summaryId, res, opts){
+  const listEl = $(listId);
+  const sumEl = $(summaryId);
+  if (!listEl || !sumEl) return;
+
+  const kind = (opts && opts.kind) ? opts.kind : 'liquids';
+  const unit = (kind === 'bottles') ? 'unid.' : 'ml';
+
+  // Clear
+  listEl.innerHTML = '';
+  sumEl.textContent = '—';
+
+  const makeEmpty = (text, withCta)=>{
+    const box = document.createElement('div');
+    box.className = 'cmd-inv-empty';
+    box.textContent = text || '';
+    if (withCta){
+      box.appendChild(document.createElement('br'));
+      const a = document.createElement('a');
+      a.href = INV_ROUTE;
+      a.className = 'cmd-mini-btn cmd-inv-link';
+      a.textContent = 'Ir a Inventario';
+      box.appendChild(a);
+    }
+    listEl.appendChild(box);
+  };
+
+  if (!res || typeof res !== 'object'){
+    sumEl.textContent = 'Inventario no configurado';
+    makeEmpty('Inventario no configurado.', true);
+    return;
+  }
+
+  const total = Number(res.total || 0);
+  const crit = Number(res.critical || 0);
+  const low = Number(res.low || 0);
+
+  if (!(total > 0)){
+    sumEl.textContent = 'Todo OK';
+    makeEmpty('Todo OK.', false);
+    return;
+  }
+
+  const showN = Math.min(5, total);
+  let summary = `En riesgo: ${total}`;
+  summary += ` (${crit} crítico${crit === 1 ? '' : 's'}, ${low} bajo${low === 1 ? '' : 's'})`;
+  if (total > showN) summary += ` · mostrando ${showN} de ${total}`;
+  sumEl.textContent = summary;
+
+  const items = Array.isArray(res.items) ? res.items.slice(0, 5) : [];
+  for (const it of items){
+    const row = document.createElement('div');
+    row.className = 'cmd-inv-row';
+
+    const name = document.createElement('div');
+    name.className = 'cmd-inv-name';
+    name.textContent = it && it.name ? String(it.name) : '—';
+
+    const meta = document.createElement('div');
+    meta.className = 'cmd-inv-meta';
+
+    const stock = document.createElement('span');
+    stock.className = 'cmd-inv-stock';
+    const n = invNum((it && it.stock != null) ? it.stock : 0);
+    stock.textContent = `Stock: ${n}${unit === 'ml' ? ' ml' : ' ' + unit}`;
+
+    const chip = document.createElement('span');
+    const level = (it && it.level) ? String(it.level) : 'low';
+    chip.className = 'cmd-chip ' + (level === 'critical' ? 'cmd-chip-critical' : 'cmd-chip-low');
+    chip.textContent = (level === 'critical') ? 'CRÍTICO' : 'BAJO';
+
+    meta.appendChild(stock);
+    meta.appendChild(chip);
+
+    row.appendChild(name);
+    row.appendChild(meta);
+
+    listEl.appendChild(row);
+  }
+}
+
+function renderInvRiskBlock(liquidsRes, bottlesRes){
+  // Guard clause: si el bloque no existe en este HTML, no hacer nada.
+  if (!$('invRiskBlock')) return;
+  renderInvRiskList('invRiskLiquidsList', 'invRiskLiquidsSummary', liquidsRes, { kind:'liquids' });
+  renderInvRiskList('invRiskBottlesList', 'invRiskBottlesSummary', bottlesRes, { kind:'bottles' });
+}
+
+function refreshInvRiskBlock(){
+  if (!$('invRiskBlock')) return;
+  const inv = readInventorySafe();
+  if (!inv){
+    renderInvRiskBlock(null, null);
+    return;
+  }
+  const liq = computeLiquidsRisk(inv);
+  const bot = computeBottlesRisk(inv);
+  renderInvRiskBlock(liq, bot);
+}
+
+
 // --- DOM helpers
 const $ = (id)=> document.getElementById(id);
 
@@ -1183,6 +1418,9 @@ async function refreshAll(){
   clearMetricsToDash();
   clearOrdersToDash();
 
+  // Inventario en riesgo (localStorage, solo lectura)
+  refreshInvRiskBlock();
+
   // Pedidos (operativo: hoy + mañana)
   const ordersCtx = computeOrdersOperative();
   const ordersOut = renderOrdersOperative(ordersCtx);
@@ -1280,6 +1518,9 @@ async function refreshAll(){
 async function init(){
   // Header: hoy
   setText('cmdToday', state.today);
+
+  // Inventario en riesgo (no depende de POS/IndexedDB)
+  refreshInvRiskBlock();
 
   // Buttons
   const bind = (id, tab)=>{
