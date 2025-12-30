@@ -559,7 +559,47 @@ button.cmd-pill{ cursor: pointer; }
 
 .cmd-inv-link{ text-decoration:none; }
 
-.cmd-inv-summary{ margin-top: 8px; }
+.cmd-inv-actions{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.cmd-inv-toggle{
+  border-color: rgba(221,191,100,0.28);
+  background: rgba(0,0,0,0.18);
+}
+
+.cmd-inv-summary{
+  margin-top: 8px;
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.cmd-inv-chips{
+  display:flex;
+  align-items:center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.cmd-inv-note{
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
 
 .cmd-inv-list{
   margin-top: 10px;
@@ -626,6 +666,28 @@ button.cmd-pill{ cursor: pointer; }
 .cmd-chip-low{
   border-color: rgba(221,191,100,0.40);
   background: rgba(221,191,100,0.12);
+}
+
+/* Semáforo */
+.cmd-chip-red{
+  border-color: rgba(176,0,32,0.55);
+  background: rgba(176,0,32,0.18);
+}
+
+.cmd-chip-yellow{
+  border-color: rgba(221,191,100,0.45);
+  background: rgba(221,191,100,0.12);
+}
+
+.cmd-chip-green{
+  border-color: rgba(0,160,90,0.45);
+  background: rgba(0,160,90,0.14);
+}
+
+.cmd-chip-neutral{
+  border-color: rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.05);
+  color: var(--muted);
 }
 
 .cmd-inv-empty{

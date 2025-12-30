@@ -21,6 +21,12 @@ const SAFE_SCAN_LIMIT = 4000; // seguridad: evitar loops gigantes
 const INV_LS_KEY = 'arcano33_inventario';
 const INV_ROUTE = '../inventario/index.html';
 
+// UI state (se queda abierto hasta que el usuario lo cierre)
+const invViewState = {
+  liquidsExpanded: false,
+  bottlesExpanded: false,
+};
+
 // Nombres (alineados al módulo Inventario; si hay claves nuevas, se muestran por id)
 const INV_LIQUIDS_META = [
   { id:'vino',   name:'Vino' },
@@ -48,6 +54,13 @@ function invNameFor(metaArr, id){
   return hit && hit.name ? hit.name : String(id || '');
 }
 
+function invPct(ratio){
+  if (typeof ratio !== 'number' || !isFinite(ratio)) return '';
+  const p = Math.round(ratio * 100);
+  if (!isFinite(p)) return '';
+  return `${p}%`;
+}
+
 function readInventorySafe(){
   let raw = null;
   try{
@@ -67,101 +80,177 @@ function readInventorySafe(){
   }
 }
 
-function computeLiquidsRisk(inv){
+// --- Semáforo (acordado)
+// LÍQUIDOS: rojo <=20% (o stock<=0), amarillo 20–35%, verde >35%
+// BOTELLAS: rojo <=10, amarillo 11–20, verde >20
+function computeLiquidsTraffic(inv){
   const src = (inv && inv.liquids && typeof inv.liquids === 'object') ? inv.liquids : {};
   const keys = new Set([...(INV_LIQUIDS_META.map(x=> x.id)), ...Object.keys(src || {})]);
 
-  const items = [];
-  let critical = 0;
-  let low = 0;
+  const red = [];
+  const yellow = [];
+  const green = [];
+  const unknown = [];
 
   for (const id of keys){
     const row = (src && src[id]) ? src[id] : {};
     const stock = invNum(row.stock);
     const max = invNum(row.max);
 
-    let level = null;
+    let status = null;
+    let ratio = null;
+
     if (stock <= 0){
-      level = 'critical';
-      critical++;
-    } else if (max > 0 && (stock / max) <= 0.20){
-      level = 'low';
-      low++;
+      status = 'red';
+    } else if (max > 0){
+      ratio = stock / max;
+      if (ratio <= 0.20) status = 'red';
+      else if (ratio <= 0.35) status = 'yellow';
+      else status = 'green';
+    } else {
+      // Sin máximo: no inventamos porcentajes
+      status = 'unknown';
     }
 
-    if (level){
-      items.push({
-        id,
-        name: invNameFor(INV_LIQUIDS_META, id) || String(id),
-        stock,
-        max,
-        level
-      });
-    }
+    const item = {
+      id,
+      name: invNameFor(INV_LIQUIDS_META, id) || String(id),
+      stock,
+      max,
+      ratio,
+      status
+    };
+
+    if (status === 'red') red.push(item);
+    else if (status === 'yellow') yellow.push(item);
+    else if (status === 'green') green.push(item);
+    else unknown.push(item);
   }
 
-  items.sort((a,b)=>{
-    const pr = (x)=> (x.level === 'critical' ? 0 : 1);
-    const d = pr(a) - pr(b);
-    if (d) return d;
-    return String(a.name).localeCompare(String(b.name));
-  });
+  const byName = (a,b)=> String(a.name).localeCompare(String(b.name));
+  red.sort(byName); yellow.sort(byName); green.sort(byName); unknown.sort(byName);
 
-  return { items, total: items.length, critical, low };
+  const itemsActionable = red.concat(yellow);
+  const itemsAll = red.concat(yellow, green, unknown);
+
+  return {
+    kind: 'liquids',
+    red, yellow, green, unknown,
+    redCount: red.length,
+    yellowCount: yellow.length,
+    greenCount: green.length,
+    unknownCount: unknown.length,
+    actionableCount: itemsActionable.length,
+    totalCount: itemsAll.length,
+    itemsActionable,
+    itemsAll
+  };
 }
 
-function computeBottlesRisk(inv){
+function computeBottlesTraffic(inv){
   const src = (inv && inv.bottles && typeof inv.bottles === 'object') ? inv.bottles : {};
   const keys = new Set([...(INV_BOTTLES_META.map(x=> x.id)), ...Object.keys(src || {})]);
 
-  const items = [];
-  let critical = 0;
-  let low = 0;
+  const red = [];
+  const yellow = [];
+  const green = [];
 
   for (const id of keys){
     const row = (src && src[id]) ? src[id] : {};
     const stock = invNum(row.stock);
 
-    let level = null;
-    if (stock <= 0){
-      level = 'critical';
-      critical++;
-    } else if (stock <= 10){
-      level = 'low';
-      low++;
-    }
+    let status = null;
+    if (stock <= 10) status = 'red';
+    else if (stock <= 20) status = 'yellow';
+    else status = 'green';
 
-    if (level){
-      items.push({
-        id,
-        name: invNameFor(INV_BOTTLES_META, id) || String(id),
-        stock,
-        level
-      });
+    const item = {
+      id,
+      name: invNameFor(INV_BOTTLES_META, id) || String(id),
+      stock,
+      status
+    };
+
+    if (status === 'red') red.push(item);
+    else if (status === 'yellow') yellow.push(item);
+    else green.push(item);
+  }
+
+  const byName = (a,b)=> String(a.name).localeCompare(String(b.name));
+  red.sort(byName); yellow.sort(byName); green.sort(byName);
+
+  const itemsActionable = red.concat(yellow);
+  const itemsAll = red.concat(yellow, green);
+
+  return {
+    kind: 'bottles',
+    red, yellow, green,
+    redCount: red.length,
+    yellowCount: yellow.length,
+    greenCount: green.length,
+    unknownCount: 0,
+    actionableCount: itemsActionable.length,
+    totalCount: itemsAll.length,
+    itemsActionable,
+    itemsAll
+  };
+}
+
+function setInvSummary(sumEl, res, expanded){
+  // Clear
+  sumEl.innerHTML = '';
+
+  const chipsWrap = document.createElement('div');
+  chipsWrap.className = 'cmd-inv-chips';
+
+  const addChip = (cls, text)=>{
+    const s = document.createElement('span');
+    s.className = 'cmd-chip ' + cls;
+    s.textContent = text;
+    chipsWrap.appendChild(s);
+  };
+
+  const note = document.createElement('div');
+  note.className = 'cmd-inv-note cmd-muted';
+
+  if (!res || typeof res !== 'object'){
+    addChip('cmd-chip-neutral', 'Inventario no configurado');
+    note.textContent = 'Configura stocks y máximos en Inventario.';
+    sumEl.appendChild(chipsWrap);
+    sumEl.appendChild(note);
+    return;
+  }
+
+  if (res.redCount > 0) addChip('cmd-chip-red', `Bajo ${res.redCount}`);
+  if (res.yellowCount > 0) addChip('cmd-chip-yellow', `Cerca ${res.yellowCount}`);
+  if (res.greenCount > 0) addChip('cmd-chip-green', `OK ${res.greenCount}`);
+  if (res.kind === 'liquids' && res.unknownCount > 0) addChip('cmd-chip-neutral', `Sin máx ${res.unknownCount}`);
+
+  if (!chipsWrap.childElementCount){
+    addChip('cmd-chip-neutral', 'Sin datos');
+  }
+
+  // Nota inferior (compacta)
+  if (res.actionableCount === 0){
+    note.textContent = 'Todo OK';
+  } else {
+    const shownLimit = 5;
+    if (!expanded){
+      const showN = Math.min(shownLimit, res.actionableCount);
+      note.textContent = (res.actionableCount > showN)
+        ? `Accionables: ${res.actionableCount} · mostrando ${showN} de ${res.actionableCount}`
+        : `Accionables: ${res.actionableCount}`;
+    } else {
+      note.textContent = `Mostrando todo · ${res.totalCount} ítem${res.totalCount === 1 ? '' : 's'}`;
     }
   }
 
-  items.sort((a,b)=>{
-    const pr = (x)=> (x.level === 'critical' ? 0 : 1);
-    const d = pr(a) - pr(b);
-    if (d) return d;
-    return String(a.name).localeCompare(String(b.name));
-  });
-
-  return { items, total: items.length, critical, low };
+  sumEl.appendChild(chipsWrap);
+  sumEl.appendChild(note);
 }
 
-function renderInvRiskList(listId, summaryId, res, opts){
-  const listEl = $(listId);
-  const sumEl = $(summaryId);
-  if (!listEl || !sumEl) return;
-
-  const kind = (opts && opts.kind) ? opts.kind : 'liquids';
-  const unit = (kind === 'bottles') ? 'unid.' : 'ml';
-
-  // Clear
+function renderInvList(listEl, res, expanded){
   listEl.innerHTML = '';
-  sumEl.textContent = '—';
 
   const makeEmpty = (text, withCta)=>{
     const box = document.createElement('div');
@@ -179,28 +268,25 @@ function renderInvRiskList(listId, summaryId, res, opts){
   };
 
   if (!res || typeof res !== 'object'){
-    sumEl.textContent = 'Inventario no configurado';
     makeEmpty('Inventario no configurado.', true);
     return;
   }
 
-  const total = Number(res.total || 0);
-  const crit = Number(res.critical || 0);
-  const low = Number(res.low || 0);
+  // Por defecto: accionables (rojo/amarillo). Expandido: todo (incluye verde)
+  const pool = expanded ? (Array.isArray(res.itemsAll) ? res.itemsAll : []) : (Array.isArray(res.itemsActionable) ? res.itemsActionable : []);
 
-  if (!(total > 0)){
-    sumEl.textContent = 'Todo OK';
+  if (!expanded && res.actionableCount === 0){
     makeEmpty('Todo OK.', false);
     return;
   }
+  if (expanded && (!pool.length)){
+    makeEmpty('Sin datos.', false);
+    return;
+  }
 
-  const showN = Math.min(5, total);
-  let summary = `En riesgo: ${total}`;
-  summary += ` (${crit} crítico${crit === 1 ? '' : 's'}, ${low} bajo${low === 1 ? '' : 's'})`;
-  if (total > showN) summary += ` · mostrando ${showN} de ${total}`;
-  sumEl.textContent = summary;
+  const limit = expanded ? 60 : 5;
+  const items = pool.slice(0, limit);
 
-  const items = Array.isArray(res.items) ? res.items.slice(0, 5) : [];
   for (const it of items){
     const row = document.createElement('div');
     row.className = 'cmd-inv-row';
@@ -214,13 +300,33 @@ function renderInvRiskList(listId, summaryId, res, opts){
 
     const stock = document.createElement('span');
     stock.className = 'cmd-inv-stock';
-    const n = invNum((it && it.stock != null) ? it.stock : 0);
-    stock.textContent = `Stock: ${n}${unit === 'ml' ? ' ml' : ' ' + unit}`;
+
+    if (res.kind === 'bottles'){
+      const n = invNum((it && it.stock != null) ? it.stock : 0);
+      stock.textContent = `Stock: ${n} u`;
+    } else {
+      const n = invNum((it && it.stock != null) ? it.stock : 0);
+      const ratio = (it && typeof it.ratio === 'number' && isFinite(it.ratio)) ? it.ratio : null;
+      const pct = ratio != null ? invPct(ratio) : '';
+      stock.textContent = pct ? `Stock: ${n} ml · ${pct}` : `Stock: ${n} ml`;
+    }
 
     const chip = document.createElement('span');
-    const level = (it && it.level) ? String(it.level) : 'low';
-    chip.className = 'cmd-chip ' + (level === 'critical' ? 'cmd-chip-critical' : 'cmd-chip-low');
-    chip.textContent = (level === 'critical') ? 'CRÍTICO' : 'BAJO';
+    const status = (it && it.status) ? String(it.status) : 'unknown';
+
+    if (status === 'red'){
+      chip.className = 'cmd-chip cmd-chip-red';
+      chip.textContent = 'BAJO';
+    } else if (status === 'yellow'){
+      chip.className = 'cmd-chip cmd-chip-yellow';
+      chip.textContent = 'CERCA';
+    } else if (status === 'green'){
+      chip.className = 'cmd-chip cmd-chip-green';
+      chip.textContent = 'OK';
+    } else {
+      chip.className = 'cmd-chip cmd-chip-neutral';
+      chip.textContent = 'SIN MÁX';
+    }
 
     meta.appendChild(stock);
     meta.appendChild(chip);
@@ -230,29 +336,68 @@ function renderInvRiskList(listId, summaryId, res, opts){
 
     listEl.appendChild(row);
   }
+
+  if (!expanded && res.actionableCount > limit){
+    const more = document.createElement('div');
+    more.className = 'cmd-inv-empty';
+    more.textContent = `+ ${res.actionableCount - limit} más…`;
+    listEl.appendChild(more);
+  }
+}
+
+function renderInvRiskCard(listId, summaryId, toggleId, res, expanded){
+  const listEl = $(listId);
+  const sumEl = $(summaryId);
+  const togEl = $(toggleId);
+  if (!listEl || !sumEl) return;
+
+  if (togEl){
+    togEl.textContent = expanded ? 'Ocultar' : 'Ver todo';
+    togEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  }
+
+  setInvSummary(sumEl, res, expanded);
+  renderInvList(listEl, res, expanded);
 }
 
 function renderInvRiskBlock(liquidsRes, bottlesRes){
-  // Guard clause: si el bloque no existe en este HTML, no hacer nada.
   if (!$('invRiskBlock')) return;
-  renderInvRiskList('invRiskLiquidsList', 'invRiskLiquidsSummary', liquidsRes, { kind:'liquids' });
-  renderInvRiskList('invRiskBottlesList', 'invRiskBottlesSummary', bottlesRes, { kind:'bottles' });
+
+  renderInvRiskCard(
+    'invRiskLiquidsList',
+    'invRiskLiquidsSummary',
+    'invLiquidsToggle',
+    liquidsRes,
+    !!invViewState.liquidsExpanded
+  );
+
+  renderInvRiskCard(
+    'invRiskBottlesList',
+    'invRiskBottlesSummary',
+    'invBottlesToggle',
+    bottlesRes,
+    !!invViewState.bottlesExpanded
+  );
 }
 
 function refreshInvRiskBlock(){
   if (!$('invRiskBlock')) return;
+
   const inv = readInventorySafe();
   if (!inv){
     renderInvRiskBlock(null, null);
     return;
   }
-  const liq = computeLiquidsRisk(inv);
-  const bot = computeBottlesRisk(inv);
+
+  const liq = computeLiquidsTraffic(inv);
+  const bot = computeBottlesTraffic(inv);
+
   renderInvRiskBlock(liq, bot);
 }
 
 
 // --- DOM helpers
+
 const $ = (id)=> document.getElementById(id);
 
 function todayYMD(){
@@ -1521,6 +1666,22 @@ async function init(){
 
   // Inventario en riesgo (no depende de POS/IndexedDB)
   refreshInvRiskBlock();
+
+  // Inventario: toggles (se mantienen abiertos hasta que el usuario los cierre)
+  const tL = $('invLiquidsToggle');
+  if (tL){
+    tL.addEventListener('click', ()=>{
+      invViewState.liquidsExpanded = !invViewState.liquidsExpanded;
+      refreshInvRiskBlock();
+    });
+  }
+  const tB = $('invBottlesToggle');
+  if (tB){
+    tB.addEventListener('click', ()=>{
+      invViewState.bottlesExpanded = !invViewState.bottlesExpanded;
+      refreshInvRiskBlock();
+    });
+  }
 
   // Buttons
   const bind = (id, tab)=>{
