@@ -7,15 +7,26 @@
 const FIN_DB_NAME = 'finanzasDB';
 // IMPORTANTE: subir versión cuando se agregan stores/nuevas estructuras.
 // v3 agrega el store `suppliers` para Proveedores (sin romper data existente).
-const FIN_DB_VERSION = 4;
+const FIN_DB_VERSION = 5; // + Importación cierres diarios POS (índice/idempotencia)
 const CENTRAL_EVENT = 'CENTRAL';
 
 let finDB = null;
 let finCachedData = null; // {accounts, accountsMap, entries, lines, linesByEntry}
 
+// Catálogo de cuentas (UI)
+let catQuery = '';
+let catUsageCache = null; // {rev, countsObj, updatedAt}
+const CAT_USAGE_CACHE_KEY = 'a33_fin_accounts_usage_cache_v1';
+let catAutoRootType = true;
+
 // POS: lectura de ventas (solo lectura, sin tocar nada del POS)
 const POS_DB_NAME = 'a33-pos';
 let posDB = null;
+
+// POS: eventos (solo lectura). Se usa para dropdown Evento y para resolver nombres live por posEventId.
+let posEventsMap = new Map(); // id -> {id,name,closedAt,createdAt}
+let posActiveEvents = []; // [{id,name,createdAt}] (solo abiertos, sin General/Central)
+let posEventsLoadedAt = 0;
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -57,6 +68,20 @@ function openFinDB() {
       if (!db.objectStoreNames.contains('settings')) {
         db.createObjectStore('settings', { keyPath: 'id' });
       }
+
+      // Importación cierres diarios del POS (idempotencia + lookup por evento/día)
+      if (!db.objectStoreNames.contains('posDailyCloseImports')) {
+        const st = db.createObjectStore('posDailyCloseImports', { keyPath: 'closureId' });
+        try { st.createIndex('eventDateKey', 'eventDateKey', { unique: false }); } catch (e) {}
+      } else {
+        // Si la store ya existe (por versiones viejas), asegurar índice.
+        try {
+          const st = e.target.transaction.objectStore('posDailyCloseImports');
+          if (st && !st.indexNames.contains('eventDateKey')) {
+            st.createIndex('eventDateKey', 'eventDateKey', { unique: false });
+          }
+        } catch (err) {}
+      }
     };
 
     req.onsuccess = () => {
@@ -93,6 +118,28 @@ function finGetAll(storeName) {
   return new Promise((resolve, reject) => {
     const store = finTx(storeName, 'readonly');
     const req = store.getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function finGetAllByIndex(storeName, indexName, key) {
+  return new Promise((resolve, reject) => {
+    let store;
+    try {
+      store = finTx(storeName, 'readonly');
+    } catch (err) {
+      resolve([]);
+      return;
+    }
+    let idx;
+    try {
+      idx = store.index(indexName);
+    } catch (err) {
+      resolve([]);
+      return;
+    }
+    const req = idx.getAll(key);
     req.onsuccess = () => resolve(req.result || []);
     req.onerror = () => reject(req.error);
   });
@@ -179,6 +226,143 @@ function getAllPosSales() {
   });
 }
 
+
+function getAllPosEventsSafe() {
+  return new Promise(async (resolve) => {
+    const db = await openPosDB();
+    if (!db) {
+      resolve([]);
+      return;
+    }
+    let store;
+    try {
+      store = posTx('events', 'readonly');
+    } catch (err) {
+      console.warn('Store events no encontrada en a33-pos', err);
+      resolve([]);
+      return;
+    }
+    const req = store.getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => {
+      console.warn('No se pudieron leer los eventos del POS', req.error);
+      resolve([]);
+    };
+  });
+}
+
+function getAllPosDailyClosuresSafe() {
+  return new Promise(async (resolve) => {
+    const db = await openPosDB();
+    if (!db) {
+      resolve([]);
+      return;
+    }
+    let store;
+    try {
+      store = posTx('dailyClosures', 'readonly');
+    } catch (err) {
+      console.warn('Store dailyClosures no encontrada en a33-pos', err);
+      resolve([]);
+      return;
+    }
+    const req = store.getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => {
+      console.warn('No se pudieron leer los cierres diarios del POS', req.error);
+      resolve([]);
+    };
+  });
+}
+
+async function refreshPosEventsCache() {
+  // Lee a33-pos (si existe) y construye mapa + lista de eventos abiertos para el dropdown.
+  try {
+    const events = await getAllPosEventsSafe();
+    const map = new Map();
+    for (const ev of (Array.isArray(events) ? events : [])) {
+      if (!ev) continue;
+      const idRaw = ev.id;
+      const id = (typeof idRaw === 'number') ? idRaw : parseInt(String(idRaw || '').trim(), 10);
+      if (!id) continue;
+      const name = String(ev.name || ev.nombre || '').trim();
+      map.set(id, { id, name, closedAt: ev.closedAt || null, createdAt: ev.createdAt || null });
+    }
+
+    posEventsMap = map;
+
+    const active = [];
+    for (const v of map.values()) {
+      const nm = String(v.name || '').trim();
+      if (!nm) continue;
+      if (v.closedAt) continue;
+      // Evitar duplicar el evento general del POS; en Finanzas se usa Central.
+      if (isCentralEventName(nm)) continue;
+      active.push({ id: v.id, name: nm, createdAt: v.createdAt || '' });
+    }
+
+    // Orden: más reciente primero (createdAt ISO). Fallback alfabético.
+    active.sort((a, b) => {
+      const ca = String(a.createdAt || '');
+      const cb = String(b.createdAt || '');
+      if (ca && cb && ca !== cb) return (ca < cb) ? 1 : -1;
+      return String(a.name || '').localeCompare(String(b.name || ''), 'es');
+    });
+
+    posActiveEvents = active;
+    posEventsLoadedAt = Date.now();
+  } catch (err) {
+    console.warn('No se pudo refrescar cache de eventos POS', err);
+    posEventsMap = new Map();
+    posActiveEvents = [];
+    posEventsLoadedAt = Date.now();
+  }
+}
+
+function getPosEventNameLiveById(posEventId) {
+  const id = (typeof posEventId === 'number') ? posEventId : parseInt(String(posEventId || '').trim(), 10);
+  if (!id) return '';
+  const ev = posEventsMap.get(id);
+  const nm = ev ? String(ev.name || '').trim() : '';
+  return nm;
+}
+
+function getPosEventNameSnapshotById(posEventId, snapshot) {
+  const live = getPosEventNameLiveById(posEventId);
+  if (live) return live;
+  const snap = String(snapshot || '').trim();
+  if (snap) return snap;
+  const id = (typeof posEventId === 'number') ? posEventId : parseInt(String(posEventId || '').trim(), 10);
+  return id ? `Evento POS (${id})` : 'Evento POS';
+}
+
+function populateMovimientoEventoSelect() {
+  const sel = document.getElementById('mov-evento-sel');
+  if (!sel) return;
+
+  const prev = sel.value || 'CENTRAL';
+  sel.innerHTML = '';
+
+  const optCentral = document.createElement('option');
+  optCentral.value = 'CENTRAL';
+  optCentral.textContent = 'Central';
+  sel.appendChild(optCentral);
+
+  // Eventos activos del POS
+  for (const ev of (Array.isArray(posActiveEvents) ? posActiveEvents : [])) {
+    const opt = document.createElement('option');
+    opt.value = `POS:${ev.id}`;
+    opt.textContent = ev.name;
+    sel.appendChild(opt);
+  }
+
+  // Restaurar selección si todavía existe.
+  if (prev && Array.from(sel.options).some(o => o.value === prev)) {
+    sel.value = prev;
+  } else {
+    sel.value = 'CENTRAL';
+  }
+}
 /* ---------- Catálogo de cuentas base ---------- */
 
 const BASE_ACCOUNTS = [
@@ -289,6 +473,165 @@ async function ensureBaseAccounts() {
       if (changed) {
         await finPut('accounts', current);
       }
+    }
+  }
+}
+
+/* ---------- Catálogo: normalización segura (Etapa 0) ---------- */
+
+const ROOT_TYPES = ['ACTIVO', 'PASIVO', 'PATRIMONIO', 'INGRESOS', 'COSTOS', 'GASTOS', 'OTROS'];
+
+function isValidRootType(v) {
+  return ROOT_TYPES.includes(String(v || '').toUpperCase());
+}
+
+function normText(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function safeParseCodeNum(code) {
+  const s = String(code ?? '').trim();
+  const digits = s.match(/\d+/g);
+  if (!digits) return NaN;
+  const n = parseInt(digits.join(''), 10);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function inferRootTypeFromCode(code) {
+  const n = safeParseCodeNum(code);
+  if (!Number.isFinite(n)) return null;
+
+  if (n >= 1000 && n <= 1999) return 'ACTIVO';
+  if (n >= 2000 && n <= 2999) return 'PASIVO';
+  if (n >= 3000 && n <= 3999) return 'PATRIMONIO';
+
+  if (n >= 4000 && n <= 4899) return 'INGRESOS';
+  if (n >= 4900 && n <= 4999) return 'OTROS';   // otros ingresos
+
+  if (n >= 5000 && n <= 5899) return 'COSTOS';
+  if (n >= 5900 && n <= 5999) return 'OTROS';   // otros costos (si aplica)
+
+  if (n >= 6000 && n <= 6899) return 'GASTOS';
+  if (n >= 6900 && n <= 6999) return 'OTROS';   // otros gastos (si aplica)
+
+  if (n >= 7000 && n <= 7999) return 'OTROS';   // 7xxx legacy: otros ingresos/gastos
+
+  return null;
+}
+
+function inferRootTypeFromTipo(tipo) {
+  const t = normText(tipo);
+  if (!t) return null;
+
+  if (t.includes('activo')) return 'ACTIVO';
+  if (t.includes('pasivo')) return 'PASIVO';
+  if (t.includes('patrimonio') || t.includes('capital')) return 'PATRIMONIO';
+  if (t.includes('ingreso')) return 'INGRESOS';
+  if (t.includes('costo')) return 'COSTOS';
+  if (t.includes('gasto')) return 'GASTOS';
+  if (t.includes('otro')) return 'OTROS';
+
+  return null;
+}
+
+function inferRootTypeFromName(nombre) {
+  const n = normText(nombre);
+  if (!n) return null;
+
+  // Regla crítica: "Retiros del dueño" debe quedar en PATRIMONIO.
+  if (n.includes('retiro') && (n.includes('duen') || n.includes('due') || n.includes('propiet'))) {
+    return 'PATRIMONIO';
+  }
+
+  return null;
+}
+
+function inferSystemProtectedIfMissing(acc) {
+  const codeStr = String(acc.code ?? '');
+  const codeNum = safeParseCodeNum(acc.code);
+  const nombre = acc.nombre || acc.name || '';
+  const nm = normText(nombre);
+
+  const criticalCodes = new Set(['1100', '1110', '1200', '4100', '5100', '3300']);
+  if (criticalCodes.has(codeStr)) return true;
+  if (Number.isFinite(codeNum)) {
+    const padded = String(codeNum).padStart(4, '0');
+    if (criticalCodes.has(padded)) return true;
+  }
+
+  const keywords = ['caja', 'banco', 'ventas', 'costo', 'inventario', 'retiro', 'capital'];
+  for (const k of keywords) {
+    if (nm.includes(k)) return true;
+  }
+
+  return false;
+}
+
+async function normalizeAccountsCatalog() {
+  await openFinDB();
+
+  const accounts = await finGetAll('accounts');
+  if (!accounts || !accounts.length) return;
+
+  const nowISO = new Date().toISOString();
+
+  for (const acc of accounts) {
+    if (!acc || acc.code === undefined || acc.code === null) continue;
+
+    let changed = false;
+
+    // Compatibilidad name/nombre (sin borrar ninguno)
+    const hasNombre = !!(acc.nombre && String(acc.nombre).trim());
+    const hasName = !!(acc.name && String(acc.name).trim());
+
+    if (!hasNombre && hasName) {
+      acc.nombre = acc.name;
+      changed = true;
+    }
+    if (!hasName && hasNombre) {
+      acc.name = acc.nombre;
+      changed = true;
+    }
+
+    // isHidden default false (solo si falta / inválido)
+    if (typeof acc.isHidden !== 'boolean') {
+      acc.isHidden = false;
+      changed = true;
+    }
+
+    // systemProtected (respetar si ya existe; inferir si falta)
+    if (typeof acc.systemProtected !== 'boolean') {
+      acc.systemProtected = inferSystemProtectedIfMissing(acc);
+      changed = true;
+    }
+
+    // rootType (si falta o inválido). Normalizamos a MAYÚSCULAS para consistencia futura.
+    const rtExisting = String(acc.rootType || '').toUpperCase();
+    if (rtExisting && ROOT_TYPES.includes(rtExisting) && acc.rootType !== rtExisting) {
+      acc.rootType = rtExisting;
+      changed = true;
+    } else if (!ROOT_TYPES.includes(rtExisting)) {
+      let rt = inferRootTypeFromName(acc.nombre || acc.name || '');
+      if (!rt) rt = inferRootTypeFromCode(acc.code);
+      if (!rt) rt = inferRootTypeFromTipo(acc.tipo);
+      if (!rt) rt = 'OTROS';
+
+      acc.rootType = rt;
+      changed = true;
+    }
+
+    // createdAtISO / updatedAtISO (opcionales pero consistentes)
+    if (!acc.createdAtISO) {
+      acc.createdAtISO = nowISO;
+      changed = true;
+    }
+
+    if (changed) {
+      acc.updatedAtISO = nowISO;
+      await finPut('accounts', acc);
     }
   }
 }
@@ -691,7 +1034,62 @@ function isCentralEventName(ev) {
 
 function displayEventLabel(ev) {
   if (!ev) return '';
-  return isCentralEventName(ev) ? 'General/Central' : ev;
+  return isCentralEventName(ev) ? 'Central' : ev;
+}
+
+// --- Compatibilidad: Evento vs Referencia (sin migración destructiva) ---
+// Históricos: el campo "evento" se usó como factura/referencia.
+// Nuevos: guardan reference + eventScope.
+
+function getDisplayReference(mov) {
+  if (!mov || typeof mov !== 'object') return '';
+
+  const ref = (mov.reference ?? mov.referencia ?? '').toString().trim();
+  if (ref) return ref;
+
+  // Fallback histórico: SOLO si no proviene del POS.
+  const origen = (mov.origen ?? mov.origin ?? '').toString().trim().toUpperCase();
+  if (origen === 'POS') return '';
+
+  // Entradas de compra usan "evento" para Central; no interpretarlo como referencia.
+  const entryType = (mov.entryType || '').toString().trim().toLowerCase();
+  if (entryType === 'purchase') return '';
+
+  const legacy = (mov.event ?? mov.evento ?? '').toString().trim();
+  if (!legacy) return '';
+  if (isCentralEventName(legacy)) return '';
+  return legacy;
+}
+
+function getDisplayEventLabel(mov) {
+  if (!mov || typeof mov !== 'object') return 'Central';
+
+  const scope = (mov.eventScope ?? mov.event_scope ?? '').toString().trim().toUpperCase();
+  const origen = (mov.origen ?? mov.origin ?? '').toString().trim().toUpperCase();
+
+  // POS: intentar resolver el nombre live (lookup por posEventId). Fallback a snapshot.
+  if (scope === 'POS' || (!scope && origen === 'POS')) {
+    const posId = mov.posEventId ?? mov.pos_event_id ?? mov.eventId ?? mov.posEventID ?? null;
+
+    const snap = (mov.posEventNameSnapshot ?? mov.posEventName ?? mov.posEventSnapshot ?? mov.eventName ?? '').toString().trim();
+    // Compatibilidad: POS antiguos pudieron guardar el nombre del evento en "evento".
+    const legacyEv = (mov.posEventNameLegacy ?? mov.evento ?? mov.event ?? '').toString().trim();
+
+    // Si hay ID, usamos live->snapshot->legacy.
+    if (posId != null && String(posId).trim() !== '') {
+      return getPosEventNameSnapshotById(posId, snap || legacyEv);
+    }
+
+    // Si no hay ID, no hay lookup live: usa snapshot/legacy.
+    return snap || legacyEv || 'Evento POS';
+  }
+
+  return 'Central';
+}
+
+function makePill(text, variant) {
+  const v = variant ? ` fin-pill--${variant}` : '';
+  return `<span class="fin-pill${v}">${escapeHtml(text)}</span>`;
 }
 
 function normalizeEventForPurchases() {
@@ -708,6 +1106,53 @@ function getSupplierLabelFromEntry(entry, data) {
     if (s && s.nombre) return s.nombre;
   }
   return '—';
+}
+
+/* ---------- Cuentas: display name por lookup (compatibilidad con históricos) ---------- */
+
+function getLineAccountSnapshotName(line) {
+  if (!line || typeof line !== 'object') return '';
+
+  // Campos comunes en históricos / importaciones antiguas (si existieran)
+  const candidates = [
+    line.accountName,
+    line.accountNombre,
+    line.nombreCuenta,
+    line.cuentaNombre,
+    line.account_name,
+    line.account_nombre,
+    line.nombre,
+    line.name
+  ];
+
+  for (const c of candidates) {
+    const v = (c != null) ? String(c).trim() : '';
+    if (v) return v;
+  }
+
+  // Algunos formatos guardan un objeto cuenta embebido
+  const embedded = line.account || line.cuenta || null;
+  if (embedded && typeof embedded === 'object') {
+    const v = String(embedded.nombre || embedded.name || '').trim();
+    if (v) return v;
+  }
+
+  return '';
+}
+
+function getAccountDisplayNameByCode(code, accountsMap, lineForFallback) {
+  const c = String(code ?? '').trim();
+  const acc = (accountsMap && typeof accountsMap.get === 'function') ? accountsMap.get(c) : null;
+  if (acc) {
+    const nm = String(acc.nombre || acc.name || '').trim();
+    if (nm) return nm;
+    return `Cuenta ${String(acc.code ?? c)}`;
+  }
+
+  const snap = getLineAccountSnapshotName(lineForFallback);
+  if (snap) return snap;
+
+  return c ? `Cuenta desconocida (${c})` : 'Cuenta desconocida';
 }
 
 
@@ -752,17 +1197,19 @@ const linesByEntry = new Map();
 function buildEventList(entries) {
   const set = new Set();
   for (const e of entries) {
-    const name = (e.evento || '').trim();
+    const name = getDisplayEventLabel(e);
     if (name) set.add(name);
   }
   return Array.from(set).sort((a, b) => a.localeCompare(b, 'es'));
 }
 
 function matchEvent(entry, eventFilter) {
-  const ev = (entry.evento || '').trim();
+  const evLabel = getDisplayEventLabel(entry);
   if (!eventFilter || eventFilter === 'ALL') return true;
-  if (eventFilter === 'NONE') return !ev;
-  return ev === eventFilter;
+  if (eventFilter === 'NONE') return !evLabel;
+  // Soportar filtros antiguos: CENTRAL/GENERAL
+  const f = displayEventLabel(eventFilter);
+  return evLabel === f;
 }
 
 function filterEntriesByDateAndEvent(entries, { desde, hasta, evento }) {
@@ -839,7 +1286,7 @@ function calcResultadosByEventInRange(data, desde, hasta) {
     if (desde && f < desde) continue;
     if (hasta && f > hasta) continue;
 
-    const eventName = (e.evento || '').trim() || 'Sin evento';
+    const eventName = getDisplayEventLabel(e) || 'Sin evento';
     if (!map.has(eventName)) {
       map.set(eventName, { ingresos: 0, costos: 0, gastos: 0 });
     }
@@ -1499,7 +1946,8 @@ async function exportDiarioExcel() {
     }
 
     const supplierLabel = getSupplierLabelFromEntry(e, data);
-    const ref = (e.reference || '').toString().trim();
+    const ref = getDisplayReference(e);
+    const evLabel = getDisplayEventLabel(e);
     const pm = (e.paymentMethod || '').toString().trim();
     const pmLabel = pm === 'bank' ? 'Banco' : (pm === 'cash' ? 'Caja' : (pm ? pm : '—'));
 
@@ -1507,7 +1955,7 @@ async function exportDiarioExcel() {
       e.fecha || e.date || '',
       e.descripcion || '',
       tipo,
-      displayEventLabel((e.evento || '').trim()) || '—',
+      evLabel || '—',
       supplierLabel,
       pmLabel,
       ref,
@@ -1845,7 +2293,7 @@ function updateEventFilters(entries) {
     eventos.forEach(ev => {
       const opt = document.createElement('option');
       opt.value = ev;
-      opt.textContent = displayEventLabel(ev) || ev;
+      opt.textContent = ev;
       sel.appendChild(opt);
     });
 
@@ -1944,6 +2392,9 @@ function fillCuentaSelect(data) {
   sel.innerHTML = '<option value="">Seleccione cuenta…</option>';
 
   for (const acc of cuentas) {
+    // Cuentas ocultas: no deben aparecer en selects para movimientos nuevos.
+    if (acc && acc.isHidden === true) continue;
+
     const tipo = getTipoCuenta(acc);
     let permitido = false;
 
@@ -2078,12 +2529,16 @@ function renderDiario(data) {
       totalHaber += Number(ln.haber || 0);
     }
 
+    const evLabel = getDisplayEventLabel(e);
+    const refLabel = getDisplayReference(e);
+    const evCell = `${makePill(evLabel, 'gold')}${refLabel ? ' ' + makePill(`Ref: ${refLabel}`, 'muted') : ''}`;
+
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${e.fecha || e.date || ''}</td>
       <td>${e.descripcion || ''}</td>
       <td>${tipoMov}</td>
-      <td>${displayEventLabel((e.evento || '').trim()) || '—'}</td>
+      <td>${evCell || '—'}</td>
       <td>${getSupplierLabelFromEntry(e, data)}</td>
       <td>${origen}</td>
       <td class="num">C$ ${fmtCurrency(totalDebe)}</td>
@@ -2106,30 +2561,28 @@ function openDetalleModal(entryId) {
   if (!modal || !meta || !tbody) return;
 
   const supplierLabel = getSupplierLabelFromEntry(entry, finCachedData);
-const ref = (entry.reference || '').toString().trim();
-const pm = (entry.paymentMethod || '').toString().trim();
-const pmLabel = pm === 'bank' ? 'Banco' : (pm === 'cash' ? 'Caja' : (pm ? pm : '—'));
-	const origenRaw = entry.origen || 'Interno';
-	const origenLabel = (origenRaw === 'Manual') ? 'Interno' : origenRaw;
+  const ref = getDisplayReference(entry);
+  const evLabel = getDisplayEventLabel(entry);
+  const pm = (entry.paymentMethod || '').toString().trim();
+  const pmLabel = pm === 'bank' ? 'Banco' : (pm === 'cash' ? 'Caja' : (pm ? pm : '—'));
+  const origenRaw = entry.origen || 'Interno';
+  const origenLabel = (origenRaw === 'Manual') ? 'Interno' : origenRaw;
 
-meta.innerHTML = `
-  <p><strong>Fecha:</strong> ${entry.fecha || entry.date || ''}</p>
-  <p><strong>Descripción:</strong> ${entry.descripcion || ''}</p>
-  <p><strong>Tipo:</strong> ${entry.tipoMovimiento || ''}</p>
-  <p><strong>Evento:</strong> ${displayEventLabel((entry.evento || '').trim()) || '—'}</p>
-  <p><strong>Proveedor:</strong> ${supplierLabel}</p>
-  <p><strong>Pago:</strong> ${pmLabel}</p>
-  <p><strong>Referencia:</strong> ${ref || '—'}</p>
-	  <p><strong>Origen:</strong> ${origenLabel}</p>
-`;
+  meta.innerHTML = `
+    <p><strong>Fecha:</strong> ${escapeHtml(entry.fecha || entry.date || '')}</p>
+    <p><strong>Descripción:</strong> ${escapeHtml(entry.descripcion || '')}</p>
+    <p><strong>Tipo:</strong> ${escapeHtml(entry.tipoMovimiento || '')}</p>
+    <p><strong>Evento:</strong> ${escapeHtml(evLabel) || '—'}</p>
+    <p><strong>Proveedor:</strong> ${escapeHtml(supplierLabel)}</p>
+    <p><strong>Pago:</strong> ${escapeHtml(pmLabel)}</p>
+    <p><strong>Referencia:</strong> ${ref ? escapeHtml(ref) : '—'}</p>
+    <p><strong>Origen:</strong> ${escapeHtml(origenLabel)}</p>
+  `;
 
 tbody.innerHTML = '';
   const lines = linesByEntry.get(entry.id) || [];
   for (const ln of lines) {
-    const acc = accountsMap.get(String(ln.accountCode));
-    const nombre = acc
-      ? (acc.nombre || acc.name || `Cuenta ${acc.code}`)
-      : '';
+    const nombre = getAccountDisplayNameByCode(ln.accountCode, accountsMap, ln);
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${ln.accountCode}</td>
@@ -2232,7 +2685,23 @@ async function guardarMovimientoManual() {
   const medio = $('#mov-medio')?.value || 'caja';
   const montoRaw = $('#mov-monto')?.value || '0';
   const cuentaCode = $('#mov-cuenta')?.value || '';
-  const evento = ($('#mov-evento')?.value || '').trim();
+
+  const eventoSel = ($('#mov-evento-sel')?.value || 'CENTRAL').toString();
+  let eventScope = 'CENTRAL';
+  let posEventId = null;
+  let posEventNameSnapshot = null;
+
+  if (eventoSel.startsWith('POS:')) {
+    const id = parseInt(eventoSel.slice(4), 10);
+    if (id) {
+      eventScope = 'POS';
+      posEventId = id;
+      // Snapshot: nombre actual (si existe). Sirve si luego renombraron o si POS no está accesible.
+      posEventNameSnapshot = getPosEventNameLiveById(id) || (Array.isArray(posActiveEvents) ? (posActiveEvents.find(e => e.id === id)?.name || null) : null);
+    }
+  }
+
+  const reference = ($('#mov-evento')?.value || '').trim();
   const descripcion = ($('#mov-descripcion')?.value || '').trim();
 
   const monto = parseFloat(montoRaw.replace(',', '.'));
@@ -2272,7 +2741,10 @@ async function guardarMovimientoManual() {
     fecha,
     descripcion: descripcion || `Movimiento ${tipo}`,
     tipoMovimiento: tipo,
-    evento,
+    reference,
+    eventScope,
+    posEventId,
+    posEventNameSnapshot,
     origen: 'Interno',
     origenId: null,
     totalDebe: monto,
@@ -2304,7 +2776,7 @@ async function guardarMovimientoManual() {
   const eventoInput = $('#mov-evento');
   if (montoInput) montoInput.value = '';
   if (descInput) descInput.value = '';
-  if (eventoInput) eventoInput.value = evento; // suele repetirse por evento
+  if (eventoInput) eventoInput.value = reference; // puede repetirse por factura / referencia
 
   showToast('Movimiento guardado en el Diario');
   await refreshAllFin();
@@ -2455,6 +2927,552 @@ function setupProveedoresUI() {
   }
 }
 
+/* ---------- Catálogo de Cuentas (CRUD + protecciones) ---------- */
+
+function catComputeDiaryRevision(data) {
+  const entries = (data && Array.isArray(data.entries)) ? data.entries : [];
+  const lines = (data && Array.isArray(data.lines)) ? data.lines : [];
+  const lastEntryId = entries.length ? Number(entries[entries.length - 1].id || 0) : 0;
+  const lastLineId = lines.length ? Number(lines[lines.length - 1].id || 0) : 0;
+  return `e${entries.length}-le${lastEntryId}-l${lines.length}-ll${lastLineId}`;
+}
+
+function catReadUsageCache() {
+  try {
+    const raw = localStorage.getItem(CAT_USAGE_CACHE_KEY);
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== 'object') return null;
+    if (typeof obj.rev !== 'string' || typeof obj.counts !== 'object') return null;
+    return obj;
+  } catch (e) {
+    return null;
+  }
+}
+
+function catWriteUsageCache(rev, countsObj) {
+  try {
+    localStorage.setItem(CAT_USAGE_CACHE_KEY, JSON.stringify({
+      rev,
+      counts: countsObj,
+      updatedAt: new Date().toISOString()
+    }));
+  } catch (e) {}
+}
+
+function catGetUsageCounts(data) {
+  const rev = catComputeDiaryRevision(data);
+
+  if (catUsageCache && catUsageCache.rev === rev && catUsageCache.countsObj) {
+    return { rev, countsObj: catUsageCache.countsObj };
+  }
+
+  const cached = catReadUsageCache();
+  if (cached && cached.rev === rev && cached.counts) {
+    catUsageCache = { rev, countsObj: cached.counts, updatedAt: cached.updatedAt || null };
+    return { rev, countsObj: cached.counts };
+  }
+
+  // Recalcular
+  const lines = (data && Array.isArray(data.lines)) ? data.lines : [];
+  const counts = {};
+  for (const ln of lines) {
+    const code = String(ln.accountCode || '').trim();
+    if (!code) continue;
+    counts[code] = (counts[code] || 0) + 1;
+  }
+
+  catUsageCache = { rev, countsObj: counts, updatedAt: new Date().toISOString() };
+  catWriteUsageCache(rev, counts);
+  return { rev, countsObj: counts };
+}
+
+function inferTipoForNewAccount(code) {
+  const s = String(code || '').trim();
+  if (s.startsWith('71')) return 'ingreso';
+  if (s.startsWith('72')) return 'gasto';
+  return inferTipoFromCode(s) || 'otro';
+}
+
+function catMakePill(text, variant) {
+  const v = variant ? ` fin-pill--${variant}` : '';
+  return `<span class="fin-pill${v}">${text}</span>`;
+}
+
+function escapeHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function renderCatalogoCuentas(data) {
+  const tbody = document.getElementById('cat-tbody');
+  if (!tbody) return;
+
+  const accounts = (data && Array.isArray(data.accounts)) ? [...data.accounts] : [];
+  const q = normText(catQuery || '').trim();
+
+  const { countsObj } = catGetUsageCounts(data);
+
+  // Orden por código asc
+  accounts.sort((a, b) => String(a.code).localeCompare(String(b.code)));
+
+  const filtered = q
+    ? accounts.filter(a => {
+        const code = String(a.code || '');
+        const name = String(a.nombre || a.name || '');
+        return normText(code).includes(q) || normText(name).includes(q);
+      })
+    : accounts;
+
+  tbody.innerHTML = '';
+
+  if (!filtered.length) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="7">Sin resultados.</td>`;
+    tbody.appendChild(tr);
+    return;
+  }
+
+  for (const acc of filtered) {
+    const code = String(acc.code);
+    const name = (acc.nombre || acc.name || '').toString();
+    const rootType = String(acc.rootType || inferRootTypeFromCode(code) || 'OTROS').toUpperCase();
+    const isHidden = !!acc.isHidden;
+    const isProtected = !!acc.systemProtected;
+    const usedCount = Number(countsObj?.[code] || 0);
+    const isUsed = usedCount > 0;
+
+    const estadoPill = isHidden ? catMakePill('Oculta', 'red') : catMakePill('Activa', 'green');
+    const protPill = isProtected ? catMakePill('Sí', 'gold') : catMakePill('No', 'muted');
+    const usedPill = isUsed ? catMakePill(`Sí (${usedCount})`, 'green') : catMakePill('No', 'muted');
+    const typePill = catMakePill(rootType, 'muted');
+
+    const tr = document.createElement('tr');
+
+    const editDisabled = isProtected;
+    const hideDisabled = isProtected;
+
+    const hideLabel = isHidden ? 'Mostrar' : 'Ocultar';
+    const hideClass = isHidden ? 'btn-small' : 'btn-danger';
+
+    tr.innerHTML = `
+      <td>${code}</td>
+      <td>${escapeHtml(name) || '—'}</td>
+      <td>${typePill}</td>
+      <td>${estadoPill}</td>
+      <td>${protPill}</td>
+      <td>${usedPill}</td>
+      <td class="fin-actions-cell">
+        <button type="button" class="btn-small cat-edit" data-code="${code}" ${editDisabled ? 'disabled title="Cuenta protegida por sistema"' : ''}>Editar</button>
+        <button type="button" class="${hideClass} cat-toggle" data-code="${code}" ${hideDisabled ? 'disabled title="Cuenta protegida por sistema"' : ''}>${hideLabel}</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+function catMakeFileStamp(d) {
+  const dt = (d instanceof Date) ? d : new Date(d || Date.now());
+  const yyyy = dt.getFullYear();
+  const mm = pad2(dt.getMonth() + 1);
+  const dd = pad2(dt.getDate());
+  const hh = pad2(dt.getHours());
+  const mi = pad2(dt.getMinutes());
+  return `${yyyy}-${mm}-${dd}_${hh}${mi}`;
+}
+
+function catBuildCatalogWorkbook(data) {
+  if (typeof XLSX === 'undefined') {
+    alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Revisa tu conexión a internet.');
+    return null;
+  }
+
+  const accounts = (data && Array.isArray(data.accounts)) ? [...data.accounts] : [];
+  const { countsObj } = catGetUsageCounts(data || { entries: [], lines: [] });
+
+  // Orden por código asc
+  accounts.sort((a, b) => String(a.code).localeCompare(String(b.code)));
+
+  // Hoja: Cuentas
+  const rows = [[
+    'Código',
+    'Nombre',
+    'Raíz/Tipo',
+    'Estado (Activa/Oculta)',
+    'Protegida (Sí/No)',
+    'Usada (Sí/No)',
+    '#Movimientos (count)'
+  ]];
+
+  let total = 0;
+  let activas = 0;
+  let ocultas = 0;
+  const byRoot = {};
+
+  for (const acc of accounts) {
+    const code = String(acc.code || '').trim();
+    if (!code) continue;
+    const name = (acc.nombre || acc.name || '').toString();
+    const rootType = String(acc.rootType || inferRootTypeFromCode(code) || 'OTROS').toUpperCase();
+    const isHidden = !!acc.isHidden;
+    const isProtected = !!acc.systemProtected;
+    const usedCount = Number(countsObj?.[code] || 0);
+    const isUsed = usedCount > 0;
+
+    total += 1;
+    if (isHidden) ocultas += 1; else activas += 1;
+    byRoot[rootType] = (byRoot[rootType] || 0) + 1;
+
+    rows.push([
+      code,
+      name,
+      rootType,
+      isHidden ? 'Oculta' : 'Activa',
+      isProtected ? 'Sí' : 'No',
+      isUsed ? 'Sí' : 'No',
+      usedCount
+    ]);
+  }
+
+  const wsCuentas = XLSX.utils.aoa_to_sheet(rows);
+  wsCuentas['!cols'] = [
+    { wch: 10 },
+    { wch: 44 },
+    { wch: 16 },
+    { wch: 20 },
+    { wch: 18 },
+    { wch: 14 },
+    { wch: 18 }
+  ];
+
+  // Hoja: Resumen (opcional)
+  const now = new Date();
+  const resumenRows = [
+    ['Suite A33', 'Finanzas · Catálogo de Cuentas'],
+    ['Exportado', fmtDDMMYYYYHHMM(now)],
+    [],
+    ['Total de cuentas', total],
+    ['Activas', activas],
+    ['Ocultas', ocultas],
+    [],
+    ['Por rootType', 'Conteo']
+  ];
+
+  // Respetar el orden de ROOT_TYPES, pero incluir extras si existieran
+  const seen = new Set();
+  for (const rt of (Array.isArray(ROOT_TYPES) ? ROOT_TYPES : [])) {
+    const key = String(rt || '').toUpperCase();
+    if (!key) continue;
+    resumenRows.push([key, Number(byRoot[key] || 0)]);
+    seen.add(key);
+  }
+  Object.keys(byRoot)
+    .map(k => String(k).toUpperCase())
+    .filter(k => !seen.has(k))
+    .sort((a, b) => a.localeCompare(b))
+    .forEach(k => resumenRows.push([k, Number(byRoot[k] || 0)]));
+
+  const wsResumen = XLSX.utils.aoa_to_sheet(resumenRows);
+  wsResumen['!cols'] = [{ wch: 20 }, { wch: 56 }];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, wsCuentas, 'Cuentas');
+  XLSX.utils.book_append_sheet(wb, wsResumen, 'Resumen');
+  return wb;
+}
+
+async function catExportCatalogExcel() {
+  try {
+    if (!finCachedData) await refreshAllFin();
+    const wb = catBuildCatalogWorkbook(finCachedData || { accounts: [], entries: [], lines: [] });
+    if (!wb) return;
+    const stamp = catMakeFileStamp(new Date());
+    const filename = `A33_Finanzas_CatalogoCuentas_${stamp}.xlsx`;
+    XLSX.writeFile(wb, filename);
+    showToast('Catálogo exportado a Excel');
+  } catch (err) {
+    console.error('Error exportando Catálogo a Excel', err);
+    alert('Ocurrió un error exportando el Catálogo a Excel.');
+  }
+}
+
+function openCatModal() {
+  const modal = document.getElementById('cat-modal');
+  if (!modal) return;
+  modal.classList.add('open');
+  modal.setAttribute('aria-hidden', 'false');
+}
+
+function closeCatModal() {
+  const modal = document.getElementById('cat-modal');
+  if (!modal) return;
+  modal.classList.remove('open');
+  modal.setAttribute('aria-hidden', 'true');
+}
+
+function setCatFormMessage(msg, isError = false) {
+  const el = document.getElementById('cat-form-msg');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.style.color = isError ? '#ffd6d6' : '';
+}
+
+function populateCatRootSelect() {
+  const sel = document.getElementById('cat-root');
+  if (!sel) return;
+  sel.innerHTML = '';
+  for (const rt of ROOT_TYPES) {
+    const opt = document.createElement('option');
+    opt.value = rt;
+    opt.textContent = rt;
+    sel.appendChild(opt);
+  }
+}
+
+function setCatModalMode(mode, acc = null) {
+  const modeEl = document.getElementById('cat-mode');
+  const editCodeEl = document.getElementById('cat-edit-code');
+  const codeEl = document.getElementById('cat-code');
+  const nameEl = document.getElementById('cat-name');
+  const rootEl = document.getElementById('cat-root');
+  const titleEl = document.getElementById('cat-modal-title');
+  const subEl = document.getElementById('cat-modal-sub');
+
+  if (!modeEl || !editCodeEl || !codeEl || !nameEl || !rootEl) return;
+
+  setCatFormMessage('');
+  catAutoRootType = true;
+
+  if (mode === 'edit' && acc) {
+    const code = String(acc.code);
+    modeEl.value = 'edit';
+    editCodeEl.value = code;
+    codeEl.value = code;
+    codeEl.disabled = true;
+    nameEl.value = (acc.nombre || acc.name || '').toString();
+    const rt = String(acc.rootType || inferRootTypeFromCode(code) || 'OTROS').toUpperCase();
+    rootEl.value = ROOT_TYPES.includes(rt) ? rt : 'OTROS';
+    if (titleEl) titleEl.textContent = 'Editar cuenta';
+    if (subEl) subEl.textContent = `Código bloqueado: ${code}`;
+  } else {
+    modeEl.value = 'new';
+    editCodeEl.value = '';
+    codeEl.value = '';
+    codeEl.disabled = false;
+    nameEl.value = '';
+    rootEl.value = 'INGRESOS';
+    if (titleEl) titleEl.textContent = 'Nueva cuenta';
+    if (subEl) subEl.textContent = 'Tip: escribe el código y te sugerimos el rootType.';
+  }
+}
+
+async function saveCatAccount() {
+  if (!finCachedData) await refreshAllFin();
+
+  const mode = document.getElementById('cat-mode')?.value || 'new';
+  const editCode = document.getElementById('cat-edit-code')?.value || '';
+
+  const codeEl = document.getElementById('cat-code');
+  const nameEl = document.getElementById('cat-name');
+  const rootEl = document.getElementById('cat-root');
+
+  const codeRaw = String(codeEl?.value || '').trim();
+  const name = String(nameEl?.value || '').trim();
+  const rootType = String(rootEl?.value || '').toUpperCase();
+
+  if (!name) {
+    setCatFormMessage('El nombre es obligatorio.', true);
+    return;
+  }
+  if (!isValidRootType(rootType)) {
+    setCatFormMessage('Selecciona un rootType válido.', true);
+    return;
+  }
+
+  await openFinDB();
+
+  if (mode === 'edit') {
+    const code = String(editCode || codeRaw).trim();
+    const existing = finCachedData.accountsMap.get(code) || await finGet('accounts', code);
+    if (!existing) {
+      setCatFormMessage('No se encontró la cuenta a editar.', true);
+      return;
+    }
+    if (existing.systemProtected) {
+      setCatFormMessage('Cuenta protegida por sistema. No se puede editar.', true);
+      return;
+    }
+
+    existing.nombre = name;
+    existing.name = name;
+    existing.rootType = rootType;
+    existing.updatedAtISO = new Date().toISOString();
+    await finPut('accounts', existing);
+    showToast('Cuenta actualizada');
+    closeCatModal();
+    await refreshAllFin();
+    return;
+  }
+
+  // new
+  if (!/^\d{4}$/.test(codeRaw)) {
+    setCatFormMessage('El código debe tener 4 dígitos (ej: 4101).', true);
+    return;
+  }
+  if (finCachedData.accountsMap.has(codeRaw)) {
+    setCatFormMessage('Ese código ya existe. Usa otro.', true);
+    return;
+  }
+  const already = await finGet('accounts', codeRaw);
+  if (already) {
+    setCatFormMessage('Ese código ya existe. Usa otro.', true);
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const newAcc = {
+    code: codeRaw,
+    nombre: name,
+    name,
+    tipo: inferTipoForNewAccount(codeRaw),
+    rootType,
+    isHidden: false,
+    systemProtected: false,
+    createdAtISO: now,
+    updatedAtISO: now
+  };
+
+  await finAdd('accounts', newAcc);
+  showToast('Cuenta creada');
+  closeCatModal();
+  await refreshAllFin();
+}
+
+async function toggleCatAccount(code) {
+  if (!finCachedData) await refreshAllFin();
+  const acc = finCachedData.accountsMap.get(String(code));
+  if (!acc) return;
+  if (acc.systemProtected) {
+    showToast('Cuenta protegida: no se puede ocultar');
+    return;
+  }
+  acc.isHidden = !acc.isHidden;
+  acc.updatedAtISO = new Date().toISOString();
+  await openFinDB();
+  await finPut('accounts', acc);
+  showToast(acc.isHidden ? 'Cuenta oculta' : 'Cuenta visible');
+  await refreshAllFin();
+}
+
+function setupCatalogoUI() {
+  populateCatRootSelect();
+
+  const search = document.getElementById('cat-search');
+  const btnNew = document.getElementById('cat-new');
+  const btnRefresh = document.getElementById('cat-refresh');
+  const btnExport = document.getElementById('cat-export');
+  const tbody = document.getElementById('cat-tbody');
+
+  const modal = document.getElementById('cat-modal');
+  const closeBtn = document.getElementById('cat-modal-close');
+  const cancelBtn = document.getElementById('cat-cancel');
+  const saveBtn = document.getElementById('cat-save');
+
+  const codeEl = document.getElementById('cat-code');
+  const rootEl = document.getElementById('cat-root');
+
+  if (search) {
+    search.addEventListener('input', (e) => {
+      catQuery = e.target.value || '';
+      renderCatalogoCuentas(finCachedData || { accounts: [] });
+    });
+  }
+
+  if (btnRefresh) {
+    btnRefresh.addEventListener('click', () => {
+      refreshAllFin().catch(err => {
+        console.error('Error refrescando Finanzas', err);
+        alert('No se pudo actualizar Finanzas.');
+      });
+    });
+  }
+
+  if (btnNew) {
+    btnNew.addEventListener('click', () => {
+      setCatModalMode('new');
+      openCatModal();
+      setTimeout(() => document.getElementById('cat-code')?.focus(), 0);
+    });
+  }
+
+  if (btnExport) {
+    btnExport.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      catExportCatalogExcel();
+    });
+  }
+
+  if (tbody) {
+    tbody.addEventListener('click', (e) => {
+      const edit = e.target.closest('.cat-edit');
+      const tog = e.target.closest('.cat-toggle');
+
+      if (edit && !edit.disabled) {
+        const code = String(edit.dataset.code || '');
+        const acc = finCachedData?.accountsMap.get(code);
+        if (!acc) return;
+        setCatModalMode('edit', acc);
+        openCatModal();
+        setTimeout(() => document.getElementById('cat-name')?.focus(), 0);
+        return;
+      }
+
+      if (tog && !tog.disabled) {
+        const code = String(tog.dataset.code || '');
+        toggleCatAccount(code).catch(err => {
+          console.error('Error ocultando/mostrando cuenta', err);
+          alert('No se pudo actualizar la cuenta.');
+        });
+      }
+    });
+  }
+
+  if (closeBtn) closeBtn.addEventListener('click', closeCatModal);
+  if (cancelBtn) cancelBtn.addEventListener('click', () => { closeCatModal(); });
+  if (saveBtn) saveBtn.addEventListener('click', () => { saveCatAccount().catch(err => {
+    console.error('Error guardando cuenta', err);
+    setCatFormMessage('No se pudo guardar. Revisa los campos e intenta de nuevo.', true);
+  }); });
+
+  if (modal) {
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeCatModal();
+    });
+  }
+
+  if (rootEl) {
+    rootEl.addEventListener('change', () => {
+      catAutoRootType = false;
+    });
+  }
+
+  if (codeEl) {
+    codeEl.addEventListener('input', () => {
+      // Solo dígitos, máximo 4
+      const cleaned = String(codeEl.value || '').replace(/\D+/g, '').slice(0, 4);
+      if (codeEl.value !== cleaned) codeEl.value = cleaned;
+      if (catAutoRootType && cleaned.length === 4 && rootEl) {
+        const inferred = inferRootTypeFromCode(cleaned) || 'OTROS';
+        if (ROOT_TYPES.includes(inferred)) rootEl.value = inferred;
+      }
+    });
+  }
+}
+
 /* ---------- Compras pagadas a proveedor (wizard) ---------- */
 
 function findAccountByCode(data, code) {
@@ -2472,6 +3490,9 @@ function fillCompraCuentaDebe(data) {
   sel.innerHTML = '<option value="">Seleccione cuenta…</option>';
 
   for (const acc of cuentas) {
+    // Cuentas ocultas: no deben aparecer en selects para movimientos nuevos.
+    if (acc && acc.isHidden === true) continue;
+
     const tipo = getTipoCuenta(acc);
     const code = String(acc.code);
     const nombre = acc.nombre || acc.name || `Cuenta ${acc.code}`;
@@ -2512,6 +3533,9 @@ function fillCompraCuentaHaber(data) {
   sel.innerHTML = '<option value="">Seleccione cuenta…</option>';
 
   for (const acc of cuentas) {
+    // Cuentas ocultas: no deben aparecer en selects para movimientos nuevos.
+    if (acc && acc.isHidden === true) continue;
+
     const tipo = getTipoCuenta(acc);
     const code = String(acc.code);
     const nombre = acc.nombre || acc.name || `Cuenta ${acc.code}`;
@@ -3870,6 +4894,10 @@ function setupFilterListeners() {
 async function refreshAllFin() {
   finCachedData = await getAllFinData();
   const data = finCachedData;
+
+  // Evento (POS): refrescar lista de eventos activos para dropdown y resolución live por ID.
+  await refreshPosEventsCache();
+  populateMovimientoEventoSelect();
   updateEventFilters(data.entries);
   updateSupplierSelects(data);
   fillCuentaSelect(data);
@@ -3879,6 +4907,7 @@ async function refreshAllFin() {
   renderDiario(data);
   renderComprasPorProveedor(data);
   renderProveedores(data);
+  renderCatalogoCuentas(data);
   renderEstadoResultados(data);
   renderBalanceGeneral(data);
   renderRentabilidadPresentacion(data);
@@ -3890,6 +4919,392 @@ async function refreshAllFin() {
 }
 
 
+/* ---------- POS: Importar cierres diarios (asiento consolidado) ---------- */
+
+const POS_DAILY_CLOSE_SOURCE = 'POS_DAILY_CLOSE';
+const POS_DAILY_CLOSE_REVERSAL_SOURCE = 'POS_DAILY_CLOSE_REVERSAL';
+
+function n0(v) {
+  if (v == null) return 0;
+  const s = (typeof v === 'string') ? v.replace(',', '.') : v;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function n2(v) {
+  return Math.round((n0(v) + Number.EPSILON) * 100) / 100;
+}
+
+function buildEventDateKey(eventId, dateKey) {
+  const id = (typeof eventId === 'number') ? eventId : parseInt(String(eventId || '').trim(), 10);
+  const dk = (dateKey || '').toString().slice(0, 10);
+  return `${id || 0}|${dk || ''}`;
+}
+
+async function finGetLinesForEntryId(idEntry) {
+  await openFinDB();
+  return new Promise((resolve, reject) => {
+    let store;
+    try {
+      store = finTx('journalLines', 'readonly');
+    } catch (err) {
+      resolve([]);
+      return;
+    }
+    const out = [];
+    const req = store.openCursor();
+    req.onsuccess = (e) => {
+      const cursor = e.target.result;
+      if (!cursor) {
+        resolve(out);
+        return;
+      }
+      const v = cursor.value;
+      if (v && Number(v.idEntry || 0) === Number(idEntry || 0)) out.push(v);
+      cursor.continue();
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function findCourtesyExpenseAccountCode(data) {
+  const accounts = (data && Array.isArray(data.accounts)) ? data.accounts : [];
+  for (const a of accounts) {
+    const nm = (a && a.nombre) ? String(a.nombre).toLowerCase() : '';
+    const tp = getTipoCuenta(a);
+    if (tp === 'gasto' && (nm.includes('cortesia') || nm.includes('cortesía') || nm.includes('promocion') || nm.includes('promoción'))) {
+      return String(a.code || '');
+    }
+  }
+  // Fallback razonable: marketing.
+  return '6105';
+}
+
+async function createJournalEntryWithLines(entry, lines) {
+  await openFinDB();
+  const entryId = await finAdd('journalEntries', entry);
+  for (const ln of (Array.isArray(lines) ? lines : [])) {
+    await finAdd('journalLines', { ...ln, idEntry: entryId });
+  }
+  return entryId;
+}
+
+async function createPosDailyCloseEntry(closure, data) {
+  const closureId = String(closure?.closureId || '').trim();
+  if (!closureId) throw new Error('Cierre sin closureId');
+
+  const eventId = (typeof closure.eventId === 'number') ? closure.eventId : parseInt(String(closure.eventId || '').trim(), 10) || 0;
+  const dateKey = String(closure.dateKey || '').slice(0, 10) || todayStr();
+  const version = Number(closure.version || 1) || 1;
+
+  const eventName = getPosEventNameSnapshotById(eventId, closure.eventNameSnapshot || closure.eventName || '');
+  const pm = (closure.totals && closure.totals.ventasPorMetodo) ? closure.totals.ventasPorMetodo : {};
+
+  const efectivo = n2(pm.efectivo);
+  const transferencia = n2(pm.transferencia);
+  const credito = n2(pm.credito);
+
+  // Cualquier método adicional → Otros activos (debe), pero lo dejamos trazado.
+  let otros = 0;
+  const extras = {};
+  if (pm && typeof pm === 'object') {
+    for (const k of Object.keys(pm)) {
+      if (k === 'efectivo' || k === 'transferencia' || k === 'credito') continue;
+      const v = n2(pm[k]);
+      if (v > 0) {
+        otros += v;
+        extras[k] = v;
+      }
+    }
+  }
+
+  let total = n2(efectivo + transferencia + credito + otros);
+  const totalGeneral = n2(closure?.totals?.totalGeneral);
+  const totalMismatch = (totalGeneral > 0 && Math.abs(totalGeneral - total) > 0.01)
+    ? n2(totalGeneral - total)
+    : 0;
+
+  const cortesiaCosto = n2(closure?.totals?.cortesiaCostoTotal);
+  const cortesiaCantidad = Number(closure?.totals?.cortesiaCantidad || 0) || 0;
+
+  const lines = [];
+  if (efectivo > 0) lines.push({ accountCode: '1110', debe: efectivo, haber: 0 });
+  if (transferencia > 0) lines.push({ accountCode: '1200', debe: transferencia, haber: 0 });
+  if (credito > 0) lines.push({ accountCode: '1300', debe: credito, haber: 0 });
+  if (otros > 0) lines.push({ accountCode: '1900', debe: otros, haber: 0 });
+
+  // Ventas pagadas
+  lines.push({ accountCode: '4100', debe: 0, haber: total });
+
+  // Cortesías (costo): gasto vs inventario (balanceado)
+  let courtesyExpenseCode = '';
+  if (cortesiaCosto > 0) {
+    courtesyExpenseCode = findCourtesyExpenseAccountCode(data);
+    lines.push({ accountCode: courtesyExpenseCode, debe: cortesiaCosto, haber: 0 });
+    lines.push({ accountCode: '1500', debe: 0, haber: cortesiaCosto });
+  }
+
+  const totalDebe = n2(lines.reduce((s, ln) => s + n0(ln.debe), 0));
+  const totalHaber = n2(lines.reduce((s, ln) => s + n0(ln.haber), 0));
+
+  const memoParts = [
+    `Cierre diario POS — ${eventName} — ${dateKey} — v${version}`,
+    `closureId: ${closureId}`
+  ];
+  if (cortesiaCosto > 0) memoParts.push(`cortesías: ${cortesiaCantidad} | costo: C$ ${fmtCurrency(cortesiaCosto)}`);
+  if (totalMismatch) memoParts.push(`POS totalGeneral: C$ ${fmtCurrency(totalGeneral)} (dif ${totalMismatch > 0 ? '+' : ''}${fmtCurrency(totalMismatch)})`);
+  if (Object.keys(extras).length) memoParts.push(`otros métodos: ${Object.keys(extras).join(', ')}`);
+
+  const entry = {
+    fecha: dateKey,
+    descripcion: memoParts.join(' — '),
+    tipoMovimiento: 'ingreso',
+    reference: closureId,
+    eventScope: 'POS',
+    posEventId: eventId,
+    posEventNameSnapshot: String(closure.eventNameSnapshot || eventName || '').trim() || null,
+    origen: 'POS',
+    origenId: closureId,
+    totalDebe,
+    totalHaber,
+    // Metadata (no rompe nada):
+    source: POS_DAILY_CLOSE_SOURCE,
+    closureId,
+    eventId,
+    dateKey,
+    version,
+    eventDateKey: buildEventDateKey(eventId, dateKey),
+    paymentBreakdown: { efectivo, transferencia, credito, otros, extras },
+    cortesia: { cantidad: cortesiaCantidad, costoTotal: cortesiaCosto, expenseAccountCode: courtesyExpenseCode || null },
+    posSnapshot: { key: closure.key || null, createdAt: closure.createdAt || null, meta: closure.meta || null, totals: { totalGeneral, totalMismatch } },
+    importedAt: Date.now()
+  };
+
+  return createJournalEntryWithLines(entry, lines);
+}
+
+async function createPosDailyCloseReversal(prevImport, reversingClosure) {
+  const prevEntryId = Number(prevImport?.journalEntryId || 0);
+  if (!prevEntryId) return null;
+
+  const original = await finGet('journalEntries', prevEntryId);
+  const originalLines = await finGetLinesForEntryId(prevEntryId);
+  if (!original || !originalLines.length) return null;
+
+  const eventId = (typeof prevImport.eventId === 'number') ? prevImport.eventId : parseInt(String(prevImport.eventId || '').trim(), 10) || 0;
+  const dateKey = String(prevImport.dateKey || original.fecha || '').slice(0, 10) || todayStr();
+  const eventName = getPosEventNameSnapshotById(eventId, prevImport.eventNameSnapshot || original.posEventNameSnapshot || '');
+
+  const prevClosureId = String(prevImport.closureId || '').trim();
+  const byClosureId = String(reversingClosure?.closureId || '').trim();
+  const prevV = Number(prevImport.version || original.version || 1) || 1;
+  const newV = Number(reversingClosure?.version || 1) || 1;
+
+  const revLines = [];
+  for (const ln of originalLines) {
+    const d = n2(ln.debe);
+    const h = n2(ln.haber);
+    if (!(d || h)) continue;
+    revLines.push({ accountCode: String(ln.accountCode || ''), debe: h, haber: d });
+  }
+
+  const totalDebe = n2(revLines.reduce((s, ln) => s + n0(ln.debe), 0));
+  const totalHaber = n2(revLines.reduce((s, ln) => s + n0(ln.haber), 0));
+
+  const entry = {
+    fecha: dateKey,
+    descripcion: `Reverso cierre diario POS — ${eventName} — ${dateKey} — rev v${prevV} por v${newV} — cierre: ${prevClosureId}`,
+    tipoMovimiento: 'ajuste',
+    reference: prevClosureId,
+    eventScope: 'POS',
+    posEventId: eventId,
+    posEventNameSnapshot: String(prevImport.eventNameSnapshot || original.posEventNameSnapshot || eventName || '').trim() || null,
+    origen: 'POS',
+    origenId: `REV:${prevClosureId}`,
+    totalDebe,
+    totalHaber,
+    source: POS_DAILY_CLOSE_REVERSAL_SOURCE,
+    reversalOfClosureId: prevClosureId,
+    reversingClosureId: byClosureId || null,
+    eventId,
+    dateKey,
+    version: prevV,
+    eventDateKey: buildEventDateKey(eventId, dateKey),
+    importedAt: Date.now()
+  };
+
+  return createJournalEntryWithLines(entry, revLines);
+}
+
+async function importPosDailyClosuresToFinanzas() {
+  const btn = document.getElementById('btn-import-pos-closures');
+  const msg = document.getElementById('import-pos-closures-msg');
+  const setMsg = (t) => { if (msg) msg.textContent = (t || '').toString(); };
+
+  try {
+    if (btn) btn.disabled = true;
+    setMsg('Importando…');
+
+    await openFinDB();
+    await ensureBaseAccounts();
+
+    if (!finCachedData) await refreshAllFin();
+    const data = finCachedData || (await getAllFinData());
+
+    // POS: cierres disponibles
+    const closuresRaw = await getAllPosDailyClosuresSafe();
+    const closures = (Array.isArray(closuresRaw) ? closuresRaw : []).filter(Boolean);
+
+    if (!closures.length) {
+      setMsg('No hay cierres en POS para importar.');
+      return;
+    }
+
+    // Cache eventos POS para nombres live
+    await refreshPosEventsCache();
+
+    // Índice existente
+    const existingImportsArr = await finGetAll('posDailyCloseImports').catch(() => []);
+    const importMap = new Map((Array.isArray(existingImportsArr) ? existingImportsArr : []).map(r => [String(r.closureId), r]));
+
+    // Fallback: si alguien importó en una versión vieja sin índice, reconstruir desde journalEntries.
+    const entriesArr = await finGetAll('journalEntries').catch(() => []);
+    const closureEntryMap = new Map();
+    for (const e of (Array.isArray(entriesArr) ? entriesArr : [])) {
+      if (!e || String(e.source || '') !== POS_DAILY_CLOSE_SOURCE) continue;
+      const cid = String(e.closureId || e.origenId || '').trim();
+      if (!cid) continue;
+      closureEntryMap.set(cid, e);
+    }
+
+    for (const [cid, entry] of closureEntryMap.entries()) {
+      if (importMap.has(cid)) continue;
+      const eventId = entry.eventId ?? entry.posEventId ?? 0;
+      const dateKey = String(entry.dateKey || entry.fecha || '').slice(0, 10);
+      const version = Number(entry.version || 1) || 1;
+      const rec = {
+        closureId: cid,
+        eventId: eventId,
+        dateKey,
+        version,
+        eventDateKey: buildEventDateKey(eventId, dateKey),
+        journalEntryId: entry.id,
+        importedAt: entry.importedAt || Date.now(),
+        eventNameSnapshot: entry.posEventNameSnapshot || null,
+        reversedAt: entry.reversedAt || null,
+        reversedByClosureId: entry.reversedByClosureId || null,
+        reversalJournalEntryId: entry.reversalJournalEntryId || null
+      };
+      try {
+        await finPut('posDailyCloseImports', rec);
+        importMap.set(cid, rec);
+      } catch (err) {}
+    }
+
+    // Mapa latest por evento/día
+    const latestByEventDate = new Map();
+    for (const r of importMap.values()) {
+      const k = String(r.eventDateKey || buildEventDateKey(r.eventId, r.dateKey));
+      if (!k) continue;
+      const v = Number(r.version || 0) || 0;
+      const cur = latestByEventDate.get(k);
+      const cv = Number(cur?.version || 0) || 0;
+      if (!cur || v > cv) latestByEventDate.set(k, r);
+    }
+
+    // Orden estable: evento/día luego versión ascendente
+    closures.sort((a, b) => {
+      const ka = buildEventDateKey(a.eventId, a.dateKey);
+      const kb = buildEventDateKey(b.eventId, b.dateKey);
+      if (ka !== kb) return ka < kb ? -1 : 1;
+      const va = Number(a.version || 0) || 0;
+      const vb = Number(b.version || 0) || 0;
+      if (va !== vb) return va - vb;
+      return String(a.closureId || '').localeCompare(String(b.closureId || ''));
+    });
+
+    let imported = 0;
+    let existing = 0;
+    let skippedOld = 0;
+
+    for (const c of closures) {
+      const closureId = String(c.closureId || '').trim();
+      if (!closureId) continue;
+
+      if (importMap.has(closureId)) {
+        existing++;
+        continue;
+      }
+
+      const eventId = (typeof c.eventId === 'number') ? c.eventId : parseInt(String(c.eventId || '').trim(), 10) || 0;
+      const dateKey = String(c.dateKey || '').slice(0, 10);
+      const version = Number(c.version || 1) || 1;
+      const k = buildEventDateKey(eventId, dateKey);
+
+      const prev = latestByEventDate.get(k) || null;
+      const prevV = Number(prev?.version || 0) || 0;
+
+      // Si ya hay una versión mayor importada, este cierre es viejo → no lo metemos.
+      if (prev && prevV > version) {
+        skippedOld++;
+        continue;
+      }
+
+      // Si entra v2+ y ya había v1 importado → reversar anterior (una sola vez)
+      if (prev && prevV < version) {
+        const alreadyReversed = !!(prev.reversalJournalEntryId || prev.reversedByClosureId);
+        if (!alreadyReversed && prev.journalEntryId) {
+          try {
+            const revEntryId = await createPosDailyCloseReversal(prev, c);
+            if (revEntryId) {
+              prev.reversalJournalEntryId = revEntryId;
+              prev.reversedAt = Date.now();
+              prev.reversedByClosureId = closureId;
+              await finPut('posDailyCloseImports', prev);
+            }
+          } catch (err) {
+            console.warn('No se pudo crear reverso del cierre anterior', err);
+          }
+        }
+      }
+
+      // Crear asiento vN
+      const entryId = await createPosDailyCloseEntry(c, data);
+
+      const rec = {
+        closureId,
+        eventId,
+        dateKey,
+        version,
+        eventDateKey: k,
+        journalEntryId: entryId,
+        importedAt: Date.now(),
+        eventNameSnapshot: String(c.eventNameSnapshot || c.eventName || getPosEventNameSnapshotById(eventId, '')) || null,
+        reversedAt: null,
+        reversedByClosureId: null,
+        reversalJournalEntryId: null
+      };
+
+      await finPut('posDailyCloseImports', rec);
+      importMap.set(closureId, rec);
+      latestByEventDate.set(k, rec);
+      imported++;
+    }
+
+    await refreshAllFin();
+
+    const parts = [`${imported} importados`, `${existing} ya existentes`];
+    if (skippedOld) parts.push(`${skippedOld} omitidos (versión vieja)`);
+    setMsg(parts.join(' · '));
+    if (imported) showToast(`Cierres POS importados: ${imported}`);
+  } catch (err) {
+    console.error('Error importando cierres POS', err);
+    alert('Ocurrió un error importando cierres del POS a Finanzas.\n\nRevisa la consola para más detalle.');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 function setupExportButtons() {
   const btnDiario = document.getElementById('btn-export-diario');
   if (btnDiario) {
@@ -3898,6 +5313,17 @@ function setupExportButtons() {
       exportDiarioExcel().catch(err => {
         console.error('Error exportando Diario a Excel', err);
         alert('Ocurrió un error exportando el Diario a Excel.');
+      });
+    });
+  }
+
+  const btnImportClosures = document.getElementById('btn-import-pos-closures');
+  if (btnImportClosures) {
+    btnImportClosures.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      importPosDailyClosuresToFinanzas().catch(err => {
+        console.error('Error importando cierres POS', err);
+        alert('Ocurrió un error importando cierres POS.');
       });
     });
   }
@@ -3940,6 +5366,7 @@ async function initFinanzas() {
   try {
     await openFinDB();
     await ensureBaseAccounts();
+    await normalizeAccountsCatalog();
 
     // Compras (planificación)
     await pcLoadAll();
@@ -3950,6 +5377,7 @@ async function initFinanzas() {
     setupModoERToggle();
     setupFilterListeners();
     setupProveedoresUI();
+    setupCatalogoUI();
     setupComprasUI();
     setupComprasPlanUI();
     setupExportButtons();
