@@ -124,21 +124,67 @@
       </div>
     </div>
 
-    <!-- Cliente (opcional) + modo pegajoso -->
-    <div class="row" id="sale-customer-row">
+
+<!-- Cliente (opcional) · Clientes v2 -->
+<div class="row" id="sale-customer-row">
+  <div class="customer-v2">
+    <div class="customer-v2-field">
+      <label>Cliente</label>
+      <input id="sale-customer" placeholder="Escribe cliente…">
+    </div>
+
+    <div class="customer-v2-actions">
+      <button id="btn-pick-customer" class="btn-outline btn-pill btn-pill-mini" type="button">Seleccionar</button>
+      <button id="btn-clear-customer" class="btn-outline btn-pill btn-pill-mini" type="button">Limpiar</button>
+      <label class="flag customer-v2-sticky"><input id="sale-customer-sticky" type="checkbox"> Pegajoso</label>
+      <button id="btn-toggle-customer-manage" class="btn-outline btn-pill btn-pill-mini" type="button" aria-expanded="false">Gestionar ▾</button>
+    </div>
+  </div>
+</div>
+
+<div id="customer-manage-panel" class="customer-manage" style="display:none">
+  <div class="card inner">
+    <h4 style="margin:0 0 10px 0">Clientes</h4>
+
+    <div class="row" style="align-items:end">
       <div>
-        <label>Cliente (opcional)</label>
-        <input id="sale-customer" list="customer-datalist" placeholder="Escribe o selecciona…">
-        <datalist id="customer-datalist"></datalist>
+        <label>Agregar cliente (sin venta)</label>
+        <input id="customer-add-name" placeholder="Nombre del cliente">
+        <small id="customer-add-msg" class="muted"></small>
       </div>
-      <div>
+      <div style="align-self:end">
         <label>&nbsp;</label>
-        <div class="customer-controls">
-          <label class="flag"><input id="sale-customer-sticky" type="checkbox"> Cliente pegajoso</label>
-          <button id="btn-clear-customer" class="btn-mini btn-outline" type="button">Limpiar cliente</button>
-        </div>
+        <button id="customer-add-save" class="btn-ok btn-pill btn-pill-mini" type="button">Guardar</button>
       </div>
     </div>
+
+
+	    <div class="customer-manage-toolbar">
+	      <div class="customer-manage-toolbar-top">
+	        <div class="customer-manage-search">
+	          <label>Buscar</label>
+	          <input id="customer-manage-search" placeholder="Buscar cliente…">
+	          <small id="customer-manage-count" class="muted"></small>
+	        </div>
+	        <div class="customer-manage-actions">
+	          <div class="customer-manage-filters" role="group" aria-label="Filtro clientes">
+	            <button id="customer-manage-filter-active" class="btn-outline btn-pill btn-pill-mini" type="button">Activos</button>
+	            <button id="customer-manage-filter-all" class="btn-outline btn-pill btn-pill-mini" type="button">Todos</button>
+	          </div>
+	          <label class="flag customer-manage-compact-toggle"><input id="customer-manage-compact" type="checkbox"> Compacto</label>
+	          <button id="customer-manage-collapse-all" class="btn-outline btn-pill btn-pill-mini" type="button" title="Colapsar letras">Colapsar</button>
+	          <button id="customer-manage-expand-all" class="btn-outline btn-pill btn-pill-mini" type="button" title="Expandir letras">Expandir</button>
+	        </div>
+	      </div>
+	    </div>
+
+	    <div class="customer-manage-scroll">
+	      <div id="customer-manage-list" class="customer-manage-list"></div>
+	    </div>
+
+    <div class="info"><small>Desactivar solo oculta del selector. Ventas históricas no se tocan.</small></div>
+  </div>
+</div>
 
     <div class="row" id="sale-bank-row" style="display:none">
       <div>
@@ -278,7 +324,78 @@
           <h3 style="margin:0">Lotes cargados en este evento <span class="badge" id="lotes-count">0</span></h3>
           <small class="muted">Se registra cuando usas “Agregar desde lote”.</small>
         </div>
+        <div class="actions end">
+          <button id="btn-reverse-assign" class="btn-outline btn-pill btn-pill-mini" type="button">Reversar asignación</button>
+          <button id="btn-create-sobrante" class="btn-outline btn-pill btn-pill-mini" type="button">Crear lote sobrante</button>
+        </div>
       </div>
+
+      <div id="sobrante-panel" class="sobrante-panel" style="display:none">
+        <div class="sobrante-panel-head">
+          <div>
+            <div class="sobrante-title">Sobrantes → Lote hijo</div>
+            <small class="muted" id="sobrante-hint">Crea un lote DISPONIBLE y cierra el lote original (trazabilidad incluida).</small>
+          </div>
+          <div class="actions end">
+            <button id="btn-sobrante-cancel" class="btn-outline btn-pill btn-pill-mini" type="button">Cancelar</button>
+          </div>
+        </div>
+
+        <div class="row" style="grid-template-columns:1fr">
+          <div>
+            <label>Lote original</label>
+            <select id="sobrante-lote-select"></select>
+            <small class="muted" id="sobrante-lote-meta"></small>
+          </div>
+        </div>
+
+        <div class="sobrante-grid" aria-label="Cantidades sobrantes por presentación">
+          <div class="sobrante-cell"><label>P</label><input id="sobrante-p" type="number" inputmode="numeric" step="1" min="0" value="0"></div>
+          <div class="sobrante-cell"><label>M</label><input id="sobrante-m" type="number" inputmode="numeric" step="1" min="0" value="0"></div>
+          <div class="sobrante-cell"><label>D</label><input id="sobrante-d" type="number" inputmode="numeric" step="1" min="0" value="0"></div>
+          <div class="sobrante-cell"><label>L</label><input id="sobrante-l" type="number" inputmode="numeric" step="1" min="0" value="0"></div>
+          <div class="sobrante-cell"><label>G</label><input id="sobrante-g" type="number" inputmode="numeric" step="1" min="0" value="0"></div>
+        </div>
+
+        <div class="actions end">
+          <button id="btn-sobrante-create" class="btn-ok btn-pill btn-pill-mini" type="button">Crear lote sobrante</button>
+        </div>
+      </div>
+
+      <div id="reverso-panel" class="reverso-panel" style="display:none">
+        <div class="reverso-panel-head">
+          <div>
+            <div class="reverso-title">Reverso de asignación</div>
+            <small class="muted">Devuelve el lote a DISPONIBLE sin borrar historia. Solo se permite si es seguro.</small>
+          </div>
+          <div class="actions end">
+            <button id="btn-reverso-cancel" class="btn-outline btn-pill btn-pill-mini" type="button">Cancelar</button>
+          </div>
+        </div>
+
+        <div class="row" style="grid-template-columns:1fr">
+          <div>
+            <label>Lote asignado</label>
+            <select id="reverso-lote-select"></select>
+            <small class="muted" id="reverso-lote-meta"></small>
+          </div>
+        </div>
+
+        <div class="reverso-grid" aria-label="Resumen de unidades a reversar">
+          <div class="reverso-cell"><label>P</label><span id="reverso-p">0</span></div>
+          <div class="reverso-cell"><label>M</label><span id="reverso-m">0</span></div>
+          <div class="reverso-cell"><label>D</label><span id="reverso-d">0</span></div>
+          <div class="reverso-cell"><label>L</label><span id="reverso-l">0</span></div>
+          <div class="reverso-cell"><label>G</label><span id="reverso-g">0</span></div>
+        </div>
+
+        <div class="warn"><small><b>Regla:</b> si el evento ya tuvo consumo/ventas de esas presentaciones (o fraccionamiento de galones), el reverso se bloquea para evitar inconsistencias.</small></div>
+
+        <div class="actions end">
+          <button id="btn-reverso-do" class="btn-danger btn-pill btn-pill-mini" type="button">Reversar asignación</button>
+        </div>
+      </div>
+
       <div class="table-scroll">
         <table id="tbl-lotes-evento" class="compact">
           <thead>
@@ -472,6 +589,17 @@
             </table>
           </div>
         </div>
+
+        <div class="petty-sync-row">
+          <span class="muted" style="font-size:0.85rem">Usar saldo inicial desde Finanzas</span>
+          <label class="switch" title="Solo se aplica cuando tú lo activas y presionas Sincronizar">
+            <input type="checkbox" id="pc-init-from-fin-toggle">
+            <span class="slider"></span>
+          </label>
+          <button id="pc-init-from-fin-sync" class="btn-primary btn-pill btn-pill-mini" type="button" disabled>Sincronizar</button>
+          <span id="pc-init-from-fin-status" class="muted" style="font-size:0.85rem"></span>
+        </div>
+
         <div class="actions end">
   <button id="pc-btn-save-initial" class="btn-ok btn-pill" type="button">Guardar saldo inicial</button>
   <button id="pc-btn-clear-initial" class="btn-danger btn-pill" type="button">Limpiar</button>
@@ -653,6 +781,23 @@
       </div>
     </div>
 
+    <!-- Resumen · Cliente (filtro) -->
+    <div class="card summary-customer-card">
+      <div class="customer-v2">
+        <div class="customer-v2-field">
+          <label>Cliente <span class="muted">(opcional)</span></label>
+          <input id="summary-customer" placeholder="Selecciona o escribe…">
+          <small class="muted" id="summary-customer-hint">Filtra este resumen por cliente usando historial real.</small>
+        </div>
+
+        <div class="customer-v2-actions">
+          <button id="btn-summary-customer-pick" class="btn-outline btn-pill btn-pill-mini" type="button">Seleccionar</button>
+          <button id="btn-summary-customer-clear" class="btn-outline btn-pill btn-pill-mini" type="button">Limpiar</button>
+          <span id="summary-customer-badge" class="tag small" style="margin-left:0">Sin filtro</span>
+        </div>
+      </div>
+    </div>
+
     <div class="card summary-top">
       <div class="summary-metrics">
         <div class="metric">
@@ -677,6 +822,26 @@
         </div>
       </div>
     </div>
+
+    <!-- Resumen · Clientes (MVP) -->
+    <div class="row">
+      <div class="card customers-card">
+        <h3>Clientes</h3>
+
+        <div class="customers-kpis">
+          <div><b>Clientes únicos:</b> <span id="summary-customers-unique">0</span></div>
+          <div><b>Ventas con cliente:</b> <span id="summary-sales-with-customer">0</span> <span class="muted">(<span id="summary-sales-with-customer-pct">0</span>%)</span></div>
+        </div>
+
+        <table id="tbl-top-clientes">
+          <thead><tr><th>Cliente</th><th>Total vendido</th><th>Compras</th></tr></thead>
+          <tbody></tbody>
+        </table>
+
+        <div class="info"><small>Tip: toca un cliente del Top para filtrar todo el Resumen.</small></div>
+      </div>
+    </div>
+
     <div class="row">
       <div class="card">
         <h3>Por evento</h3>
@@ -1033,6 +1198,88 @@
   </div>
 </div>
 
+
+
+
+<!-- Modal Seleccionar Cliente (Clientes v2) -->
+<div id="customer-picker-modal" class="modal">
+  <div class="panel panel-compact">
+    <button id="customer-picker-close" class="close btn-warn btn-pill btn-pill-mini" type="button">Cerrar</button>
+    <h3>Seleccionar cliente</h3>
+
+    <div class="row" style="grid-template-columns:1fr; gap:10px">
+      <input id="customer-picker-search" placeholder="Buscar cliente…">
+      <small id="customer-picker-count" class="muted"></small>
+    </div>
+
+    <div class="scroll" style="max-height:55vh">
+      <div id="customer-picker-list" class="customer-picker-list"></div>
+    </div>
+
+    <div class="warn"><small>Solo se muestran clientes activos. Para ver desactivados o administrar, usa “Gestionar ▾”.</small></div>
+  </div>
+</div>
+
+<!-- Modal Editar Cliente (Clientes v3) -->
+<div id="customer-edit-modal" class="modal">
+  <div class="panel panel-compact">
+    <button id="customer-edit-close" class="close btn-warn btn-pill btn-pill-mini" type="button">Cerrar</button>
+    <h3>Editar cliente</h3>
+
+    <p class="hint small" id="customer-edit-current" style="margin-top:0.25rem;">Actual: —</p>
+
+    <div class="row" style="grid-template-columns:1fr; gap:10px">
+      <input id="customer-edit-name" placeholder="Nuevo nombre…" autocomplete="off">
+      <input id="customer-edit-reason" placeholder="Motivo (opcional)…" autocomplete="off">
+      <small id="customer-edit-msg" class="muted"></small>
+    </div>
+
+    <div class="row" style="grid-template-columns:1fr 1fr; gap:10px; margin-top:10px">
+      <button id="customer-edit-save" class="btn-ok btn-pill" type="button">Guardar</button>
+      <button id="customer-edit-cancel" class="btn-secondary btn-pill" type="button">Cancelar</button>
+    </div>
+
+    <div class="warn"><small>Editar cambia <b>solo</b> el nombre. El ID se mantiene y el historial no se reescribe.</small></div>
+  </div>
+</div>
+
+<!-- Modal Fusionar Clientes (Clientes v3) -->
+<div id="customer-merge-modal" class="modal">
+  <div class="panel panel-compact">
+    <button id="customer-merge-close" class="close btn-warn btn-pill btn-pill-mini" type="button">Cerrar</button>
+    <h3>Fusionar clientes</h3>
+
+    <div class="warn" style="margin-top:8px">
+      <small><b>Advertencia:</b> Esto NO borra ventas históricas. La “Fuente” quedará desactivada y apuntará al “Destino”.</small>
+    </div>
+
+    <div class="grid" style="margin-top:10px">
+      <div>
+        <label class="muted" for="customer-merge-source">Fuente (se absorbe)</label>
+        <select id="customer-merge-source"></select>
+      </div>
+      <div>
+        <label class="muted" for="customer-merge-dest">Destino (se queda)</label>
+        <select id="customer-merge-dest"></select>
+      </div>
+    </div>
+
+    <div class="row" style="grid-template-columns:1fr; gap:10px; margin-top:10px">
+      <input id="customer-merge-reason" placeholder="Motivo (opcional)…" autocomplete="off">
+      <label class="muted" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <input id="customer-merge-confirm" type="checkbox"> Confirmo que entiendo y quiero fusionar.
+      </label>
+      <small id="customer-merge-msg" class="muted"></small>
+    </div>
+
+    <div class="row" style="grid-template-columns:1fr 1fr; gap:10px; margin-top:10px">
+      <button id="customer-merge-run" class="btn-warn btn-pill" type="button">Fusionar</button>
+      <button id="customer-merge-cancel" class="btn-secondary btn-pill" type="button">Cancelar</button>
+    </div>
+
+    <div class="info"><small>Consejo: si te equivocas, podés revertir creando una nueva identidad y fusionando de nuevo (no es ideal, pero mantiene trazabilidad).</small></div>
+  </div>
+</div>
 
 <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true">Hecho</div>
 <footer></footer>

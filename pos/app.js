@@ -605,8 +605,11 @@ async function postPettyCashMovementToFinanzas(eventId, dayKey, mov){
   const expenseEvents = '6100';
   const adjustExpense = '6130';
 
-  const isTransfer = !!mov.isTransfer || mov.uiType === 'transferencia';
-  const isAdjust = !!mov.isAdjust;
+  const isReversal = !!mov.isReversal;
+  const baseMov = (isReversal && mov.reversalOriginal && typeof mov.reversalOriginal === 'object') ? mov.reversalOriginal : mov;
+
+  const isTransfer = !!baseMov.isTransfer || baseMov.uiType === 'transferencia';
+  const isAdjust = !!baseMov.isAdjust;
 
   let tipoMovimiento = 'egreso';
   let debeCode = expenseEvents;
@@ -616,7 +619,7 @@ async function postPettyCashMovementToFinanzas(eventId, dayKey, mov){
   if (isTransfer){
     tipoMovimiento = 'transferencia';
     kindTag = 'TRANSFERENCIA';
-    const tk = mov.transferKind || 'to_bank';
+    const tk = baseMov.transferKind || 'to_bank';
     if (tk === 'from_general'){
       debeCode = cashEvents;
       haberCode = cashGeneral;
@@ -629,7 +632,7 @@ async function postPettyCashMovementToFinanzas(eventId, dayKey, mov){
     }
   } else if (isAdjust){
     tipoMovimiento = 'ajuste';
-    if (mov.type === 'entrada'){
+    if (baseMov.type === 'entrada'){
       kindTag = 'AJUSTE SOBRANTE';
       debeCode = cashEvents;
       haberCode = incomeCode;
@@ -638,7 +641,7 @@ async function postPettyCashMovementToFinanzas(eventId, dayKey, mov){
       debeCode = adjustExpense;
       haberCode = cashEvents;
     }
-  } else if (mov.type === 'entrada'){
+  } else if (baseMov.type === 'entrada'){
     tipoMovimiento = 'ingreso';
     kindTag = 'INGRESO';
     debeCode = cashEvents;
@@ -650,12 +653,31 @@ async function postPettyCashMovementToFinanzas(eventId, dayKey, mov){
     haberCode = cashEvents;
   }
 
+  // Reverso: invertir Debe/Haber usando el mismo mapeo del movimiento original.
+  if (isReversal){
+    const tmp = debeCode;
+    debeCode = haberCode;
+    haberCode = tmp;
+    kindTag = `REVERSO ${kindTag}`;
+  }
+
   // Memo / descripción
   let desc = String(mov.description || '').trim();
   if (mov.currency === 'USD' && fxUsed){
     desc = `${desc} (USD ${round2(amountOrig)} @ ${round2(fxUsed)} = C$ ${amountNio.toFixed(2)})`;
   }
-  const memo = `[POS Caja Chica] ${kindTag} - ${desc || '—'} - ${eventName} - ${mvDate}`;
+
+  let memo = `[POS Caja Chica] ${kindTag} - ${desc || '—'} - ${eventName} - ${mvDate}`;
+  if (isReversal){
+    const motivo = String(mov.reversalMotivo || '').trim();
+    const o = (mov.reversalOf != null) ? `#${mov.reversalOf}` : '—';
+    memo = `ANULACIÓN Caja Chica POS — Reverso de movimiento ${o} — Motivo: ${motivo || '—'}`;
+    // Mantener contexto del evento/fecha para auditoría
+    memo += ` — ${eventName} — ${mvDate}`;
+    if (mov.currency === 'USD' && fxUsed){
+      memo += ` (USD ${round2(amountOrig)} @ ${round2(fxUsed)} = C$ ${amountNio.toFixed(2)})`;
+    }
+  }
 
   // Crear asiento + líneas (doble partida)
   await new Promise((resolve)=>{
@@ -688,6 +710,10 @@ async function postPettyCashMovementToFinanzas(eventId, dayKey, mov){
             createdAt: mov.createdAt,
             uiType: mov.uiType,
             type: mov.type,
+            isReversal: !!mov.isReversal,
+            reversalOf: (mov.reversalOf != null) ? mov.reversalOf : null,
+            reversalMotivo: mov.reversalMotivo || null,
+            reversalOriginal: (mov.reversalOriginal && typeof mov.reversalOriginal === 'object') ? mov.reversalOriginal : null,
             isAdjust: !!mov.isAdjust,
             adjustKind: mov.adjustKind || null,
             isTransfer: !!mov.isTransfer,
@@ -840,10 +866,17 @@ async function getMeta(key){
 const LAST_GROUP_KEY = 'a33_pos_lastGroupName';
 const HIDDEN_GROUPS_KEY = 'a33_pos_hiddenGroups';
 
-// --- Ventas: Cliente (autocomplete + pegajoso)
+
+// --- Ventas: Cliente (Clientes v2: picker propio + pegajoso + gestión)
+// Etapa 2 (Datos): catálogo con customerId + migración suave. Analítica sigue usando customerName.
 const CUSTOMER_CATALOG_KEY = 'a33_pos_customersCatalog';
+const CUSTOMER_DISABLED_KEY = 'a33_pos_customersDisabled'; // legado (Etapa 1). En Etapa 2 se mantiene sincronizado.
 const CUSTOMER_STICKY_KEY  = 'a33_pos_customerSticky';
 const CUSTOMER_LAST_KEY    = 'a33_pos_customerLast';
+	// Preferencias UI (Gestionar clientes)
+	const CUSTOMER_MANAGE_FILTER_KEY = 'a33_pos_customerManageFilter'; // 'active' | 'all'
+	const CUSTOMER_MANAGE_COMPACT_KEY = 'a33_pos_customerManageCompact'; // '1' | '0'
+	const CUSTOMER_MANAGE_OPEN_KEY = 'a33_pos_customerManageOpenGroups'; // JSON {A:true,...}
 
 function normalizeCustomerKeyPOS(name){
   let s = (name || '').toString();
@@ -859,53 +892,378 @@ function sanitizeCustomerDisplayPOS(name){
   return (name || '').toString().replace(/\s+/g,' ').trim();
 }
 
-function loadCustomerCatalogPOS(){
-  const list = A33Storage.getJSON(CUSTOMER_CATALOG_KEY, [], 'local');
-  if (!Array.isArray(list)) return [];
-  // limpiar: strings no vacíos y dedupe por key normalizada
-  const out = [];
-  const seen = new Set();
-  for (const it of list){
-    const raw = sanitizeCustomerDisplayPOS(it);
-    if (!raw) continue;
-    const key = normalizeCustomerKeyPOS(raw);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    out.push(raw);
+function sortCustomerObjectsAZ_POS(list){
+  return (Array.isArray(list) ? list : [])
+    .slice()
+    .sort((a,b)=> normalizeCustomerKeyPOS(a && a.name).localeCompare(normalizeCustomerKeyPOS(b && b.name)));
+}
+
+function loadCustomerDisabledSetPOS(){
+  const raw = A33Storage.getJSON(CUSTOMER_DISABLED_KEY, [], 'local');
+  const set = new Set();
+  if (Array.isArray(raw)){
+    for (const v of raw){
+      const k = (v || '').toString().trim();
+      if (k) set.add(k);
+    }
+  } else if (raw && typeof raw === 'object'){
+    // compat futuro: { key:true }
+    for (const k in raw){
+      if (raw[k]){
+        const kk = (k || '').toString().trim();
+        if (kk) set.add(kk);
+      }
+    }
   }
-  return out;
+  return set;
+}
+
+function saveCustomerDisabledSetPOS(set){
+  try{
+    const arr = Array.from(set || []).filter(Boolean);
+    A33Storage.setJSON(CUSTOMER_DISABLED_KEY, arr, 'local');
+  }catch(_){ }
+}
+
+function generateCustomerIdPOS(existingIds){
+  const used = existingIds instanceof Set ? existingIds : new Set(existingIds || []);
+  let id = '';
+  for (let i=0;i<6;i++){
+    id = 'c_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,9);
+    if (!used.has(id)) break;
+  }
+  return id || ('c_' + Date.now().toString(36));
+}
+
+function coerceCustomerObjectPOS(raw, disabledSet, existingIds){
+  // Acepta string u objeto y devuelve objeto válido o null
+  if (typeof raw === 'string'){
+    const name = sanitizeCustomerDisplayPOS(raw);
+    if (!name) return null;
+    const normalizedName = normalizeCustomerKeyPOS(name);
+    if (!normalizedName) return null;
+    const id = generateCustomerIdPOS(existingIds);
+    existingIds.add(id);
+    return {
+      id,
+      name,
+      isActive: !disabledSet.has(normalizedName),
+      createdAt: Date.now(),
+      updatedAt: null,
+      normalizedName,
+      // Clientes v3 (Identidad): campos opcionales (migración suave)
+      aliases: [],
+      nameHistory: [],
+      mergedIntoId: null,
+      mergedAt: null,
+      mergeReason: '',
+      mergeHistory: []
+    };
+  }
+
+  if (!raw || typeof raw !== 'object') return null;
+
+  const name = sanitizeCustomerDisplayPOS(raw.name || raw.customerName || raw.customer || '');
+  if (!name) return null;
+  const normalizedName = normalizeCustomerKeyPOS(name);
+  if (!normalizedName) return null;
+
+  let id = (raw.id != null) ? String(raw.id) : '';
+  if (!id || existingIds.has(id)){
+    id = generateCustomerIdPOS(existingIds);
+  }
+  existingIds.add(id);
+
+  let isActive;
+  if (typeof raw.isActive === 'boolean') isActive = raw.isActive;
+  else if (typeof raw.active === 'boolean') isActive = raw.active;
+  else isActive = !disabledSet.has(normalizedName);
+
+  const createdAtNum = Number(raw.createdAt);
+  const createdAt = (Number.isFinite(createdAtNum) && createdAtNum > 0) ? createdAtNum : Date.now();
+
+  const updatedAtNum = Number(raw.updatedAt);
+  const updatedAt = (Number.isFinite(updatedAtNum) && updatedAtNum > 0) ? updatedAtNum : null;
+
+  const aliases = Array.isArray(raw.aliases) ? raw.aliases.map(sanitizeCustomerDisplayPOS).filter(Boolean) : [];
+  const nameHistory = Array.isArray(raw.nameHistory)
+    ? raw.nameHistory
+      .map(h => {
+        if (!h || typeof h !== 'object') return null;
+        const from = sanitizeCustomerDisplayPOS(h.from || '');
+        const to = sanitizeCustomerDisplayPOS(h.to || '');
+        const atNum = Number(h.at);
+        const at = (Number.isFinite(atNum) && atNum > 0) ? atNum : null;
+        const reason = sanitizeCustomerDisplayPOS(h.reason || '');
+        if (!from && !to) return null;
+        return { from, to, at, reason };
+      })
+      .filter(Boolean)
+    : [];
+
+  const mergeHistory = Array.isArray(raw.mergeHistory)
+    ? raw.mergeHistory
+      .map(h => {
+        if (!h || typeof h !== 'object') return null;
+        const fromId = (h.fromId != null) ? String(h.fromId).trim() : '';
+        const fromName = sanitizeCustomerDisplayPOS(h.fromName || '');
+        const atNum = Number(h.at);
+        const at = (Number.isFinite(atNum) && atNum > 0) ? atNum : null;
+        const reason = sanitizeCustomerDisplayPOS(h.reason || '');
+        if (!fromId && !fromName) return null;
+        return { fromId, fromName, at, reason };
+      })
+      .filter(Boolean)
+    : [];
+
+  const mergedIntoId = (raw.mergedIntoId != null && String(raw.mergedIntoId).trim()) ? String(raw.mergedIntoId).trim() : null;
+  const mergedAtNum = Number(raw.mergedAt);
+  const mergedAt = (Number.isFinite(mergedAtNum) && mergedAtNum > 0) ? mergedAtNum : null;
+  const mergeReason = sanitizeCustomerDisplayPOS(raw.mergeReason || '');
+
+  return {
+    id,
+    name,
+    isActive: !!isActive,
+    createdAt,
+    updatedAt,
+    normalizedName,
+    aliases,
+    nameHistory,
+    mergedIntoId,
+    mergedAt,
+    mergeReason,
+    mergeHistory
+  };
+}
+
+function resolveFinalCustomerIdPOS(id, byId){
+  const start = (id != null) ? String(id).trim() : '';
+  if (!start) return '';
+  const seen = new Set();
+  let cur = start;
+  while (cur){
+    if (seen.has(cur)) break;
+    seen.add(cur);
+    const c = byId.get(cur);
+    if (!c) break;
+    const next = (c.mergedIntoId != null) ? String(c.mergedIntoId).trim() : '';
+    if (!next) break;
+    cur = next;
+  }
+  return cur;
+}
+
+function collectCustomerAllNamesPOS(c){
+  const out = [];
+  if (!c) return out;
+  if (c.name) out.push(String(c.name));
+  if (Array.isArray(c.aliases)) out.push(...c.aliases);
+  if (Array.isArray(c.nameHistory)){
+    for (const h of c.nameHistory){
+      if (!h || typeof h !== 'object') continue;
+      if (h.from) out.push(String(h.from));
+      if (h.to) out.push(String(h.to));
+    }
+  }
+  return out.map(sanitizeCustomerDisplayPOS).filter(Boolean);
+}
+
+function buildCustomerResolverPOS(catalog){
+  const list = Array.isArray(catalog) ? catalog : [];
+  const byId = new Map();
+  for (const c of list){
+    if (c && c.id != null){
+      const id = String(c.id).trim();
+      if (id) byId.set(id, c);
+    }
+  }
+
+  const keyToFinalId = new Map();
+  const ambiguous = new Set();
+
+  const addKey = (k, finalId)=>{
+    if (!k) return;
+    if (ambiguous.has(k)) return;
+    const prev = keyToFinalId.get(k);
+    if (prev && prev !== finalId){
+      keyToFinalId.delete(k);
+      ambiguous.add(k);
+      return;
+    }
+    keyToFinalId.set(k, finalId);
+  };
+
+  for (const c of list){
+    if (!c || c.id == null) continue;
+    const finalId = resolveFinalCustomerIdPOS(c.id, byId);
+    const names = collectCustomerAllNamesPOS(c);
+    for (const nm of names){
+      addKey(normalizeCustomerKeyPOS(nm), finalId);
+    }
+  }
+
+  const matchNameToFinalId = (name)=>{
+    const n = sanitizeCustomerDisplayPOS(name);
+    if (!n) return '';
+    const k = normalizeCustomerKeyPOS(n);
+    if (!k) return '';
+    return keyToFinalId.get(k) || '';
+  };
+
+  const getDisplayName = (finalId)=>{
+    const fid = (finalId != null) ? String(finalId).trim() : '';
+    if (!fid) return '';
+    const c = byId.get(fid);
+    return c && c.name ? sanitizeCustomerDisplayPOS(c.name) : '';
+  };
+
+  return { byId, resolveFinalId:(id)=> resolveFinalCustomerIdPOS(id, byId), matchNameToFinalId, getDisplayName, keyToFinalId, ambiguous };
+}
+
+function migrateCustomerCatalogToObjectsPOS(){
+  const raw = A33Storage.getJSON(CUSTOMER_CATALOG_KEY, [], 'local');
+  const disabled = loadCustomerDisabledSetPOS();
+
+  const existingIds = new Set();
+  const seenNorm = new Set();
+  const out = [];
+  let changed = false;
+
+  if (Array.isArray(raw)){
+    for (const item of raw){
+      const obj = coerceCustomerObjectPOS(item, disabled, existingIds);
+      if (!obj) { if (item) changed = true; continue; }
+
+      if (seenNorm.has(obj.normalizedName)){
+        // Merge: mantener el primero, pero si alguno está activo, se queda activo.
+        const prev = out.find(x => x.normalizedName === obj.normalizedName);
+        if (prev && prev.isActive === false && obj.isActive === true) prev.isActive = true;
+        changed = true;
+        continue;
+      }
+
+      seenNorm.add(obj.normalizedName);
+
+      // Si el raw ya era objeto pero faltaba normalizedName/isActive/id, marcamos changed
+      if (typeof item === 'string') changed = true;
+      else {
+        if (!item.id || item.normalizedName !== obj.normalizedName || typeof item.isActive !== 'boolean' || typeof item.createdAt !== 'number') changed = true;
+      }
+
+      out.push(obj);
+    }
+  } else {
+    // Algo raro guardado: lo normalizamos a vacío
+    if (raw) changed = true;
+  }
+
+  const sorted = sortCustomerObjectsAZ_POS(out);
+
+  // Sincronizar disabled legacy basado en isActive
+  const disabled2 = new Set();
+  for (const c of sorted){
+    if (c && c.isActive === false && c.normalizedName) disabled2.add(c.normalizedName);
+  }
+  try{
+    // Guardar siempre si hubo migración o si hay divergencia con disabled existente
+    const oldDisabledArr = Array.from(disabled).sort().join('|');
+    const newDisabledArr = Array.from(disabled2).sort().join('|');
+    if (changed || oldDisabledArr !== newDisabledArr){
+      A33Storage.setJSON(CUSTOMER_CATALOG_KEY, sorted, 'local');
+      saveCustomerDisabledSetPOS(disabled2);
+    }
+  }catch(_){ }
+
+  return sorted;
+}
+
+function loadCustomerCatalogPOS(){
+  // Siempre devolvemos objetos (id, name, isActive, createdAt, normalizedName)
+  return migrateCustomerCatalogToObjectsPOS();
 }
 
 function saveCustomerCatalogPOS(list){
   try{ A33Storage.setJSON(CUSTOMER_CATALOG_KEY, Array.isArray(list) ? list : [], 'local'); }catch(_){ }
 }
 
-function updateCustomerDatalistPOS(list){
-  const dl = document.getElementById('customer-datalist');
-  if (!dl) return;
-  dl.innerHTML = '';
-  (list || []).slice(0, 250).forEach(name=>{
-    const opt = document.createElement('option');
-    opt.value = name;
-    dl.appendChild(opt);
-  });
+function syncDisabledLegacyFromCatalogPOS(list){
+  const set = new Set();
+  for (const c of (Array.isArray(list) ? list : [])){
+    if (c && c.isActive === false && c.normalizedName) set.add(c.normalizedName);
+  }
+  saveCustomerDisabledSetPOS(set);
 }
 
-function addCustomerToCatalogPOS(name){
+function getCustomerManageFilterPOS(){
+  const v = (A33Storage.getItem(CUSTOMER_MANAGE_FILTER_KEY) || '').toString().trim();
+  return (v === 'all') ? 'all' : 'active';
+}
+
+function setCustomerManageFilterPOS(mode){
+  const m = (mode === 'all') ? 'all' : 'active';
+  try{ A33Storage.setItem(CUSTOMER_MANAGE_FILTER_KEY, m); }catch(_){ }
+}
+
+function isCustomerManageCompactPOS(){
+  return (A33Storage.getItem(CUSTOMER_MANAGE_COMPACT_KEY) === '1');
+}
+
+function setCustomerManageCompactPOS(on){
+  try{ A33Storage.setItem(CUSTOMER_MANAGE_COMPACT_KEY, on ? '1' : '0'); }catch(_){ }
+}
+
+function loadCustomerManageOpenMapPOS(){
+  const raw = A33Storage.getJSON(CUSTOMER_MANAGE_OPEN_KEY, null, 'local');
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  return {};
+}
+
+function saveCustomerManageOpenMapPOS(map){
+  try{ A33Storage.setJSON(CUSTOMER_MANAGE_OPEN_KEY, (map && typeof map === 'object') ? map : {}, 'local'); }catch(_){ }
+}
+
+function getCustomerGroupLetterPOS(name){
   const n = sanitizeCustomerDisplayPOS(name);
-  if (!n) return;
-  const key = normalizeCustomerKeyPOS(n);
-  if (!key) return;
+  if (!n) return '#';
+  const norm = normalizeCustomerKeyPOS(n);
+  const ch = (norm || '').charAt(0).toUpperCase();
+  return (ch >= 'A' && ch <= 'Z') ? ch : '#';
+}
 
-  const cur = loadCustomerCatalogPOS();
-  const exists = cur.some(x => normalizeCustomerKeyPOS(x) === key);
-  if (exists) return;
+function applyCustomerManageUIStatePOS(){
+  const panel = document.getElementById('customer-manage-panel');
+  if (panel){
+    if (isCustomerManageCompactPOS()) panel.classList.add('compact');
+    else panel.classList.remove('compact');
+  }
 
-  cur.push(n);
-  // Ordenar (A→Z) sin ser agresivos
-  cur.sort((a,b)=> normalizeCustomerKeyPOS(a).localeCompare(normalizeCustomerKeyPOS(b)));
-  saveCustomerCatalogPOS(cur);
-  updateCustomerDatalistPOS(cur);
+  const filter = getCustomerManageFilterPOS();
+  const btnA = document.getElementById('customer-manage-filter-active');
+  const btnT = document.getElementById('customer-manage-filter-all');
+  if (btnA) btnA.classList.toggle('is-active', filter === 'active');
+  if (btnT) btnT.classList.toggle('is-active', filter === 'all');
+
+  const compact = document.getElementById('customer-manage-compact');
+  if (compact) compact.checked = isCustomerManageCompactPOS();
+}
+
+function setAllCustomerManageGroupsPOS(open){
+  // Aplica a la vista sin búsqueda (A→Z) según filtro actual
+  const filter = getCustomerManageFilterPOS();
+  let items = loadCustomerCatalogPOS();
+  if (filter === 'active') items = items.filter(c => c && c.isActive !== false);
+  items = sortCustomerObjectsAZ_POS(items);
+
+  const letters = new Set();
+  for (const c of items){
+    letters.add(getCustomerGroupLetterPOS(c && c.name));
+  }
+  const map = {};
+  for (const l of letters){
+    map[l] = !!open;
+  }
+  saveCustomerManageOpenMapPOS(map);
 }
 
 function isCustomerStickyPOS(){
@@ -918,10 +1276,28 @@ function getCustomerNameFromUI_POS(){
   return sanitizeCustomerDisplayPOS(inp ? inp.value : '');
 }
 
-function setCustomerNameUI_POS(val){
+function getCustomerIdHintFromUI_POS(){
+  const inp = document.getElementById('sale-customer');
+  const raw = (inp && inp.dataset) ? String(inp.dataset.customerId || '').trim() : '';
+  return raw || null;
+}
+
+function setCustomerSelectionUI_POS(customer){
   const inp = document.getElementById('sale-customer');
   if (!inp) return;
-  inp.value = sanitizeCustomerDisplayPOS(val);
+  const name = sanitizeCustomerDisplayPOS(customer && customer.name);
+  inp.value = name;
+  if (inp.dataset){
+    if (customer && customer.id) inp.dataset.customerId = String(customer.id);
+    else delete inp.dataset.customerId;
+  }
+}
+
+function clearCustomerSelectionUI_POS(){
+  const inp = document.getElementById('sale-customer');
+  if (!inp) return;
+  inp.value = '';
+  if (inp.dataset) delete inp.dataset.customerId;
 }
 
 function persistCustomerStickyStatePOS(){
@@ -934,21 +1310,884 @@ function persistCustomerLastPOS(val){
   try{ A33Storage.setItem(CUSTOMER_LAST_KEY, sanitizeCustomerDisplayPOS(val || '')); }catch(_){ }
 }
 
+function resolveCustomerIdForSalePOS(customerName, uiHintId){
+  const name = sanitizeCustomerDisplayPOS(customerName);
+  if (!name) return { id: null, displayName: '', isNew: false };
+
+  const catalog = loadCustomerCatalogPOS();
+  const resolver = buildCustomerResolverPOS(catalog);
+
+  // 1) Hint de UI: si existe el ID, lo respetamos (y resolvemos merges)
+  if (uiHintId){
+    const hid = String(uiHintId).trim();
+    if (hid && resolver.byId.has(hid)){
+      const finalId = resolver.resolveFinalId(hid);
+      const displayName = resolver.getDisplayName(finalId) || name;
+      return { id: String(finalId), displayName, isNew: false };
+    }
+  }
+
+  // 2) Match robusto por nombre (name / aliases / nameHistory / clientes fusionados)
+  const finalId2 = resolver.matchNameToFinalId(name);
+  if (finalId2){
+    const displayName = resolver.getDisplayName(finalId2) || name;
+    return { id: String(finalId2), displayName, isNew: false };
+  }
+
+  // 3) Nuevo (se agregará al catálogo al completar la venta)
+  const existingIds = new Set(catalog.map(c => c && c.id).filter(Boolean).map(String));
+  const newId = generateCustomerIdPOS(existingIds);
+  return { id: String(newId), displayName: name, isNew: true };
+}
+
+function ensureCustomerInCatalogPOS(name, preferredId){
+  const n = sanitizeCustomerDisplayPOS(name);
+  if (!n) return { ok:false, id:null };
+
+  const norm = normalizeCustomerKeyPOS(n);
+  if (!norm) return { ok:false, id:null };
+
+  const list = loadCustomerCatalogPOS();
+  const resolver = buildCustomerResolverPOS(list);
+  const matchFinal = resolver.matchNameToFinalId(n);
+
+  if (matchFinal){
+    const existing = resolver.byId.get(String(matchFinal));
+    if (existing){
+      // Reactivar si estaba desactivado
+      if (existing.isActive === false){
+        existing.isActive = true;
+        existing.updatedAt = Date.now();
+      }
+
+      // Si el usuario escribió una variante (alias), la guardamos como alias del ID final
+      const kTyped = normalizeCustomerKeyPOS(n);
+      const kMain = normalizeCustomerKeyPOS(existing.name);
+      if (kTyped && kMain && kTyped !== kMain){
+        if (!Array.isArray(existing.aliases)) existing.aliases = [];
+        if (!existing.aliases.some(a => normalizeCustomerKeyPOS(a) === kTyped)){
+          existing.aliases.push(n);
+          existing.updatedAt = Date.now();
+        }
+      }
+
+      const sorted = sortCustomerObjectsAZ_POS(list);
+      saveCustomerCatalogPOS(sorted);
+      syncDisabledLegacyFromCatalogPOS(sorted);
+      return { ok:true, id: String(existing.id) };
+    }
+  }
+
+  const existingIds = new Set(list.map(c => c && c.id).filter(Boolean).map(String));
+  let id = preferredId ? String(preferredId) : '';
+  if (!id || existingIds.has(id)){
+    id = generateCustomerIdPOS(existingIds);
+  }
+  const obj = {
+    id,
+    name: n,
+    isActive: true,
+    createdAt: Date.now(),
+    updatedAt: null,
+    normalizedName: norm,
+    aliases: [],
+    nameHistory: [],
+    mergedIntoId: null,
+    mergedAt: null,
+    mergeReason: '',
+    mergeHistory: []
+  };
+
+  list.push(obj);
+  const sorted = sortCustomerObjectsAZ_POS(list);
+  saveCustomerCatalogPOS(sorted);
+  syncDisabledLegacyFromCatalogPOS(sorted);
+  refreshCustomerUI_POS();
+
+  return { ok:true, id };
+}
+
+function getActiveCustomersPOS(){
+  const all = loadCustomerCatalogPOS();
+  return all.filter(c => c && c.isActive !== false);
+}
+
+function addCustomerToCatalogPOS(name, preferredId){
+  const n = sanitizeCustomerDisplayPOS(name);
+  if (!n) return { ok:false, reason:'empty', id:null };
+
+  const norm = normalizeCustomerKeyPOS(n);
+  if (!norm) return { ok:false, reason:'empty', id:null };
+
+  const list = loadCustomerCatalogPOS();
+  const resolver = buildCustomerResolverPOS(list);
+  const matchFinal = resolver.matchNameToFinalId(n);
+  if (matchFinal) {
+    const ex = resolver.byId.get(String(matchFinal));
+    return { ok:false, reason:'exists', id: (ex && ex.id) ? String(ex.id) : String(matchFinal) };
+  }
+
+  const existingIds = new Set(list.map(c => c && c.id).filter(Boolean).map(String));
+  let id = preferredId ? String(preferredId) : '';
+  if (!id || existingIds.has(id)){
+    id = generateCustomerIdPOS(existingIds);
+  }
+
+  list.push({
+    id,
+    name: n,
+    isActive: true,
+    createdAt: Date.now(),
+    updatedAt: null,
+    normalizedName: norm,
+    aliases: [],
+    nameHistory: [],
+    mergedIntoId: null,
+    mergedAt: null,
+    mergeReason: '',
+    mergeHistory: []
+  });
+
+  const sorted = sortCustomerObjectsAZ_POS(list);
+  saveCustomerCatalogPOS(sorted);
+  syncDisabledLegacyFromCatalogPOS(sorted);
+  refreshCustomerUI_POS();
+
+  return { ok:true, id };
+}
+
+function setCustomerActiveByIdPOS(id, isActive){
+  const cid = (id != null) ? String(id) : '';
+  if (!cid) return;
+
+  const list = loadCustomerCatalogPOS();
+  const c = list.find(x => x && String(x.id) === cid);
+  if (!c) return;
+
+  // ABS: un cliente fusionado (fuente) no se reactiva ni se toca
+  if (c.mergedIntoId){
+    toast('Este cliente está fusionado. Administra el destino final.');
+    return;
+  }
+
+  c.isActive = !!isActive;
+  c.updatedAt = Date.now();
+  const sorted = sortCustomerObjectsAZ_POS(list);
+  saveCustomerCatalogPOS(sorted);
+  syncDisabledLegacyFromCatalogPOS(sorted);
+  refreshCustomerUI_POS();
+}
+
+function editCustomerNamePOS(customerId, newName, reason){
+  const cid = (customerId != null) ? String(customerId).trim() : '';
+  const nn = sanitizeCustomerDisplayPOS(newName || '');
+  if (!cid || !nn) return { ok:false, reason:'empty' };
+
+  const list = loadCustomerCatalogPOS();
+  const resolver = buildCustomerResolverPOS(list);
+  const c = resolver.byId.get(cid);
+  if (!c) return { ok:false, reason:'not_found' };
+
+  // Solo se edita el ID final (no la fuente fusionada)
+  if (c.mergedIntoId) return { ok:false, reason:'merged_source' };
+
+  const newNorm = normalizeCustomerKeyPOS(nn);
+  if (!newNorm) return { ok:false, reason:'empty' };
+
+  // Evitar renombres que choquen con otro cliente (mejor: fusionar)
+  const matchFinal = resolver.matchNameToFinalId(nn);
+  if (matchFinal && String(matchFinal) !== String(cid)){
+    return { ok:false, reason:'name_conflict', conflictId: String(matchFinal) };
+  }
+
+  const oldName = sanitizeCustomerDisplayPOS(c.name || '');
+  if (oldName && normalizeCustomerKeyPOS(oldName) === newNorm){
+    return { ok:true, id: cid, noChange:true };
+  }
+
+  if (!Array.isArray(c.nameHistory)) c.nameHistory = [];
+  c.nameHistory.push({
+    from: oldName,
+    to: nn,
+    at: Date.now(),
+    reason: sanitizeCustomerDisplayPOS(reason || '')
+  });
+
+  // Guardar el nombre viejo también como alias para resolver escritura manual
+  if (oldName){
+    if (!Array.isArray(c.aliases)) c.aliases = [];
+    const kOld = normalizeCustomerKeyPOS(oldName);
+    if (kOld && !c.aliases.some(a => normalizeCustomerKeyPOS(a) === kOld)){
+      c.aliases.push(oldName);
+    }
+  }
+
+  c.name = nn;
+  c.normalizedName = newNorm;
+  c.updatedAt = Date.now();
+
+  const sorted = sortCustomerObjectsAZ_POS(list);
+  saveCustomerCatalogPOS(sorted);
+  syncDisabledLegacyFromCatalogPOS(sorted);
+  refreshCustomerUI_POS();
+
+  // Si estaba seleccionado en la venta, refrescar el input
+  const inp = document.getElementById('sale-customer');
+  if (inp && inp.dataset && String(inp.dataset.customerId||'') === cid){
+    setCustomerSelectionUI_POS({ id: cid, name: nn });
+    if (isCustomerStickyPOS()) persistCustomerLastPOS(nn);
+  }
+
+  return { ok:true, id: cid };
+}
+
+function mergeCustomersPOS(sourceId, destId, reason){
+  const sid = (sourceId != null) ? String(sourceId).trim() : '';
+  const did = (destId != null) ? String(destId).trim() : '';
+  if (!sid || !did) return { ok:false, reason:'empty' };
+  if (sid === did) return { ok:false, reason:'same' };
+
+  const list = loadCustomerCatalogPOS();
+  const resolver = buildCustomerResolverPOS(list);
+  const source = resolver.byId.get(sid);
+  const destRaw = resolver.byId.get(did);
+  if (!source || !destRaw) return { ok:false, reason:'not_found' };
+
+  // Bloqueos
+  if (source.mergedIntoId) return { ok:false, reason:'source_already_merged' };
+  if (destRaw.isActive === false) return { ok:false, reason:'dest_inactive' };
+  if (destRaw.mergedIntoId) return { ok:false, reason:'dest_is_source' };
+
+  const destFinalId = resolver.resolveFinalId(did);
+  if (!destFinalId) return { ok:false, reason:'not_found' };
+  if (String(destFinalId) === sid) return { ok:false, reason:'same' };
+
+  const dest = resolver.byId.get(String(destFinalId));
+  if (!dest) return { ok:false, reason:'not_found' };
+  if (dest.isActive === false) return { ok:false, reason:'dest_inactive' };
+  if (dest.mergedIntoId) return { ok:false, reason:'dest_is_source' };
+
+  const now = Date.now();
+  const mergeReason = sanitizeCustomerDisplayPOS(reason || '');
+
+  // Fuente
+  source.isActive = false;
+  source.mergedIntoId = String(destFinalId);
+  source.mergedAt = now;
+  source.mergeReason = mergeReason;
+  source.updatedAt = now;
+
+  // Destino
+  if (!Array.isArray(dest.mergeHistory)) dest.mergeHistory = [];
+  dest.mergeHistory.push({ fromId: String(source.id), fromName: sanitizeCustomerDisplayPOS(source.name||''), at: now, reason: mergeReason });
+  if (!Array.isArray(dest.aliases)) dest.aliases = [];
+
+  const pushAlias = (txt)=>{
+    const v = sanitizeCustomerDisplayPOS(txt||'');
+    if (!v) return;
+    const k = normalizeCustomerKeyPOS(v);
+    if (!k) return;
+    if (!dest.aliases.some(a => normalizeCustomerKeyPOS(a) === k)) dest.aliases.push(v);
+  };
+
+  // Agregar nombre de la fuente + sus aliases + su historial
+  pushAlias(source.name);
+  if (Array.isArray(source.aliases)) for (const a of source.aliases) pushAlias(a);
+  if (Array.isArray(source.nameHistory)){
+    for (const h of source.nameHistory){
+      if (h && h.from) pushAlias(h.from);
+      if (h && h.to) pushAlias(h.to);
+    }
+  }
+
+  dest.updatedAt = now;
+
+  const sorted = sortCustomerObjectsAZ_POS(list);
+  saveCustomerCatalogPOS(sorted);
+  syncDisabledLegacyFromCatalogPOS(sorted);
+  refreshCustomerUI_POS();
+
+  // Si el cliente seleccionado era la fuente, saltamos al destino
+  const inp = document.getElementById('sale-customer');
+  if (inp && inp.dataset && String(inp.dataset.customerId||'') === sid){
+    setCustomerSelectionUI_POS({ id: String(destFinalId), name: sanitizeCustomerDisplayPOS(dest.name||'') });
+    if (isCustomerStickyPOS()) persistCustomerLastPOS(dest.name);
+  }
+
+  return { ok:true, destId: String(destFinalId) };
+}
+
+function isCustomerDisabledKeyPOS(normKey){
+  if (!normKey) return false;
+  const set = loadCustomerDisabledSetPOS();
+  return set.has(normKey);
+}
+
+function isCustomerPickerOpenPOS(){
+  const modal = document.getElementById('customer-picker-modal');
+  return !!(modal && modal.style.display === 'flex');
+}
+
+function closeCustomerPickerPOS(){
+  const modal = document.getElementById('customer-picker-modal');
+  if (modal) modal.style.display = 'none';
+  // Si el picker fue abierto con callback (ej. Resumen), lo limpiamos al cerrar.
+  try{ window.__A33_CUSTOMER_PICKER_ONSELECT = null; }catch(_){ }
+}
+
+function renderCustomerPickerListPOS(){
+  const wrap = document.getElementById('customer-picker-list');
+  const search = document.getElementById('customer-picker-search');
+  const count = document.getElementById('customer-picker-count');
+  if (!wrap) return;
+
+  const q = normalizeCustomerKeyPOS(search ? search.value : '');
+  const active = getActiveCustomersPOS();
+  const filtered = q ? active.filter(c => (c && c.normalizedName && c.normalizedName.includes(q)) || normalizeCustomerKeyPOS(c && c.name).includes(q)) : active;
+
+  wrap.innerHTML = '';
+  if (!filtered.length){
+    wrap.innerHTML = '<div class="muted">Sin resultados</div>';
+    if (count) count.textContent = '0';
+    return;
+  }
+
+  for (const c of filtered){
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'customer-picker-item';
+    btn.textContent = c.name;
+    btn.addEventListener('click', ()=>{
+      const cb = (typeof window !== 'undefined') ? window.__A33_CUSTOMER_PICKER_ONSELECT : null;
+      if (typeof cb === 'function'){
+        try{ cb(c); }catch(err){ console.warn('customer picker onSelect error', err); }
+        try{ window.__A33_CUSTOMER_PICKER_ONSELECT = null; }catch(_){ }
+        closeCustomerPickerPOS();
+        return;
+      }
+
+      setCustomerSelectionUI_POS(c);
+      // El último cliente se guarda siempre; el modo pegajoso decide si se limpia tras la venta.
+      persistCustomerLastPOS(c.name);
+      closeCustomerPickerPOS();
+    });
+    wrap.appendChild(btn);
+  }
+
+  if (count) count.textContent = filtered.length + ' cliente' + (filtered.length === 1 ? '' : 's');
+}
+
+function openCustomerPickerPOS(onSelect){
+  const modal = document.getElementById('customer-picker-modal');
+  if (!modal) return;
+
+  // Permite reutilizar el mismo picker en otros contextos (ej. Resumen)
+  try{ window.__A33_CUSTOMER_PICKER_ONSELECT = (typeof onSelect === 'function') ? onSelect : null; }catch(_){ }
+
+  // reset búsqueda
+  const search = document.getElementById('customer-picker-search');
+  if (search) search.value = '';
+
+  renderCustomerPickerListPOS();
+  modal.style.display = 'flex';
+
+  setTimeout(()=>{ try{ document.getElementById('customer-picker-search')?.focus(); }catch(_){ } }, 40);
+}
+
+function renderCustomerManageListPOS(){
+  const listEl = document.getElementById('customer-manage-list');
+  if (!listEl) return;
+
+  applyCustomerManageUIStatePOS();
+
+  const searchEl = document.getElementById('customer-manage-search');
+  const countEl = document.getElementById('customer-manage-count');
+  const q = normalizeCustomerKeyPOS(searchEl ? searchEl.value : '');
+
+  const filter = getCustomerManageFilterPOS();
+  let items = loadCustomerCatalogPOS();
+  if (filter === 'active') items = items.filter(c => c && c.isActive !== false);
+  items = sortCustomerObjectsAZ_POS(items);
+
+  if (q) items = items.filter(c => c && c.normalizedName && c.normalizedName.includes(q));
+
+  // Conteo
+  try{
+    if (countEl){
+      const label = (filter === 'active') ? 'Activos' : 'Todos';
+      countEl.textContent = label + ': ' + items.length;
+    }
+  }catch(_){ }
+
+  listEl.innerHTML = '';
+
+  if (!items.length){
+    listEl.innerHTML = '<div class="muted">Sin resultados.</div>';
+    return;
+  }
+
+  const makeRow = (c)=>{
+    const isOff = (c.isActive === false);
+    const isMerged = !!(c && c.mergedIntoId);
+
+    const row = document.createElement('div');
+    row.className = 'customer-manage-item';
+
+    const left = document.createElement('div');
+    left.className = 'customer-manage-meta';
+
+    const nm = document.createElement('div');
+    nm.className = 'customer-manage-name';
+    nm.textContent = c.name;
+
+    const badge = document.createElement('span');
+    badge.className = 'badge ' + (isOff ? 'badge-off' : 'badge-on');
+    badge.textContent = isOff ? 'Desactivado' : 'Activo';
+
+    left.appendChild(nm);
+    left.appendChild(badge);
+
+    if (isMerged){
+      const b2 = document.createElement('span');
+      b2.className = 'badge badge-off';
+      b2.textContent = 'Fusionado';
+      left.appendChild(b2);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'customer-manage-item-actions';
+
+    const btnEdit = document.createElement('button');
+    btnEdit.type = 'button';
+    btnEdit.className = 'btn-secondary btn-pill btn-pill-mini' + (isMerged ? ' btn-disabled' : '');
+    btnEdit.textContent = 'Editar';
+    if (!isMerged){
+      btnEdit.addEventListener('click', ()=> openCustomerEditModalPOS(String(c.id)));
+    } else {
+      btnEdit.disabled = true;
+    }
+
+    const btnMerge = document.createElement('button');
+    btnMerge.type = 'button';
+    btnMerge.className = 'btn-outline btn-pill btn-pill-mini' + (isMerged ? ' btn-disabled' : '');
+    btnMerge.textContent = 'Fusionar';
+    if (!isMerged){
+      btnMerge.addEventListener('click', ()=> openCustomerMergeModalPOS({ sourceId: String(c.id) }));
+    } else {
+      btnMerge.disabled = true;
+    }
+
+    const btnToggle = document.createElement('button');
+    btnToggle.type = 'button';
+    btnToggle.className = (isOff ? 'btn-ok' : 'btn-warn') + ' btn-pill btn-pill-mini' + (isMerged ? ' btn-disabled' : '');
+    btnToggle.textContent = isOff ? 'Reactivar' : 'Desactivar';
+    if (!isMerged){
+      btnToggle.addEventListener('click', ()=> setCustomerActiveByIdPOS(c.id, isOff));
+    } else {
+      btnToggle.disabled = true;
+    }
+
+    actions.appendChild(btnEdit);
+    actions.appendChild(btnMerge);
+    actions.appendChild(btnToggle);
+
+    row.appendChild(left);
+    row.appendChild(actions);
+    return row;
+  };
+
+  // Si hay búsqueda activa, mostramos lista plana (Resultados)
+  if (q){
+    const head = document.createElement('div');
+    head.className = 'customer-manage-results-head';
+    const t = document.createElement('div');
+    t.className = 'customer-manage-results-title';
+    t.textContent = 'Resultados';
+    const t2 = document.createElement('div');
+    t2.className = 'muted';
+    t2.textContent = String(items.length);
+    head.appendChild(t);
+    head.appendChild(t2);
+    listEl.appendChild(head);
+
+    for (const c of items){
+      listEl.appendChild(makeRow(c));
+    }
+    return;
+  }
+
+  // Acordeón por letra
+  const groups = {};
+  for (const c of items){
+    const letter = getCustomerGroupLetterPOS(c && c.name);
+    if (!groups[letter]) groups[letter] = [];
+    groups[letter].push(c);
+  }
+
+  const letters = Object.keys(groups)
+    .sort((a,b)=>{
+      if (a === '#') return 1;
+      if (b === '#') return -1;
+      return a.localeCompare(b);
+    });
+
+  let openMap = loadCustomerManageOpenMapPOS();
+  const hasAny = openMap && typeof openMap === 'object' && Object.keys(openMap).length > 0;
+  if (!hasAny){
+    // Primer uso: abrir la primera letra para que no se vea “vacío”
+    if (letters.length){
+      openMap = {};
+      openMap[letters[0]] = true;
+      saveCustomerManageOpenMapPOS(openMap);
+    }
+  }
+
+  for (const letter of letters){
+    const arr = groups[letter] || [];
+    if (!arr.length) continue;
+
+    const isOpen = !!openMap[letter];
+
+    const g = document.createElement('div');
+    g.className = 'customer-manage-group';
+
+    const h = document.createElement('button');
+    h.type = 'button';
+    h.className = 'customer-manage-group-header';
+    h.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+
+    const left = document.createElement('div');
+    left.className = 'customer-manage-group-left';
+
+    const l = document.createElement('div');
+    l.className = 'customer-manage-group-letter';
+    l.textContent = letter;
+
+    const cnt = document.createElement('div');
+    cnt.className = 'customer-manage-group-count';
+    cnt.textContent = String(arr.length);
+
+    left.appendChild(l);
+    left.appendChild(cnt);
+
+    const ch = document.createElement('div');
+    ch.className = 'customer-manage-group-chevron';
+    ch.textContent = isOpen ? '▾' : '▸';
+
+    h.appendChild(left);
+    h.appendChild(ch);
+
+    h.addEventListener('click', ()=>{
+      const map = loadCustomerManageOpenMapPOS();
+      map[letter] = !map[letter];
+      saveCustomerManageOpenMapPOS(map);
+      renderCustomerManageListPOS();
+    });
+
+    g.appendChild(h);
+
+    if (isOpen){
+      const body = document.createElement('div');
+      body.className = 'customer-manage-group-body';
+      for (const c of arr){
+        body.appendChild(makeRow(c));
+      }
+      g.appendChild(body);
+    }
+
+    listEl.appendChild(g);
+  }
+}
+
+function refreshCustomerUI_POS(){
+  // Migración suave: al refrescar UI aseguramos que el catálogo esté en formato objeto
+  loadCustomerCatalogPOS();
+
+  // Si el picker está abierto, re-render para respetar desactivados/búsqueda
+  if (isCustomerPickerOpenPOS()) renderCustomerPickerListPOS();
+
+  // Si la gestión existe (y esté abierto o no), render listo para cuando se abra
+  renderCustomerManageListPOS();
+}
+
+function toggleCustomerManagePanelPOS(){
+  const panel = document.getElementById('customer-manage-panel');
+  const btn = document.getElementById('btn-toggle-customer-manage');
+  if (!panel || !btn) return;
+
+  const open = panel.style.display !== 'none';
+  panel.style.display = open ? 'none' : 'block';
+  btn.setAttribute('aria-expanded', open ? 'false' : 'true');
+
+  if (!open){
+    renderCustomerManageListPOS();
+    setTimeout(()=>{ try{ document.getElementById('customer-add-name')?.focus(); }catch(_){ } }, 40);
+  }
+}
+
+function setupCustomerPickerModalPOS(){
+  const modal = document.getElementById('customer-picker-modal');
+  if (!modal) return;
+
+  const closeBtn = document.getElementById('customer-picker-close');
+  if (closeBtn){
+    closeBtn.addEventListener('click', closeCustomerPickerPOS);
+  }
+
+  // click/tap fuera
+  modal.addEventListener('click', (e)=>{
+    if (e.target === modal) closeCustomerPickerPOS();
+  });
+
+  const search = document.getElementById('customer-picker-search');
+  if (search){
+    search.addEventListener('input', ()=> renderCustomerPickerListPOS());
+  }
+
+  // Escape
+  document.addEventListener('keydown', (e)=>{
+    if (e.key !== 'Escape') return;
+    if (isCustomerPickerOpenPOS()) closeCustomerPickerPOS();
+    if (isCustomerEditOpenPOS()) closeCustomerEditModalPOS();
+    if (isCustomerMergeOpenPOS()) closeCustomerMergeModalPOS();
+  });
+}
+
+function isCustomerEditOpenPOS(){
+  const modal = document.getElementById('customer-edit-modal');
+  return !!(modal && modal.style.display === 'flex');
+}
+
+function closeCustomerEditModalPOS(){
+  const modal = document.getElementById('customer-edit-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function openCustomerEditModalPOS(customerId){
+  const modal = document.getElementById('customer-edit-modal');
+  if (!modal) return;
+
+  const list = loadCustomerCatalogPOS();
+  const resolver = buildCustomerResolverPOS(list);
+  const c = resolver.byId.get(String(customerId||'').trim());
+  if (!c){ toast('Cliente no encontrado'); return; }
+  if (c.mergedIntoId){ toast('Este cliente está fusionado. Edita el destino.'); return; }
+
+  modal.dataset.editId = String(c.id);
+  const cur = document.getElementById('customer-edit-current');
+  if (cur) cur.textContent = sanitizeCustomerDisplayPOS(c.name||'');
+  const inp = document.getElementById('customer-edit-name');
+  if (inp) inp.value = sanitizeCustomerDisplayPOS(c.name||'');
+  const rsn = document.getElementById('customer-edit-reason');
+  if (rsn) rsn.value = '';
+  const msg = document.getElementById('customer-edit-msg');
+  if (msg) msg.textContent = '';
+
+  modal.style.display = 'flex';
+  setTimeout(()=>{ try{ inp?.focus(); inp?.select(); }catch(_){ } }, 60);
+}
+
+function setupCustomerEditModalPOS(){
+  const modal = document.getElementById('customer-edit-modal');
+  if (!modal) return;
+
+  const closeBtn = document.getElementById('customer-edit-close');
+  if (closeBtn) closeBtn.addEventListener('click', closeCustomerEditModalPOS);
+
+  modal.addEventListener('click', (e)=>{ if (e.target === modal) closeCustomerEditModalPOS(); });
+
+  const btn = document.getElementById('customer-edit-save');
+  if (btn){
+    btn.addEventListener('click', ()=>{
+      const id = String(modal.dataset.editId || '').trim();
+      const nn = document.getElementById('customer-edit-name')?.value || '';
+      const reason = document.getElementById('customer-edit-reason')?.value || '';
+      const msg = document.getElementById('customer-edit-msg');
+      const r = editCustomerNamePOS(id, nn, reason);
+      if (!r || !r.ok){
+        if (r && r.reason === 'name_conflict'){
+          if (msg) msg.textContent = 'Ese nombre ya existe. Mejor usa Fusionar.';
+          return;
+        }
+        if (msg) msg.textContent = 'No se pudo editar.';
+        return;
+      }
+      toast(r.noChange ? 'Sin cambios.' : 'Cliente editado.');
+      closeCustomerEditModalPOS();
+      renderCustomerManageListPOS();
+      if (isCustomerPickerOpenPOS()) renderCustomerPickerListPOS();
+    });
+  }
+
+  const cancelBtn = document.getElementById('customer-edit-cancel');
+  if (cancelBtn) cancelBtn.addEventListener('click', closeCustomerEditModalPOS);
+}
+
+function isCustomerMergeOpenPOS(){
+  const modal = document.getElementById('customer-merge-modal');
+  return !!(modal && modal.style.display === 'flex');
+}
+
+function closeCustomerMergeModalPOS(){
+  const modal = document.getElementById('customer-merge-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function fillCustomerMergeSelectsPOS(sourceId){
+  const srcSel = document.getElementById('customer-merge-source');
+  const dstSel = document.getElementById('customer-merge-dest');
+  if (!srcSel || !dstSel) return;
+
+  const list = loadCustomerCatalogPOS();
+  const resolver = buildCustomerResolverPOS(list);
+
+  // Fuente: cualquier cliente que NO sea ya fuente fusionada
+  const sources = list
+    .filter(c => c && !c.mergedIntoId)
+    .map(c => ({ id: String(c.id), name: sanitizeCustomerDisplayPOS(c.name||''), isActive: c.isActive !== false }));
+
+  // Destino: solo activos y no fusionados
+  const dests = list
+    .filter(c => c && c.isActive !== false && !c.mergedIntoId)
+    .map(c => ({ id: String(c.id), name: sanitizeCustomerDisplayPOS(c.name||'') }));
+
+  const sortByName = (a,b)=> (a.name||'').localeCompare(b.name||'');
+  sources.sort(sortByName);
+  dests.sort(sortByName);
+
+  srcSel.innerHTML = '';
+  dstSel.innerHTML = '';
+
+  for (const s of sources){
+    const opt = document.createElement('option');
+    opt.value = s.id;
+    opt.textContent = s.name + (s.isActive ? '' : ' (desactivado)');
+    srcSel.appendChild(opt);
+  }
+  for (const d of dests){
+    const opt = document.createElement('option');
+    opt.value = d.id;
+    opt.textContent = d.name;
+    dstSel.appendChild(opt);
+  }
+
+  // Preselección
+  const sid = String(sourceId||'').trim();
+  if (sid && sources.some(s => s.id === sid)) srcSel.value = sid;
+
+  // Si destino queda igual a fuente, movemos destino al primer distinto
+  if (dstSel.value === srcSel.value){
+    const firstOk = dests.find(d => d.id !== srcSel.value);
+    if (firstOk) dstSel.value = firstOk.id;
+  }
+
+  // En caso de que el usuario escoja una fuente, evitamos que destino sea el mismo
+  const sync = ()=>{
+    if (dstSel.value === srcSel.value){
+      const firstOk2 = dests.find(d => d.id !== srcSel.value);
+      if (firstOk2) dstSel.value = firstOk2.id;
+    }
+  };
+  srcSel.onchange = sync;
+  dstSel.onchange = sync;
+}
+
+function openCustomerMergeModalPOS(opts){
+  const modal = document.getElementById('customer-merge-modal');
+  if (!modal) return;
+  const sourceId = opts && opts.sourceId ? String(opts.sourceId) : '';
+  modal.dataset.sourcePreset = sourceId || '';
+
+  fillCustomerMergeSelectsPOS(sourceId);
+
+  const chk = document.getElementById('customer-merge-confirm');
+  if (chk) chk.checked = false;
+  const rsn = document.getElementById('customer-merge-reason');
+  if (rsn) rsn.value = '';
+  const msg = document.getElementById('customer-merge-msg');
+  if (msg) msg.textContent = '';
+
+  modal.style.display = 'flex';
+  setTimeout(()=>{ try{ document.getElementById('customer-merge-source')?.focus(); }catch(_){ } }, 60);
+}
+
+function setupCustomerMergeModalPOS(){
+  const modal = document.getElementById('customer-merge-modal');
+  if (!modal) return;
+
+  const closeBtn = document.getElementById('customer-merge-close');
+  if (closeBtn) closeBtn.addEventListener('click', closeCustomerMergeModalPOS);
+
+  modal.addEventListener('click', (e)=>{ if (e.target === modal) closeCustomerMergeModalPOS(); });
+
+  const confirmChk = document.getElementById('customer-merge-confirm');
+  const doBtn = document.getElementById('customer-merge-run');
+  const gate = ()=>{
+    if (doBtn) doBtn.disabled = !(confirmChk && confirmChk.checked);
+  };
+  if (confirmChk){
+    confirmChk.addEventListener('change', gate);
+  }
+  gate();
+
+  if (doBtn){
+    doBtn.addEventListener('click', ()=>{
+      const srcId = document.getElementById('customer-merge-source')?.value || '';
+      const dstId = document.getElementById('customer-merge-dest')?.value || '';
+      const reason = document.getElementById('customer-merge-reason')?.value || '';
+      const msg = document.getElementById('customer-merge-msg');
+
+      const r = mergeCustomersPOS(srcId, dstId, reason);
+      if (!r || !r.ok){
+        const why = (r && r.reason) ? r.reason : 'error';
+        let human = 'No se pudo fusionar.';
+        if (why === 'source_already_merged') human = 'La fuente ya está fusionada.';
+        else if (why === 'dest_inactive') human = 'El destino no puede estar desactivado.';
+        else if (why === 'same') human = 'No puedes fusionar un cliente consigo mismo.';
+        else if (why === 'dest_is_source') human = 'El destino seleccionado no es válido (está fusionado).';
+        if (msg) msg.textContent = human;
+        return;
+      }
+
+      toast('Fusión aplicada. Historia intacta.');
+      closeCustomerMergeModalPOS();
+      renderCustomerManageListPOS();
+      if (isCustomerPickerOpenPOS()) renderCustomerPickerListPOS();
+    });
+  }
+
+  const cancelBtn = document.getElementById('customer-merge-cancel');
+  if (cancelBtn) cancelBtn.addEventListener('click', closeCustomerMergeModalPOS);
+}
+
 function initCustomerUXPOS(){
   const inp = document.getElementById('sale-customer');
   const sticky = document.getElementById('sale-customer-sticky');
   const clearBtn = document.getElementById('btn-clear-customer');
+  const pickBtn = document.getElementById('btn-pick-customer');
+  const manageBtn = document.getElementById('btn-toggle-customer-manage');
+
   if (!inp || !sticky) return;
 
-  const list = loadCustomerCatalogPOS();
-  updateCustomerDatalistPOS(list);
+  setupCustomerPickerModalPOS();
+  setupCustomerEditModalPOS();
+  setupCustomerMergeModalPOS();
+  refreshCustomerUI_POS();
 
   // Estado pegajoso + último cliente
   const stickyOn = (A33Storage.getItem(CUSTOMER_STICKY_KEY) === '1');
   sticky.checked = stickyOn;
   if (stickyOn){
     const last = A33Storage.getItem(CUSTOMER_LAST_KEY) || '';
-    if (last) inp.value = sanitizeCustomerDisplayPOS(last);
+    if (last){
+      inp.value = sanitizeCustomerDisplayPOS(last);
+      // restaurar customerId si existe por match normalizado
+      const r = resolveCustomerIdForSalePOS(inp.value, null);
+      if (r && r.id && inp.dataset){
+        inp.dataset.customerId = String(r.id);
+        if (!r.isNew && r.displayName) inp.value = r.displayName;
+      }
+    }
   }
 
   sticky.addEventListener('change', ()=>{
@@ -958,31 +2197,151 @@ function initCustomerUXPOS(){
     }
   });
 
-  // Guardar último escrito (sirve cuando encienden "pegajoso" a mitad)
+  // Si el usuario teclea, invalidamos el hint de id (se re-resuelve al vender)
   inp.addEventListener('input', ()=>{
+    if (inp.dataset) delete inp.dataset.customerId;
     if (isCustomerStickyPOS()) persistCustomerLastPOS(inp.value || '');
+  });
+
+  // Si el usuario escribe un alias / nombre viejo / cliente fusionado, lo resolvemos al destino final
+  inp.addEventListener('blur', ()=>{
+    const raw = sanitizeCustomerDisplayPOS(inp.value || '');
+    if (!raw) return;
+    const r = resolveCustomerIdForSalePOS(raw, null);
+    if (r && r.id && !r.isNew){
+      if (inp.dataset) inp.dataset.customerId = String(r.id);
+      if (r.displayName) inp.value = r.displayName;
+      if (isCustomerStickyPOS()) persistCustomerLastPOS(inp.value || '');
+    }
   });
 
   if (clearBtn){
     clearBtn.addEventListener('click', ()=>{
-      inp.value = '';
+      clearCustomerSelectionUI_POS();
       persistCustomerLastPOS('');
       inp.focus();
     });
   }
+
+  if (pickBtn){
+    pickBtn.addEventListener('click', ()=> openCustomerPickerPOS());
+  }
+
+  if (manageBtn){
+    manageBtn.addEventListener('click', ()=> toggleCustomerManagePanelPOS());
+  }
+
+  // Gestión: agregar cliente sin venta
+  const addInp = document.getElementById('customer-add-name');
+  const addBtn = document.getElementById('customer-add-save');
+  const addMsg = document.getElementById('customer-add-msg');
+  if (addBtn && addInp){
+    const save = ()=>{
+      const name = sanitizeCustomerDisplayPOS(addInp.value || '');
+      if (!name){
+        if (addMsg) addMsg.textContent = 'Escribe un nombre.';
+        addInp.focus();
+        return;
+      }
+      const res = addCustomerToCatalogPOS(name);
+      if (!res || !res.ok){
+        if (res && res.reason === 'exists'){
+          // Si existe pero estaba desactivado, reactivar
+          const list2 = loadCustomerCatalogPOS();
+          const ex = list2.find(c => c && String(c.id) === String(res.id));
+          if (ex && ex.isActive === false && !ex.mergedIntoId){
+            setCustomerActiveByIdPOS(ex.id, true);
+            if (addMsg) addMsg.textContent = 'Ya existía (reactivado).';
+          } else {
+            if (addMsg) addMsg.textContent = 'Ya existe.';
+          }
+          return;
+        }
+        if (addMsg) addMsg.textContent = 'No se pudo guardar.';
+        return;
+      }
+
+      addInp.value = '';
+      if (addMsg) addMsg.textContent = 'Guardado.';
+      renderCustomerManageListPOS();
+      if (isCustomerPickerOpenPOS()) renderCustomerPickerListPOS();
+      addInp.focus();
+    };
+
+    addBtn.addEventListener('click', save);
+    addInp.addEventListener('keydown', (e)=>{
+      if (e.key === 'Enter') save();
+    });
+  }
+
+  // Gestión: buscador
+  const manageSearch = document.getElementById('customer-manage-search');
+  if (manageSearch){
+    manageSearch.addEventListener('input', ()=> renderCustomerManageListPOS());
+  }
+
+  // Gestión: filtros + compacto + expandir/colapsar
+  const filterActiveBtn = document.getElementById('customer-manage-filter-active');
+  const filterAllBtn = document.getElementById('customer-manage-filter-all');
+  const compactChk = document.getElementById('customer-manage-compact');
+  const collapseAllBtn = document.getElementById('customer-manage-collapse-all');
+  const expandAllBtn = document.getElementById('customer-manage-expand-all');
+
+  if (filterActiveBtn){
+    filterActiveBtn.addEventListener('click', ()=>{
+      setCustomerManageFilterPOS('active');
+      // no forzamos colapsar/expandir; mantenemos preferencia actual
+      renderCustomerManageListPOS();
+      manageSearch?.focus();
+    });
+  }
+  if (filterAllBtn){
+    filterAllBtn.addEventListener('click', ()=>{
+      setCustomerManageFilterPOS('all');
+      renderCustomerManageListPOS();
+      manageSearch?.focus();
+    });
+  }
+  if (compactChk){
+    // estado inicial
+    compactChk.checked = isCustomerManageCompactPOS();
+    compactChk.addEventListener('change', ()=>{
+      setCustomerManageCompactPOS(!!compactChk.checked);
+      renderCustomerManageListPOS();
+    });
+  }
+  if (collapseAllBtn){
+    collapseAllBtn.addEventListener('click', ()=>{
+      setAllCustomerManageGroupsPOS(false);
+      renderCustomerManageListPOS();
+    });
+  }
+  if (expandAllBtn){
+    expandAllBtn.addEventListener('click', ()=>{
+      setAllCustomerManageGroupsPOS(true);
+      renderCustomerManageListPOS();
+    });
+  }
+
+  // Estado inicial visual (botones activos / clase compacto)
+  applyCustomerManageUIStatePOS();
 }
 
-function afterSaleCustomerHousekeepingPOS(customerName){
+function afterSaleCustomerHousekeepingPOS(customerName, customerId){
   const n = sanitizeCustomerDisplayPOS(customerName);
-  if (n) addCustomerToCatalogPOS(n);
-
-  // Persistir "último" solo si es pegajoso; si no, igual lo guardamos para autocompletar
-  persistCustomerLastPOS(n);
+  if (n){
+    // asegurar catálogo con ID (si es nuevo, se crea con el ID ya usado en la venta)
+    ensureCustomerInCatalogPOS(n, customerId || null);
+    persistCustomerLastPOS(n);
+  } else {
+    persistCustomerLastPOS('');
+  }
 
   if (!isCustomerStickyPOS()){
-    setCustomerNameUI_POS('');
+    clearCustomerSelectionUI_POS();
   }
 }
+
 
 function getLastGroupName() {
   try {
@@ -1578,6 +2937,24 @@ function ymdPrev(ymd){
 // Normalizar nombres
 function normName(s){ return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim(); }
 
+// Detectar clave de presentación (P/M/D/L/G) a partir del nombre de producto
+function presKeyFromProductNamePOS(name){
+  const n = normName(name);
+  if (!n) return '';
+  if (n.includes('pulso') && n.includes('250')) return 'P';
+  if (n.includes('media') && n.includes('375')) return 'M';
+  if (n.includes('djeba') && n.includes('750')) return 'D';
+  if (n.includes('litro') && n.includes('1000')) return 'L';
+  if ((n.includes('galon') || n.includes('galón')) && n.includes('3800')) return 'G';
+  // fallback por palabra (por si el nombre no incluye ml)
+  if (n.includes('pulso')) return 'P';
+  if (n.includes('media')) return 'M';
+  if (n.includes('djeba')) return 'D';
+  if (n.includes('litro')) return 'L';
+  if (n.includes('galon') || n.includes('galón')) return 'G';
+  return '';
+}
+
 const RECETAS_KEY = 'arcano33_recetas_v1';
 
 const STORAGE_KEY_INVENTARIO = 'arcano33_inventario';
@@ -1796,6 +3173,16 @@ function toHHMMFromDatePOS(d){
   try{
     if (!(d instanceof Date) || isNaN(d.getTime())) return '';
     return pad2POS(d.getHours()) + ':' + pad2POS(d.getMinutes());
+  }catch(e){
+    return '';
+  }
+}
+
+function fmtDDMMYYYYHHMM_POS(date){
+  try{
+    const d = (date instanceof Date) ? date : new Date(date);
+    if (!(d instanceof Date) || isNaN(d.getTime())) return '';
+    return pad2POS(d.getDate()) + '/' + pad2POS(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + toHHMMFromDatePOS(d);
   }catch(e){
     return '';
   }
@@ -3938,7 +5325,10 @@ async function sellCupsPOS(isCourtesy){
   if (!(await guardSellDayOpenOrToastPOS(ev, date))) return;
 
   const payment = document.getElementById('sale-payment')?.value || 'efectivo';
-  const customerName = getCustomerNameFromUI_POS();
+  const customerInputName = getCustomerNameFromUI_POS();
+  const customerResolved = resolveCustomerIdForSalePOS(customerInputName, getCustomerIdHintFromUI_POS());
+  const customerId = customerResolved ? customerResolved.id : null;
+  const customerName = (customerResolved && customerResolved.displayName) ? customerResolved.displayName : customerInputName;
 
   // Banco (obligatorio si es Transferencia)
   let bankId = null;
@@ -4024,6 +5414,7 @@ async function sellCupsPOS(isCourtesy){
     // Compat: mantenemos "customer" y añadimos "customerName" (nuevo)
     customer: customerName,
     customerName,
+    customerId,
     courtesyTo: isCourtesy ? ((document.getElementById('sale-courtesy-to')?.value || '').trim()) : '',
     total,
     notes: isCourtesy ? 'Cortesía por vaso' : 'Venta por vaso',
@@ -4046,7 +5437,7 @@ async function sellCupsPOS(isCourtesy){
   }
 
   // Cliente: catálogo + modo pegajoso
-  afterSaleCustomerHousekeepingPOS(customerName);
+  afterSaleCustomerHousekeepingPOS(customerName, customerId);
 
   const qtyInp = document.getElementById('cup-qty');
   if (qtyInp) qtyInp.value = 1;
@@ -4131,6 +5522,11 @@ async function importFromLoteToInventory(){
     alert('Primero selecciona un evento.');
     return;
   }
+
+  // Evento real (para nombre)
+  const ev = await getEventByIdPOS(evId);
+  const evName = (ev && ev.name) ? String(ev.name) : '';
+
   let lotes = [];
   try {
     const raw = A33Storage.getItem('arcano33_lotes');
@@ -4144,18 +5540,55 @@ async function importFromLoteToInventory(){
     alert('No hay lotes registrados en el Control de Lotes.');
     return;
   }
-  const listaCodigos = lotes
+
+  // Helpers de estado (compat: lotes viejos sin campos = DISPONIBLE)
+  const normStatus = (status) => {
+    const st = (status || '').toString().trim().toUpperCase();
+    if (!st) return '';
+    if (st === 'EN EVENTO') return 'EN_EVENTO';
+    if (st === 'EN_EVENTO') return 'EN_EVENTO';
+    if (st === 'DISPONIBLE') return 'DISPONIBLE';
+    if (st === 'CERRADO') return 'CERRADO';
+    return st;
+  };
+  const hasAssigned = (l) => (l && l.assignedEventId != null && String(l.assignedEventId).trim() !== '');
+  const isAvailable = (l) => {
+    const st = normStatus(l?.status);
+    if (hasAssigned(l)) return false;
+    if (!st) return true; // lotes viejos
+    return st === 'DISPONIBLE';
+  };
+
+  const available = lotes.filter(isAvailable);
+  if (!available.length){
+    showToast('No hay lotes disponibles. Los lotes asignados no se pueden cargar de nuevo. Crea otro lote.', 'error', 4200);
+    return;
+  }
+
+  const listaCodigos = available
     .map(l => (l.codigo || '').trim())
     .filter(c => c)
     .join(', ');
-  const codigo = prompt('Escribe el CÓDIGO del lote que quieres asignar a este evento (códigos disponibles: ' + (listaCodigos || 'ninguno') + '):');
+
+  const codigo = prompt('Escribe el CÓDIGO del lote que quieres asignar a este evento (disponibles: ' + (listaCodigos || 'ninguno') + '):');
   if (!codigo) return;
+
   const codigoNorm = (codigo || '').toString().toLowerCase().trim();
-  const lote = lotes.find(l => ((l.codigo || '').toString().toLowerCase().trim() === codigoNorm));
-  if (!lote){
+  const matchFn = (l) => ((l.codigo || '').toString().toLowerCase().trim() === codigoNorm);
+
+  const loteAny = lotes.find(matchFn);
+  if (!loteAny){
     alert('No se encontró un lote con ese código.');
     return;
   }
+
+  if (!isAvailable(loteAny)){
+    const prevEvName = (loteAny.assignedEventName || '').toString().trim();
+    const msg = 'Ese lote ya fue asignado' + (prevEvName ? (' al evento "' + prevEvName + '"') : '') + '. No se puede cargar dos veces.';
+    showToast(msg, 'error', 4300);
+    return;
+  }
+
   const stamp = new Date().toISOString();
   const cargaId = 'lc-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,7);
   const map = [
@@ -4165,28 +5598,70 @@ async function importFromLoteToInventory(){
     { field: 'litro', name: 'Litro 1000ml' },
     { field: 'galon', name: 'Galón 3800ml' }
   ];
+
   const products = await getAll('products');
   const norm = s => (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+
+  const items = [];
   let total = 0;
   for (const m of map){
-    const rawQty = (lote[m.field] ?? '0').toString();
+    const rawQty = (loteAny[m.field] ?? '0').toString();
     const qty = parseInt(rawQty, 10);
     if (!(qty > 0)) continue;
     const prod = products.find(p => norm(p.name) === norm(m.name));
     if (!prod) continue;
-    await addRestock(evId, prod.id, qty, {
-      source: 'lote',
-      loteCodigo: (lote.codigo || ''),
-      loteId: (lote.id != null ? lote.id : null),
-      loteCargaId: cargaId,
-      time: stamp,
-      notes: 'Reposición (lote ' + (lote.codigo || '') + ')'
-    });
+    items.push({ productId: prod.id, qty });
     total += qty;
   }
+
+  if (!items.length){
+    showToast('Ese lote no trae unidades para cargar (todo está en 0).', 'error', 3800);
+    return;
+  }
+
+  // Asignación única: marcamos el lote como EN_EVENTO y lo vinculamos al evento (anti stock fantasma)
+  try {
+    const idx = lotes.findIndex(l => (loteAny.id != null && l.id === loteAny.id) || matchFn(l));
+    if (idx >= 0){
+      const prev = lotes[idx] || {};
+      const hist = Array.isArray(prev.assignmentHistory) ? prev.assignmentHistory.slice() : [];
+      hist.push({
+        type: 'ASSIGN',
+        at: stamp,
+        eventId: evId,
+        eventName: evName || ('Evento #' + evId),
+        loteCargaId: cargaId
+      });
+      lotes[idx] = {
+        ...prev,
+        status: 'EN_EVENTO',
+        assignedEventId: evId,
+        assignedEventName: evName || ('Evento #' + evId),
+        assignedAt: stamp,
+        assignedCargaId: cargaId,
+        assignmentHistory: hist
+      };
+      A33Storage.setItem('arcano33_lotes', JSON.stringify(lotes));
+    }
+  } catch (e){
+    showToast('No se pudo marcar el lote como asignado. No se aplicó la carga.', 'error', 4200);
+    return;
+  }
+
+  for (const it of items){
+    await addRestock(evId, it.productId, it.qty, {
+      source: 'lote',
+      loteCodigo: (loteAny.codigo || ''),
+      loteId: (loteAny.id != null ? loteAny.id : null),
+      loteCargaId: cargaId,
+      time: stamp,
+      notes: 'Reposición (lote ' + (loteAny.codigo || '') + ')'
+    });
+  }
+
   await renderInventario();
   await refreshSaleStockLabel();
-  alert('Se agregó inventario desde el lote "' + (lote.codigo || '') + '" al evento seleccionado.');
+  showToast('Lote "' + (loteAny.codigo || '') + '" asignado a ' + (evName || 'evento') + ' (' + total + ' u.)', 'ok', 2400);
 }
 
 
@@ -4203,26 +5678,22 @@ async function renderLotesCargadosEvento(eventId){
     .filter(e => e && e.type === 'restock' && (e.loteCodigo || e.source === 'lote'))
     .sort((a,b)=> (b.time||'').localeCompare(a.time||''));
 
+  // Detectar reversos (ajustes negativos) por grupo de carga, para marcar la historia sin ocultarla
+  const revRows = (entries || [])
+    .filter(e => e && e.type === 'adjust' && e.source === 'lote_reverso');
+  const revByGroupKey = new Map();
+  for (const r of revRows){
+    const k = (r.loteGroupKey || r.loteCargaId || '')
+      ? String(r.loteGroupKey || r.loteCargaId)
+      : '';
+    if (!k) continue;
+    const t = (r.time || '').toString();
+    const prev = revByGroupKey.get(k);
+    if (!prev || t.localeCompare(prev) > 0) revByGroupKey.set(k, t);
+  }
+
   const prods = await getAll('products');
   const pMap = new Map((prods||[]).map(p => [p.id, p]));
-
-  const norm = s => (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
-  function presKeyFromName(name){
-    const n = norm(name);
-    if (!n) return '';
-    if (n.includes('pulso') && n.includes('250')) return 'P';
-    if (n.includes('media') && n.includes('375')) return 'M';
-    if (n.includes('djeba') && n.includes('750')) return 'D';
-    if (n.includes('litro') && n.includes('1000')) return 'L';
-    if (n.includes('galon') && n.includes('3800')) return 'G';
-    // fallback por palabra (por si el nombre no incluye ml)
-    if (n.includes('pulso')) return 'P';
-    if (n.includes('media')) return 'M';
-    if (n.includes('djeba')) return 'D';
-    if (n.includes('litro')) return 'L';
-    if (n.includes('galon')) return 'G';
-    return '';
-  }
 
   // Agrupar: 1 fila por cada "carga" de lote
   const groups = new Map();
@@ -4234,16 +5705,21 @@ async function renderLotesCargadosEvento(eventId){
       : ((loteCodigo || '—') + '|' + (time || ''));
     let g = groups.get(gKey);
     if (!g){
-      g = { loteCodigo: loteCodigo || '—', time: time || '', P:0, M:0, D:0, L:0, G:0 };
+      g = { loteCodigo: loteCodigo || '—', time: time || '', groupKey: gKey, P:0, M:0, D:0, L:0, G:0 };
       groups.set(gKey, g);
     }
     if ((g.loteCodigo === '—' || !g.loteCodigo) && loteCodigo) g.loteCodigo = loteCodigo;
     if (!g.time && time) g.time = time;
 
     const p = pMap.get(it.productId);
-    const key = presKeyFromName(p ? (p.name || '') : '');
+    const key = presKeyFromProductNamePOS(p ? (p.name || '') : '');
     const qty = Number(it.qty) || 0;
     if (key) g[key] = (Number(g[key]) || 0) + qty;
+
+    // marcar si esta carga fue reversada (para claridad)
+    if (!g.reversedAt && revByGroupKey.has(gKey)){
+      g.reversedAt = revByGroupKey.get(gKey);
+    }
   }
 
   const out = Array.from(groups.values()).sort((a,b)=> (b.time||'').localeCompare(a.time||''));
@@ -4259,8 +5735,9 @@ async function renderLotesCargadosEvento(eventId){
   for (const g of out){
     const dt = g.time ? new Date(g.time).toLocaleString('es-NI') : '';
     const tr = document.createElement('tr');
+    const codeTxt = escapeHtml((g.loteCodigo || '—').toString()) + (g.reversedAt ? ' ↩︎ REV' : '');
     tr.innerHTML = `
-      <td>${escapeHtml((g.loteCodigo || '—').toString())}</td>
+      <td>${codeTxt}</td>
       <td>${escapeHtml(dt || '')}</td>
       <td>${Number(g.P)||0}</td>
       <td>${Number(g.M)||0}</td>
@@ -4270,6 +5747,629 @@ async function renderLotesCargadosEvento(eventId){
     `;
     tbody.appendChild(tr);
   }
+}
+
+// ==============================
+// Sobrantes → Lote hijo (Control de Lotes)
+// - Crea un nuevo lote DISPONIBLE con parentLotId/sourceEventId
+// - Marca el lote original como CERRADO (sin perder Evento asignado)
+// ==============================
+const LOTES_LS_KEY = 'arcano33_lotes';
+
+function normLoteStatusPOS(status){
+  const s = String(status || '').trim().toUpperCase();
+  if (s === 'DISPONIBLE' || s === 'EN_EVENTO' || s === 'CERRADO') return s;
+  return '';
+}
+
+function effectiveLoteStatusPOS(lote){
+  const st = normLoteStatusPOS(lote && lote.status);
+  if (st === 'CERRADO') return 'CERRADO';
+  const hasAssigned = (lote && (lote.assignedEventId != null || lote.assignedEventName));
+  if (st) return st;
+  return hasAssigned ? 'EN_EVENTO' : 'DISPONIBLE';
+}
+
+function readLotesLS_POS(){
+  try{
+    const LS = window.A33Storage;
+    const arr = LS ? LS.getJSON(LOTES_LS_KEY, []) : null;
+    return Array.isArray(arr) ? arr : [];
+  }catch(_){
+    return [];
+  }
+}
+
+function writeLotesLS_POS(arr){
+  try{
+    const LS = window.A33Storage;
+    if (!LS) return false;
+    LS.setJSON(LOTES_LS_KEY, Array.isArray(arr) ? arr : []);
+    return true;
+  }catch(_){
+    return false;
+  }
+}
+
+function lotHasSobranteChildPOS(allLotes, parentId, eventId){
+  if (!parentId) return false;
+  const arr = Array.isArray(allLotes) ? allLotes : [];
+  return arr.some(l => l && String(l.parentLotId||'') === String(parentId) && Number(l.sourceEventId||0) === Number(eventId||0));
+}
+
+function makeSobranteCodePOS(eventName){
+  const base = String(eventName || 'Evento').trim() || 'Evento';
+  const today = new Date();
+  const y = today.getFullYear();
+  const m = String(today.getMonth()+1).padStart(2,'0');
+  const d = String(today.getDate()).padStart(2,'0');
+  const rand = Math.random().toString(36).slice(2,5).toUpperCase();
+  return `SOBRANTE — ${base} — ${y}-${m}-${d} — ${rand}`;
+}
+
+async function getPresentationProductIdMapPOS(){
+  const prods = await getAll('products');
+  const map = { P:null, M:null, D:null, L:null, G:null };
+  for (const p of (prods || [])){
+    const n = normName(p && p.name);
+    if (!n) continue;
+    if (!map.P && n.includes('pulso')) map.P = p.id;
+    else if (!map.M && n.includes('media')) map.M = p.id;
+    else if (!map.D && n.includes('djeba')) map.D = p.id;
+    else if (!map.L && n.includes('litro')) map.L = p.id;
+    else if (!map.G && (n.includes('galon') || n.includes('galón'))) map.G = p.id;
+  }
+  return map;
+}
+
+async function prefillSobranteQtySuggestPOS(eventId){
+  const ids = await getPresentationProductIdMapPOS();
+  const out = { P:0, M:0, D:0, L:0, G:0 };
+  for (const k of Object.keys(out)){
+    const pid = ids[k];
+    if (pid == null) continue;
+    try{
+      const st = await computeStock(eventId, pid);
+      const n = Number(st || 0);
+      out[k] = n > 0 ? Math.floor(n) : 0;
+    }catch(_){ }
+  }
+  return out;
+}
+
+function setSobranteInputsPOS(vals){
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = String(Math.max(0, Number(v || 0)) | 0); };
+  set('sobrante-p', vals.P);
+  set('sobrante-m', vals.M);
+  set('sobrante-d', vals.D);
+  set('sobrante-l', vals.L);
+  set('sobrante-g', vals.G);
+}
+
+function getSobranteInputsPOS(){
+  const get = (id) => {
+    const el = document.getElementById(id);
+    const n = parseInt(el && el.value ? el.value : '0', 10);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
+  return { P:get('sobrante-p'), M:get('sobrante-m'), D:get('sobrante-d'), L:get('sobrante-l'), G:get('sobrante-g') };
+}
+
+
+function updateSobranteMetaPOS(){
+  const sel = document.getElementById('sobrante-lote-select');
+  const meta = document.getElementById('sobrante-lote-meta');
+  if (!sel || !meta) return;
+  const parentId = sel.value ? String(sel.value) : '';
+  if (!parentId){
+    meta.textContent = '';
+    return;
+  }
+  const allLotes = readLotesLS_POS();
+  const parent = allLotes.find(l => l && String(l.id) === parentId) || null;
+  const code = parent ? (parent.codigo || parent.name || parent.nombre || ('Lote ' + parentId)).toString() : ('Lote ' + parentId);
+  meta.textContent = `Se cerrará el lote original: ${code}`;
+}
+
+async function refreshSobranteUIForEventPOS(eventId){
+  const btn = document.getElementById('btn-create-sobrante');
+  const panel = document.getElementById('sobrante-panel');
+  const sel = document.getElementById('sobrante-lote-select');
+  const meta = document.getElementById('sobrante-lote-meta');
+  if (!btn || !panel || !sel) return;
+
+  const allLotes = readLotesLS_POS();
+  const candidates = allLotes.filter(l => {
+    if (!l) return false;
+    if (Number(l.assignedEventId || 0) !== Number(eventId || 0)) return false;
+    const st = effectiveLoteStatusPOS(l);
+    if (st !== 'EN_EVENTO') return false;
+    // prevenir doble sobrante
+    if (l.sobranteLotId) return false;
+    if (lotHasSobranteChildPOS(allLotes, l.id, eventId)) return false;
+    return true;
+  });
+
+  sel.innerHTML = '';
+  if (!candidates.length){
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '— No hay lotes EN_EVENTO sin sobrante —';
+    sel.appendChild(opt);
+    btn.disabled = true;
+    if (meta) meta.textContent = 'Tip: si necesitas cargar más inventario, crea otro lote nuevo. Si hubo sobrantes, primero asegúrate de haber cargado el lote al evento.';
+    // Si el panel estaba abierto y ya no hay candidatos, cerrarlo
+    panel.style.display = 'none';
+    return;
+  }
+
+  btn.disabled = false;
+  for (const l of candidates){
+    const opt = document.createElement('option');
+    opt.value = String(l.id);
+    const code = (l.codigo || l.name || l.nombre || ('Lote ' + l.id)).toString();
+    opt.textContent = code;
+    sel.appendChild(opt);
+  }
+
+  // meta del select + listener
+  try{
+    updateSobranteMetaPOS();
+    sel.onchange = () => { try{ updateSobranteMetaPOS(); }catch(_){ } };
+  }catch(_){ }
+}
+
+async function openSobrantePanelPOS(){
+  const panel = document.getElementById('sobrante-panel');
+  const btn = document.getElementById('btn-create-sobrante');
+  if (!panel) return;
+
+  const evId = parseInt((document.getElementById('inv-event') && document.getElementById('inv-event').value) || '0', 10);
+  if (!evId) return alert('Selecciona un evento');
+
+  // Validar evento (si está abierto, permitir pero advertir)
+  const evs = await getAll('events');
+  const ev = evs.find(e => e && Number(e.id) === Number(evId)) || null;
+  if (!ev){ alert('Evento no encontrado'); return; }
+  if (!ev.closedAt){
+    const ok = confirm('Este evento aún está ABIERTO.\n\n¿Crear lote sobrante de todas formas? (Recomendado al final del evento)');
+    if (!ok) return;
+  }
+
+  await refreshSobranteUIForEventPOS(evId);
+
+  if (btn && btn.disabled){
+    alert('No hay lotes EN_EVENTO disponibles para crear sobrante (o ya se creó el sobrante).');
+    return;
+  }
+
+  // Sugerir cantidades basado en stock actual del evento
+  try{
+    const suggest = await prefillSobranteQtySuggestPOS(evId);
+    setSobranteInputsPOS(suggest);
+  }catch(e){
+    setSobranteInputsPOS({P:0,M:0,D:0,L:0,G:0});
+  }
+
+  panel.style.display = 'block';
+}
+
+async function closeSobrantePanelPOS(){
+  const panel = document.getElementById('sobrante-panel');
+  if (panel) panel.style.display = 'none';
+}
+
+async function createSobranteLotPOS(){
+  const evId = parseInt((document.getElementById('inv-event') && document.getElementById('inv-event').value) || '0', 10);
+  if (!evId) return alert('Selecciona un evento');
+
+  const sel = document.getElementById('sobrante-lote-select');
+  const parentId = sel && sel.value ? sel.value : '';
+  if (!parentId) return alert('Selecciona un lote original');
+
+  const qty = getSobranteInputsPOS();
+  const total = Number(qty.P||0)+Number(qty.M||0)+Number(qty.D||0)+Number(qty.L||0)+Number(qty.G||0);
+  if (!(total > 0)) return alert('Ingresa al menos una cantidad sobrante (> 0).');
+
+  const allLotes = readLotesLS_POS();
+  const parent = allLotes.find(l => l && String(l.id) === String(parentId));
+  if (!parent){
+    alert('No se encontró el lote original en Control de Lotes.');
+    return;
+  }
+
+  const st = effectiveLoteStatusPOS(parent);
+  if (st === 'CERRADO'){
+    alert('Este lote ya está CERRADO.');
+    return;
+  }
+  if (Number(parent.assignedEventId || 0) !== Number(evId || 0)){
+    alert('Este lote no corresponde al evento seleccionado.');
+    return;
+  }
+
+  if (parent.sobranteLotId || lotHasSobranteChildPOS(allLotes, parent.id, evId)){
+    alert('Ya existe un lote sobrante creado para este lote original (doble sobrante prevenido).');
+    return;
+  }
+
+  const evs = await getAll('events');
+  const ev = evs.find(e => e && Number(e.id) === Number(evId)) || null;
+  const evName = ev ? (ev.name || '') : '';
+
+  const nowIso = new Date().toISOString();
+  const newId = 'lot-child-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,6);
+
+  const child = {
+    // Copiar lo que exista (materia prima / datos del lote) sin inventar
+    ...parent,
+    id: newId,
+    codigo: makeSobranteCodePOS(evName || parent.assignedEventName || ('Evento ' + evId)),
+
+    // Cantidades sobrantes (presentaciones)
+    pulso: String(qty.P || 0),
+    media: String(qty.M || 0),
+    djeba: String(qty.D || 0),
+    litro: String(qty.L || 0),
+    galon: String(qty.G || 0),
+
+    // Nuevo lote DISPONIBLE
+    status: 'DISPONIBLE',
+    assignedEventId: null,
+    assignedEventName: '',
+    assignedAt: null,
+
+    // Trazabilidad
+    parentLotId: parent.id,
+    sourceEventId: evId,
+    sourceEventName: evName || (parent.assignedEventName || ''),
+    loteType: 'SOBRANTE',
+
+    createdAt: nowIso
+  };
+
+  // Notas: dejar rastro sin romper lo existente
+  try{
+    const pcode = (parent.codigo || parent.name || parent.nombre || parent.id).toString();
+    const line = `SOBRANTE del lote ${pcode} · Evento: ${child.sourceEventName || evId} · ${nowIso}`;
+    child.notas = (parent.notas ? String(parent.notas).trim() + '\n' : '') + line;
+  }catch(_){ }
+
+  // Cerrar lote original (mantener Evento asignado visible)
+  parent.status = 'CERRADO';
+  parent.closedAt = nowIso;
+  parent.sobranteLotId = newId;
+
+  // Guardar
+  const next = allLotes.map(l => (l && String(l.id) === String(parent.id)) ? parent : l);
+  next.push(child);
+  writeLotesLS_POS(next);
+
+  await closeSobrantePanelPOS();
+  await refreshSobranteUIForEventPOS(evId);
+  toast('Lote sobrante creado y lote original cerrado');
+}
+
+
+// ==============================
+// Reverso de asignación de lote (sin borrar historia)
+// - Crea ajustes negativos en inventory (source: lote_reverso) para neutralizar la carga
+// - Devuelve el lote a DISPONIBLE y limpia assignedEventId/Name
+// - Bloqueo conservador: si hay consumo/ventas de esas presentaciones (o fraccionamiento de galones), no permite reversar
+// ==============================
+
+function setReversoPreviewPOS(vals){
+  const set = (id, v)=>{ const el = document.getElementById(id); if (el) el.textContent = String(Math.max(0, Number(v||0))|0); };
+  set('reverso-p', vals.P);
+  set('reverso-m', vals.M);
+  set('reverso-d', vals.D);
+  set('reverso-l', vals.L);
+  set('reverso-g', vals.G);
+}
+
+function resetReversoPreviewPOS(){
+  setReversoPreviewPOS({P:0,M:0,D:0,L:0,G:0});
+}
+
+async function getRestockGroupForLotePOS(eventId, lote){
+  const entries = await getInventoryEntries(eventId);
+  const restocks = (entries || []).filter(e => e && e.type === 'restock' && (e.loteCodigo || e.loteId || e.loteCargaId || e.source === 'lote'));
+
+  const wantCarga = (lote && lote.assignedCargaId) ? String(lote.assignedCargaId) : '';
+  const wantId = (lote && lote.id != null) ? String(lote.id) : '';
+  const wantCode = (lote && lote.codigo != null) ? normName(String(lote.codigo)) : '';
+
+  let matches = restocks;
+  if (wantCarga){
+    matches = restocks.filter(r => r && r.loteCargaId != null && String(r.loteCargaId) === wantCarga);
+  } else if (wantId){
+    matches = restocks.filter(r => r && r.loteId != null && String(r.loteId) === wantId);
+  } else if (wantCode){
+    matches = restocks.filter(r => r && r.loteCodigo != null && normName(String(r.loteCodigo)) === wantCode);
+  }
+
+  if (!matches.length) return null;
+
+  // Agrupar por loteCargaId si existe; si no, fallback a código|time (lotes viejos)
+  const groups = new Map();
+  for (const it of matches){
+    const loteCodigo = (it.loteCodigo || '').toString().trim();
+    const time = (it.time || '').toString();
+    const gKey = it.loteCargaId
+      ? String(it.loteCargaId)
+      : ((loteCodigo || '—') + '|' + (time || ''));
+    let g = groups.get(gKey);
+    if (!g){
+      g = { groupKey: gKey, loteCargaId: it.loteCargaId ? String(it.loteCargaId) : null, time: time || '', items: [] };
+      groups.set(gKey, g);
+    }
+    if (!g.time && time) g.time = time;
+    g.items.push(it);
+  }
+
+  const list = Array.from(groups.values()).sort((a,b)=> (b.time||'').localeCompare(a.time||''));
+  return list.length ? list[0] : null;
+}
+
+async function summarizeRestockGroupPOS(group){
+  const out = { P:0,M:0,D:0,L:0,G:0 };
+  const sumsByPid = new Map();
+  if (!group || !Array.isArray(group.items)) return { totals: out, sumsByPid, hasGallon: false };
+
+  for (const it of group.items){
+    const pid = it.productId;
+    const qty = Number(it.qty) || 0;
+    if (!pid || !(qty > 0)) continue;
+    sumsByPid.set(pid, (Number(sumsByPid.get(pid))||0) + qty);
+  }
+
+  const prods = await getAll('products');
+  const pMap = new Map((prods||[]).map(p => [p.id, p]));
+  for (const [pid, qty] of sumsByPid.entries()){
+    const p = pMap.get(pid);
+    const key = presKeyFromProductNamePOS(p ? (p.name || '') : '');
+    if (key && Object.prototype.hasOwnProperty.call(out, key)){
+      out[key] = (Number(out[key]) || 0) + (Number(qty) || 0);
+    }
+  }
+  const hasGallon = (Number(out.G) || 0) > 0;
+  return { totals: out, sumsByPid, hasGallon };
+}
+
+async function validateReverseAssignPOS(eventId, group, sumsByPid, hasGallon){
+  // 1) Evitar doble reverso
+  const entries = await getInventoryEntries(eventId);
+  const already = (entries || []).some(e => e && e.type === 'adjust' && e.source === 'lote_reverso' && (
+    (group && group.groupKey && String(e.loteGroupKey || '') === String(group.groupKey)) ||
+    (group && group.loteCargaId && String(e.loteCargaId || '') === String(group.loteCargaId))
+  ));
+  if (already){
+    return { ok:false, reason:'Este lote ya fue reversado (se detectó un ajuste previo).'};
+  }
+
+  // 2) Bloqueo por ventas/consumo (proxy conservador)
+  const sales = await getAll('sales');
+  const pidSet = new Set(Array.from((sumsByPid || new Map()).keys()).map(n => Number(n)));
+  const hasSalesForThese = (sales || []).some(s => s && Number(s.eventId) === Number(eventId) && pidSet.has(Number(s.productId)));
+  if (hasSalesForThese){
+    return { ok:false, reason:'No se puede reversar: ya existen ventas registradas de esas presentaciones en este evento.'};
+  }
+
+  // Si el lote incluye galones, bloquear si hubo fraccionamiento o ventas por vaso
+  if (hasGallon){
+    const ev = await getEventByIdPOS(eventId);
+    const hasFraction = ev && Array.isArray(ev.fractionBatches) && ev.fractionBatches.length > 0;
+    const hasCupSales = (sales || []).some(s => s && Number(s.eventId) === Number(eventId) && isCupSaleRecord(s));
+    if (hasFraction || hasCupSales){
+      return { ok:false, reason:'No se puede reversar: este evento ya tuvo fraccionamiento/ventas por vaso (consumo de galones).'};
+    }
+  }
+
+  // 3) Stock actual debe cubrir el reverso (si no, algo ya consumió/ajustó)
+  for (const [pid, qty] of (sumsByPid || new Map()).entries()){
+    const need = Number(qty) || 0;
+    if (!(need > 0)) continue;
+    const st = Number(await computeStock(eventId, pid)) || 0;
+    if (st < need){
+      return { ok:false, reason:'No se puede reversar: el stock actual no alcanza para revertir esta carga (posible consumo o ajuste manual).'};
+    }
+  }
+
+  return { ok:true, reason:'' };
+}
+
+async function refreshReversoUIForEventPOS(eventId){
+  const btnOpen = document.getElementById('btn-reverse-assign');
+  const panel = document.getElementById('reverso-panel');
+  const sel = document.getElementById('reverso-lote-select');
+  const meta = document.getElementById('reverso-lote-meta');
+  if (!btnOpen || !panel || !sel) return;
+
+  const lotes = readLotesLS_POS();
+  const candidates = (lotes || []).filter(l => l && effectiveLoteStatusPOS(l) === 'EN_EVENTO' && Number(l.assignedEventId) === Number(eventId));
+
+  // Botón habilitado solo si hay candidatos
+  btnOpen.disabled = candidates.length === 0;
+  if (candidates.length === 0){
+    // si está abierto, lo cerramos para evitar panel vacío
+    if (panel.style.display !== 'none') panel.style.display = 'none';
+    if (meta) meta.textContent = 'No hay lotes EN_EVENTO en este evento.';
+    sel.innerHTML = '';
+    resetReversoPreviewPOS();
+    return;
+  }
+
+  // Mantener selección si existe
+  const prevVal = sel.value;
+  sel.innerHTML = candidates.map(l => {
+    const id = String(l.id);
+    const code = (l.codigo || l.name || l.nombre || id).toString();
+    return `<option value="${escapeHtml(id)}">${escapeHtml(code)}</option>`;
+  }).join('');
+  if (prevVal && candidates.some(l => String(l.id) === String(prevVal))){
+    sel.value = prevVal;
+  }
+
+  // Actualizar meta/preview
+  await updateReversoMetaPOS(eventId);
+}
+
+async function updateReversoMetaPOS(eventId){
+  const sel = document.getElementById('reverso-lote-select');
+  const meta = document.getElementById('reverso-lote-meta');
+  if (!sel || !meta) return;
+
+  const lotes = readLotesLS_POS();
+  const lote = lotes.find(l => l && String(l.id) === String(sel.value)) || null;
+  if (!lote){
+    meta.textContent = 'Selecciona un lote.';
+    resetReversoPreviewPOS();
+    return;
+  }
+
+  const group = await getRestockGroupForLotePOS(eventId, lote);
+  if (!group){
+    meta.textContent = 'No se encontró la carga de inventario para este lote en el evento (datos viejos o incompletos).';
+    resetReversoPreviewPOS();
+    return;
+  }
+
+  const sum = await summarizeRestockGroupPOS(group);
+  setReversoPreviewPOS(sum.totals);
+
+  const chk = await validateReverseAssignPOS(eventId, group, sum.sumsByPid, sum.hasGallon);
+  if (!chk.ok){
+    meta.textContent = 'Bloqueado: ' + chk.reason;
+  } else {
+    const dt = group.time ? new Date(group.time).toLocaleString('es-NI') : '';
+    meta.textContent = 'OK. Carga detectada ' + (dt ? ('(' + dt + '). ') : '') + 'Al reversar, el lote vuelve a DISPONIBLE.';
+  }
+
+  // Guardar en dataset para el botón (evitar reconsultas sencillas)
+  const btnDo = document.getElementById('btn-reverso-do');
+  if (btnDo){
+    btnDo.dataset.groupKey = String(group.groupKey || '');
+  }
+}
+
+function openReversoPanelPOS(){
+  const panel = document.getElementById('reverso-panel');
+  if (!panel) return;
+  panel.style.display = 'block';
+}
+
+function closeReversoPanelPOS(){
+  const panel = document.getElementById('reverso-panel');
+  if (!panel) return;
+  panel.style.display = 'none';
+}
+
+async function reverseAssignSelectedLotePOS(){
+  const evId = parseInt((document.getElementById('inv-event') && document.getElementById('inv-event').value) || '0', 10);
+  if (!evId) return alert('Selecciona un evento.');
+
+  const sel = document.getElementById('reverso-lote-select');
+  const meta = document.getElementById('reverso-lote-meta');
+  if (!sel) return;
+
+  const lotes = readLotesLS_POS();
+  const idx = lotes.findIndex(l => l && String(l.id) === String(sel.value));
+  if (idx < 0) return alert('No se encontró el lote seleccionado.');
+  const lote = lotes[idx];
+
+  if (effectiveLoteStatusPOS(lote) !== 'EN_EVENTO' || Number(lote.assignedEventId) !== Number(evId)){
+    alert('Este lote ya no está EN_EVENTO en el evento actual.');
+    await refreshReversoUIForEventPOS(evId);
+    return;
+  }
+
+  const group = await getRestockGroupForLotePOS(evId, lote);
+  if (!group){
+    alert('No se encontró la carga de inventario de este lote en el evento.');
+    return;
+  }
+
+  const sum = await summarizeRestockGroupPOS(group);
+  const chk = await validateReverseAssignPOS(evId, group, sum.sumsByPid, sum.hasGallon);
+  if (!chk.ok){
+    alert('Reverso bloqueado: ' + chk.reason);
+    if (meta) meta.textContent = 'Bloqueado: ' + chk.reason;
+    return;
+  }
+
+  const reason = prompt(`REVERSO de asignación de lote #${lote.codigo || lote.id} — Motivo:`, '')
+  if (reason === null) return; // cancelado
+  const reasonTrim = String(reason || '').trim();
+
+  const confirmMsg = `Se creará un reverso sin borrar historia:\n\n- Se registrarán ajustes negativos equivalentes a la carga.\n- El lote volverá a DISPONIBLE y reaparecerá en “Agregar desde lote”.\n\n¿Confirmas reversar la asignación?`;
+  if (!confirm(confirmMsg)) return;
+
+  const nowIso = new Date().toISOString();
+  const revId = 'ra-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,6);
+
+  // 1) Ajustes negativos (inventory)
+  const noteBase = `REVERSO asignación lote ${lote.codigo || lote.id}` + (reasonTrim ? ` — Motivo: ${reasonTrim}` : '');
+  for (const [pid, qty] of sum.sumsByPid.entries()){
+    const n = Number(qty) || 0;
+    if (!(n > 0)) continue;
+    await put('inventory', {
+      eventId: evId,
+      productId: pid,
+      type: 'adjust',
+      qty: -n,
+      time: nowIso,
+      notes: noteBase,
+      source: 'lote_reverso',
+      reverseId: revId,
+      loteId: (lote.id != null ? lote.id : null),
+      loteCodigo: (lote.codigo || ''),
+      loteCargaId: group.loteCargaId || null,
+      loteGroupKey: group.groupKey || null,
+      reversedReason: reasonTrim
+    });
+  }
+
+  // 2) Devolver el lote a DISPONIBLE (sin borrar historia)
+  const prev = {...lote};
+  const hist = Array.isArray(prev.assignmentHistory) ? prev.assignmentHistory.slice() : [];
+  hist.push({
+    type: 'REVERSE_ASSIGN',
+    at: nowIso,
+    eventId: evId,
+    eventName: (prev.assignedEventName || ''),
+    reverseId: revId,
+    loteGroupKey: group.groupKey || null,
+    loteCargaId: group.loteCargaId || null,
+    reason: reasonTrim
+  });
+
+  const line = `REVERSO asignación · Evento: ${prev.assignedEventName || evId} · ${nowIso}` + (reasonTrim ? ` · Motivo: ${reasonTrim}` : '');
+  const nextNotas = (prev.notas ? String(prev.notas).trim() + '\n' : '') + line;
+
+  lotes[idx] = {
+    ...prev,
+    status: 'DISPONIBLE',
+    prevAssignedEventId: prev.assignedEventId,
+    prevAssignedEventName: prev.assignedEventName,
+    prevAssignedAt: prev.assignedAt,
+    assignedEventId: null,
+    assignedEventName: '',
+    assignedAt: null,
+    lastAssignedCargaId: (group.loteCargaId || prev.assignedCargaId || null),
+    assignedCargaId: null,
+    reversedAt: nowIso,
+    reversedReason: reasonTrim,
+    lastReverseId: revId,
+    assignmentHistory: hist,
+    notas: nextNotas
+  };
+
+  writeLotesLS_POS(lotes);
+
+  await closeReversoPanelPOS();
+  await renderInventario();
+  await refreshReversoUIForEventPOS(evId);
+  showToast('Asignación reversada. Lote disponible otra vez.', 'ok', 2800);
 }
 
 
@@ -4301,6 +6401,12 @@ async function renderInventario(){
 
   // Bloque informativo: lotes cargados en este evento
   await renderLotesCargadosEvento(evId);
+
+  // UI: Sobrantes → Lote hijo (solo UI; no altera inventario)
+  try{ await refreshSobranteUIForEventPOS(evId); }catch(e){ console.warn('refreshSobranteUIForEventPOS error', e); }
+
+  // UI: Reverso de asignación (airbag anti-errores)
+  try{ await refreshReversoUIForEventPOS(evId); }catch(e){ console.warn('refreshReversoUIForEventPOS error', e); }
 
   const prods = await getAll('products');
   const hiddenIds = await getHiddenProductIdsPOS();
@@ -4433,6 +6539,228 @@ async function renderDay(){
 }
 
 // Summary (extendido con costo y utilidad)
+
+// --- Resumen: filtro por Cliente (POS) ---
+const POS_SUMMARY_CUSTOMER_FILTER_KEY = 'pos_summary_customer_filter_v1';
+
+function normalizeSummaryCustomerFilterPOS(obj){
+  if (!obj || typeof obj !== 'object') return null;
+  const type = (obj.type === 'id' || obj.type === 'name') ? obj.type : '';
+  const value = (obj.value != null) ? String(obj.value).trim() : '';
+  if (!type || !value) return null;
+  const displayName = (obj.displayName != null) ? sanitizeCustomerDisplayPOS(obj.displayName) : '';
+  return { type, value, displayName };
+}
+
+function getSummaryCustomerFilterPOS(){
+  try{
+    if (typeof window !== 'undefined' && window.__A33_SUMMARY_CUSTOMER_FILTER){
+      const n = normalizeSummaryCustomerFilterPOS(window.__A33_SUMMARY_CUSTOMER_FILTER);
+      if (n) return n;
+    }
+  }catch(_){ }
+
+  let stored = null;
+  try{ stored = A33Storage.getJSON(POS_SUMMARY_CUSTOMER_FILTER_KEY, null, 'local'); }catch(_){ stored = null; }
+  const n = normalizeSummaryCustomerFilterPOS(stored);
+  try{ if (typeof window !== 'undefined') window.__A33_SUMMARY_CUSTOMER_FILTER = n; }catch(_){ }
+  return n;
+}
+
+function setSummaryCustomerFilterPOS(filter, { silentUI = false } = {}){
+  const n = normalizeSummaryCustomerFilterPOS(filter);
+  try{ if (typeof window !== 'undefined') window.__A33_SUMMARY_CUSTOMER_FILTER = n; }catch(_){ }
+  try{ A33Storage.setJSON(POS_SUMMARY_CUSTOMER_FILTER_KEY, n, 'local'); }catch(_){ }
+  if (!silentUI) syncSummaryCustomerFilterUI_POS(n);
+  return n;
+}
+
+function clearSummaryCustomerFilterPOS({ silentUI = false } = {}){
+  try{ if (typeof window !== 'undefined') window.__A33_SUMMARY_CUSTOMER_FILTER = null; }catch(_){ }
+  try{ A33Storage.setJSON(POS_SUMMARY_CUSTOMER_FILTER_KEY, null, 'local'); }catch(_){ }
+  if (!silentUI) syncSummaryCustomerFilterUI_POS(null);
+}
+
+function syncSummaryCustomerFilterUI_POS(filter, resolver){
+  const inp = document.getElementById('summary-customer');
+  const badge = document.getElementById('summary-customer-badge');
+
+  // Input
+  if (inp){
+    if (!filter){
+      inp.value = '';
+      try{ if (inp.dataset) delete inp.dataset.customerId; }catch(_){ }
+    } else if (filter.type === 'id'){
+      const fid = String(filter.value || '').trim();
+      const dn = resolver ? (resolver.getDisplayName(fid) || filter.displayName || '') : (filter.displayName || '');
+      if (dn) inp.value = dn;
+      try{ if (inp.dataset) inp.dataset.customerId = fid; }catch(_){ }
+    } else {
+      // type=name
+      try{ if (inp.dataset) delete inp.dataset.customerId; }catch(_){ }
+      // No forzamos el valor: mantenemos lo que el usuario escribió
+      if (!inp.value && filter.displayName) inp.value = filter.displayName;
+    }
+  }
+
+  // Badge
+  if (badge){
+    if (!filter){
+      badge.textContent = 'Sin filtro';
+      badge.classList.remove('closed');
+      badge.classList.add('open');
+    } else {
+      let label = '';
+      if (filter.type === 'id'){
+        label = resolver ? (resolver.getDisplayName(filter.value) || filter.displayName || '') : (filter.displayName || '');
+        if (!label) label = 'Cliente';
+      } else {
+        label = filter.displayName || 'Texto';
+      }
+      badge.textContent = 'Filtrando: ' + label + (filter.type === 'name' ? ' (texto)' : '');
+      badge.classList.remove('open');
+      badge.classList.add('closed');
+    }
+  }
+}
+
+function deriveSaleCustomerIdentityForSummaryPOS(s, resolver){
+  let finalId = '';
+  try{
+    const rawId = (s && s.customerId != null) ? String(s.customerId).trim() : '';
+    if (rawId){
+      finalId = resolver ? (resolver.resolveFinalId(rawId) || rawId) : rawId;
+    } else {
+      const nm = sanitizeCustomerDisplayPOS(s && s.customerName || '');
+      if (nm && resolver){
+        finalId = resolver.matchNameToFinalId(nm) || '';
+      }
+    }
+  }catch(_){ }
+
+  const rawName = sanitizeCustomerDisplayPOS(s && s.customerName || '');
+  let displayName = rawName;
+  if (finalId && resolver){
+    displayName = resolver.getDisplayName(finalId) || rawName || displayName;
+  }
+  const nameKey = normalizeCustomerKeyPOS(displayName || rawName);
+  const hasCustomer = !!(finalId || rawName);
+  return { finalId, displayName, nameKey, rawName, hasCustomer };
+}
+
+function initSummaryCustomerFilterPOS(){
+  const inp = document.getElementById('summary-customer');
+  const pickBtn = document.getElementById('btn-summary-customer-pick');
+  const clearBtn = document.getElementById('btn-summary-customer-clear');
+  const tblTop = document.getElementById('tbl-top-clientes');
+
+  if (!inp && !pickBtn && !clearBtn && !tblTop) return;
+
+  // Restaurar UI desde storage
+  try{
+    const catalog = loadCustomerCatalogPOS();
+    const resolver = buildCustomerResolverPOS(catalog);
+    const f0 = getSummaryCustomerFilterPOS();
+    if (f0 && f0.type === 'id'){
+      const fid = resolver.resolveFinalId(f0.value) || f0.value;
+      const dn = resolver.getDisplayName(fid) || f0.displayName || '';
+      const n = { type: 'id', value: String(fid), displayName: dn };
+      setSummaryCustomerFilterPOS(n, { silentUI: true });
+      syncSummaryCustomerFilterUI_POS(n, resolver);
+    } else {
+      syncSummaryCustomerFilterUI_POS(f0, resolver);
+    }
+  }catch(_){
+    syncSummaryCustomerFilterUI_POS(getSummaryCustomerFilterPOS());
+  }
+
+  if (pickBtn){
+    pickBtn.addEventListener('click', ()=>{
+      openCustomerPickerPOS((c)=>{
+        try{
+          const catalog = loadCustomerCatalogPOS();
+          const resolver = buildCustomerResolverPOS(catalog);
+          const rawId = String((c && c.id) || '').trim();
+          const fid = resolver.resolveFinalId(rawId) || rawId;
+          const dn = resolver.getDisplayName(fid) || sanitizeCustomerDisplayPOS((c && c.name) || '');
+          setSummaryCustomerFilterPOS({ type:'id', value: fid, displayName: dn });
+          renderSummary();
+        }catch(err){
+          console.warn('Error al seleccionar cliente para Resumen', err);
+        }
+      });
+    });
+  }
+
+  if (clearBtn){
+    clearBtn.addEventListener('click', ()=>{
+      clearSummaryCustomerFilterPOS();
+      renderSummary();
+      try{ inp && inp.focus(); }catch(_){ }
+    });
+  }
+
+  if (inp){
+    const applyTyped = ()=>{
+      const raw = sanitizeCustomerDisplayPOS(inp.value || '');
+      if (!raw){
+        clearSummaryCustomerFilterPOS();
+        renderSummary();
+        return;
+      }
+      try{
+        const catalog = loadCustomerCatalogPOS();
+        const resolver = buildCustomerResolverPOS(catalog);
+
+        // Si el usuario pega un ID exacto
+        let fid = '';
+        const maybeId = String(raw).trim();
+        try{ if (resolver && resolver.byId && resolver.byId.has(maybeId)) fid = resolver.resolveFinalId(maybeId) || maybeId; }catch(_){ }
+
+        if (!fid) fid = resolver ? (resolver.matchNameToFinalId(raw) || '') : '';
+
+        if (fid){
+          const dn = resolver.getDisplayName(fid) || raw;
+          if (dn) inp.value = dn;
+          setSummaryCustomerFilterPOS({ type:'id', value: fid, displayName: dn || raw });
+        } else {
+          // Fallback por nombre (no crea clientes)
+          const key = normalizeCustomerKeyPOS(raw);
+          setSummaryCustomerFilterPOS({ type:'name', value: key, displayName: raw });
+        }
+
+        renderSummary();
+      }catch(_){
+        const key = normalizeCustomerKeyPOS(raw);
+        setSummaryCustomerFilterPOS({ type:'name', value: key, displayName: raw });
+        renderSummary();
+      }
+    };
+
+    inp.addEventListener('blur', applyTyped);
+    inp.addEventListener('keydown', (e)=>{
+      if (e.key === 'Enter'){
+        e.preventDefault();
+        try{ inp.blur(); }catch(_){ }
+      }
+    });
+  }
+
+  if (tblTop){
+    tblTop.addEventListener('click', (e)=>{
+      const tr = e.target.closest('tr');
+      if (!tr) return;
+      const type = (tr.dataset && tr.dataset.filterType) ? tr.dataset.filterType : '';
+      const value = (tr.dataset && tr.dataset.filterValue) ? tr.dataset.filterValue : '';
+      const name = (tr.dataset && tr.dataset.filterName) ? tr.dataset.filterName : '';
+      if (!type || !value) return;
+      setSummaryCustomerFilterPOS({ type, value, displayName: name });
+      renderSummary();
+      try{ document.getElementById('summary-customer')?.focus(); }catch(_){ }
+    });
+  }
+}
+
 async function renderSummary(){
   const sales = await getAll('sales');
   const events = await getAll('events');
@@ -4507,8 +6835,51 @@ async function renderSummary(){
   const byPay = new Map();
   const byEvent = new Map();
 
+  // --- Cliente: resolver + filtro activo ---
+  let resolver = null;
+  try{
+    const catalog = loadCustomerCatalogPOS();
+    resolver = buildCustomerResolverPOS(catalog);
+  }catch(_){ resolver = null; }
+
+  let summaryCustomerFilter = getSummaryCustomerFilterPOS();
+  try{
+    if (summaryCustomerFilter && summaryCustomerFilter.type === 'name'){
+      const key = normalizeCustomerKeyPOS(summaryCustomerFilter.value || summaryCustomerFilter.displayName || '');
+      if (key && key !== summaryCustomerFilter.value){
+        summaryCustomerFilter = setSummaryCustomerFilterPOS({ type:'name', value: key, displayName: summaryCustomerFilter.displayName || '' }, { silentUI: true });
+      }
+    }
+    if (summaryCustomerFilter && summaryCustomerFilter.type === 'id' && resolver){
+      const fid = resolver.resolveFinalId(summaryCustomerFilter.value) || summaryCustomerFilter.value;
+      const dn = resolver.getDisplayName(fid) || summaryCustomerFilter.displayName || '';
+      if (fid !== summaryCustomerFilter.value || dn !== summaryCustomerFilter.displayName){
+        summaryCustomerFilter = setSummaryCustomerFilterPOS({ type:'id', value: String(fid), displayName: dn || summaryCustomerFilter.displayName || '' }, { silentUI: true });
+      }
+    }
+  }catch(_){ }
+
+  syncSummaryCustomerFilterUI_POS(summaryCustomerFilter, resolver);
+  const isCustomerFilterActive = !!(summaryCustomerFilter && summaryCustomerFilter.value);
+
+  // KPIs/Top clientes (solo ventas reales)
+  const customersAgg = new Map(); // key -> { total, count, filterType, filterValue, name }
+  let realSalesCount = 0;
+  let salesWithCustomerCount = 0;
+
   for (const s of (sales || [])){
+
     if (!s) continue;
+
+    const ident = deriveSaleCustomerIdentityForSummaryPOS(s, resolver);
+    if (isCustomerFilterActive && summaryCustomerFilter){
+      if (summaryCustomerFilter.type === 'id'){
+        if (!ident.finalId || ident.finalId !== summaryCustomerFilter.value) continue;
+      } else if (summaryCustomerFilter.type === 'name'){
+        const key = normalizeCustomerKeyPOS(ident.rawName || ident.displayName);
+        if (!key || key !== summaryCustomerFilter.value) continue;
+      }
+    }
 
     const total = Number(s.total || 0);
     const courtesy = isCourtesySale(s);
@@ -4541,6 +6912,40 @@ async function renderSummary(){
       grandCost += lineCost;
       grandProfit += lineProfit;
 
+      // --- Clientes (MVP) ---
+      realSalesCount += 1;
+      if (ident && (ident.finalId || ident.rawName)) salesWithCustomerCount += 1;
+
+      let custKey = '';
+      let custFilterType = '';
+      let custFilterValue = '';
+      let custName = '';
+
+      if (ident && ident.finalId){
+        custKey = 'id:' + ident.finalId;
+        custFilterType = 'id';
+        custFilterValue = ident.finalId;
+        custName = (resolver ? (resolver.getDisplayName(ident.finalId) || '') : '') || ident.rawName || ident.displayName || 'Cliente';
+      } else {
+        const nk = normalizeCustomerKeyPOS((ident && (ident.rawName || ident.displayName)) || '');
+        if (nk){
+          custKey = 'name:' + nk;
+          custFilterType = 'name';
+          custFilterValue = nk;
+          custName = (ident && (ident.rawName || ident.displayName)) || nk;
+        }
+      }
+
+      if (custKey){
+        const curCust = customersAgg.get(custKey) || { total: 0, count: 0, filterType: custFilterType, filterValue: custFilterValue, name: custName };
+        curCust.total += total;
+        curCust.count += 1;
+        if (custName && (!curCust.name || custName.length > curCust.name.length)) curCust.name = custName;
+        curCust.filterType = custFilterType;
+        curCust.filterValue = custFilterValue;
+        customersAgg.set(custKey, curCust);
+      }
+
     } else {
       courtesyTx += 1;
 
@@ -4567,7 +6972,8 @@ async function renderSummary(){
   }
 
   // Acumular también lo archivado por evento (si existiera)
-  for (const ev of (events || [])){
+  if (!isCustomerFilterActive){
+    for (const ev of (events || [])){
     if (ev.archive && ev.archive.totals){
       const t = ev.archive.totals;
 
@@ -4597,6 +7003,7 @@ async function renderSummary(){
       // Nota: por ahora no tenemos costo/utilidad/cortesías archivados.
     }
   }
+  }
 
   const profitAfterCourtesy = grandProfit - courtesyCost;
 
@@ -4615,6 +7022,44 @@ async function renderSummary(){
 
   const profitAfterEl = document.getElementById('grand-profit-after-courtesy');
   if (profitAfterEl) profitAfterEl.textContent = fmt(profitAfterCourtesy);
+
+
+  // --- Clientes (MVP) ---
+  const uniqueCustomersEl = document.getElementById('summary-customers-unique');
+  if (uniqueCustomersEl) uniqueCustomersEl.textContent = String(customersAgg.size);
+
+  const salesWithCustomerEl = document.getElementById('summary-sales-with-customer');
+  if (salesWithCustomerEl) salesWithCustomerEl.textContent = String(salesWithCustomerCount);
+
+  const salesWithCustomerPctEl = document.getElementById('summary-sales-with-customer-pct');
+  if (salesWithCustomerPctEl){
+    const pct = realSalesCount ? (salesWithCustomerCount / realSalesCount * 100) : 0;
+    salesWithCustomerPctEl.textContent = String(Math.round(pct));
+  }
+
+  const topCustomersBody = document.querySelector('#tbl-top-clientes tbody');
+  if (topCustomersBody){
+    topCustomersBody.innerHTML = '';
+    const entries = Array.from(customersAgg.values())
+      .sort((a,b)=>Number((b&&b.total)||0) - Number((a&&a.total)||0))
+      .slice(0, 10);
+
+    if (!entries.length){
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td colspan="3" class="muted">(sin datos)</td>`;
+      topCustomersBody.appendChild(tr);
+    } else {
+      for (const it of entries){
+        if (!it) continue;
+        const tr = document.createElement('tr');
+        tr.dataset.filterType = it.filterType || '';
+        tr.dataset.filterValue = it.filterValue || '';
+        tr.dataset.filterName = it.name || '';
+        tr.innerHTML = `<td>${escapeHtml(it.name||'')}</td><td>${fmt(Number(it.total||0))}</td><td>${it.count||0}</td>`;
+        topCustomersBody.appendChild(tr);
+      }
+    }
+  }
 
   // Compat: si no existe el bloque superior nuevo, intentamos crearlo sin romper el HTML viejo
   if (!costEl || !profitEl || !courCostEl || !profitAfterEl){
@@ -5634,6 +8079,7 @@ async function init(){
   await runStep('updateSellEnabled', updateSellEnabled);
   await runStep('initVasosPanel', initVasosPanelPOS);
   await runStep('initCustomerUX', async()=>{ initCustomerUXPOS(); });
+  await runStep('initSummaryCustomerFilter', async()=>{ initSummaryCustomerFilterPOS(); });
 
   // Paso 5: barra offline y eventos de Caja Chica
   try{
@@ -6109,6 +8555,31 @@ async function exportEventosExcel(){
   const btnFromLote = document.getElementById('btn-inv-from-lote');
   if (btnFromLote) btnFromLote.addEventListener('click', importFromLoteToInventory);
 
+  // Sobrantes → Lote hijo (Control de Lotes)
+  const btnSobrante = document.getElementById('btn-create-sobrante');
+  if (btnSobrante) btnSobrante.addEventListener('click', openSobrantePanelPOS);
+  const btnSobCancel = document.getElementById('btn-sobrante-cancel');
+  if (btnSobCancel) btnSobCancel.addEventListener('click', closeSobrantePanelPOS);
+  const btnSobCreate = document.getElementById('btn-sobrante-create');
+  if (btnSobCreate) btnSobCreate.addEventListener('click', createSobranteLotPOS);
+
+  // Reverso de asignación (airbag anti-errores)
+  const btnRevOpen = document.getElementById('btn-reverse-assign');
+  if (btnRevOpen) btnRevOpen.addEventListener('click', async()=>{
+    openReversoPanelPOS();
+    const evId = parseInt((document.getElementById('inv-event') && document.getElementById('inv-event').value) || '0', 10);
+    if (evId) await refreshReversoUIForEventPOS(evId);
+  });
+  const btnRevCancel = document.getElementById('btn-reverso-cancel');
+  if (btnRevCancel) btnRevCancel.addEventListener('click', closeReversoPanelPOS);
+  const btnRevDo = document.getElementById('btn-reverso-do');
+  if (btnRevDo) btnRevDo.addEventListener('click', reverseAssignSelectedLotePOS);
+  const selRev = document.getElementById('reverso-lote-select');
+  if (selRev) selRev.addEventListener('change', async()=>{
+    const evId = parseInt((document.getElementById('inv-event') && document.getElementById('inv-event').value) || '0', 10);
+    if (evId) await updateReversoMetaPOS(evId);
+  });
+
 }
 
 // Totales y ventas
@@ -6159,7 +8630,10 @@ async function addSale(){
   const payment = $('#sale-payment').value;
   const courtesy = $('#sale-courtesy').checked;
   const isReturn = $('#sale-return').checked;
-  const customerName = getCustomerNameFromUI_POS();
+  const customerInputName = getCustomerNameFromUI_POS();
+  const customerResolved = resolveCustomerIdForSalePOS(customerInputName, getCustomerIdHintFromUI_POS());
+  const customerId = customerResolved ? customerResolved.id : null;
+  const customerName = (customerResolved && customerResolved.displayName) ? customerResolved.displayName : customerInputName;
   const courtesyTo = $('#sale-courtesy-to').value || '';
   const notes = $('#sale-notes').value || '';
   if (!date || !productId || !qty) { alert('Completa fecha, producto y cantidad'); return; }
@@ -6246,6 +8720,7 @@ async function addSale(){
     // Compat: mantenemos "customer" y añadimos "customerName" (nuevo)
     customer: customerName,
     customerName,
+    customerId,
     courtesyTo,
     total,
     notes,
@@ -6269,7 +8744,7 @@ async function addSale(){
   // limpiar campos para el siguiente registro (incluye NOTAS)
   $('#sale-qty').value=1; 
   $('#sale-discount').value=0; 
-  afterSaleCustomerHousekeepingPOS(customerName);
+  afterSaleCustomerHousekeepingPOS(customerName, customerId);
   $('#sale-courtesy-to').value='';
   $('#sale-notes').value=''; // limpiar notas
   const nextTotal = (courtesy?0:price).toFixed(2);
@@ -6301,7 +8776,10 @@ async function addExtraSale(extraId){
   const payment = $('#sale-payment').value;
   const courtesy = $('#sale-courtesy').checked;
   const isReturn = $('#sale-return').checked;
-  const customerName = getCustomerNameFromUI_POS();
+  const customerInputName = getCustomerNameFromUI_POS();
+  const customerResolved = resolveCustomerIdForSalePOS(customerInputName, getCustomerIdHintFromUI_POS());
+  const customerId = customerResolved ? customerResolved.id : null;
+  const customerName = (customerResolved && customerResolved.displayName) ? customerResolved.displayName : customerInputName;
   const courtesyTo = $('#sale-courtesy-to').value || '';
   const notes = $('#sale-notes').value || '';
 
@@ -6413,6 +8891,7 @@ async function addExtraSale(extraId){
     // Compat: mantenemos "customer" y añadimos "customerName" (nuevo)
     customer: customerName,
     customerName,
+    customerId,
     courtesy,
     courtesyTo,
     notes,
@@ -6429,7 +8908,7 @@ async function addExtraSale(extraId){
   await createJournalEntryForSalePOS(saleRecord);
 
   // Cliente: catálogo + modo pegajoso
-  afterSaleCustomerHousekeepingPOS(customerName);
+  afterSaleCustomerHousekeepingPOS(customerName, customerId);
 
   // Reset mínimos
   $('#sale-qty').value = '1';
@@ -6815,7 +9294,10 @@ function setPettyReadOnly(isReadOnly, allowReopen){
   const fsCount = document.getElementById('pc-count-fieldset');
   const fsMov = document.getElementById('pc-mov-fieldset');
   if (fsCount) fsCount.disabled = !!isReadOnly;
-  if (fsMov) fsMov.disabled = !!isReadOnly;
+  // IMPORTANTE (contabilidad): Caja Chica ya no se “borra”.
+  // Incluso en días cerrados/histórico, permitimos el botón “Revertir” por movimiento.
+  // Por eso NO deshabilitamos el fieldset completo de movimientos; se bloquean inputs específicos abajo.
+  if (fsMov) fsMov.disabled = false;
 
   const lockAll = (sel) => {
     document.querySelectorAll(sel).forEach(el => { el.disabled = !!isReadOnly; });
@@ -6825,6 +9307,7 @@ function setPettyReadOnly(isReadOnly, allowReopen){
 
   [
     'pc-btn-save-initial','pc-btn-clear-initial',
+    'pc-init-from-fin-toggle','pc-init-from-fin-sync',
     'pc-btn-save-final','pc-btn-clear-final',
     'pc-mov-type','pc-mov-adjust-kind','pc-mov-transfer-kind','pc-mov-currency','pc-mov-amount','pc-mov-desc','pc-mov-add',
     'pc-btn-close-day','pc-btn-reopen-day'
@@ -6915,13 +9398,13 @@ function renderPettyHistoryControls(pc){
     const target = pettyReturnDayKey || '';
     if (banner){
       banner.style.display = 'block';
-      banner.textContent = `Vista histórica (solo lectura): ${from}. Día objetivo: ${target}.`;
+      banner.textContent = `Vista histórica: ${from}. Día objetivo: ${target}.`;
     }
     if (btnUse){
       btnUse.textContent = target ? `Usar cierre del ${from} como inicio del ${target}` : 'Usar este cierre como inicio';
     }
     if (note){
-      note.textContent = 'Nota: en histórico no se puede editar. Usa “Volver al día operativo” para registrar cambios.';
+      note.textContent = 'Nota: en histórico no se editan conteos ni se agregan movimientos manuales. Correcciones: usa “Revertir” en el movimiento que corresponda.';
     }
   } else {
     if (banner){
@@ -7036,6 +9519,27 @@ function setPrevCierreUI(pc, dayKey){
   }
 }
 
+function updatePcFinSyncUI(ev, canInteract, readOnlyDay){
+  const t = document.getElementById('pc-init-from-fin-toggle');
+  const b = document.getElementById('pc-init-from-fin-sync');
+  const s = document.getElementById('pc-init-from-fin-status');
+
+  if (s) s.textContent = '';
+  if (!t || !b) return;
+
+  const checked = !!(ev && ev.pcInitFromFinanzasEnabled);
+  t.checked = checked;
+
+  const locked = (!canInteract) || !!readOnlyDay;
+  t.disabled = locked;
+  b.disabled = locked || !checked;
+
+  if (s && ev){
+    const last = ev.pcInitFromFinanzasLastSyncDisplay || (ev.pcInitFromFinanzasLastSync ? fmtDDMMYYYYHHMM_POS(ev.pcInitFromFinanzasLastSync) : '');
+    if (last) s.textContent = 'Sincronizado: ' + last;
+  }
+}
+
 async function renderCajaChica(){
   const main = document.getElementById('pc-main');
   const note = document.getElementById('pc-no-event-note');
@@ -7068,6 +9572,7 @@ async function renderCajaChica(){
     renderPettyHistoryControls(null);
     setPettyCloseUIEmpty();
     setPettyReadOnly(false, false);
+    updatePcFinSyncUI(null, false, false);
 
     const movDate = document.getElementById('pc-mov-date');
     if (movDate){
@@ -7092,6 +9597,7 @@ async function renderCajaChica(){
     renderPettyHistoryControls(null);
     setPettyCloseUIEmpty();
     setPettyReadOnly(false, false);
+    updatePcFinSyncUI(ev, false, false);
 
     const movDate = document.getElementById('pc-mov-date');
     if (movDate){
@@ -7163,6 +9669,7 @@ async function renderCajaChica(){
   renderPettyCloseUI(check, hist);
 
   setPettyReadOnly(readOnlyDay, (!hist && !!day.closedAt));
+  updatePcFinSyncUI(ev, true, readOnlyDay);
 }
 
 function updatePettySummaryUI(pc, dayKey, opts){
@@ -7633,6 +10140,15 @@ function renderPettyMovements(pc, dayKey, readOnly){
   const movs = Array.isArray(day.movements) ? day.movements : [];
   if (!movs.length) return;
 
+  // Índice rápido: qué movimientos ya tienen reverso (para compatibilidad con datos viejos)
+  const hasReversalFor = new Set();
+  for (const x of movs){
+    if (x && x.isReversal && x.reversalOf != null){
+      const oid = Number(x.reversalOf);
+      if (Number.isFinite(oid)) hasReversalFor.add(oid);
+    }
+  }
+
   // Más reciente primero
   const ordered = [...movs].sort((a,b)=> (Number(b.id||0) - Number(a.id||0)));
   for (const m of ordered){
@@ -7650,6 +10166,10 @@ function renderPettyMovements(pc, dayKey, readOnly){
     const tdType = document.createElement('td');
     // Tipo visible: Ingreso / Egreso / Ajuste
     let typeLabel = (m && m.type === 'salida') ? 'Egreso' : 'Ingreso';
+    if (m && m.isReversal){
+      typeLabel = 'Reverso';
+      if (m.reversalOf != null) typeLabel += ` (#${m.reversalOf})`;
+    }
     if (m && m.isAdjust){
       const k = (m.adjustKind === 'sobrante') ? 'Sobrante' : 'Faltante';
       typeLabel = `Ajuste (${k})`;
@@ -7671,13 +10191,27 @@ function renderPettyMovements(pc, dayKey, readOnly){
     tdDesc.textContent = m.description || '';
 
     const tdAct = document.createElement('td');
-    if (!readOnly){
+    const idNum = (m && m.id != null) ? Number(m.id) : NaN;
+    const alreadyAdjusted = !!(m && (m.isAdjusted || m.isReverted || m.reversedBy != null)) || (Number.isFinite(idNum) && hasReversalFor.has(idNum));
+
+    // UI: Eliminamos borrado. Correcciones solo por reverso.
+    if (m && m.isReversal){
+      const b = document.createElement('span');
+      b.className = 'badge';
+      b.textContent = 'Reverso';
+      tdAct.appendChild(b);
+    } else if (alreadyAdjusted){
+      const b = document.createElement('span');
+      b.className = 'badge';
+      b.textContent = 'Revertido';
+      tdAct.appendChild(b);
+    } else if (Number.isFinite(idNum)){
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'btn small danger';
-      btn.dataset.movid = String(m.id || '');
-      btn.textContent = 'Eliminar';
-      btn.addEventListener('click', ()=> onDeletePettyMovement(m.id));
+      btn.className = 'btn-warn btn-mini btn-pill';
+      btn.dataset.movid = String(idNum);
+      btn.textContent = 'Revertir';
+      btn.addEventListener('click', ()=> onRevertPettyMovement(idNum));
       tdAct.appendChild(btn);
     }
 
@@ -7690,6 +10224,113 @@ function renderPettyMovements(pc, dayKey, readOnly){
 
     tbody.appendChild(tr);
   }
+}
+
+async function onRevertPettyMovement(originalId){
+  const oid = Number(originalId);
+  if (!Number.isFinite(oid)) return;
+
+  const evId = await getMeta('currentEventId');
+  if (!evId){
+    alert('Activa un evento antes de revertir movimientos de Caja Chica.');
+    return;
+  }
+
+  const dayKey = getSelectedPcDay();
+  const pc = await getPettyCash(evId);
+  const day = ensurePcDay(pc, dayKey);
+  if (!Array.isArray(day.movements)) day.movements = [];
+
+  const movs = day.movements;
+  const orig = movs.find(m => m && Number(m.id) === oid);
+  if (!orig){
+    alert('No se encontró el movimiento a revertir.');
+    return;
+  }
+
+  if (orig.isReversal){
+    alert('Este movimiento ya es un reverso.');
+    return;
+  }
+
+  const hasReversal = movs.some(m => m && m.isReversal && Number(m.reversalOf) === oid);
+  const alreadyAdjusted = !!(orig.isAdjusted || orig.isReverted || orig.reversedBy != null) || hasReversal;
+  if (alreadyAdjusted){
+    // Auto-curar datos viejos: si ya existe un reverso pero el original no quedó marcado.
+    if (hasReversal && !(orig.isAdjusted || orig.reversedBy != null)){
+      const rev = movs.find(m => m && m.isReversal && Number(m.reversalOf) === oid);
+      orig.isAdjusted = true;
+      orig.adjustedAt = orig.adjustedAt || Date.now();
+      if (rev && rev.id != null) orig.reversedBy = rev.id;
+      try{ await savePettyCash(pc); }catch(e){}
+      await renderCajaChica();
+    }
+    alert('Este movimiento ya fue ajustado/revertido. No se puede revertir dos veces.');
+    return;
+  }
+
+  const curTxt = (orig.currency === 'USD') ? 'US$' : 'C$';
+  const kindTxt = (orig.type === 'salida') ? 'Egreso' : 'Ingreso';
+  const amtTxt = fmt(Number(orig.amount || 0));
+  const motivo = prompt(`Revertir movimiento #${oid}\n${kindTxt} · ${curTxt} ${amtTxt}\n\nMotivo (opcional):`, '');
+  if (motivo === null) return;
+  const motivoClean = String(motivo || '').trim();
+
+  // Nuevo movimiento inverso (mismo monto/moneda/fecha, tipo invertido)
+  const nextId = movs.reduce((mx, m)=>{
+    const n = Number(m && m.id);
+    return Number.isFinite(n) ? Math.max(mx, n) : mx;
+  }, 0) + 1;
+
+  const revType = (orig.type === 'salida') ? 'entrada' : 'salida';
+  const desc = `AJUSTE / REVERSO de movimiento #${oid} — Motivo:` + (motivoClean ? ` ${motivoClean}` : '');
+
+  const reverso = {
+    id: nextId,
+    createdAt: Date.now(),
+    date: orig.date || dayKey,
+    uiType: 'reverso',
+    type: revType,
+    currency: orig.currency || 'NIO',
+    amount: Number(orig.amount) || 0,
+    description: desc,
+    isReversal: true,
+    reversalOf: oid,
+    reversalMotivo: motivoClean,
+    // Snapshot para mapeo contable (se usa en Finanzas para invertir cuentas sin cambiar reglas base)
+    reversalOriginal: {
+      type: orig.type,
+      uiType: orig.uiType || null,
+      isAdjust: !!orig.isAdjust,
+      adjustKind: orig.adjustKind || null,
+      isTransfer: !!orig.isTransfer,
+      transferKind: orig.transferKind || null
+    }
+  };
+
+  // Marcar original como AJUSTADO/REVERTIDO
+  orig.isAdjusted = true;
+  orig.adjustedAt = Date.now();
+  orig.reversedBy = nextId;
+
+  day.movements.push(reverso);
+
+  try{
+    await savePettyCash(pc);
+  }catch(err){
+    console.error('onRevertPettyMovement save error', err);
+    showToast('No se pudo guardar el reverso', 'error', 5000);
+    await renderCajaChica();
+    return;
+  }
+
+  // POS → Finanzas (Diario): registrar reverso como un asiento nuevo (no se borra nada)
+  try{
+    await postPettyCashMovementToFinanzas(evId, dayKey, reverso);
+  }catch(e){}
+
+  await renderCajaChica();
+  showToast('Reverso creado y movimiento original marcado como REVERTIDO', 'ok', 5000);
 }
 
 async function onAddPettyMovement(){
@@ -7823,33 +10464,6 @@ async function onAddPettyMovement(){
   updatePettyMovementTypeUI();
 }
 
-async function onDeletePettyMovement(id){
-  if (isPettyHistoryMode()){
-    alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
-    return;
-  }
-  const evId = await getMeta('currentEventId');
-  if (!evId) return;
-
-  const dayKey = getSelectedPcDay();
-  const pc = await getPettyCash(evId);
-  const day = ensurePcDay(pc, dayKey);
-
-  if (!Array.isArray(day.movements)) day.movements = [];
-  day.movements = day.movements.filter(m => m.id !== id);
-
-  try{
-    await savePettyCash(pc);
-  }catch(err){
-    console.error('onDeletePettyMovement save error', err);
-    showToast('No se pudo eliminar el movimiento', 'error', 5000);
-    await renderCajaChica();
-    return;
-  }
-  await renderCajaChica();
-}
-
-
 async function onUsePrevCierre(){
   if (isPettyHistoryMode()){
     alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
@@ -7900,6 +10514,84 @@ async function onUsePrevCierre(){
   toast('Saldo inicial precargado desde el cierre anterior');
 }
 
+function safeParseJsonPOS(raw){
+  try{ return JSON.parse(raw); }catch(e){ return null; }
+}
+
+function sumCountsByValue(denoms){
+  const m = new Map();
+  const arr = Array.isArray(denoms) ? denoms : [];
+  for (const d of arr){
+    const v = Number(d && d.value);
+    const c = (d && d.count == null) ? 0 : Number(d && d.count);
+    if (!Number.isFinite(v)) continue;
+    if (!Number.isFinite(c)) continue;
+    m.set(v, (m.get(v) || 0) + Math.trunc(c));
+  }
+  return m;
+}
+
+async function syncPettyInitialFromFinanzas(){
+  if (isPettyHistoryMode()){
+    alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para sincronizar.');
+    return;
+  }
+
+  const evId = await getMeta('currentEventId');
+  const ev = evId ? await getEventByIdSafe(evId) : null;
+  if (!evId || !ev){
+    toast('No hay evento activo');
+    return;
+  }
+  if (!eventPettyEnabled(ev)){
+    toast('Activa Caja Chica para este evento primero');
+    return;
+  }
+
+  const statusEl = document.getElementById('pc-init-from-fin-status');
+  const raw = localStorage.getItem('a33_finanzas_caja_chica_v1');
+  const snap = raw ? safeParseJsonPOS(raw) : null;
+  if (!snap || !snap.currencies){
+    if (statusEl){
+      statusEl.innerHTML = 'Caja Chica (Finanzas) no configurada. <a class="a33-link" href="../finanzas/index.html#tab=cajachica">Ir a Finanzas</a>';
+    }
+    toast('Caja Chica (Finanzas) no configurada');
+    return;
+  }
+
+  const nio = snap.currencies.NIO || {};
+  const usd = snap.currencies.USD || {};
+  const nioMap = sumCountsByValue(nio.denoms);
+  const usdMap = sumCountsByValue(usd.denoms);
+
+  if (typeof NIO_DENOMS !== 'undefined'){
+    NIO_DENOMS.forEach(v=>{
+      const inp = document.getElementById('pc-nio-q-'+v);
+      if (inp) inp.value = String(nioMap.get(v) || 0);
+    });
+  }
+  if (typeof USD_DENOMS !== 'undefined'){
+    USD_DENOMS.forEach(v=>{
+      const inp = document.getElementById('pc-usd-q-'+v);
+      if (inp) inp.value = String(usdMap.get(v) || 0);
+    });
+  }
+
+  recalcPettyInitialTotalsFromInputs();
+  await onSavePettyInitial();
+
+  const now = new Date();
+  const stamp = fmtDDMMYYYYHHMM_POS(now);
+  ev.pcInitFromFinanzasLastSync = now.toISOString();
+  ev.pcInitFromFinanzasLastSyncDisplay = stamp;
+  await put('events', ev);
+
+  if (statusEl){
+    statusEl.textContent = 'Sincronizado: ' + stamp;
+  }
+  toast('Sincronizado desde Finanzas');
+}
+
 function bindCajaChicaEvents(){
   // Activar Caja Chica por evento (si está desactivada)
   const btnActivate = document.getElementById('pc-btn-activate');
@@ -7939,6 +10631,30 @@ function bindCajaChicaEvents(){
     });
   }
 
+  // Manual: usar saldo inicial desde Finanzas (solo si el usuario lo habilita)
+  const finTog = document.getElementById('pc-init-from-fin-toggle');
+  const finBtn = document.getElementById('pc-init-from-fin-sync');
+  if (finTog){
+    finTog.addEventListener('change', async ()=>{
+      const evId = await getMeta('currentEventId');
+      const ev = evId ? await getEventByIdSafe(evId) : null;
+      if (!evId || !ev){
+        finTog.checked = false;
+        updatePcFinSyncUI(null, false, false);
+        return;
+      }
+      ev.pcInitFromFinanzasEnabled = !!finTog.checked;
+      await put('events', ev);
+      await renderCajaChica();
+    });
+  }
+  if (finBtn){
+    finBtn.addEventListener('click', (e)=>{
+      e.preventDefault();
+      syncPettyInitialFromFinanzas().catch(err=>console.error(err));
+    });
+  }
+
   const btnSaveFinal = document.getElementById('pc-btn-save-final');
   if (btnSaveFinal){
     btnSaveFinal.addEventListener('click', (e)=>{
@@ -7971,17 +10687,6 @@ const btnAddMov = document.getElementById('pc-mov-add');
     btnAddMov.addEventListener('click', (e)=>{
       e.preventDefault();
       onAddPettyMovement();
-    });
-  }
-
-  const tbody = document.getElementById('pc-mov-tbody');
-  if (tbody){
-    tbody.addEventListener('click', (e)=>{
-      const btn = e.target.closest('button[data-movid]');
-      if (!btn) return;
-      const id = Number(btn.dataset.movid);
-      if (!id) return;
-      onDeletePettyMovement(id);
     });
   }
 

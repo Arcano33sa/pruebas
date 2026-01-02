@@ -89,6 +89,87 @@ input[type="date"]{padding:10px}
 .btn-pill:disabled{opacity:.55; box-shadow:none}
 .btn-pill:not(:disabled):active{filter:brightness(.98)}
 
+/* Pastilla mini (para acciones compactas tipo Sincronizar / Sobrantes) */
+.btn-pill-mini{
+  padding:6px 10px;
+  font-size:12px;
+  line-height:1.05;
+}
+
+/* Sobrantes → Lote hijo (Inventario por evento) */
+.sobrante-panel{
+  margin-top:10px;
+  padding:10px;
+  border-radius:14px;
+  background:#101010;
+  border:1px solid rgba(212,175,55,0.22);
+  box-shadow:0 8px 22px rgba(0,0,0,0.22);
+}
+.sobrante-panel-head{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+  flex-wrap:wrap;
+}
+.sobrante-title{
+  font-weight:800;
+  letter-spacing:.2px;
+}
+.sobrante-grid{
+  display:grid;
+  grid-template-columns:repeat(5, minmax(46px, 1fr));
+  gap:8px;
+  margin-top:10px;
+}
+.sobrante-cell{display:flex; flex-direction:column; gap:4px}
+.sobrante-cell label{font-size:12px; color:var(--muted); font-weight:800; letter-spacing:.3px}
+.sobrante-cell input{width:100%}
+@media (max-width: 520px){
+  .sobrante-grid{grid-template-columns:repeat(3, minmax(46px, 1fr))}
+}
+
+/* Reverso de asignación (Inventario por evento) */
+.reverso-panel{
+  margin-top:10px;
+  padding:10px;
+  border-radius:14px;
+  background:#101010;
+  border:1px solid rgba(212,175,55,0.22);
+  box-shadow:0 8px 22px rgba(0,0,0,0.22);
+}
+.reverso-panel-head{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+  flex-wrap:wrap;
+}
+.reverso-title{font-weight:800; letter-spacing:.2px}
+.reverso-grid{
+  display:grid;
+  grid-template-columns:repeat(5, minmax(46px, 1fr));
+  gap:8px;
+  margin-top:10px;
+}
+.reverso-cell{display:flex; flex-direction:column; gap:4px}
+.reverso-cell label{font-size:12px; color:var(--muted); font-weight:800; letter-spacing:.3px}
+.reverso-cell span{
+  display:block;
+  width:100%;
+  padding:8px 10px;
+  border-radius:10px;
+  background:#141414;
+  border:1px solid rgba(212,175,55,0.22);
+  text-align:center;
+  font-weight:900;
+  color:var(--accent);
+}
+@media (max-width: 520px){
+  .reverso-grid{grid-template-columns:repeat(3, minmax(46px, 1fr))}
+}
+
+
 /* Vasos panel (colapsable persistente) */
 .is-collapsed{display:none !important}
 
@@ -271,6 +352,64 @@ small.muted{color:var(--muted)}
 .customer-controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-start}
 .customer-controls .flag{margin:0}
 
+/* Cliente v2 (POS > Vender): picker propio + gestión colapsable */
+#sale-customer-row{grid-template-columns:1fr}
+.customer-v2{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+.customer-v2-field{flex:1 1 260px;min-width:220px}
+.customer-v2-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.customer-v2-actions .flag{margin:0}
+.customer-v2-actions .btn-link{padding:6px 0}
+.customer-v2-sticky{font-size:13px}
+
+.customer-manage{margin-top:8px}
+	.customer-manage-list{display:flex;flex-direction:column;gap:8px}
+	.customer-manage-item{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:8px 10px;border:1px solid #2a2a2a;border-radius:12px;background:#111}
+.customer-manage-name{font-weight:800}
+.customer-manage-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+	.customer-manage-item-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end}
+	.customer-manage-item-actions .btn-pill-mini{white-space:nowrap}
+	.customer-manage-item-actions .btn-disabled{opacity:.55;cursor:not-allowed;filter:grayscale(.15)}
+.badge-on{background:#0f1b0f;color:#b6f0b6;border:1px solid #214021}
+.badge-off{background:#2a1b0f;color:#ffd7a1;border:1px solid #5a3d12}
+
+	/* Gestionar clientes (v2.1): toolbar + scroll interno + acordeón por letra */
+	.customer-manage-toolbar{margin-top:8px}
+	.customer-manage-toolbar-top{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;justify-content:space-between}
+	.customer-manage-search{flex:1 1 260px;min-width:220px}
+	.customer-manage-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-start}
+	.customer-manage-filters{display:flex;gap:6px;flex-wrap:wrap}
+	.customer-manage-filters button{opacity:.72}
+	.customer-manage-filters button.is-active{opacity:1;border-color:rgba(212,175,55,0.8);box-shadow:0 0 0 3px rgba(255,215,0,0.18)}
+	.customer-manage-compact-toggle{font-size:12.5px}
+	.customer-manage-scroll{max-height:52vh;overflow:auto;-webkit-overflow-scrolling:touch;margin-top:8px;padding-right:2px}
+
+	.customer-manage-group{border:1px solid #2a2a2a;border-radius:14px;background:#0e0e0e;overflow:hidden}
+	.customer-manage-group-header{width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 10px;background:#101010;color:#f5f5f5;border:0;cursor:pointer;text-align:left}
+	.customer-manage-group-header:active{filter:brightness(.98)}
+	.customer-manage-group-left{display:flex;align-items:center;gap:10px;min-width:0}
+	.customer-manage-group-letter{font-weight:900;letter-spacing:.7px}
+	.customer-manage-group-count{display:inline-flex;align-items:center;justify-content:center;padding:2px 8px;border-radius:999px;background:#111;border:1px solid rgba(212,175,55,0.22);font-size:12px;opacity:.9}
+	.customer-manage-group-chevron{opacity:.85}
+	.customer-manage-group-body{padding:8px 10px 10px;display:flex;flex-direction:column;gap:8px}
+	.customer-manage-results-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px dashed rgba(212,175,55,0.25);border-radius:12px;background:#0f0f0f}
+	.customer-manage-results-title{font-weight:800}
+
+	/* Modo compacto (preferencia) */
+	.customer-manage.compact .customer-manage-list{gap:6px}
+	.customer-manage.compact .customer-manage-item{padding:6px 8px;border-radius:10px}
+	.customer-manage.compact .customer-manage-name{font-size:13px}
+	.customer-manage.compact .badge{font-size:11px;padding:2px 6px}
+	.customer-manage.compact .customer-manage-group-header{padding:7px 8px}
+	.customer-manage.compact .customer-manage-group-body{padding:6px 8px 8px;gap:6px}
+	.customer-manage.compact .btn-pill-mini{padding:5px 9px;font-size:11.5px}
+
+.customer-picker-list{display:flex;flex-direction:column;gap:8px}
+.customer-picker-item{width:100%;text-align:left;padding:10px 12px;border-radius:12px;border:1px solid rgba(212,175,55,0.25);background:#111;color:#f5f5f5;font-weight:700;cursor:pointer}
+.customer-picker-item:active{filter:brightness(.98)}
+
+.modal .panel.panel-compact{max-width:560px}
+
+
 .btn-outline{
   width:auto;
   border-radius:999px;
@@ -366,6 +505,11 @@ small.muted{color:var(--muted)}
 /* Toggle (Caja Chica por evento) */
 .petty-toggle-wrap{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .petty-toggle-title{font-weight:700;color:var(--text)}
+
+/* Sincronizar saldo inicial desde Finanzas (manual) */
+.petty-sync-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0 6px 0}
+.petty-sync-row .btn-pill{padding:8px 12px}
+.a33-link{color:var(--tab-gold);text-decoration:underline}
 .switch{position:relative;display:inline-block;width:52px;height:28px}
 .switch input{opacity:0;width:0;height:0}
 .slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#d0d0d0;transition:.2s;border-radius:999px}
@@ -455,6 +599,17 @@ small.muted{color:var(--muted)}
 .pc-table input[type="number"]{
   width:80px;
 }
+
+/* Caja Chica — Tabla de movimientos (evitar overflow horizontal en iPad) */
+#pc-mov-table{ table-layout:fixed; }
+#pc-mov-table th,
+#pc-mov-table td{ white-space:normal; }
+#pc-mov-table th:nth-child(1), #pc-mov-table td:nth-child(1){ width:110px; white-space:nowrap; }
+#pc-mov-table th:nth-child(2), #pc-mov-table td:nth-child(2){ width:140px; white-space:nowrap; }
+#pc-mov-table th:nth-child(3), #pc-mov-table td:nth-child(3){ width:70px; white-space:nowrap; }
+#pc-mov-table th:nth-child(4), #pc-mov-table td:nth-child(4){ width:110px; white-space:nowrap; }
+#pc-mov-table th:nth-child(6), #pc-mov-table td:nth-child(6){ width:120px; white-space:nowrap; text-align:right; }
+#pc-mov-table td:nth-child(5){ word-break:break-word; }
 
 .petty-mov h3{
   margin-top:0;
@@ -724,6 +879,35 @@ small.muted{color:var(--muted)}
   font-size:13px;
 }
 
+
+/* --- Resumen: filtro por Cliente + top clientes --- */
+.summary-customer-card{padding:12px}
+.summary-customer-card .customer-v2-field label{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.summary-customer-card #summary-customer-hint{display:block;margin-top:6px}
+
+.customers-card .customers-kpis{
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:10px;
+  margin:8px 0 6px 0;
+}
+@media (max-width: 700px){
+  .customers-card .customers-kpis{grid-template-columns:1fr}
+}
+.customers-card .customers-kpis > div{
+  background:#141414;
+  border:1px solid #2a2a2a;
+  border-radius:12px;
+  padding:10px 12px;
+  font-size:13px;
+}
+
+#tbl-top-clientes{width:100%;table-layout:fixed}
+#tbl-top-clientes th:nth-child(1), #tbl-top-clientes td:nth-child(1){width:55%;white-space:normal;word-break:break-word}
+#tbl-top-clientes th:nth-child(2), #tbl-top-clientes td:nth-child(2){width:25%;white-space:nowrap}
+#tbl-top-clientes th:nth-child(3), #tbl-top-clientes td:nth-child(3){width:20%;white-space:nowrap}
+#tbl-top-clientes tbody tr{cursor:pointer}
+#tbl-top-clientes tbody tr:active{filter:brightness(.98)}
 
 /* --- Resumen: controles de período y archivo --- */
 .summary-controls{
