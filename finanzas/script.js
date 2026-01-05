@@ -1400,7 +1400,7 @@ function calcBalanceGroupsUntilDate(data, corte) {
 }
 
 function calcCajaBancoUntilDate(data, corte) {
-  const { entries, linesByEntry } = data;
+  const { entries, linesByEntry, accountsMap } = data;
   const cutoff = corte || todayStr();
   let caja = 0;
   let banco = 0;
@@ -1954,7 +1954,7 @@ async function exportDiarioExcel() {
 
   const { desde: diarioDesde, hasta: diarioHasta } = getDiaryRangeFromUI();
 
-  const { entries, linesByEntry } = data;
+  const { entries, linesByEntry, accountsMap } = data;
 
   const sorted = [...entries].sort((a, b) => {
     const fa = a.fecha || a.date || '';
@@ -1997,6 +1997,17 @@ async function exportDiarioExcel() {
     for (const ln of lines) {
       totalDebe += Number(ln.debe || 0);
       totalHaber += Number(ln.haber || 0);
+    }
+
+    // Display-only: para cierres POS, en el listado mostramos el monto principal (Caja/Banco vs Ventas)
+    let displayDebe = totalDebe;
+    let displayHaber = totalHaber;
+    if (isPosDailyCloseEntry(e)) {
+      const p = getPosPrincipalAmounts(e, lines, accountsMap);
+      if (p && p.found) {
+        displayDebe = p.principalDebe;
+        displayHaber = p.principalHaber;
+      }
     }
 
     const supplierLabel = getSupplierLabelFromEntry(e, data);
@@ -2558,6 +2569,121 @@ function getDisplayDescription(entry) {
   return desc;
 }
 
+
+
+function isPosDailyCloseEntry(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+
+  const src = String(entry.source || '').trim();
+  if (src === POS_DAILY_CLOSE_SOURCE || src === POS_DAILY_CLOSE_REVERSAL_SOURCE) return true;
+  if (src && src.includes(POS_DAILY_CLOSE_SOURCE)) return true;
+  // Compatibilidad: posibles variantes de source en builds antiguos
+  if (src && src.includes('POS_DAILY_CLOSE')) return true;
+
+  // Campos técnicos del flujo POS (si existen)
+  if (entry.closureId || entry.reversalOfClosureId || entry.reversingClosureId) return true;
+
+  const origen = String(entry.origen || '').trim().toUpperCase();
+  const desc = String((entry.descripcion != null ? entry.descripcion : entry.description) || '');
+  if (origen === 'POS' && /cierre\s+diario\s+pos/i.test(desc)) return true;
+
+  return false;
+}
+
+function looksLikeCashOrBankAccount(code, name) {
+  const c = String(code || '').trim();
+  // Códigos estándar Suite A33
+  if (c === '1100' || c === '1110' || c === '1200') return true;
+
+  const n = normText(name);
+  if (!n) return false;
+
+  // Fallback por nombre (históricos / catálogos custom)
+  if (n.includes('caja') || n.includes('banco') || n.includes('efectivo')) return true;
+  if (n.includes('cash') || n.includes('bank')) return true;
+
+  return false;
+}
+
+function getPosPrincipalAmounts(entry, lines, accountsMap) {
+  // Helper display-only. NO toca data persistida.
+  // Retorna montos principales (Caja/Banco vs Ventas/Ingresos) para el listado.
+  let arr = Array.isArray(lines) ? lines : [];
+
+  // Compatibilidad: si alguna integración guardara líneas embebidas
+  if (!arr.length && entry && typeof entry === 'object') {
+    const embedded = entry.lines || entry.items || entry.movements || entry.detailLines || entry.journalLines;
+    if (Array.isArray(embedded)) arr = embedded;
+  }
+
+  const getSalesTotalFromMeta = () => {
+    const v =
+      entry?.meta?.salesTotal ??
+      entry?.salesTotal ??
+      entry?.totalSales ??
+      entry?.ventasTotal ??
+      entry?.meta?.ventasTotal ??
+      entry?.posTotals?.salesTotal ??
+      entry?.posTotals?.ventasTotal ??
+      null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  if (!arr.length) {
+    const s = getSalesTotalFromMeta();
+    if (s != null) return { principalDebe: s, principalHaber: s, found: true, by: 'meta' };
+    return { principalDebe: null, principalHaber: null, found: false, by: 'none' };
+  }
+
+  let deltaCash = 0;
+  let deltaIncome = 0;
+  let hasCash = false;
+  let hasIncome = false;
+
+  for (const ln of arr) {
+    if (!ln) continue;
+
+    const code = String(
+      ln.accountCode ?? ln.code ?? ln.account ?? ln.cuenta ?? ln.account_code ?? ''
+    ).trim();
+
+    const debe = Number(ln.debe ?? ln.debit ?? 0);
+    const haber = Number(ln.haber ?? ln.credit ?? 0);
+
+    const acc = (accountsMap && typeof accountsMap.get === 'function' && code) ? accountsMap.get(code) : null;
+    const accName =
+      String(acc?.nombre || acc?.name || ln.accountName || ln.nombreCuenta || ln.nombre || '').trim() ||
+      getLineAccountSnapshotName(ln);
+
+    const rt = String(
+      acc?.rootType ||
+      inferRootTypeFromTipo(acc?.tipo) ||
+      inferRootTypeFromCode(code) ||
+      ''
+    ).toUpperCase();
+
+    if (looksLikeCashOrBankAccount(code, accName)) {
+      hasCash = true;
+      deltaCash += (Number.isFinite(debe) ? debe : 0) - (Number.isFinite(haber) ? haber : 0);
+    }
+
+    if (rt === 'INGRESOS') {
+      hasIncome = true;
+      deltaIncome += (Number.isFinite(haber) ? haber : 0) - (Number.isFinite(debe) ? debe : 0);
+    }
+  }
+
+  if (hasCash && hasIncome) {
+    return { principalDebe: deltaCash, principalHaber: deltaIncome, found: true, by: 'lines' };
+  }
+
+  const s = getSalesTotalFromMeta();
+  if (s != null) return { principalDebe: s, principalHaber: s, found: true, by: 'meta' };
+
+  return { principalDebe: null, principalHaber: null, found: false, by: 'none' };
+}
+
 function renderDiario(data) {
   const tbody = $('#diario-tbody');
   if (!tbody) return;
@@ -2570,7 +2696,7 @@ function renderDiario(data) {
 
   const { desde: diarioDesde, hasta: diarioHasta } = getDiaryRangeFromUI();
 
-  const { entries, linesByEntry } = data;
+  const { entries, linesByEntry, accountsMap } = data;
 
   // Mostrar lo más reciente arriba (fecha DESC, id DESC). Si falta fecha, va al final.
   const sorted = [...entries].sort((a, b) => {
@@ -2636,6 +2762,17 @@ function renderDiario(data) {
       totalHaber += Number(ln.haber || 0);
     }
 
+    // Display-only: para cierres POS mostramos Caja/Banco vs Ventas, no el total contable del asiento
+    let displayDebe = totalDebe;
+    let displayHaber = totalHaber;
+    if (isPosDailyCloseEntry(e)) {
+      const p = getPosPrincipalAmounts(e, lines, accountsMap);
+      if (p && p.found) {
+        displayDebe = p.principalDebe;
+        displayHaber = p.principalHaber;
+      }
+    }
+
     const evLabel = getDisplayEventLabel(e);
     const refLabel = getDisplayReference(e);
     const refText = refLabel ? (isPosClose ? refLabel : `Ref: ${refLabel}`) : '';
@@ -2649,8 +2786,8 @@ function renderDiario(data) {
       <td>${evCell || '—'}</td>
       <td>${getSupplierLabelFromEntry(e, data)}</td>
       <td>${origenCell}</td>
-      <td class="num">C$ ${fmtCurrency(totalDebe)}</td>
-      <td class="num">C$ ${fmtCurrency(totalHaber)}</td>
+      <td class="num">C$ ${fmtCurrency(displayDebe)}</td>
+      <td class="num">C$ ${fmtCurrency(displayHaber)}</td>
       <td><button type="button" class="btn-link ver-detalle" data-id="${e.id}">Ver detalle</button></td>
     `;
     tbody.appendChild(tr);
