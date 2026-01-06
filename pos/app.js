@@ -4579,6 +4579,11 @@ function makeChecklistItemIdPOS(){
   return 'chk_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
 }
 
+function makeReminderIdPOS(){
+  try{ return (crypto && crypto.randomUUID) ? crypto.randomUUID() : null; }catch(e){}
+  return 'rem_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+}
+
 function normalizeChecklistTemplatePOS(t){
   const out = (t && typeof t === 'object') ? t : {};
   const normArr = (arr)=>{
@@ -4619,12 +4624,42 @@ function ensureChecklistDataPOS(ev, dayKey){
     changed = true;
   }
   if (!ev.days[dayKey].checklistState || typeof ev.days[dayKey].checklistState !== 'object') {
-    ev.days[dayKey].checklistState = { checkedIds: [], notes: '' };
+    ev.days[dayKey].checklistState = { checkedIds: [], notes: '', reminders: [] };
     changed = true;
   }
   const st = ev.days[dayKey].checklistState;
   if (!Array.isArray(st.checkedIds)) { st.checkedIds = []; changed = true; }
   if (typeof st.notes !== 'string') { st.notes = String(st.notes || ''); changed = true; }
+
+  // Recordatorios (por día)
+  if (!Array.isArray(st.reminders)) { st.reminders = []; changed = true; }
+  const normReminders = (arr)=>{
+    if (!Array.isArray(arr)) return [];
+    const out = [];
+    for (const raw of arr){
+      if (!raw || typeof raw !== 'object') continue;
+      const id = String(raw.id || makeReminderIdPOS());
+      const text = String(raw.text || '').trim();
+      if (!text) continue;
+      const done = !!raw.done;
+      const createdAt = Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now();
+      let doneAt = (raw.doneAt === null || raw.doneAt === undefined) ? null : Number(raw.doneAt);
+      if (!Number.isFinite(doneAt)) doneAt = null;
+      let dueTime = (typeof raw.dueTime === 'string') ? raw.dueTime.trim() : null;
+      if (!dueTime || !/^\d{2}:\d{2}$/.test(dueTime)) dueTime = null;
+      let priority = (typeof raw.priority === 'string') ? raw.priority.trim() : null;
+      if (!priority || !['high','med','low'].includes(priority)) priority = null;
+      if (!done) {
+        doneAt = null;
+      } else if (done && doneAt === null) {
+        doneAt = Date.now();
+      }
+      out.push({ id, text, done, createdAt, doneAt, dueTime, priority });
+    }
+    return out;
+  };
+  const rem2 = normReminders(st.reminders);
+  if (JSON.stringify(rem2) !== JSON.stringify(st.reminders)) { st.reminders = rem2; changed = true; }
 
   // Limpieza: checkedIds solo válidos según template
   const allIds = new Set([
@@ -4714,6 +4749,154 @@ function renderChecklistSectionPOS(sectionKey, listEl, items, checkedSet){
   });
 }
 
+function labelReminderPriorityPOS(p){
+  if (p === 'high') return 'Alta';
+  if (p === 'med') return 'Media';
+  if (p === 'low') return 'Baja';
+  return '';
+}
+
+function classReminderPriorityPOS(p){
+  if (p === 'high') return 'rem-pri-high';
+  if (p === 'med') return 'rem-pri-med';
+  if (p === 'low') return 'rem-pri-low';
+  return '';
+}
+
+function buildReminderRowPOS(rem){
+  const row = document.createElement('div');
+  row.className = 'rem-item';
+  row.dataset.id = String(rem.id);
+
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.className = 'rem-toggle';
+  cb.checked = !!rem.done;
+  cb.dataset.id = String(rem.id);
+
+  const main = document.createElement('div');
+  main.className = 'rem-main';
+
+  const text = document.createElement('div');
+  text.className = 'rem-textline';
+  text.textContent = String(rem.text || '');
+
+  const meta = document.createElement('div');
+  meta.className = 'rem-meta';
+
+  if (rem.dueTime){
+    const chip = document.createElement('span');
+    chip.className = 'rem-chip rem-chip-time';
+    chip.textContent = '⏰ ' + String(rem.dueTime);
+    meta.appendChild(chip);
+  }
+  if (rem.priority){
+    const chip = document.createElement('span');
+    chip.className = 'rem-chip ' + classReminderPriorityPOS(rem.priority);
+    chip.textContent = labelReminderPriorityPOS(rem.priority);
+    meta.appendChild(chip);
+  }
+
+  main.appendChild(text);
+  if (meta.childElementCount) main.appendChild(meta);
+
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'btn-mini btn-pill-mini rem-del';
+  del.textContent = '✕';
+  del.title = 'Eliminar';
+  del.dataset.id = String(rem.id);
+
+  row.appendChild(cb);
+  row.appendChild(main);
+  row.appendChild(del);
+  return row;
+}
+
+function renderChecklistRemindersPOS(reminders){
+  const countEl = document.getElementById('checklist-reminder-count');
+  const listEl = document.getElementById('checklist-reminder-list');
+  const doneToggle = document.getElementById('checklist-reminder-done-toggle');
+  const doneWrap = document.getElementById('checklist-reminder-done-wrap');
+  const doneList = document.getElementById('checklist-reminder-done-list');
+  const clearDoneBtn = document.getElementById('checklist-reminder-clear-done');
+
+  if (!listEl) return;
+
+  const arr = Array.isArray(reminders) ? reminders : [];
+  const pending = arr.filter(r=>!r.done);
+  const done = arr.filter(r=>!!r.done);
+
+  // Orden sugerido: prioridad (alta→baja), luego hora, luego creación
+  const priRank = (p)=> (p==='high'?0:(p==='med'?1:(p==='low'?2:3)));
+  pending.sort((a,b)=>{
+    const pa = priRank(a.priority), pb = priRank(b.priority);
+    if (pa !== pb) return pa - pb;
+    const ta = a.dueTime || '99:99';
+    const tb = b.dueTime || '99:99';
+    if (ta !== tb) return ta.localeCompare(tb);
+    return (a.createdAt||0) - (b.createdAt||0);
+  });
+  done.sort((a,b)=> (b.doneAt||0) - (a.doneAt||0));
+
+  if (countEl) countEl.textContent = String(pending.length);
+
+  // Pendientes
+  listEl.innerHTML = '';
+  if (!pending.length){
+    const empty = document.createElement('div');
+    empty.className = 'rem-empty';
+    empty.textContent = 'Sin recordatorios pendientes.';
+    listEl.appendChild(empty);
+  } else {
+    for (const r of pending){
+      listEl.appendChild(buildReminderRowPOS(r));
+    }
+  }
+
+  // Completados
+  const open = !!window.__A33_REM_DONE_OPEN;
+  if (doneWrap) doneWrap.style.display = (open && done.length) ? 'block' : 'none';
+  if (doneToggle){
+    doneToggle.disabled = (done.length === 0);
+    doneToggle.setAttribute('aria-expanded', (open && done.length) ? 'true' : 'false');
+    doneToggle.textContent = `Completados (${done.length}) ${(open && done.length) ? '▾' : '▸'}`;
+  }
+  if (clearDoneBtn) clearDoneBtn.disabled = (done.length === 0);
+
+  if (doneList){
+    doneList.innerHTML = '';
+    if (!done.length){
+      const empty = document.createElement('div');
+      empty.className = 'rem-empty';
+      empty.textContent = 'Aún no hay completados.';
+      doneList.appendChild(empty);
+    } else {
+      for (const r of done){
+        doneList.appendChild(buildReminderRowPOS(r));
+      }
+    }
+  }
+}
+
+async function getChecklistContextPOS(){
+  const cur = await getMeta('currentEventId');
+  const curId = (cur === null || cur === undefined || cur === '') ? null : parseInt(cur,10);
+  if (!curId) return null;
+  const dayKey = safeYMD(getSaleDayKeyPOS());
+  const ev = await getEventByIdPOS(curId);
+  if (!ev) return null;
+  const { state } = ensureChecklistDataPOS(ev, dayKey);
+  return { curId, dayKey, ev, state };
+}
+
+async function saveChecklistStatePOS(ctx){
+  if (!ctx || !ctx.ev || !ctx.ev.days || !ctx.dayKey) return;
+  if (!ctx.ev.days[ctx.dayKey] || typeof ctx.ev.days[ctx.dayKey] !== 'object') ctx.ev.days[ctx.dayKey] = {};
+  ctx.ev.days[ctx.dayKey].checklistState = ctx.state;
+  await put('events', ctx.ev);
+}
+
 async function renderChecklistTab(){
   bindChecklistEventsOncePOS();
 
@@ -4758,6 +4941,9 @@ async function renderChecklistTab(){
 
   const notes = document.getElementById('checklist-notes');
   if (notes) notes.value = state.notes || '';
+
+  // Recordatorios (por día)
+  try{ renderChecklistRemindersPOS(state.reminders || []); }catch(e){ console.warn('Checklist: recordatorios', e); }
 }
 
 function bindChecklistEventsOncePOS(){
@@ -4820,6 +5006,87 @@ function bindChecklistEventsOncePOS(){
   const tab = document.getElementById('tab-checklist');
   if (tab){
     tab.addEventListener('click', async (e)=>{
+      const remAdd = e.target.closest('#checklist-reminder-add');
+      const remDoneToggle = e.target.closest('#checklist-reminder-done-toggle');
+      const remClearDone = e.target.closest('#checklist-reminder-clear-done');
+      const remDel = e.target.closest('.rem-del');
+
+      if (remDoneToggle){
+        if (remDoneToggle.disabled) return;
+        window.__A33_REM_DONE_OPEN = !window.__A33_REM_DONE_OPEN;
+        await renderChecklistTab();
+        return;
+      }
+
+      if (remAdd){
+        const ctx = await getChecklistContextPOS();
+        if (!ctx){
+          try{ showToast('Selecciona un evento primero.'); }catch(_e){}
+          return;
+        }
+
+        const tEl = document.getElementById('checklist-reminder-text');
+        const dueEl = document.getElementById('checklist-reminder-due');
+        const priEl = document.getElementById('checklist-reminder-priority');
+
+        const text = (tEl ? (tEl.value || '') : '').trim();
+        if (!text){
+          try{ showToast('Escribe el recordatorio.'); }catch(_e){}
+          try{ tEl && tEl.focus(); }catch(_e){}
+          return;
+        }
+
+        const dueTimeRaw = dueEl ? (dueEl.value || '').trim() : '';
+        const dueTime = (dueTimeRaw && /^\d{2}:\d{2}$/.test(dueTimeRaw)) ? dueTimeRaw : null;
+        const priRaw = priEl ? (priEl.value || '').trim() : '';
+        const priority = (priRaw && ['high','med','low'].includes(priRaw)) ? priRaw : null;
+
+        ctx.state.reminders = Array.isArray(ctx.state.reminders) ? ctx.state.reminders : [];
+        ctx.state.reminders.unshift({
+          id: makeReminderIdPOS(),
+          text,
+          done: false,
+          createdAt: Date.now(),
+          doneAt: null,
+          dueTime,
+          priority
+        });
+
+        await saveChecklistStatePOS(ctx);
+        if (tEl) tEl.value = '';
+        if (dueEl) dueEl.value = '';
+        if (priEl) priEl.value = '';
+        await renderChecklistTab();
+        try{ showToast('Recordatorio agregado.'); }catch(_e){}
+        try{ tEl && tEl.focus(); }catch(_e){}
+        return;
+      }
+
+      if (remClearDone){
+        const ctx = await getChecklistContextPOS();
+        if (!ctx) return;
+        const ok = confirm('¿Limpiar todos los recordatorios completados?');
+        if (!ok) return;
+        ctx.state.reminders = (Array.isArray(ctx.state.reminders) ? ctx.state.reminders : []).filter(r=>!r.done);
+        await saveChecklistStatePOS(ctx);
+        window.__A33_REM_DONE_OPEN = false;
+        await renderChecklistTab();
+        try{ showToast('Completados eliminados.'); }catch(_e){}
+        return;
+      }
+
+      if (remDel){
+        const id = remDel.dataset.id;
+        if (!id) return;
+        const ctx = await getChecklistContextPOS();
+        if (!ctx) return;
+        ctx.state.reminders = (Array.isArray(ctx.state.reminders) ? ctx.state.reminders : []).filter(r=>String(r.id)!==String(id));
+        await saveChecklistStatePOS(ctx);
+        await renderChecklistTab();
+        try{ showToast('Recordatorio eliminado.'); }catch(_e){}
+        return;
+      }
+
       const up = e.target.closest('.chk-up');
       const down = e.target.closest('.chk-down');
       const del = e.target.closest('.chk-del');
@@ -4888,7 +5155,8 @@ function bindChecklistEventsOncePOS(){
     tab.addEventListener('change', async (e)=>{
       const cb = e.target.closest('.chk-box');
       const txt = e.target.closest('.chk-text');
-      if (!(cb || txt)) return;
+      const remCb = e.target.closest('.rem-toggle');
+      if (!(cb || txt || remCb)) return;
       const cur = await getMeta('currentEventId');
       const curId = cur ? parseInt(cur,10) : null;
       if (!curId) return;
@@ -4896,6 +5164,21 @@ function bindChecklistEventsOncePOS(){
       const ev = await getEventByIdPOS(curId);
       if (!ev) return;
       const { template, state } = ensureChecklistDataPOS(ev, dayKey);
+
+      if (remCb){
+        const id = remCb.dataset.id;
+        if (!id) return;
+        const arr = Array.isArray(state.reminders) ? state.reminders : [];
+        const it = arr.find(r=>String(r.id)===String(id));
+        if (!it) return;
+        it.done = !!remCb.checked;
+        it.doneAt = it.done ? Date.now() : null;
+        state.reminders = arr;
+        ev.days[dayKey].checklistState = state;
+        await put('events', ev);
+        await renderChecklistTab();
+        return;
+      }
 
       if (cb){
         const id = cb.dataset.id;
@@ -4925,6 +5208,20 @@ function bindChecklistEventsOncePOS(){
       }
     });
   }
+
+  // Recordatorios: Enter = Agregar
+  const hookEnter = (el)=>{
+    if (!el) return;
+    el.addEventListener('keydown', (e)=>{
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const btn = document.getElementById('checklist-reminder-add');
+      try{ btn && btn.click(); }catch(_e){}
+    });
+  };
+  hookEnter(document.getElementById('checklist-reminder-text'));
+  hookEnter(document.getElementById('checklist-reminder-due'));
+  hookEnter(document.getElementById('checklist-reminder-priority'));
 
   // Notas (debounced)
   const notes = document.getElementById('checklist-notes');
