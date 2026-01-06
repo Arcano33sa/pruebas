@@ -1,5 +1,5 @@
 /*
-  Suite A33 v4.20.4 — Centro de Mando (OPERATIVO v1)
+  Suite A33 v4.20.5 — Centro de Mando (OPERATIVO v1)
 
   Fuentes reales (descubiertas en /pos/app.js dentro de esta ZIP):
   - DB_NAME: 'a33-pos'
@@ -16,6 +16,10 @@ const LS_FOCUS_KEY = 'a33_cmd_focusEventId';
 const ORDERS_LS_KEY = 'arcano33_pedidos';
 const ORDERS_ROUTE = '../pedidos/index.html';
 const SAFE_SCAN_LIMIT = 4000; // seguridad: evitar loops gigantes
+
+// --- Recordatorios (índice liviano desde POS)
+const REMINDERS_STORE = 'posRemindersIndex';
+const REMINDERS_SHOW_DONE_KEY = 'a33_cmd_reminders_showDone_v1';
 
 // --- Recomendaciones (desde Analítica: cache en localStorage)
 const ANALYTICS_RECOS_KEY = 'a33_analytics_recos_v1';
@@ -509,6 +513,20 @@ function safeStr(x){
   return s.trim();
 }
 
+// --- Preferencias UI (Recordatorios)
+function getShowDoneRemindersPref(){
+  try{
+    const raw = localStorage.getItem(REMINDERS_SHOW_DONE_KEY);
+    return raw === '1' || raw === 'true';
+  }catch(_){
+    return false;
+  }
+}
+
+function setShowDoneRemindersPref(val){
+  try{ localStorage.setItem(REMINDERS_SHOW_DONE_KEY, val ? '1' : '0'); }catch(_){ }
+}
+
 
 // --- Recomendaciones (Analítica: cache)
 function safeLSGetJSON(key, fallback=null){
@@ -849,6 +867,187 @@ async function getMeta(db, key){
 
 async function setMeta(db, key, value){
   return idbPut(db, 'meta', { id: key, value });
+}
+
+
+// --- Recordatorios (posRemindersIndex) — SOLO lectura
+function remindersGetShowDone(){
+  try{
+    const raw = localStorage.getItem(REMINDERS_SHOW_DONE_KEY);
+    return raw === '1' || raw === 'true';
+  }catch(_){
+    return false;
+  }
+}
+
+function remindersSetShowDone(v){
+  try{ localStorage.setItem(REMINDERS_SHOW_DONE_KEY, v ? '1' : '0'); }catch(_){ }
+}
+
+function remindersDueMinutes(row){
+  const t = safeStr(row && row.dueTime);
+  if (!/^[0-2]\d:[0-5]\d$/.test(t)) return 1e9;
+  const [hh, mm] = t.split(':').map(n=>parseInt(n,10));
+  if (!isFinite(hh) || !isFinite(mm)) return 1e9;
+  return (hh * 60) + mm;
+}
+
+function remindersPriorityRank(p){
+  const s = safeStr(p).toLowerCase();
+  if (s === 'high') return 0;
+  if (s === 'med') return 1;
+  if (s === 'low') return 2;
+  return 3;
+}
+
+async function idbScanRemindersByDayPrefix(db, dayKey){
+  if (!db || !hasStore(db, REMINDERS_STORE)) return [];
+  const prefix = `${String(dayKey)}|`;
+  return new Promise((resolve)=>{
+    try{
+      const store = tx(db, REMINDERS_STORE, 'readonly');
+      let range = null;
+      try{
+        range = IDBKeyRange.bound(prefix, prefix + '\uffff');
+      }catch(_){
+        range = null;
+      }
+
+      const out = [];
+      const req = store.openCursor(range);
+      req.onsuccess = (e)=>{
+        const cur = e.target.result;
+        if (!cur) return resolve(out);
+        if (out.length >= 1200) return resolve(out); // seguridad
+        out.push(cur.value);
+        try{ cur.continue(); }catch(_){ resolve(out); }
+      };
+      req.onerror = ()=> resolve([]);
+    }catch(err){
+      console.warn('idbScanRemindersByDayPrefix exception', err);
+      resolve([]);
+    }
+  });
+}
+
+async function readRemindersIndexForDay(db, dayKey){
+  if (!db) return { ok:false, rows:[], reason:'No disponible' };
+  if (!hasStore(db, REMINDERS_STORE)) {
+    return { ok:false, rows:[], reason:'Índice no disponible. Abre POS una vez.' };
+  }
+
+  let rows = null;
+  try{
+    rows = await idbGetAllByIndex(db, REMINDERS_STORE, 'by_day', IDBKeyRange.only(String(dayKey)));
+  }catch(_){
+    rows = null;
+  }
+  if (rows === null){
+    // Fallback eficiente por prefijo de clave (dayKey|...)
+    rows = await idbScanRemindersByDayPrefix(db, String(dayKey));
+  }
+  if (!Array.isArray(rows)) rows = [];
+  return { ok:true, rows, reason:'' };
+}
+
+function renderRemindersBlock(payload){
+  const pendingEl = $('remindersPending');
+  const listEl = $('remindersList');
+  const emptyEl = $('remindersEmpty');
+  const emptyHint = $('remindersEmptyHint');
+  const toggleEl = $('remindersToggleDone');
+
+  const showDonePref = remindersGetShowDone();
+  if (toggleEl){
+    toggleEl.setAttribute('aria-pressed', showDonePref ? 'true' : 'false');
+    toggleEl.textContent = showDonePref ? 'Ocultar completados' : 'Mostrar completados';
+  }
+
+  if (listEl) listEl.innerHTML = '';
+  if (emptyEl) emptyEl.hidden = true;
+
+  const ok = payload && payload.ok;
+  const rows = ok && Array.isArray(payload.rows) ? payload.rows : [];
+  const reason = payload && payload.reason ? String(payload.reason) : '';
+
+  // Pendientes: siempre basado en done=false (aunque estemos mostrando completados)
+  const pendingCount = rows.filter(r => !(r && r.done)).length;
+  if (pendingEl) pendingEl.textContent = String(pendingCount);
+
+  if (!ok){
+    if (emptyEl) emptyEl.hidden = false;
+    if (emptyHint) emptyHint.textContent = reason || 'No disponible';
+    return;
+  }
+
+  const shown = showDonePref ? rows.slice() : rows.filter(r => !(r && r.done));
+
+  // Orden: dueTime asc (sin hora al final), prioridad high>med>low, updatedAt desc
+  shown.sort((a,b)=>{
+    const ad = remindersDueMinutes(a);
+    const bd = remindersDueMinutes(b);
+    if (ad !== bd) return ad - bd;
+    const ap = remindersPriorityRank(a && a.priority);
+    const bp = remindersPriorityRank(b && b.priority);
+    if (ap !== bp) return ap - bp;
+    const au = Number((a && (a.updatedAt || a.createdAt)) || 0);
+    const bu = Number((b && (b.updatedAt || b.createdAt)) || 0);
+    if (au !== bu) return bu - au;
+    return safeStr(a && a.idxId).localeCompare(safeStr(b && b.idxId));
+  });
+
+  if (!shown.length){
+    if (emptyEl) emptyEl.hidden = false;
+    if (emptyHint) emptyHint.textContent = showDonePref ? 'No hay recordatorios para esta fecha.' : 'No hay pendientes para esta fecha.';
+    return;
+  }
+
+  for (const r of shown){
+    if (!r || typeof r !== 'object') continue;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'cmd-rem-item';
+
+    const top = document.createElement('div');
+    top.className = 'cmd-rem-top';
+
+    const evName = safeStr(r.eventName) || (r.eventId != null ? (`Evento #${r.eventId}`) : 'Evento —');
+    const ev = document.createElement('div');
+    ev.className = 'cmd-rem-event';
+    ev.textContent = evName;
+
+    const chips = document.createElement('div');
+    chips.className = 'cmd-rem-chips';
+
+    const addChip = (cls, text)=>{
+      const s = document.createElement('span');
+      s.className = 'cmd-chip ' + cls;
+      s.textContent = text;
+      chips.appendChild(s);
+    };
+
+    const due = safeStr(r.dueTime);
+    if (due) addChip('cmd-chip-neutral', due);
+
+    const pr = safeStr(r.priority).toLowerCase();
+    if (pr === 'high') addChip('cmd-chip-critical', 'Alta');
+    else if (pr === 'med') addChip('cmd-chip-yellow', 'Media');
+    else if (pr === 'low') addChip('cmd-chip-low', 'Baja');
+
+    const done = !!r.done;
+    addChip(done ? 'cmd-chip-green' : 'cmd-chip-neutral', done ? 'Hecho' : 'Pendiente');
+
+    top.appendChild(ev);
+    top.appendChild(chips);
+
+    const text = document.createElement('div');
+    text.className = 'cmd-rem-text';
+    text.textContent = safeStr(r.text) || '—';
+
+    wrap.appendChild(top);
+    wrap.appendChild(text);
+    if (listEl) listEl.appendChild(wrap);
+  }
 }
 
 // --- Checklist helpers (estructura real en POS: ev.checklistTemplate + ev.days[YYYY-MM-DD].checklistState)
@@ -1719,6 +1918,15 @@ async function navigateToPOS(tab){
   window.location.href = `../pos/index.html?tab=${encodeURIComponent(t)}`;
 }
 
+async function navigateToPOSReminders(){
+  const ev = state.focusEvent;
+  try{
+    if (ev && state.db) await setMeta(state.db, 'currentEventId', Number(ev.id));
+  }catch(_){ }
+  // Deep-link: POS abre Checklist y hace scroll a la card Recordatorios
+  window.location.href = `../pos/index.html#checklist-reminders`;
+}
+
 // --- Picker
 function eventSortKey(ev){
   // Preferir updatedAt, luego createdAt, luego id (todos reales del objeto)
@@ -1816,6 +2024,15 @@ async function refreshAll(){
   clearMetricsToDash();
   clearOrdersToDash();
 
+  // Recordatorios del día (no depende del evento enfocado)
+  try{
+    const dkR = state.today;
+    const rem = await readRemindersIndexForDay(state.db, dkR);
+    renderRemindersBlock(rem);
+  }catch(_){
+    renderRemindersBlock({ ok:false, rows:[], reason:'No disponible' });
+  }
+
   // Recomendaciones (cache Analítica)
   renderRecos();
 
@@ -1835,6 +2052,7 @@ async function refreshAll(){
     setDisabled('btnGoResumen', true);
     setDisabled('btnGoChecklist', true);
     setDisabled('btnOpenChecklist', true);
+    setDisabled('btnGoPosReminders', true);
 
     const onlyOrders = (ordersOut && Array.isArray(ordersOut.alerts)) ? ordersOut.alerts : [];
     renderAlerts(onlyOrders.length ? onlyOrders : null);
@@ -1845,6 +2063,7 @@ async function refreshAll(){
   setDisabled('btnGoResumen', false);
   setDisabled('btnGoChecklist', false);
   setDisabled('btnOpenChecklist', false);
+  setDisabled('btnGoPosReminders', false);
 
   const dk = state.today;
 
@@ -1974,6 +2193,25 @@ async function init(){
   bind('btnGoResumen', 'resumen');
   bind('btnGoChecklist', 'checklist');
   bind('btnOpenChecklist', 'checklist');
+
+  // Recordatorios: CTA + toggle (solo lectura)
+  const goRem = $('btnGoPosReminders');
+  if (goRem){
+    goRem.addEventListener('click', ()=>{ navigateToPOSReminders(); });
+  }
+  const tDone = $('remindersToggleDone');
+  if (tDone){
+    tDone.addEventListener('click', async ()=>{
+      remindersSetShowDone(!remindersGetShowDone());
+      // Solo re-render de la sección (usa índice liviano)
+      try{
+        const rem = await readRemindersIndexForDay(state.db, state.today);
+        renderRemindersBlock(rem);
+      }catch(_){
+        renderRemindersBlock({ ok:false, rows:[], reason:'No disponible' });
+      }
+    });
+  }
 
   // Pedidos: CTA
   const bindPedidos = (id)=>{

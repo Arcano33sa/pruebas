@@ -4573,6 +4573,9 @@ function getTabFromUrlPOS(){
     // Hash: #tab=vender o #vender
     const h = (window.location.hash || '').replace(/^#/, '').trim();
     if (!h) return null;
+    // Alias: CdM → Recordatorios (abre Checklist)
+    if (h === 'checklist-reminders' || h === 'checklist-reminders-card') return 'checklist';
+    if (h.startsWith('checklist-reminders')) return 'checklist';
     if (h.startsWith('tab=')){
       const ht = h.slice(4).trim();
       if (allowed.has(ht)) return ht;
@@ -4580,6 +4583,33 @@ function getTabFromUrlPOS(){
     if (allowed.has(h)) return h;
   }catch(_){ }
   return null;
+}
+
+function getDeepScrollTargetFromUrlPOS(){
+  try{
+    const h = (window.location.hash || '').replace(/^#/, '').trim();
+    if (!h) return null;
+    // CdM: #checklist-reminders -> scroll a la card real
+    if (h === 'checklist-reminders' || h === 'checklist-reminders-card' || h.startsWith('checklist-reminders')){
+      return 'checklist-reminders-card';
+    }
+  }catch(_){ }
+  return null;
+}
+
+function scheduleScrollToIdPOS(id){
+  const targetId = String(id || '').trim();
+  if (!targetId) return;
+  const tryScroll = (n)=>{
+    const el = document.getElementById(targetId);
+    if (el){
+      try{ el.scrollIntoView({ behavior:'smooth', block:'start' }); }catch(_){ el.scrollIntoView(); }
+      return;
+    }
+    if (n >= 12) return;
+    setTimeout(()=> tryScroll(n+1), 120);
+  };
+  setTimeout(()=> tryScroll(0), 80);
 }
 
 // --- Checklist (POS)
@@ -10487,6 +10517,13 @@ async function init(){
   try{
     const deepTab = getTabFromUrlPOS();
     if (deepTab) setTab(deepTab);
+
+    // Deep-link extra: #checklist-reminders -> checklist + scroll a la card
+    const scrollTarget = getDeepScrollTargetFromUrlPOS();
+    if (scrollTarget){
+      setTab('checklist');
+      scheduleScrollToIdPOS(scrollTarget);
+    }
   }catch(_){ }
 
   // Vender tab
