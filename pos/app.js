@@ -1,6 +1,6 @@
 // --- IndexedDB helpers POS
 const DB_NAME = 'a33-pos';
-const DB_VER = 25; // + summaryArchives (archivo de períodos) + secuencia de export
+const DB_VER = 26; // + posRemindersIndex (índice liviano de recordatorios)
 let db;
 
 // --- Resumen: modo de vista (por período vs todo)
@@ -112,6 +112,21 @@ function openDB() {
         try { a.createIndex('by_periodKey', 'periodKey', { unique: false }); } catch {}
         try { a.createIndex('by_createdAt', 'createdAt', { unique: false }); } catch {}
         try { a.createIndex('by_seq', 'seq', { unique: false }); } catch {}
+      }
+
+      // posRemindersIndex: índice liviano de recordatorios (para lecturas rápidas sin escanear eventos completos)
+      // key: idxId = ${dayKey}|${eventId}|${reminderId}
+      if (!d.objectStoreNames.contains('posRemindersIndex')) {
+        const r = d.createObjectStore('posRemindersIndex', { keyPath: 'idxId' });
+        try { r.createIndex('by_event', 'eventId', { unique: false }); } catch {}
+        try { r.createIndex('by_day', 'dayKey', { unique: false }); } catch {}
+        try { r.createIndex('by_event_day', ['eventId','dayKey'], { unique: false }); } catch {}
+        try { r.createIndex('by_updatedAt', 'updatedAt', { unique: false }); } catch {}
+      } else {
+        try { e.target.transaction.objectStore('posRemindersIndex').createIndex('by_event','eventId'); } catch {}
+        try { e.target.transaction.objectStore('posRemindersIndex').createIndex('by_day','dayKey'); } catch {}
+        try { e.target.transaction.objectStore('posRemindersIndex').createIndex('by_event_day',['eventId','dayKey']); } catch {}
+        try { e.target.transaction.objectStore('posRemindersIndex').createIndex('by_updatedAt','updatedAt'); } catch {}
       }
     };
     req.onsuccess = () => { db = req.result; resolve(db); };
@@ -4643,6 +4658,7 @@ function ensureChecklistDataPOS(ev, dayKey){
       if (!text) continue;
       const done = !!raw.done;
       const createdAt = Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now();
+      let updatedAt = Number.isFinite(raw.updatedAt) ? raw.updatedAt : createdAt;
       let doneAt = (raw.doneAt === null || raw.doneAt === undefined) ? null : Number(raw.doneAt);
       if (!Number.isFinite(doneAt)) doneAt = null;
       let dueTime = (typeof raw.dueTime === 'string') ? raw.dueTime.trim() : null;
@@ -4654,7 +4670,9 @@ function ensureChecklistDataPOS(ev, dayKey){
       } else if (done && doneAt === null) {
         doneAt = Date.now();
       }
-      out.push({ id, text, done, createdAt, doneAt, dueTime, priority });
+      // Si venía sin updatedAt pero sí con doneAt (históricos), respetamos doneAt como última modificación.
+      if (!Number.isFinite(raw.updatedAt) && Number.isFinite(doneAt) && doneAt > updatedAt) updatedAt = doneAt;
+      out.push({ id, text, done, createdAt, updatedAt, doneAt, dueTime, priority });
     }
     return out;
   };
@@ -4674,6 +4692,134 @@ function ensureChecklistDataPOS(ev, dayKey){
   }
 
   return { changed, template: tpl, state: st };
+}
+
+// --- Recordatorios: índice liviano (posRemindersIndex)
+// Objetivo: permitir lectura rápida (p.ej. Centro de Mando) sin escanear eventos completos.
+function buildReminderIndexIdPOS(eventId, dayKey, reminderId){
+  return `${String(dayKey)}|${String(eventId)}|${String(reminderId)}`;
+}
+
+async function getRemindersIndexRowsForEventDayPOS(eventId, dayKey){
+  try{
+    if (!db) await openDB();
+    if (!db || !db.objectStoreNames.contains('posRemindersIndex')) return [];
+    const evId = Number(eventId);
+    const dk = String(dayKey);
+
+    return await new Promise((resolve)=>{
+      try{
+        const t = db.transaction(['posRemindersIndex'], 'readonly');
+        const st = t.objectStore('posRemindersIndex');
+
+        let idx = null;
+        try{ idx = st.index('by_event_day'); }catch(e){ idx = null; }
+
+        if (idx){
+          let range = null;
+          try{ range = IDBKeyRange.only([evId, dk]); }catch(e){ range = null; }
+          const r = range ? idx.getAll(range) : idx.getAll();
+          r.onsuccess = ()=>resolve(r.result || []);
+          r.onerror = ()=>resolve([]);
+          return;
+        }
+
+        const r = st.getAll();
+        r.onsuccess = ()=>{
+          const all = r.result || [];
+          resolve(all.filter(x=>String(x.eventId)===String(evId) && String(x.dayKey)===dk));
+        };
+        r.onerror = ()=>resolve([]);
+      }catch(e){
+        resolve([]);
+      }
+    });
+  }catch(e){
+    return [];
+  }
+}
+
+// FUNCIÓN CENTRAL (obligatoria)
+// syncRemindersIndexForDay(ev, dayKey)
+// - Upsert lo actual + delete lo que ya no existe (sin duplicados)
+async function syncRemindersIndexForDay(ev, dayKey){
+  try{
+    if (!ev || !dayKey) return;
+    if (!db) await openDB();
+    if (!db || !db.objectStoreNames.contains('posRemindersIndex')) return;
+
+    const eventId = Number(ev.id);
+    const eventName = String(ev.name || '').trim();
+    const dk = String(dayKey);
+
+    // Leer reminders del día actual
+    const { state } = ensureChecklistDataPOS(ev, dk);
+    const reminders = Array.isArray(state.reminders) ? state.reminders : [];
+
+    // Construir set de idxId esperado
+    const expected = new Set();
+    const rows = [];
+
+    for (const r of reminders){
+      if (!r || typeof r !== 'object') continue;
+      const reminderId = String(r.id || '').trim();
+      const text = String(r.text || '').trim();
+      if (!reminderId || !text) continue;
+
+      const idxId = buildReminderIndexIdPOS(eventId, dk, reminderId);
+      expected.add(idxId);
+
+      const createdAt = Number.isFinite(r.createdAt) ? r.createdAt : Date.now();
+      const updatedAt = Number.isFinite(r.updatedAt) ? r.updatedAt : createdAt;
+
+      rows.push({
+        idxId,
+        eventId,
+        eventName,
+        dayKey: dk,
+        reminderId,
+        text,
+        done: !!r.done,
+        dueTime: (typeof r.dueTime === 'string' && /^\d{2}:\d{2}$/.test(r.dueTime.trim())) ? r.dueTime.trim() : null,
+        priority: (typeof r.priority === 'string' && ['high','med','low'].includes(r.priority.trim())) ? r.priority.trim() : null,
+        createdAt,
+        updatedAt
+      });
+    }
+
+    // Leer del índice todas las filas de ese (eventId, dayKey)
+    const existing = await getRemindersIndexRowsForEventDayPOS(eventId, dk);
+
+    // Upsert + Delete (en una sola transacción)
+    await new Promise((resolve)=>{
+      try{
+        const t = db.transaction(['posRemindersIndex'], 'readwrite');
+        const st = t.objectStore('posRemindersIndex');
+
+        // Upsert: por cada reminder actual → put en índice
+        for (const row of rows){
+          try{ st.put(row); }catch(_e){}
+        }
+
+        // Delete: eliminar del índice todo registro que exista pero ya no esté en el set esperado
+        for (const old of (existing || [])){
+          const oldId = old && old.idxId ? String(old.idxId) : '';
+          if (!oldId) continue;
+          if (!expected.has(oldId)){
+            try{ st.delete(oldId); }catch(_e){}
+          }
+        }
+
+        t.oncomplete = ()=>resolve();
+        t.onerror = ()=>resolve();
+        t.onabort = ()=>resolve();
+      }catch(e){
+        resolve();
+      }
+    });
+  }catch(e){
+    console.warn('syncRemindersIndexForDay: fallo (se ignora para no romper POS)', e);
+  }
 }
 
 function renderChecklistSectionPOS(sectionKey, listEl, items, checkedSet){
@@ -4926,6 +5072,8 @@ async function renderChecklistTab(){
   const { changed, template, state } = ensureChecklistDataPOS(ev, dayKey);
   if (changed) {
     try{ await put('events', ev); }catch(e){ console.error('Checklist: no se pudo persistir inicialización', e); }
+    // Si acabamos de normalizar/crear recordatorios del día (datos antiguos), mantenemos el índice coherente.
+    try{ await syncRemindersIndexForDay(ev, dayKey); }catch(e){}
   }
 
   if (empty) empty.style.display = 'none';
@@ -5042,17 +5190,20 @@ function bindChecklistEventsOncePOS(){
         const priority = (priRaw && ['high','med','low'].includes(priRaw)) ? priRaw : null;
 
         ctx.state.reminders = Array.isArray(ctx.state.reminders) ? ctx.state.reminders : [];
+        const now = Date.now();
         ctx.state.reminders.unshift({
           id: makeReminderIdPOS(),
           text,
           done: false,
-          createdAt: Date.now(),
+          createdAt: now,
+          updatedAt: now,
           doneAt: null,
           dueTime,
           priority
         });
 
         await saveChecklistStatePOS(ctx);
+        try{ await syncRemindersIndexForDay(ctx.ev, ctx.dayKey); }catch(e){}
         if (tEl) tEl.value = '';
         if (dueEl) dueEl.value = '';
         if (priEl) priEl.value = '';
@@ -5069,6 +5220,7 @@ function bindChecklistEventsOncePOS(){
         if (!ok) return;
         ctx.state.reminders = (Array.isArray(ctx.state.reminders) ? ctx.state.reminders : []).filter(r=>!r.done);
         await saveChecklistStatePOS(ctx);
+        try{ await syncRemindersIndexForDay(ctx.ev, ctx.dayKey); }catch(e){}
         window.__A33_REM_DONE_OPEN = false;
         await renderChecklistTab();
         try{ showToast('Completados eliminados.'); }catch(_e){}
@@ -5082,6 +5234,7 @@ function bindChecklistEventsOncePOS(){
         if (!ctx) return;
         ctx.state.reminders = (Array.isArray(ctx.state.reminders) ? ctx.state.reminders : []).filter(r=>String(r.id)!==String(id));
         await saveChecklistStatePOS(ctx);
+        try{ await syncRemindersIndexForDay(ctx.ev, ctx.dayKey); }catch(e){}
         await renderChecklistTab();
         try{ showToast('Recordatorio eliminado.'); }catch(_e){}
         return;
@@ -5173,9 +5326,11 @@ function bindChecklistEventsOncePOS(){
         if (!it) return;
         it.done = !!remCb.checked;
         it.doneAt = it.done ? Date.now() : null;
+        it.updatedAt = Date.now();
         state.reminders = arr;
         ev.days[dayKey].checklistState = state;
         await put('events', ev);
+        try{ await syncRemindersIndexForDay(ev, dayKey); }catch(e){}
         await renderChecklistTab();
         return;
       }
