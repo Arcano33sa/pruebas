@@ -498,6 +498,21 @@ function ymdAddDays(ymd, delta){
   }
 }
 
+
+function fmtYMDShortES(ymd){
+  // Ej: 2026-01-05 -> "Lun 05 Ene"
+  try{
+    const [y,m,d] = String(ymd).split('-').map(n=>parseInt(n,10));
+    const dt = new Date(y, (m||1)-1, d||1);
+    const dow = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'][dt.getDay()] || '—';
+    const mon = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'][dt.getMonth()] || '—';
+    const dd = String(dt.getDate()).padStart(2,'0');
+    return `${dow} ${dd} ${mon}`;
+  }catch(_){
+    return String(ymd || '');
+  }
+}
+
 function fmtMoneyNIO(n){
   if (typeof n !== 'number' || !isFinite(n)) return '—';
   // 2 decimales, sin locales raros (consistencia iPad)
@@ -950,12 +965,51 @@ async function readRemindersIndexForDay(db, dayKey){
   return { ok:true, rows, reason:'' };
 }
 
+
+async function readRemindersIndexForRange(db, dayKeys){
+  const keys = Array.isArray(dayKeys) ? dayKeys.map(k=>String(k)) : [];
+  if (!db) return { ok:false, rows:[], reason:'No disponible', dayKeys: keys };
+  if (!hasStore(db, REMINDERS_STORE)) {
+    return { ok:false, rows:[], reason:'Índice no disponible. Abre POS una vez.', dayKeys: keys };
+  }
+
+  const rowsAll = [];
+  let anyOk = false;
+  for (const dk of keys){
+    try{
+      const res = await readRemindersIndexForDay(db, dk);
+      if (res && res.ok){
+        anyOk = true;
+        if (Array.isArray(res.rows) && res.rows.length) rowsAll.push(...res.rows);
+      }
+    }catch(_){
+      // seguimos con el resto de días
+    }
+  }
+
+  return { ok:anyOk, rows: rowsAll, reason: anyOk ? '' : 'No disponible', dayKeys: keys };
+}
+
 function renderRemindersBlock(payload){
   const pendingEl = $('remindersPending');
   const listEl = $('remindersList');
   const emptyEl = $('remindersEmpty');
   const emptyHint = $('remindersEmptyHint');
   const toggleEl = $('remindersToggleDone');
+
+  // Título: "Recordatorios · Próximos 7 días" (manteniendo el contador existente)
+  try{
+    const titleEl = document.querySelector('#remindersBlock .cmd-rem-card .cmd-section-title');
+    if (titleEl){
+      const span = titleEl.querySelector('span');
+      // reconstruimos el título sin tocar el span (contiene #remindersPending)
+      if (span){
+        titleEl.innerHTML = '';
+        titleEl.appendChild(document.createTextNode('Recordatorios · Próximos 7 días '));
+        titleEl.appendChild(span);
+      }
+    }
+  }catch(_){ }
 
   const showDonePref = remindersGetShowDone();
   if (toggleEl){
@@ -969,8 +1023,11 @@ function renderRemindersBlock(payload){
   const ok = payload && payload.ok;
   const rows = ok && Array.isArray(payload.rows) ? payload.rows : [];
   const reason = payload && payload.reason ? String(payload.reason) : '';
+  const dayKeys = (payload && Array.isArray(payload.dayKeys) && payload.dayKeys.length)
+    ? payload.dayKeys.map(k=>String(k))
+    : Array.from(new Set(rows.map(r=> safeStr(r && r.dayKey)).filter(Boolean))).sort();
 
-  // Pendientes: siempre basado en done=false (aunque estemos mostrando completados)
+  // Pendientes: siempre basado en done=false (en TODO el rango)
   const pendingCount = rows.filter(r => !(r && r.done)).length;
   if (pendingEl) pendingEl.textContent = String(pendingCount);
 
@@ -980,31 +1037,33 @@ function renderRemindersBlock(payload){
     return;
   }
 
-  const shown = showDonePref ? rows.slice() : rows.filter(r => !(r && r.done));
-
-  // Orden: dueTime asc (sin hora al final), prioridad high>med>low, updatedAt desc
-  shown.sort((a,b)=>{
-    const ad = remindersDueMinutes(a);
-    const bd = remindersDueMinutes(b);
-    if (ad !== bd) return ad - bd;
-    const ap = remindersPriorityRank(a && a.priority);
-    const bp = remindersPriorityRank(b && b.priority);
-    if (ap !== bp) return ap - bp;
-    const au = Number((a && (a.updatedAt || a.createdAt)) || 0);
-    const bu = Number((b && (b.updatedAt || b.createdAt)) || 0);
-    if (au !== bu) return bu - au;
-    return safeStr(a && a.idxId).localeCompare(safeStr(b && b.idxId));
-  });
-
-  if (!shown.length){
-    if (emptyEl) emptyEl.hidden = false;
-    if (emptyHint) emptyHint.textContent = showDonePref ? 'No hay recordatorios para esta fecha.' : 'No hay pendientes para esta fecha.';
-    return;
+  // Agrupar por dayKey
+  const byDay = new Map();
+  for (const r of rows){
+    if (!r || typeof r !== 'object') continue;
+    const dk = safeStr(r.dayKey);
+    if (!dk) continue;
+    if (!byDay.has(dk)) byDay.set(dk, []);
+    byDay.get(dk).push(r);
   }
 
-  for (const r of shown){
-    if (!r || typeof r !== 'object') continue;
+  // Orden: dueTime asc (sin hora al final), prioridad high>med>low, updatedAt desc
+  const sortRows = (arr)=>{
+    arr.sort((a,b)=>{
+      const ad = remindersDueMinutes(a);
+      const bd = remindersDueMinutes(b);
+      if (ad !== bd) return ad - bd;
+      const ap = remindersPriorityRank(a && a.priority);
+      const bp = remindersPriorityRank(b && b.priority);
+      if (ap !== bp) return ap - bp;
+      const au = Number((a && (a.updatedAt || a.createdAt)) || 0);
+      const bu = Number((b && (b.updatedAt || b.createdAt)) || 0);
+      if (au !== bu) return bu - au;
+      return safeStr(a && a.idxId).localeCompare(safeStr(b && b.idxId));
+    });
+  };
 
+  const renderRow = (r)=>{
     const wrap = document.createElement('div');
     wrap.className = 'cmd-rem-item';
 
@@ -1047,9 +1106,48 @@ function renderRemindersBlock(payload){
     wrap.appendChild(top);
     wrap.appendChild(text);
     if (listEl) listEl.appendChild(wrap);
+  };
+
+  let shownTotal = 0;
+  for (const dk of dayKeys){
+    const allDay = byDay.get(dk) || [];
+    const shownDay = showDonePref ? allDay.slice() : allDay.filter(r => !(r && r.done));
+    sortRows(shownDay);
+    if (!shownDay.length) continue;
+
+    shownTotal += shownDay.length;
+
+    // Header por fecha
+    const h = document.createElement('div');
+    h.className = 'cmd-rem-day-title';
+    h.textContent = `${fmtYMDShortES(dk)} · ${dk}`;
+    if (listEl) listEl.appendChild(h);
+
+    for (const r of shownDay) renderRow(r);
+  }
+
+  if (!shownTotal){
+    if (emptyEl) emptyEl.hidden = false;
+    if (emptyHint) emptyHint.textContent = showDonePref
+      ? 'No hay recordatorios para los próximos 7 días.'
+      : 'No hay pendientes para los próximos 7 días.';
+    return;
   }
 }
 
+
+
+async function refreshRemindersNext7(){
+  try{
+    const start = state && state.today ? String(state.today) : todayYMD();
+    const dayKeys = [];
+    for (let i=0; i<7; i++) dayKeys.push(ymdAddDays(start, i));
+    const rem = await readRemindersIndexForRange(state.db, dayKeys);
+    renderRemindersBlock(rem);
+  }catch(_){
+    renderRemindersBlock({ ok:false, rows:[], reason:'No disponible', dayKeys:[] });
+  }
+}
 // --- Checklist helpers (estructura real en POS: ev.checklistTemplate + ev.days[YYYY-MM-DD].checklistState)
 function computeChecklistProgress(ev, dayKey){
   if (!ev || typeof ev !== 'object') return { ok:false, text:'—', checked:null, total:null, reason:'No disponible' };
@@ -2024,14 +2122,8 @@ async function refreshAll(){
   clearMetricsToDash();
   clearOrdersToDash();
 
-  // Recordatorios del día (no depende del evento enfocado)
-  try{
-    const dkR = state.today;
-    const rem = await readRemindersIndexForDay(state.db, dkR);
-    renderRemindersBlock(rem);
-  }catch(_){
-    renderRemindersBlock({ ok:false, rows:[], reason:'No disponible' });
-  }
+  // Recordatorios (solo lectura): próximos 7 días (hoy + 6) — NO escanear eventos
+  await refreshRemindersNext7();
 
   // Recomendaciones (cache Analítica)
   renderRecos();
@@ -2203,13 +2295,8 @@ async function init(){
   if (tDone){
     tDone.addEventListener('click', async ()=>{
       remindersSetShowDone(!remindersGetShowDone());
-      // Solo re-render de la sección (usa índice liviano)
-      try{
-        const rem = await readRemindersIndexForDay(state.db, state.today);
-        renderRemindersBlock(rem);
-      }catch(_){
-        renderRemindersBlock({ ok:false, rows:[], reason:'No disponible' });
-      }
+      // Solo re-render de la sección (usa índice liviano, rango 7 días)
+      await refreshRemindersNext7();
     });
   }
 
