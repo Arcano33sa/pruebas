@@ -26,10 +26,10 @@
   --font-serif: "EB Garamond", ui-serif, Georgia, serif;
 }
 
-html{ font-size: 18px; } /* +2px vs 16px base */
+html{ font-size: 20px; } /* +4px vs 16px base */
 
 @media (max-width: 420px){
-  html{ font-size: 16px; }
+  html{ font-size: 18px; }
 }
 
 html, body{
