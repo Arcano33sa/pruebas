@@ -1162,6 +1162,26 @@ small.muted{color:var(--muted)}
   margin-top:10px;
 }
 
+
+.rem-group-title{
+  font-weight:800;
+  letter-spacing:0.02em;
+  margin-top:2px;
+}
+
+.rem-group-date{
+  font-weight:700;
+  opacity:0.90;
+  padding-left:2px;
+  margin-top:8px;
+}
+
+.rem-block-sep{
+  border-top:1px solid rgba(255,255,255,0.08);
+  margin:10px 0 2px;
+  height:10px; /* 'media línea' de aire */
+}
+
 .rem-empty{
   padding:8px 4px;
   color:var(--muted);
