@@ -5013,13 +5013,13 @@ function pcOpenHistoryModal(recordId) {
   fillLines('ph-modal-tbody-proveedores', rec.sections && rec.sections.proveedores);
   fillLines('ph-modal-tbody-varias', rec.sections && rec.sections.varias);
 
-  modal.classList.add('show');
+  modal.classList.add('open');
 }
 
 function pcCloseHistoryModal() {
   const modal = document.getElementById('ph-modal');
   if (!modal) return;
-  modal.classList.remove('show');
+  modal.classList.remove('open');
   pcModalRecordId = null;
 }
 
