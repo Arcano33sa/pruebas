@@ -1175,6 +1175,73 @@ function hasPettyDayActivity(day){
   return false;
 }
 
+// --- Caja Chica: estado real de sesión (NO confundir "habilitada" con "abierta")
+// Definición:
+// - Abierta: hay evidencia de apertura (openedAt o actividad) y NO hay closedAt
+// - Cerrada: closedAt existe
+// - No iniciada: no hay evidencia de apertura
+function getPettyDayOpenedAt(day){
+  if (!day || typeof day !== 'object') return null;
+
+  // Preferir campo explícito si existe (compatibilidad)
+  const explicit = safeStr(day.openedAt);
+  if (explicit) return explicit;
+
+  // Initial (cuando se guarda el efectivo inicial)
+  const i = safeStr(day.initial && day.initial.savedAt);
+  if (i) return i;
+
+  // Movimientos: intentar tomar el más temprano si hay timestamps
+  let best = null;
+  if (Array.isArray(day.movements) && day.movements.length){
+    for (const m of day.movements){
+      if (!m || typeof m !== 'object') continue;
+      const t = safeStr(m.createdAt) || safeStr(m.ts) || safeStr(m.savedAt);
+      if (!t) continue;
+      if (!best){ best = t; continue; }
+      try{
+        if (Date.parse(t) < Date.parse(best)) best = t;
+      }catch(_){ }
+    }
+  }
+
+  // Final (cuando se guarda el conteo final)
+  const f = safeStr(day.finalCount && day.finalCount.savedAt);
+  if (f){
+    if (!best) best = f;
+    else {
+      try{ if (Date.parse(f) < Date.parse(best)) best = f; }catch(_){ }
+    }
+  }
+
+  // Ajuste arqueo (si existe)
+  const adj = (day.arqueoAdjust && typeof day.arqueoAdjust === 'object') ? day.arqueoAdjust : null;
+  if (adj){
+    const a1 = safeStr(adj.NIO && adj.NIO.createdAt);
+    const a2 = safeStr(adj.USD && adj.USD.createdAt);
+    const pick = (x)=>{
+      if (!x) return;
+      if (!best){ best = x; return; }
+      try{ if (Date.parse(x) < Date.parse(best)) best = x; }catch(_){ }
+    };
+    pick(a1); pick(a2);
+  }
+
+  return best;
+}
+
+function isPettyDayOpenReal(day){
+  if (!day || typeof day !== 'object') return false;
+  const closedAt = safeStr(day.closedAt);
+  if (closedAt) return false;
+
+  // Compatibilidad: flag legacy
+  if (day.isOpen === true) return true;
+
+  const openedAt = getPettyDayOpenedAt(day);
+  return !!openedAt;
+}
+
 // --- State
 const state = {
   db: null,
@@ -1712,8 +1779,10 @@ async function computePettyStatus(ev, dayKey){
     return { ok:false, enabled:true, dayState:null, fxMissing, fxKnown, closedAt:null, pcDay:null, fxSource: fxKnown ? 'event' : 'unknown', reason:'No disponible' };
   }
 
-  const closedAt = day.closedAt || null;
-  const dayState = closedAt ? 'Cerrado' : 'Abierto';
+  const closedAt = safeStr(day.closedAt) || null;
+  const openedAt = getPettyDayOpenedAt(day);
+  const isOpen = isPettyDayOpenReal(day);
+  const dayState = closedAt ? 'Cerrado' : (isOpen ? 'Abierto' : 'No iniciada');
 
   const fxDayRaw = (day.fxRate != null) ? Number(day.fxRate) : NaN;
   const fxDay = (Number.isFinite(fxDayRaw) && fxDayRaw > 0) ? fxDayRaw : null;
@@ -1723,7 +1792,7 @@ async function computePettyStatus(ev, dayKey){
   const fxMissing = !(fxEffective && fxEffective > 0);
   const fxSource = (fxEvent != null) ? 'event' : (fxDay != null ? 'pettyCash' : 'none');
 
-  return { ok:true, enabled:true, dayState, fxMissing, fxKnown, closedAt, pcDay: day, fxSource, reason:'' };
+  return { ok:true, enabled:true, dayState, isOpen, openedAt, fxMissing, fxKnown, closedAt, pcDay: day, fxSource, reason:'' };
 }
 
 async function computeUnclosed7d(ev, pcDayKey){
@@ -1749,7 +1818,7 @@ async function computeUnclosed7d(ev, pcDayKey){
 
 // --- Alertas (motor + Sincronizar)
 const ALERT_LABELS = {
-  'petty-open': 'Caja Chica: día abierto',
+  'petty-open': 'Caja Chica abierta',
   'fx-missing': 'Tipo de cambio vacío hoy',
   'checklist-incomplete': 'Checklist hoy incompleto',
   'inventory-critical': 'Inventario crítico',
@@ -1773,15 +1842,16 @@ function buildActionableAlerts(ev, dayKey, pc){
   const alerts = [];
   const unavailable = [];
 
-  // 1) Caja Chica activa y hoy NO está cerrado (solo con señal real)
+  // 1) Caja Chica realmente abierta (sesión abierta real)
+  // Nota: Caja activa/habilitada ≠ Caja abierta.
   if (pc && pc.enabled === true){
     if (pc.ok){
-      if (pc.dayState === 'Abierto'){
+      if (pc.isOpen === true){
         alerts.push({
           key: 'petty-open',
           icon: '🔓',
-          title: 'Caja Chica activa y hoy NO está cerrado',
-          sub: `Hoy (${dayKey}): día abierto en Caja Chica`,
+          title: 'Caja Chica abierta',
+          sub: `Hoy (${dayKey}): sesión abierta en Caja Chica`,
           cta: 'Ir a Caja Chica',
           tab: 'caja'
         });
