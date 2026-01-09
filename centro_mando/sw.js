@@ -1,3 +1,4 @@
+// Legacy cleanup SW — no usar para desarrollo
 // A33 Centro de Mando (compat) — Bridge SW
 // Objetivo: eliminar caché zombie de centro_mando/ y retirarse.
 const BRIDGE_VERSION = '4.20.7';
