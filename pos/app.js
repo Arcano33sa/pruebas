@@ -3739,9 +3739,19 @@ function validateLotFifoIntegrityPOS(fifo, evId){
       if (!Number.isFinite(st) || st < -0.000001) return { ok:false, msg:'FIFO/Lotes: soldTotal inválido.' };
       if (!Number.isFinite(rt) || rt < -0.000001) return { ok:false, msg:'FIFO/Lotes: remainingTotal inválido.' };
     }
-
-    const totS = Number(fifo.soldTotal);
-    const totR = Number(fifo.remainingTotal);
+    let totS = Number(fifo.soldTotal);
+    let totR = Number(fifo.remainingTotal);
+    // Hotfix Etapa 4: si el snapshot no trae totales, los calculamos desde los lotes.
+    if (!Number.isFinite(totS) || !Number.isFinite(totR)){
+      totS = 0;
+      totR = 0;
+      for (const lk of Object.keys(lotsMap)){
+        const l = lotsMap[lk];
+        if (!l) continue;
+        totS += Math.max(0, Number(l.soldTotal) || 0);
+        totR += Math.max(0, Number(l.remainingTotal) || 0);
+      }
+    }
     if (!Number.isFinite(totS) || totS < -0.000001) return { ok:false, msg:'FIFO/Lotes: total vendido inválido.' };
     if (!Number.isFinite(totR) || totR < -0.000001) return { ok:false, msg:'FIFO/Lotes: total restante inválido.' };
 
@@ -7041,6 +7051,8 @@ async function computeLotFifoForEvent(eventId){
     return {
       eventId: evId,
       updatedAt,
+      soldTotal: unassignedTotal,
+      remainingTotal: 0,
       lots: {},
       unassigned: { byKey: unassignedByKey, total: unassignedTotal },
       keys: Object.keys(unassignedByKey),
@@ -7247,9 +7259,19 @@ async function computeLotFifoForEvent(eventId){
   let unassignedTotal = 0;
   for (const v of Object.values(unassignedByKey)) unassignedTotal += Math.max(0, Number(v) || 0);
 
+  let soldTotal = 0;
+  let remainingTotal = 0;
+  for (const lotKey of lotOrder){
+    const lot = outLots[lotKey];
+    soldTotal += Math.max(0, Number(lot && lot.soldTotal) || 0);
+    remainingTotal += Math.max(0, Number(lot && lot.remainingTotal) || 0);
+  }
+
   return {
     eventId: evId,
     updatedAt,
+    soldTotal,
+    remainingTotal,
     lots: outLots,
     lotOrder,
     keys,
