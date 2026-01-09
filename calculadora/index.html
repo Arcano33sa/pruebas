@@ -244,6 +244,53 @@
       border-color: rgba(221, 191, 100, 0.6);
     }
 
+    /* A33 — Modal compacto (iPad-friendly) */
+    .a33-modal[hidden] { display: none !important; }
+    .a33-modal {
+      position: fixed;
+      inset: 0;
+      padding: 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,0,0,0.66);
+      z-index: 9999;
+    }
+    .a33-modal-card {
+      width: 100%;
+      max-width: 520px;
+      background: #1b1b1b;
+      border: 1px solid #333;
+      border-radius: 14px;
+      padding: 0.9rem;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+      overflow: hidden;
+    }
+    .a33-modal-text {
+      font-size: 0.92rem;
+      line-height: 1.35;
+      color: #eee;
+      word-break: break-word;
+    }
+    .a33-mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 0.9em;
+      padding: 0 0.15rem;
+    }
+    .a33-modal-actions {
+      margin-top: 0.85rem;
+      display: flex;
+      gap: 0.5rem;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+    .a33-btn-primary-pill {
+      border: none;
+      background: linear-gradient(135deg, #7b1818, #ddbf64);
+      color: #111;
+    }
+    .a33-btn-primary-pill:hover { filter: brightness(1.05); }
+
   </style>
   <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.7" />
 </head>
@@ -355,6 +402,18 @@
     <button id="btn-limpiar" class="btn-secondary">Limpiar cantidades (no borra recetas)</button>
   </div>
 
+  <!-- Modal: código duplicado (Etapa 3) -->
+  <div id="a33-modal-dup-codigo" class="a33-modal" hidden aria-hidden="true">
+    <div class="a33-modal-card" role="dialog" aria-modal="true" aria-labelledby="a33-modal-dup-text">
+      <div id="a33-modal-dup-text" class="a33-modal-text"></div>
+      <div class="a33-modal-actions">
+        <button id="a33-modal-dup-aplicar" class="btn-pill a33-btn-primary-pill" type="button">Aplicar</button>
+        <button id="a33-modal-dup-cancelar" class="btn-pill" type="button">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+
   <script src="/assets/js/a33-storage.js?v=4.20.7"></script>
   <script src="/assets/js/a33-presentations.js?v=4.20.7"></script>
   <script src="/assets/js/a33-auth.js?v=4.20.7"></script>
@@ -459,6 +518,54 @@
       const hy4 = v.ok ? v.code.slice(12, 16) : (A33Hebreo.hy4 || String(new Date().getFullYear()).slice(-4));
       return "A33" + mask + dd2 + hm3 + hy4;
     }
+
+    function A33ModalDuplicadoCodigo(nextCode) {
+      return new Promise((resolve) => {
+        const overlay = document.getElementById("a33-modal-dup-codigo");
+        const textEl = document.getElementById("a33-modal-dup-text");
+        const btnApply = document.getElementById("a33-modal-dup-aplicar");
+        const btnCancel = document.getElementById("a33-modal-dup-cancelar");
+        const code = normalizarCodigoLote(nextCode);
+
+        // Fallback ultra-simple
+        if (!overlay || !textEl || !btnApply || !btnCancel) {
+          resolve(confirm("Este código ya fue usado. Siguiente disponible: " + code + ". ¿Aplicar?"));
+          return;
+        }
+
+        textEl.innerHTML = "Este código ya fue usado. Siguiente disponible: <span class='a33-mono'>" +
+          escapeHtml(code) + "</span>. ¿Aplicar?";
+
+        const prevOverflow = document.body.style.overflow;
+        overlay.hidden = false;
+        overlay.setAttribute("aria-hidden", "false");
+        document.body.style.overflow = "hidden";
+
+        const cleanup = (val) => {
+          overlay.hidden = true;
+          overlay.setAttribute("aria-hidden", "true");
+          document.body.style.overflow = prevOverflow;
+          btnApply.removeEventListener("click", onApply);
+          btnCancel.removeEventListener("click", onCancel);
+          overlay.removeEventListener("click", onOutside);
+          document.removeEventListener("keydown", onKey);
+          resolve(val);
+        };
+
+        const onApply = (e) => { e.preventDefault(); cleanup(true); };
+        const onCancel = (e) => { e.preventDefault(); cleanup(false); };
+        const onOutside = (e) => { if (e.target === overlay) cleanup(false); };
+        const onKey = (e) => { if (e.key === "Escape") cleanup(false); };
+
+        btnApply.addEventListener("click", onApply);
+        btnCancel.addEventListener("click", onCancel);
+        overlay.addEventListener("click", onOutside);
+        document.addEventListener("keydown", onKey);
+
+        setTimeout(() => { try { btnApply.focus(); } catch (e) {} }, 0);
+      });
+    }
+
 
 
 
@@ -1325,7 +1432,7 @@
       A33HasCalculoPrevio = false;
     }
 
-    function guardarCalculoComoLote() {
+    async function guardarCalculoComoLote() {
       const datos = calcularDatosLote();
 
       // Bloqueante: solo se permite guardar si hubo cálculo previo
@@ -1368,39 +1475,53 @@
       let codigoFinal = v.code;
       let seqFinal = v.seq;
 
-      // Resolver colisiones (dos pestañas/dispositivos): si ya se usó entre preview y guardar, proponemos el siguiente disponible
-      for (let i = 0; i < 3; i++) {
+      // Duplicado/colisión: si ya se usó entre preview y guardar, ofrecer aplicar el siguiente disponible (1 toque)
+      const checkDuplicado = () => {
         const last = obtenerUltimoConsecutivoNumerico();
         const suggestedUpper = normalizarCodigoLote(A33SuggestedCode || "");
         const isSuggested = (normalizarCodigoLote(codigoFinal) === suggestedUpper);
 
         const yaExiste = existeCodigoEnLotes(lotes, codigoFinal);
         const quedoAtras = (typeof seqFinal === "number" && seqFinal <= last && isSuggested);
+        return { yaExiste, quedoAtras };
+      };
 
-        if (yaExiste || quedoAtras) {
-          const nextCode = proponerSiguienteCodigoDisponible(codigoFinal, lotes);
-          const ok = confirm("Este código ya fue usado.\n\nSiguiente disponible:\n" + nextCode + "\n\nOK = aplicar y guardar.\nCancelar = revisar.");
-          if (!ok) return;
+      let dup = checkDuplicado();
+      if (dup.yaExiste || dup.quedoAtras) {
+        const nextCode = proponerSiguienteCodigoDisponible(codigoFinal, lotes);
+        const aplicar = await A33ModalDuplicadoCodigo(nextCode);
+        if (!aplicar) return;
 
-          codigoFinal = nextCode;
-          v = validarCodigoLoteFuerte(codigoFinal);
-          if (!v.ok) {
-            alert("No se pudo generar un código válido automáticamente.");
-            return;
-          }
-          seqFinal = v.seq;
-
-          if (loteInput) setCodigoLoteValue(codigoFinal);
-          A33CodigoLoteMode = "AUTO";
-          A33AutoSeq = pad4(extraerSeqDeCodigo(codigoFinal) || 0).slice(-4);
-          A33SuggestedCode = codigoFinal;
-          setPillEstadoCodigo("SUGERIDO");
-          try { A33Storage.setItem(STORAGE_LOTE_CODE_MODE_KEY, "AUTO"); } catch (e) {}
-
-          // Reintentar: por si otra pestaña volvió a guardar en el milisegundo exacto
-          continue;
+        // Aplicar
+        codigoFinal = nextCode;
+        v = validarCodigoLoteFuerte(codigoFinal);
+        if (!v.ok) {
+          alert("No se pudo asignar un código libre. Reintentá.");
+          return;
         }
-        break;
+        seqFinal = v.seq;
+
+        if (loteInput) setCodigoLoteValue(codigoFinal);
+        A33CodigoLoteMode = "AUTO";
+        A33AutoSeq = pad4(extraerSeqDeCodigo(codigoFinal) || 0).slice(-4);
+        A33SuggestedCode = codigoFinal;
+        setPillEstadoCodigo("SUGERIDO");
+        try { A33Storage.setItem(STORAGE_LOTE_CODE_MODE_KEY, "AUTO"); } catch (e) {}
+
+        // Reintentar una sola vez (sin otro modal) con datos frescos
+        try {
+          const raw2 = A33Storage.getItem("arcano33_lotes");
+          lotes = raw2 ? (JSON.parse(raw2) || []) : [];
+          if (!Array.isArray(lotes)) lotes = [];
+        } catch (e) {
+          lotes = [];
+        }
+
+        dup = checkDuplicado();
+        if (dup.yaExiste || dup.quedoAtras) {
+          alert("No se pudo asignar un código libre. Reintentá.");
+          return;
+        }
       }
 
       // Regla del consecutivo si el usuario editó el código:
