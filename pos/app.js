@@ -3205,7 +3205,7 @@ function presKeyFromProductNamePOS(name){
   if (n.includes('media') && n.includes('375')) return 'M';
   if (n.includes('djeba') && n.includes('750')) return 'D';
   if (n.includes('litro') && n.includes('1000')) return 'L';
-  if ((n.includes('galon') || n.includes('galón')) && n.includes('3800')) return 'G';
+  if ((n.includes('galon') || n.includes('galón')) && (n.includes('3750') || n.includes('3800'))) return 'G';
   // fallback por palabra (por si el nombre no incluye ml)
   if (n.includes('pulso')) return 'P';
   if (n.includes('media')) return 'M';
@@ -3268,7 +3268,7 @@ function mapProductNameToFinishedId(name){
   if (n.includes('media') && n.includes('375')) return 'media';
   if (n.includes('djeba') && n.includes('750')) return 'djeba';
   if (n.includes('litro') && n.includes('1000')) return 'litro';
-  if (n.includes('gal') && (n.includes('3800') || n.includes('galon') || n.includes('galón'))) return 'galon';
+  if (n.includes('gal') && (n.includes('3750') || n.includes('3800') || n.includes('galon') || n.includes('galón'))) return 'galon';
   return null;
 }
 function applyFinishedFromSalePOS(sale, direction){
@@ -3300,7 +3300,7 @@ async function renderCentralFinishedPOS(){
     { id:'media', label:'Media 375 ml' },
     { id:'djeba', label:'Djeba 750 ml' },
     { id:'litro', label:'Litro 1000 ml' },
-    { id:'galon', label:'Galón 3800 ml' },
+    { id:'galon', label:'Galón 3750 ml' },
   ];
   defs.forEach(d=>{
     const info = (inv.finished && inv.finished[d.id]) || { stock: 0 };
@@ -3358,13 +3358,15 @@ const SEED = [
   {name:'Media 375ml', price:150, manageStock:true, active:true},
   {name:'Djeba 750ml', price:300, manageStock:true, active:true},
   {name:'Litro 1000ml', price:330, manageStock:true, active:true},
-  {name:'Galón 3800ml', price:900, manageStock:true, active:true},
+  {name:'Galón 3750ml', price:800, manageStock:true, active:true},
 ];
 const DEFAULT_EVENTS = [{name:'General'}];
 
 async function seedMissingDefaults(force=false){
   const list = await getAll('products');
   const names = new Set(list.map(p=>normName(p.name)));
+  // Compat: si existe el legacy 'Galón 3800ml', tratamos como presente el nuevo 'Galón 3750ml' para evitar duplicados.
+  if (names.has(normName('Galón 3800ml'))) names.add(normName('Galón 3750ml'));
   for (const s of SEED){
     const n = normName(s.name);
     if (force || !names.has(n)){
@@ -4523,9 +4525,41 @@ async function updateSellEnabled(){
   try{ await refreshCupBlock(); }catch(e){}
 }
 
+// Normalizar producto Galón (legacy 3800ml -> 3750ml)
+async function normalizeLegacyGallonProductPOS(){
+  try{
+    const products = await getAll('products');
+    if (!products || !products.length) return;
+
+    const norm = (s)=>normName(s);
+    const legacyNorm = norm('Galón 3800ml');
+    const canonicalName = 'Galón 3750ml';
+    const canonicalNorm = norm(canonicalName);
+
+    const hasCanonical = products.some(p=> norm(p.name) === canonicalNorm );
+    // Solo renombramos si existe legacy y NO existe ya el canonical (evita duplicados).
+    const legacy = products.find(p=> norm(p.name) === legacyNorm );
+    if (legacy && !hasCanonical){
+      legacy.name = canonicalName;
+      legacy.price = 800;
+      await put('products', legacy);
+    }
+    // Si ya existe canonical, al menos aseguramos su precio si viene vacío/0.
+    if (hasCanonical){
+      const canon = products.find(p=> norm(p.name) === canonicalNorm );
+      if (canon && !(Number(canon.price) > 0)) { canon.price = 800; await put('products', canon); }
+    }
+  }catch(e){
+    console.warn('No se pudo normalizar producto Galón', e);
+  }
+}
+
 // Ensure defaults
 async function ensureDefaults(){
   let products = await getAll('products');
+  // Migración suave: renombrar Galón 3800ml -> Galón 3750ml (sin migraciones destructivas)
+  await normalizeLegacyGallonProductPOS();
+  products = await getAll('products');
   if (!products.length){
     for (const p of SEED) await put('products', p);
   } else {
@@ -4746,7 +4780,7 @@ async function renderProductChips(){
   let list = (await getAll('products')).filter(p=>p.active!==false && !hiddenIds.has(p.id));
 
   // Orden con prioridad de Arcano 33
-  const priority = ['pulso','media','djeba','litro','galon','galón','galon 3800','galón 3800'];
+  const priority = ['pulso','media','djeba','litro','galon','galón','galon 3750','galón 3750','galon 3800','galón 3800'];
   list.sort((a,b)=>{
     const ia = priority.findIndex(x=>normName(a.name).includes(x));
     const ib = priority.findIndex(x=>normName(b.name).includes(x));
@@ -7448,7 +7482,7 @@ try{ window.syncLotsUsageForEvent = syncLotsUsageForEvent; }catch(_){ }
 
 
 // --- Venta por vaso (fraccionamiento de galones) ---
-const ML_PER_GALON = 3800;
+const ML_PER_GALON = 3750;
 
 function safeInt(val, def){
   const n = parseInt(val, 10);
@@ -7599,7 +7633,7 @@ async function fractionGallonsToCupsPOS(){
   const products = await getAll('products');
   const galProd = products.find(p => mapProductNameToFinishedId(p.name) === 'galon') || null;
   if (!galProd){
-    alert('No encontré el producto "Galón 3800ml" en Productos. Restaura productos base o créalo.');
+    alert('No encontré el producto "Galón 3750ml" (antes 3800ml) en Productos. Restaura productos base o créalo.');
     return;
   }
 
@@ -7760,7 +7794,7 @@ async function sellCupsPOS(isCourtesy){
 
   // Costo por vaso (COGS): derivado del costo del Galón configurado en Calculadora (Recetas).
   // Usamos el breakdown FIFO (mlPerCup) para estimar el costo exacto por ml servido.
-  const costoGallon = getCostoUnitarioProducto('Galón 3800ml') || getCostoUnitarioProducto('Galón') || 0;
+  const costoGallon = getCostoUnitarioProducto('Galón 3750ml') || getCostoUnitarioProducto('Galón 3800ml') || getCostoUnitarioProducto('Galón') || 0;
   let lineCost = 0;
   if (costoGallon > 0) {
     const costPerMl = costoGallon / ML_PER_GALON;
@@ -7993,7 +8027,7 @@ async function importFromLoteToInventory(){
     { field: 'media', name: 'Media 375ml' },
     { field: 'djeba', name: 'Djeba 750ml' },
     { field: 'litro', name: 'Litro 1000ml' },
-    { field: 'galon', name: 'Galón 3800ml' }
+    { field: 'galon', name: 'Galón 3750ml' }
   ];
 
   const products = await getAll('products');
@@ -8005,7 +8039,11 @@ async function importFromLoteToInventory(){
     const rawQty = (loteAny[m.field] ?? '0').toString();
     const qty = parseInt(rawQty, 10);
     if (!(qty > 0)) continue;
-    const prod = products.find(p => norm(p.name) === norm(m.name));
+    let prod = products.find(p => norm(p.name) === norm(m.name));
+    // Compat Galón: permitir legacy 'Galón 3800ml' y/o cualquier nombre que mapee a 'galon'
+    if (!prod && m.field === 'galon') {
+      prod = products.find(p => norm(p.name) === norm('Galón 3800ml')) || products.find(p => mapProductNameToFinishedId(p.name) === 'galon') || null;
+    }
     if (!prod) continue;
     items.push({ productId: prod.id, qty });
     total += qty;
