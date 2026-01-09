@@ -3197,6 +3197,30 @@ function formatDayKeyShortESPOS(ymd){
 // Normalizar nombres
 function normName(s){ return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim(); }
 
+const CANON_GALON_LABEL = 'Galón 3750 ml';
+function normKeyPOS(s){ return normName(s).replace(/\s+/g,''); }
+// Back-compat: algunos bloques usan norm(...)
+function norm(s){ return normKeyPOS(s); }
+function uiProductNamePOS(name){
+  try{
+    if (window.A33Presentations && typeof A33Presentations.canonicalizeProductName === 'function'){
+      return A33Presentations.canonicalizeProductName(name);
+    }
+  }catch(_){ }
+  const n = normName(name);
+  if (!n) return String(name||'');
+  if (n.includes('gal')) return CANON_GALON_LABEL;
+  return String(name||'');
+}
+function uiTextPOS(text){
+  try{
+    if (window.A33Presentations && typeof A33Presentations.canonicalizeText === 'function'){
+      return A33Presentations.canonicalizeText(text);
+    }
+  }catch(_){ }
+  return String(text||'');
+}
+
 // Detectar clave de presentación (P/M/D/L/G) a partir del nombre de producto
 function presKeyFromProductNamePOS(name){
   const n = normName(name);
@@ -3358,31 +3382,47 @@ const SEED = [
   {name:'Media 375ml', price:150, manageStock:true, active:true},
   {name:'Djeba 750ml', price:300, manageStock:true, active:true},
   {name:'Litro 1000ml', price:330, manageStock:true, active:true},
-  {name:'Galón 3750ml', price:800, manageStock:true, active:true},
+  {name:'Galón 3750 ml', price:800, manageStock:true, active:true},
 ];
 const DEFAULT_EVENTS = [{name:'General'}];
 
 async function seedMissingDefaults(force=false){
   const list = await getAll('products');
-  const names = new Set(list.map(p=>normName(p.name)));
-  // Compat: si existe el legacy 'Galón 3800ml', tratamos como presente el nuevo 'Galón 3750ml' para evitar duplicados.
-  if (names.has(normName('Galón 3800ml'))) names.add(normName('Galón 3750ml'));
+  const keys = new Set(list.map(p=>normKeyPOS(p.name)));
+
+  // Alias legacy: si existe Galón 3800 (o variantes), lo tratamos como galón canónico para no duplicar.
+  if (keys.has(normKeyPOS('Galón 3800ml')) || keys.has(normKeyPOS('Galón 3800 ml'))){
+    keys.add(normKeyPOS(CANON_GALON_LABEL));
+  }
+
   for (const s of SEED){
-    const n = normName(s.name);
-    if (force || !names.has(n)){
-      const existing = list.find(p=>normName(p.name)===n);
+    const k = normKeyPOS(s.name);
+    const existing = list.find(p=>normKeyPOS(p.name)===k);
+
+    if (force || !existing){
       if (existing){
         existing.active = true;
         if (!existing.price || existing.price <= 0) existing.price = s.price;
+        // Ajuste suave: si era el default viejo del galón (900), lo alineamos a 800.
+        if (k === normKeyPOS(CANON_GALON_LABEL) && Number(existing.price) === 900) existing.price = 800;
         if (typeof existing.manageStock === 'undefined') existing.manageStock = s.manageStock;
         if (s.internalType) existing.internalType = s.internalType;
         await put('products', existing);
       } else {
         await put('products', {...s});
       }
+    } else {
+      // Existe: solo completar faltantes (sin pisar custom)
+      let changed = false;
+      if (typeof existing.active === 'undefined'){ existing.active = true; changed = true; }
+      if (typeof existing.manageStock === 'undefined'){ existing.manageStock = s.manageStock; changed = true; }
+      if (!(Number(existing.price) > 0)) { existing.price = s.price; changed = true; }
+      if (k === normKeyPOS(CANON_GALON_LABEL) && Number(existing.price) === 900) { existing.price = 800; changed = true; }
+      if (changed) await put('products', existing);
     }
   }
 }
+
 
 // UI helpers
 const $ = s => document.querySelector(s);
@@ -3986,9 +4026,10 @@ async function computeDailySnapshotFromSalesPOS(eventId, dateKey){
   const breakdownMap = new Map();
 
   const baseName = (name) => {
-    return String(name || '')
+    const bn = String(name || '')
       .replace(/\s*\(Cortes[ií]a\)\s*$/i, '')
       .trim();
+    return uiProductNamePOS(bn);
   };
 
   const isA33CostableSale = (s) => {
@@ -4529,35 +4570,54 @@ async function updateSellEnabled(){
 async function normalizeLegacyGallonProductPOS(){
   try{
     const products = await getAll('products');
-    if (!products || !products.length) return;
+    if (!Array.isArray(products) || !products.length) return;
 
-    const norm = (s)=>normName(s);
-    const legacyNorm = norm('Galón 3800ml');
-    const canonicalName = 'Galón 3750ml';
-    const canonicalNorm = norm(canonicalName);
+    const canonicalName = CANON_GALON_LABEL;
 
-    const hasCanonical = products.some(p=> norm(p.name) === canonicalNorm );
-    // Solo renombramos si existe legacy y NO existe ya el canonical (evita duplicados).
-    const legacy = products.find(p=> norm(p.name) === legacyNorm );
-    if (legacy && !hasCanonical){
-      legacy.name = canonicalName;
-      legacy.price = 800;
-      await put('products', legacy);
-    }
-    // Si ya existe canonical, al menos aseguramos su precio si viene vacío/0.
-    if (hasCanonical){
-      const canon = products.find(p=> norm(p.name) === canonicalNorm );
-      if (canon && !(Number(canon.price) > 0)) { canon.price = 800; await put('products', canon); }
+    // Identificar productos tipo "galón" con la misma heurística usada por inventario.
+    const galonProducts = products.filter(p => p && mapProductNameToFinishedId(p.name || '') === 'galon');
+    if (!galonProducts.length) return;
+
+    const canonicalKey = normKeyPOS(canonicalName);
+
+    // Elegir canon: preferir ya-3750, luego cualquiera.
+    let canon = galonProducts.find(p => normKeyPOS(p.name) === canonicalKey)
+      || galonProducts.find(p => normName(p.name).includes('3750'))
+      || galonProducts[0];
+
+    // Canon: label estándar + precio solo si faltaba/0 o si venía con el default viejo 900.
+    let changedCanon = false;
+    if (canon.name !== canonicalName){ canon.name = canonicalName; changedCanon = true; }
+    const pr = Number(canon.price || 0);
+    if (!(pr > 0) || pr === 900){ canon.price = 800; changedCanon = true; }
+    if (typeof canon.manageStock === 'undefined'){ canon.manageStock = true; changedCanon = true; }
+    if (typeof canon.active === 'undefined'){ canon.active = true; changedCanon = true; }
+    if (changedCanon) await put('products', canon);
+
+    // Duplicados: mantener data (sin borrar) pero evitar duplicación en UI/ventas.
+    for (const p of galonProducts){
+      if (!p || p.id === canon.id) continue;
+      let ch = false;
+      // Display consistente: no dejar “3800” visible.
+      if (p.name !== canonicalName){ p.name = canonicalName; ch = true; }
+      // Completar precio solo si faltaba/0 (no pisar custom)
+      const ppr = Number(p.price || 0);
+      if (!(ppr > 0)){ p.price = 800; ch = true; }
+      // Ocultar de catálogo de venta
+      if (p.active !== false){ p.active = false; ch = true; }
+      if (typeof p.manageStock === 'undefined'){ p.manageStock = true; ch = true; }
+      if (ch) await put('products', p);
     }
   }catch(e){
     console.warn('No se pudo normalizar producto Galón', e);
   }
 }
 
+
 // Ensure defaults
 async function ensureDefaults(){
   let products = await getAll('products');
-  // Migración suave: renombrar Galón 3800ml -> Galón 3750ml (sin migraciones destructivas)
+  // Migración suave: renombrar Galón 3750 ml -> Galón 3750 ml (sin migraciones destructivas)
   await normalizeLegacyGallonProductPOS();
   products = await getAll('products');
   if (!products.length){
@@ -7633,7 +7693,7 @@ async function fractionGallonsToCupsPOS(){
   const products = await getAll('products');
   const galProd = products.find(p => mapProductNameToFinishedId(p.name) === 'galon') || null;
   if (!galProd){
-    alert('No encontré el producto "Galón 3750ml" (antes 3800ml) en Productos. Restaura productos base o créalo.');
+    alert('No encontré el producto "Galón 3750 ml" (antes 3800ml) en Productos. Restaura productos base o créalo.');
     return;
   }
 
@@ -7794,7 +7854,7 @@ async function sellCupsPOS(isCourtesy){
 
   // Costo por vaso (COGS): derivado del costo del Galón configurado en Calculadora (Recetas).
   // Usamos el breakdown FIFO (mlPerCup) para estimar el costo exacto por ml servido.
-  const costoGallon = getCostoUnitarioProducto('Galón 3750ml') || getCostoUnitarioProducto('Galón 3800ml') || getCostoUnitarioProducto('Galón') || 0;
+  const costoGallon = getCostoUnitarioProducto('Galón 3750 ml') || getCostoUnitarioProducto('Galón 3750 ml') || getCostoUnitarioProducto('Galón') || 0;
   let lineCost = 0;
   if (costoGallon > 0) {
     const costPerMl = costoGallon / ML_PER_GALON;
@@ -8027,7 +8087,7 @@ async function importFromLoteToInventory(){
     { field: 'media', name: 'Media 375ml' },
     { field: 'djeba', name: 'Djeba 750ml' },
     { field: 'litro', name: 'Litro 1000ml' },
-    { field: 'galon', name: 'Galón 3750ml' }
+    { field: 'galon', name: 'Galón 3750 ml' }
   ];
 
   const products = await getAll('products');
@@ -8040,9 +8100,9 @@ async function importFromLoteToInventory(){
     const qty = parseInt(rawQty, 10);
     if (!(qty > 0)) continue;
     let prod = products.find(p => norm(p.name) === norm(m.name));
-    // Compat Galón: permitir legacy 'Galón 3800ml' y/o cualquier nombre que mapee a 'galon'
+    // Compat Galón: permitir legacy 'Galón 3750 ml' y/o cualquier nombre que mapee a 'galon'
     if (!prod && m.field === 'galon') {
-      prod = products.find(p => norm(p.name) === norm('Galón 3800ml')) || products.find(p => mapProductNameToFinishedId(p.name) === 'galon') || null;
+      prod = products.find(p => norm(p.name) === norm('Galón 3750 ml')) || products.find(p => mapProductNameToFinishedId(p.name) === 'galon') || null;
     }
     if (!prod) continue;
     items.push({ productId: prod.id, qty });
@@ -8959,7 +9019,7 @@ async function renderDay(){
       const seqTxt = getSaleSeqDisplayPOS(s);
       const timeTxt = getSaleTimeTextPOS(s);
       tr.innerHTML = `<td>${seqTxt ? ('#' + seqTxt + ' · ') : ''}${timeTxt}</td>
-        <td>${s.productName}</td>
+        <td>${escapeHtml(uiProductNamePOS(s.productName))}</td>
         <td>${s.qty}</td>
         <td>${fmt(s.unitPrice)}</td>
         <td>${fmt(getSaleDiscountTotalPOS(s))}</td>
@@ -11380,7 +11440,7 @@ async function openEventView(eventId){
   const byProd = Array.from((()=>{
     const m = new Map();
     for (const s of sales){
-      const k = (s && s.productName) ? String(s.productName) : '—';
+      const k = (s && s.productName) ? uiProductNamePOS(s.productName) : '—';
       const prev = m.get(k) || { amount: 0, qty: 0 };
       prev.amount += (Number(s && s.total) || 0);
       prev.qty += (Number(s && s.qty) || 0);
@@ -11414,7 +11474,7 @@ async function openEventView(eventId){
     const payLabel = (s.payment === 'transferencia')
       ? (`Transferencia · ${getSaleBankLabel(s, bankMap)}`)
       : (s.payment || '');
-    const tr=document.createElement('tr'); tr.innerHTML = `<td>${getSaleSeqDisplayPOS(s)}</td><td>${s.date}</td><td>${getSaleTimeTextPOS(s)}</td><td>${s.productName}</td><td>${s.qty}</td><td>${fmt(s.unitPrice)}</td><td>${fmt(getSaleDiscountTotalPOS(s))}</td><td>${fmt(s.total)}</td><td>${payLabel}</td><td>${s.courtesy?'✓':''}</td><td>${s.isReturn?'✓':''}</td><td>${s.customerName||s.customer||''}</td><td>${s.courtesyTo||''}</td><td>${s.notes||''}</td>`;
+    const tr=document.createElement('tr'); tr.innerHTML = `<td>${getSaleSeqDisplayPOS(s)}</td><td>${s.date}</td><td>${getSaleTimeTextPOS(s)}</td><td>${escapeHtml(uiProductNamePOS(s.productName))}</td><td>${s.qty}</td><td>${fmt(s.unitPrice)}</td><td>${fmt(getSaleDiscountTotalPOS(s))}</td><td>${fmt(s.total)}</td><td>${payLabel}</td><td>${s.courtesy?'✓':''}</td><td>${s.isReturn?'✓':''}</td><td>${s.customerName||s.customer||''}</td><td>${s.courtesyTo||''}</td><td>${s.notes||''}</td>`;
     tb.appendChild(tr);
   });
 
@@ -11434,7 +11494,7 @@ async function exportEventSalesCSV(eventId){
   const ordered = [...sales].sort((a,b)=> (saleSortKeyPOS(b) - saleSortKeyPOS(a)));
   for (const s of ordered){
     const bank = (s.payment === 'transferencia') ? getSaleBankLabel(s, bankMap) : '';
-    rows.push([ (s.seqId || ''), s.id, s.date, getSaleTimeTextPOS(s), s.productName, s.qty, s.unitPrice, getSaleDiscountTotalPOS(s), s.total, (s.payment||''), bank, s.courtesy?1:0, s.isReturn?1:0, s.courtesyTo||'', s.notes||'', s.customerName||s.customer||'']);
+    rows.push([ (s.seqId || ''), s.id, s.date, getSaleTimeTextPOS(s), uiProductNamePOS(s.productName), s.qty, s.unitPrice, getSaleDiscountTotalPOS(s), s.total, (s.payment||''), bank, s.courtesy?1:0, s.isReturn?1:0, s.courtesyTo||'', s.notes||'', s.customerName||s.customer||'']);
   }
   const safeName = (ev?ev.name:'evento').replace(/[^a-z0-9_\- ]/gi,'_');
   downloadExcel(`ventas_${safeName}.xlsx`, 'Ventas', rows);
@@ -11511,7 +11571,7 @@ async function generateCorteCSV(eventId){
   rows.push(['id','fecha','hora','producto','cant','PU','desc_C$','total','pago','banco','cortesia','devolucion','cortesia_a','notas','cliente']);
   for (const s of sales){
     const bank = (s.payment === 'transferencia') ? getSaleBankLabel(s, bankMap) : '';
-    rows.push([s.id, s.date, getSaleTimeTextPOS(s), s.productName, s.qty, s.unitPrice, getSaleDiscountTotalPOS(s), s.total, (s.payment||''), bank, s.courtesy?1:0, s.isReturn?1:0, s.courtesyTo||'', s.notes||'', s.customerName||s.customer||'']);
+    rows.push([s.id, s.date, getSaleTimeTextPOS(s), uiProductNamePOS(s.productName), s.qty, s.unitPrice, getSaleDiscountTotalPOS(s), s.total, (s.payment||''), bank, s.courtesy?1:0, s.isReturn?1:0, s.courtesyTo||'', s.notes||'', s.customerName||s.customer||'']);
   }
   const safeName = ev.name.replace(/[^a-z0-9_\- ]/gi,'_');
   downloadExcel(`corte_${safeName}.xlsx`, 'Corte', rows);
