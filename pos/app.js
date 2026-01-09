@@ -1420,6 +1420,106 @@ function clearCustomerSelectionOnEventSwitchPOS(){
   }catch(_){ }
 }
 
+
+// Etapa 2 (POS): Reset limpio al cambiar evento (sin estados pegajosos)
+async function resetOperationalStateOnEventSwitchPOS(){
+  // 1) Cliente (incluye dataset + storage del último cliente)
+  try{ clearCustomerSelectionOnEventSwitchPOS(); }catch(_){ }
+
+  // 2) Resumen: filtro por cliente (estado operativo, no preferencia visual)
+  try{ clearSummaryCustomerFilterPOS({ silentUI: false }); }catch(_){ }
+
+  // 3) Venta normal: inputs y toggles
+  try{
+    const qty = document.getElementById('sale-qty');
+    if (qty) qty.value = '1';
+    const disc = document.getElementById('sale-discount');
+    if (disc) disc.value = '0';
+    const notes = document.getElementById('sale-notes');
+    if (notes) notes.value = '';
+    const courtesy = document.getElementById('sale-courtesy');
+    if (courtesy) courtesy.checked = false;
+    const courtesyTo = document.getElementById('sale-courtesy-to');
+    if (courtesyTo){
+      courtesyTo.value = '';
+      courtesyTo.disabled = true;
+    }
+    const isReturn = document.getElementById('sale-return');
+    if (isReturn) isReturn.checked = false;
+
+    // Producto: volver a un producto base (evitar extras/evento anterior)
+    const sel = document.getElementById('sale-product');
+    if (sel && sel.options && sel.options.length){
+      let picked = false;
+      for (let i=0;i<sel.options.length;i++){
+        const v = String(sel.options[i].value || '');
+        if (v && !v.startsWith('extra:')){
+          sel.selectedIndex = i;
+          picked = true;
+          break;
+        }
+      }
+      if (!picked) sel.selectedIndex = 0;
+      try{ await setSalePriceFromSelectionPOS(); }catch(_){ }
+      try{ updateChipsActiveFromSelectionPOS(); }catch(_){ }
+    }
+
+    // Pago: por defecto efectivo (y refrescar selector de banco)
+    const pay = document.getElementById('sale-payment');
+    if (pay) pay.value = 'efectivo';
+    try{ await refreshSaleBankSelect(); }catch(_){ }
+
+    // Total
+    try{ recomputeTotal(); }catch(_){ }
+  }catch(_){ }
+
+  // 4) Venta por vaso: inputs (sin tocar data real de vasos del evento)
+  try{
+    const cq = document.getElementById('cup-qty');
+    if (cq) cq.value = '1';
+    const cp = document.getElementById('cup-price');
+    if (cp) cp.value = '0';
+    const fg = document.getElementById('cup-fraction-gallons');
+    if (fg) fg.value = '1';
+    const cy = document.getElementById('cup-yield');
+    if (cy) cy.value = '22';
+  }catch(_){ }
+
+  // 5) Búsquedas / filtros temporales
+  try{
+    const s1 = document.getElementById('customer-picker-search');
+    if (s1) s1.value = '';
+    const s2 = document.getElementById('customer-manage-search');
+    if (s2) s2.value = '';
+    const s3 = document.getElementById('summary-customer');
+    if (s3) s3.value = '';
+    const fe = document.getElementById('filtro-eventos');
+    if (fe) fe.value = 'todos';
+    const fg = document.getElementById('filtro-grupo');
+    if (fg) fg.value = '';
+  }catch(_){ }
+
+  // 6) Cerrar modales/paneles que podrían quedar “colgados”
+  try{ closeModalPOS('customer-picker-modal'); }catch(_){ }
+  try{ closeModalPOS('customer-edit-modal'); }catch(_){ }
+  try{ closeModalPOS('customer-merge-modal'); }catch(_){ }
+  try{
+    const panel = document.getElementById('customer-manage-panel');
+    const btn = document.getElementById('btn-toggle-customer-manage');
+    if (panel) panel.style.display = 'none';
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+  }catch(_){ }
+
+  // 7) Caja Chica: si estaba en histórico, volver a modo operativo (solo UI)
+  try{
+    if (typeof isPettyHistoryMode === 'function' && isPettyHistoryMode()) exitPettyHistoryMode();
+  }catch(_){ }
+
+  // 8) Extras: formulario en limpio (sin tocar extras del evento)
+  try{ resetExtraFormPOS(); }catch(_){ }
+}
+
+
 function persistCustomerStickyStatePOS(){
   try{
     A33Storage.setItem(CUSTOMER_STICKY_KEY, isCustomerStickyPOS() ? '1' : '0');
@@ -3526,6 +3626,259 @@ function humanizeError(err){
 }
 
 
+
+
+// --- Persistencia robusta (Etapa 1): alertas bloqueantes + atomicidad en flujos críticos
+function posBlockingAlert(msg){
+  try{ alert(msg); }catch(_){ }
+  try{ if (typeof showToast === 'function') showToast(msg, 'error', 7000); }catch(_){ }
+}
+
+function persistFailHelpPOS(){
+  return 'Libera espacio, cierra otras pestañas del POS/Suite A33 y reintenta. No se registró la operación.';
+}
+
+function showPersistFailPOS(action, err){
+  const a = (action || 'operación').toString();
+  const detail = humanizeError(err);
+  const msg = `No se pudo guardar (${a}).\n\n${detail}\n\n${persistFailHelpPOS()}`;
+  posBlockingAlert(msg);
+}
+
+function isValidYmdStrictPOS(v){
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+}
+
+// Validación calendario real (YYYY-MM-DD). Para cierres diarios preferimos bloquear fechas imposibles.
+function isValidYmdCalendarPOS(v){
+  const s = String(v || '').trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return false;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return false;
+  if (mo < 1 || mo > 12) return false;
+  if (d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return (dt.getUTCFullYear() === y) && ((dt.getUTCMonth() + 1) === mo) && (dt.getUTCDate() === d);
+}
+
+function normalizeDateKeyForClosePOS(input){
+  const raw = (input == null) ? '' : String(input).trim();
+  if (!raw) return null;
+  const m = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  const candidate = m ? m[1] : raw;
+  return isValidYmdCalendarPOS(candidate) ? candidate : null;
+}
+
+function validateSaleMinimalPOS(sale){
+  if (!sale || typeof sale !== 'object') return { ok:false, msg:'Venta inválida.' };
+  const evId = sale.eventId;
+  if (!(Number.isFinite(Number(evId)) && Number(evId) > 0)) return { ok:false, msg:'Venta inválida: falta eventId.' };
+  const dk = String(sale.date || '');
+  if (!isValidYmdStrictPOS(dk)) return { ok:false, msg:'Venta inválida: dateKey inválido.' };
+  const qty = Number(sale.qty);
+  if (!Number.isFinite(qty) || qty === 0) return { ok:false, msg:'Venta inválida: cantidad inválida.' };
+  const total = Number(sale.total);
+  if (!Number.isFinite(total)) return { ok:false, msg:'Venta inválida: total inválido.' };
+  const isReturn = !!sale.isReturn;
+  if (!isReturn && total < -0.00001) return { ok:false, msg:'Venta inválida: total negativo (sin marcar como devolución).' };
+  if (!isReturn && qty < 0) return { ok:false, msg:'Venta inválida: cantidad negativa (sin marcar como devolución).' };
+  if (isReturn && qty > 0) return { ok:false, msg:'Venta inválida: devolución requiere cantidad negativa.' };
+  const name = String(sale.productName || '').trim();
+  if (!name) return { ok:false, msg:'Venta inválida: nombre de producto vacío.' };
+  return { ok:true, msg:'' };
+}
+
+
+
+// --- Etapa 4: Guardas duras FIFO/Lotes (sin NaN/negativos silenciosos)
+function numFinitePOS(v){
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function nonNegPOS(v){
+  const n = numFinitePOS(v);
+  return n < 0 ? 0 : n;
+}
+
+function validateLotFifoIntegrityPOS(fifo, evId){
+  try{
+    if (!fifo || typeof fifo !== 'object') return { ok:false, msg:'FIFO/Lotes: no se pudo leer el estado de lotes.' };
+    const eid = Number(fifo.eventId);
+    if (Number.isFinite(evId) && evId > 0 && Number.isFinite(eid) && eid > 0 && eid !== Number(evId)){
+      // Evitar contaminar otro evento por referencias cruzadas.
+      return { ok:false, msg:'FIFO/Lotes: evento inválido (aislamiento).' };
+    }
+
+    const lotsMap = (fifo.lots && typeof fifo.lots === 'object') ? fifo.lots : {};
+    const keys = Array.isArray(fifo.keys) ? fifo.keys : ['P','M','D','L','G'];
+
+    const chkMap = (m)=>{
+      if (!m) return true;
+      for (const k of keys){
+        const v = m[k];
+        if (v == null) continue;
+        const n = Number(v);
+        if (!Number.isFinite(n)) return false;
+        if (n < -0.000001) return false;
+      }
+      return true;
+    };
+
+    for (const lk of Object.keys(lotsMap)){
+      const l = lotsMap[lk];
+      if (!l) continue;
+      if (!chkMap(l.loadedByKey)) return { ok:false, msg:'FIFO/Lotes: detecté cantidades inválidas en carga.' };
+      if (!chkMap(l.soldByKey)) return { ok:false, msg:'FIFO/Lotes: detecté cantidades inválidas en ventas.' };
+      if (!chkMap(l.remainingByKey)) return { ok:false, msg:'FIFO/Lotes: detecté cantidades inválidas en remaining.' };
+      const st = Number(l.soldTotal);
+      const rt = Number(l.remainingTotal);
+      if (!Number.isFinite(st) || st < -0.000001) return { ok:false, msg:'FIFO/Lotes: soldTotal inválido.' };
+      if (!Number.isFinite(rt) || rt < -0.000001) return { ok:false, msg:'FIFO/Lotes: remainingTotal inválido.' };
+    }
+
+    const totS = Number(fifo.soldTotal);
+    const totR = Number(fifo.remainingTotal);
+    if (!Number.isFinite(totS) || totS < -0.000001) return { ok:false, msg:'FIFO/Lotes: total vendido inválido.' };
+    if (!Number.isFinite(totR) || totR < -0.000001) return { ok:false, msg:'FIFO/Lotes: total restante inválido.' };
+
+    return { ok:true, msg:'' };
+  }catch(e){
+    return { ok:false, msg:'FIFO/Lotes: error verificando integridad.' };
+  }
+}
+
+function lotTotalsForKeyPOS(fifo, presKey){
+  const key = String(presKey || '').trim();
+  if (!key) return { loaded:0, remaining:0 };
+  const lotsMap = (fifo && fifo.lots && typeof fifo.lots === 'object') ? fifo.lots : {};
+  const order = Array.isArray(fifo && fifo.lotOrder) ? fifo.lotOrder : Object.keys(lotsMap);
+  let loaded = 0;
+  let remaining = 0;
+  for (const lk of order){
+    const l = lotsMap[lk];
+    if (!l) continue;
+    loaded += nonNegPOS(l.loadedByKey && l.loadedByKey[key]);
+    remaining += nonNegPOS(l.remainingByKey && l.remainingByKey[key]);
+  }
+  return { loaded, remaining };
+}
+
+async function guardLotAvailabilityBeforeSalePOS(eventId, productName, qty){
+  const presKey = presKeyFromProductNamePOS(productName);
+  if (!presKey) return { ok:true, presKey:'' };
+
+  try{
+    const fifo = await computeLotFifoForEvent(eventId);
+    const v = validateLotFifoIntegrityPOS(fifo, eventId);
+    if (!v.ok) return { ok:false, presKey, msg: v.msg };
+
+    const totals = lotTotalsForKeyPOS(fifo, presKey);
+
+    // A) Sin lotes asignados / disponibles
+    if (!(totals.loaded > 0) || !(totals.remaining > 0)){
+      return { ok:false, presKey, msg:'No hay lotes asignados a este evento para vender esta presentación.' };
+    }
+
+    // B) Excede remaining disponible
+    if (Number(qty) > totals.remaining){
+      const faltan = Math.max(0, Number(qty) - totals.remaining);
+      return { ok:true, presKey, warn:true, remaining: totals.remaining, faltan };
+    }
+
+    return { ok:true, presKey, warn:false, remaining: totals.remaining, faltan:0 };
+  }catch(e){
+    console.warn('guardLotAvailabilityBeforeSalePOS failed', e);
+    return { ok:false, presKey, msg:'No se pudo verificar lotes/FIFO para esta venta. Revisa tus lotes asignados e intenta de nuevo.' };
+  }
+}
+function reserveSaleSeqInMemoryPOS(event, saleRecord, salesForEvent){
+  try{
+    if (!event || !saleRecord) return;
+    let curSeq = Number(event.saleSeq || 0);
+    if (!Number.isFinite(curSeq) || curSeq <= 0){
+      const base = computeEventSaleSeqBasePOS(Array.isArray(salesForEvent) ? salesForEvent : []);
+      curSeq = Number.isFinite(base) ? base : 0;
+      event.saleSeq = curSeq;
+    }
+    const next = Number(event.saleSeq || curSeq || 0) + 1;
+    saleRecord.seqId = next;
+    event.saleSeq = next;
+  }catch(_){ }
+}
+
+// Guardar venta + actualizar contador del evento en una sola transacción (sales + events)
+async function saveSaleAndEventAtomicPOS({ saleRecord, eventUpdated }){
+  if (!db) await openDB();
+  return await new Promise((resolve, reject)=>{
+    let done = false;
+    const ok = (id)=>{ if (done) return; done = true; resolve(id); };
+    const fail = (err)=>{ if (done) return; done = true; reject(err); };
+    try{
+      const tr = db.transaction(['sales','events'], 'readwrite');
+      const sStore = tr.objectStore('sales');
+      const eStore = tr.objectStore('events');
+
+      let saleId = null;
+
+      tr.oncomplete = ()=> ok(saleId);
+      tr.onabort = ()=> fail(tr.error || new Error('Transacción abortada (venta).'));
+      tr.onerror = ()=> fail(tr.error || new Error('Error de transacción (venta).'));
+
+      const reqSale = (saleRecord && saleRecord.id != null) ? sStore.put(saleRecord) : sStore.add(saleRecord);
+      reqSale.onsuccess = ()=>{ saleId = reqSale.result; };
+      reqSale.onerror = ()=>{ try{ tr.abort(); }catch(_){ } };
+
+      const reqEv = eStore.put(eventUpdated);
+      reqEv.onerror = ()=>{ try{ tr.abort(); }catch(_){ } };
+    }catch(err){
+      fail(err);
+    }
+  });
+}
+
+// Guardar cierre diario + candado (dailyClosures + dayLocks) en una sola transacción
+async function saveDailyClosureAndLockAtomicPOS({ closureRecord, lockKey, lockPatch, eventId, dateKey }){
+  if (!db) await openDB();
+  return await new Promise((resolve, reject)=>{
+    let done = false;
+    const ok = (payload)=>{ if (done) return; done = true; resolve(payload); };
+    const fail = (err)=>{ if (done) return; done = true; reject(err); };
+    try{
+      const tr = db.transaction(['dailyClosures','dayLocks'], 'readwrite');
+      const cStore = tr.objectStore('dailyClosures');
+      const lStore = tr.objectStore('dayLocks');
+
+      let lockSaved = null;
+
+      tr.oncomplete = ()=> ok({ lock: lockSaved, closure: closureRecord });
+      tr.onabort = ()=> fail(tr.error || new Error('Transacción abortada (cierre diario).'));
+      tr.onerror = ()=> fail(tr.error || new Error('Error de transacción (cierre diario).'));
+
+      // Etapa 3: NO sobreescribir cierres ya existentes. Si ya existe (mismo key o mismo evento+día+versión), debe fallar.
+      const rc = cStore.add(closureRecord);
+      rc.onerror = ()=>{ try{ tr.abort(); }catch(_){ } };
+
+      const rget = lStore.get(lockKey);
+      rget.onerror = ()=>{ try{ tr.abort(); }catch(_){ } };
+      rget.onsuccess = ()=>{
+        const cur = rget.result;
+        const base = (cur && typeof cur === 'object') ? cur : { key: lockKey, eventId:Number(eventId), dateKey: safeYMD(dateKey) };
+        const next = { ...base, ...(lockPatch || {}), key: lockKey, eventId:Number(eventId), dateKey: safeYMD(dateKey), updatedAt: Date.now() };
+        lockSaved = next;
+        const rput = lStore.put(next);
+        rput.onerror = ()=>{ try{ tr.abort(); }catch(_){ } };
+      };
+    }catch(err){
+      fail(err);
+    }
+  });
+}
+
+
 function setOfflineBar(){ const ob=$('#offlineBar'); if (!ob) return; ob.style.display = navigator.onLine?'none':'block'; }
 window.addEventListener('online', setOfflineBar);
 window.addEventListener('offline', setOfflineBar);
@@ -3875,10 +4228,15 @@ async function buildPettyCashAccountingBlockForClosePOS(event, eventId, dayKey){
   return { enabled:true, totals, breakdown };
 }
 
+// Candado en memoria (mínimo) para evitar doble click / doble ejecución del mismo cierre.
+// La unicidad final la impone IndexedDB (store + índice), pero esto reduce carreras y compute duplicado.
+const __A33_DAILY_CLOSE_MUTEX = new Set();
+
 async function closeDailyPOS({ event, dateKey, source }){
   if (!event || event.id == null) throw new Error('No hay evento válido para cerrar el día.');
   const eventId = Number(event.id);
-  const dk = safeYMD(dateKey);
+  const dk = normalizeDateKeyForClosePOS(dateKey);
+  if (!dk) throw new Error('dateKey inválido para cierre. Usa formato YYYY-MM-DD.');
   // Nota: el cierre oficial se ejecuta desde Resumen.
   // Si Caja Chica está activa, Resumen valida arqueo final + cuadratura antes de llamar a este método.
 
@@ -3887,11 +4245,21 @@ async function closeDailyPOS({ event, dateKey, source }){
   if (curLock && curLock.isClosed){
     const lastKey = (curLock.lastClosureKey || (curLock.lastClosureVersion ? makeDailyClosureKeyPOS(eventId, dk, curLock.lastClosureVersion) : null));
     const last = lastKey ? await getDailyClosureByKeyPOS(lastKey) : null;
+    if (!last){
+      posBlockingAlert('Inconsistencia: el día está marcado como CERRADO pero no se encontró el cierre guardado. Reabrí el día y volvé a cerrarlo para regenerar el cierre (v+1).');
+    }
     return { already:true, lock: curLock, closure: last };
   }
 
-  const maxV = await getMaxDailyClosureVersionPOS(eventId, dk);
-  const version = maxV + 1;
+  const mutexKey = `${eventId}|${dk}`;
+  if (__A33_DAILY_CLOSE_MUTEX.has(mutexKey)){
+    throw new Error('Cierre en progreso para este evento/día. Esperá y reintentá.');
+  }
+  __A33_DAILY_CLOSE_MUTEX.add(mutexKey);
+
+  try{
+    const maxV = await getMaxDailyClosureVersionPOS(eventId, dk);
+    const version = maxV + 1;
 
   const snapshot = await computeDailySnapshotFromSalesPOS(eventId, dk);
 
@@ -3933,27 +4301,8 @@ async function closeDailyPOS({ event, dateKey, source }){
     }
   };
 
-  try{
-    await put('dailyClosures', record);
-  }catch(err){
-    // Si otro dispositivo lo creó al mismo tiempo, lo tratamos como idempotente.
-    if (err && (err.name === 'ConstraintError' || err.name === 'DataError')){
-      const existing = await getDailyClosureByKeyPOS(key);
-      const lock = await upsertDayLockPOS(eventId, dk, {
-        isClosed: true,
-        eventNameSnapshot: String(event.name || ''),
-        closedAt: createdAt,
-        closedSource: String(source || 'SUMMARY').toUpperCase(),
-        lastClosureVersion: existing ? Number(existing.version||version) : version,
-        lastClosureId: existing ? (existing.closureId || null) : closureId,
-        lastClosureKey: key
-      });
-      return { already:true, lock, closure: existing };
-    }
-    throw err;
-  }
-
-  const lock = await upsertDayLockPOS(eventId, dk, {
+  const lockKey = makeDayLockKeyPOS(eventId, dk);
+  const lockPatch = {
     isClosed: true,
     eventNameSnapshot: String(event.name || ''),
     closedAt: createdAt,
@@ -3961,15 +4310,48 @@ async function closeDailyPOS({ event, dateKey, source }){
     lastClosureVersion: version,
     lastClosureId: closureId,
     lastClosureKey: key
-  });
+  };
 
-  return { already:false, lock, closure: record };
+    const saved = await saveDailyClosureAndLockAtomicPOS({
+      closureRecord: record,
+      lockKey,
+      lockPatch,
+      eventId,
+      dateKey: dk
+    });
+    return { already:false, lock: saved.lock, closure: record };
+  }catch(err){
+    console.error('closeDailyPOS persist error', err);
+
+    // Etapa 3: idempotencia mínima.
+    // Si el cierre ya existe (doble click / race / pestañas), NO creamos otro ni sobreescribimos.
+    if (err && String(err.name || '') === 'ConstraintError'){
+      let lockNow = null;
+      let existing = null;
+      try{ lockNow = await getDayLockRecordPOS(eventId, dk); }catch(_){ }
+      try{ existing = await getDailyClosureByKeyPOS(key); }catch(_){ }
+      // Fallback: buscar por versión en el día (por si el key legacy no coincide)
+      if (!existing){
+        try{
+          const list = await listDailyClosuresForDayPOS(eventId, dk);
+          existing = (Array.isArray(list) ? list : []).find(c => c && Number(c.version || 0) === Number(version));
+        }catch(_){ }
+      }
+      return { already:true, lock: lockNow || null, closure: existing || null, duplicate:true };
+    }
+
+    showPersistFailPOS('cierre diario', err);
+    throw err;
+  } finally {
+    __A33_DAILY_CLOSE_MUTEX.delete(mutexKey);
+  }
 }
 
 async function reopenDailyPOS({ event, dateKey, source }){
   if (!event || event.id == null) throw new Error('No hay evento válido para reabrir el día.');
   const eventId = Number(event.id);
-  const dk = safeYMD(dateKey);
+  const dk = normalizeDateKeyForClosePOS(dateKey);
+  if (!dk) throw new Error('dateKey inválido para reabrir. Usa formato YYYY-MM-DD.');
   // Nota: reapertura unificada desde Resumen (Caja Chica ya no es la puerta de cierre).
 
   const curLock = await getDayLockRecordPOS(eventId, dk);
@@ -3977,11 +4359,18 @@ async function reopenDailyPOS({ event, dateKey, source }){
     return { already:true, lock: curLock };
   }
 
-  const lock = await upsertDayLockPOS(eventId, dk, {
-    isClosed: false,
-    reopenedAt: Date.now(),
-    reopenedSource: String(source || 'SUMMARY').toUpperCase()
-  });
+  let lock;
+  try{
+    lock = await upsertDayLockPOS(eventId, dk, {
+      isClosed: false,
+      reopenedAt: Date.now(),
+      reopenedSource: String(source || 'SUMMARY').toUpperCase()
+    });
+  }catch(err){
+    console.error('reopenDailyPOS persist error', err);
+    showPersistFailPOS('reabrir día', err);
+    throw err;
+  }
 
   return { already:false, lock };
 }
@@ -5410,7 +5799,7 @@ function bindChecklistEventsOncePOS(){
   if (sel){
     sel.addEventListener('change', async ()=>{
       // Etapa 2: limpiar cliente al cambiar evento
-      clearCustomerSelectionOnEventSwitchPOS();
+      await resetOperationalStateOnEventSwitchPOS();
       const val = (sel.value || '').trim();
       if (!val) {
         await setMeta('currentEventId', null);
@@ -6547,7 +6936,22 @@ async function addRestock(eventId, productId, qty, extra){
 }
 
 async function addAdjust(eventId, productId, qty, notes){ if (!qty) throw new Error('Ajuste no puede ser 0'); await put('inventory', {eventId, productId, type:'adjust', qty, notes: notes||'Ajuste', time:new Date().toISOString()}); }
-async function computeStock(eventId, productId){ const inv = await getInventoryEntries(eventId); const ledger = inv.filter(i=>i.productId===productId).reduce((a,b)=>a+(b.qty||0),0); const sales = (await getAll('sales')).filter(s=>s.eventId===eventId && s.productId===productId).reduce((a,b)=>a+(b.qty||0),0); return ledger - sales; }
+async function computeStock(eventId, productId){
+  const evId = Number(eventId);
+  const pid = Number(productId);
+  const inv = await getInventoryEntries(evId);
+  const ledger = (Array.isArray(inv) ? inv : [])
+    .filter(i => i && Number(i.productId) === pid)
+    .reduce((a,b)=> a + (Number(b && b.qty) || 0), 0);
+
+  const allSales = await getAll('sales');
+  const sold = (Array.isArray(allSales) ? allSales : [])
+    .filter(s => s && Number(s.eventId) === evId && Number(s.productId) === pid)
+    .reduce((a,b)=> a + (Number(b && b.qty) || 0), 0);
+
+  const out = ledger - sold;
+  return Number.isFinite(out) ? out : 0;
+}
 
 // =========================================================
 // Lotes FIFO (Etapa 1: solo cálculo, sin UI)
@@ -6911,6 +7315,11 @@ async function syncLotsUsageForEvent(eventId){
   if (!Array.isArray(lotes) || !lotes.length) return { ok:true, updated:0, eventId: evId };
 
   const fifo = await computeLotFifoForEvent(evId);
+  // Etapa 4: Integridad post-operación (números finitos/no negativos)
+  const vInt = validateLotFifoIntegrityPOS(fifo, evId);
+  if (!vInt.ok){
+    return { ok:false, updated:0, eventId: evId, reason: vInt.msg || 'FIFO/Lotes inválido' };
+  }
   const stamp = (fifo && fifo.updatedAt != null) ? fifo.updatedAt : Date.now();
   const lotsMap = (fifo && fifo.lots && typeof fifo.lots === 'object') ? fifo.lots : {};
   const evidenceIds = Array.isArray(fifo && fifo.evidenceLotIds) ? fifo.evidenceLotIds.map(x=>String(x)) : [];
@@ -6954,7 +7363,14 @@ async function syncLotsUsageForEvent(eventId){
     let lotObj = lid ? byId.get(lid) : null;
     if (!lotObj && codeKey){
       const arr = byCode.get(codeKey) || [];
-      lotObj = arr.find(x => Number(x && x.assignedEventId) === evId) || arr[0] || null;
+      // Preferir lote asignado a este evento. Para evitar cruces por códigos repetidos,
+      // solo hacemos fallback a un único candidato o a lotes sin asignación explícita.
+      lotObj = arr.find(x => Number(x && x.assignedEventId) === evId) || null;
+      if (!lotObj){
+        const unassigned = arr.find(x => !(Number(x && x.assignedEventId) > 0));
+        if (unassigned) lotObj = unassigned;
+        else if (arr.length === 1) lotObj = arr[0];
+      }
     }
     if (lotObj) applySnap(lotObj, s);
   }
@@ -6968,7 +7384,10 @@ async function syncLotsUsageForEvent(eventId){
   for (const codeRaw of evidenceCodes){
     const codeKey = normLotCodePOS(codeRaw);
     if (!codeKey) continue;
-    const arr = byCode.get(codeKey) || [];
+    const arrAll = byCode.get(codeKey) || [];
+    let arr = arrAll.filter(x => Number(x && x.assignedEventId) === evId);
+    if (!arr.length) arr = arrAll.filter(x => !(Number(x && x.assignedEventId) > 0));
+    if (!arr.length && arrAll.length === 1) arr = arrAll;
     for (const lotObj of arr){
       const lid = (lotObj && lotObj.id != null) ? String(lotObj.id) : '';
       if (lid && touched.has(lid)) continue;
@@ -7198,7 +7617,7 @@ async function fractionGallonsToCupsPOS(){
   });
 
   ev.fractionBatches = batches;
-  await put('events', ev);
+  // Nota: persistencia de cups+venta se hace atómica (events+sales) más abajo
 
   await renderInventario();
   await refreshSaleStockLabel();
@@ -7259,7 +7678,7 @@ async function sellCupsPOS(isCourtesy){
   }
 
   ev.fractionBatches = batches;
-  await put('events', ev);
+  // Nota: persistencia de cups+venta se hace atómica (events+sales) más abajo
 
   // Candado: si Caja Chica está activada y el día está cerrado, NO permitir ventas por vaso
   if (!(await guardSellDayOpenOrToastPOS(ev, date))) return;
@@ -7297,7 +7716,11 @@ async function sellCupsPOS(isCourtesy){
     try{
       const newId = await put('products', {name:'Vaso', price:100, manageStock:false, active:false, internalType:'cup_portion'});
       vasoProd = {id: newId, price:100, manageStock:false, active:false, internalType:'cup_portion'};
-    }catch(e){}
+    }catch(e){
+      console.error('No se pudo preparar producto interno Vaso', e);
+      showPersistFailPOS('producto Vaso', e);
+      return;
+    }
   }
   const productId = vasoProd ? vasoProd.id : 0;
 
@@ -7365,10 +7788,22 @@ async function sellCupsPOS(isCourtesy){
     fifoBreakdown: taken.breakdown
   };
 
-  try{ await ensureNewSaleSeqIdPOS(ev, saleRecord); }catch(e){ console.warn('No se pudo asignar N° por evento a venta por vaso', e); }
+  // Validación mínima (bloqueante antes de guardar)
+  const vMin = validateSaleMinimalPOS(saleRecord);
+  if (!vMin.ok){ alert(vMin.msg); return; }
 
-  const saleId = await put('sales', saleRecord);
-  saleRecord.id = saleId;
+  // Reservar N° por evento en memoria y guardar atómico (events + sales)
+  try{
+    const salesForEvent = (allSales || []).filter(s => s && s.eventId === evId);
+    reserveSaleSeqInMemoryPOS(ev, saleRecord, salesForEvent);
+    const saleId = await saveSaleAndEventAtomicPOS({ saleRecord, eventUpdated: ev });
+    saleRecord.id = saleId;
+  }catch(err){
+    console.error('sellCupsPOS persist error', err);
+    showPersistFailPOS('venta por vaso', err);
+    try{ await refreshCupBlock(); }catch(_e){}
+    return;
+  }
 
   try{
     await createJournalEntryForSalePOS(saleRecord);
@@ -9517,7 +9952,9 @@ async function renderSummaryDailyCloseCardPOS(){
 function getSummaryCloseDayKeyPOS(){
   const el = document.getElementById('summary-close-date');
   const v = (el && el.value) ? el.value : '';
-  return safeYMD(v || getSaleDayKeyPOS());
+  // Importante (Etapa 3): NO normalizar aquí con safeYMD, para poder bloquear fechas inválidas.
+  // Fallback a día de venta (que ya está normalizado) solo si el input está vacío.
+  return v || getSaleDayKeyPOS();
 }
 
 function clearSummaryCloseBlockerPOS(){
@@ -9609,7 +10046,7 @@ async function showSummaryReturnBannerPOS({ currentEventId, prevEventId }){
   btn.addEventListener('click', async (e)=>{
     e.preventDefault();
     // Etapa 2: limpiar cliente al cambiar evento
-    clearCustomerSelectionOnEventSwitchPOS();
+    await resetOperationalStateOnEventSwitchPOS();
     await setMeta('currentEventId', prevEventId);
     clearPcPrevEventId();
     hideSummaryReturnBannerPOS();
@@ -9772,7 +10209,7 @@ function bindSummaryDailyClosePOS(){
     sumEv.addEventListener('change', ()=>{
       (async()=>{
         // Etapa 2: limpiar cliente al cambiar evento
-        clearCustomerSelectionOnEventSwitchPOS();
+        await resetOperationalStateOnEventSwitchPOS();
         const val = sumEv.value;
         if (val === '') { await setMeta('currentEventId', null); }
         else { await setMeta('currentEventId', parseInt(val,10)); }
@@ -11389,7 +11826,7 @@ async function closeEvent(eventId){
   const curId = await getMeta('currentEventId');
   if (curId === eventId){
     // Etapa 2: al dejar evento activo, limpiar cliente
-    clearCustomerSelectionOnEventSwitchPOS();
+    await resetOperationalStateOnEventSwitchPOS();
     await setMeta('currentEventId', null);
   }
   await refreshEventUI(); await renderEventos(); await renderDay(); await renderSummary();
@@ -11403,7 +11840,7 @@ async function reopenEvent(eventId){
   ev.closedAt = null;
   await put('events', ev);
   // Etapa 2: limpiar cliente al cambiar evento
-  clearCustomerSelectionOnEventSwitchPOS();
+  await resetOperationalStateOnEventSwitchPOS();
   await setMeta('currentEventId', eventId);
   await refreshEventUI(); await renderEventos();
   toast('Evento reabierto');
@@ -11411,7 +11848,7 @@ async function reopenEvent(eventId){
 
 async function activateEvent(eventId){
   // Etapa 2: limpiar cliente al cambiar evento
-  clearCustomerSelectionOnEventSwitchPOS();
+  await resetOperationalStateOnEventSwitchPOS();
   await setMeta('currentEventId', eventId);
   await refreshEventUI();
   await renderDay();
@@ -11539,7 +11976,7 @@ async function init(){
   $('#sale-event').addEventListener('change', async()=>{ 
     const val = $('#sale-event').value;
     // Etapa 2: limpiar cliente al cambiar evento
-    clearCustomerSelectionOnEventSwitchPOS();
+    await resetOperationalStateOnEventSwitchPOS();
     if (val === '') { await setMeta('currentEventId', null); }
     else { await setMeta('currentEventId', parseInt(val,10)); }
     await refreshEventUI(); 
@@ -11666,7 +12103,7 @@ async function init(){
 
   const id = await put('events', {name, groupName, pettyEnabled:false, createdAt:new Date().toISOString()});
   // Etapa 2: limpiar cliente al cambiar evento
-  clearCustomerSelectionOnEventSwitchPOS();
+  await resetOperationalStateOnEventSwitchPOS();
   await setMeta('currentEventId', id);
   $('#new-event').value = '';
 
@@ -11803,7 +12240,13 @@ async function init(){
 
     // FIFO (Etapa 2): re-sincronizar snapshot por evento/lote
     try{
-      if (last && presKeyFromProductNamePOS(last.productName)) queueLotsUsageSyncPOS(last.eventId);
+      if (last && presKeyFromProductNamePOS(last.productName)) {
+        queueLotsUsageSyncPOS(last.eventId).then(res=>{
+          if (res && res.ok===false){
+            showToast('FIFO/Lotes: no se pudo actualizar el uso de lotes para este evento. Revisa asignación de lotes.', 'error', 7000);
+          }
+        });
+      }
     }catch(_){ }
   });
 
@@ -11861,7 +12304,13 @@ async function init(){
 
       // FIFO (Etapa 2): re-sincronizar snapshot por evento/lote
       try{
-        if (saleToDelete && presKeyFromProductNamePOS(saleToDelete.productName)) queueLotsUsageSyncPOS(saleToDelete.eventId);
+        if (saleToDelete && presKeyFromProductNamePOS(saleToDelete.productName)) {
+          queueLotsUsageSyncPOS(saleToDelete.eventId).then(res=>{
+            if (res && res.ok===false){
+              showToast('FIFO/Lotes: no se pudo actualizar el uso de lotes para este evento. Revisa asignación de lotes.', 'error', 7000);
+            }
+          });
+        }
       }catch(_){ }
 
     }catch(err){
@@ -12125,6 +12574,33 @@ async function addSale(){
   const prod = products.find(p=>p.id===productId);
   const productName = prod ? prod.name : 'N/D';
 
+  // Etapa 4: Presentaciones con lote → no vender sin lotes asignados/disponibles
+  if (!isReturn){
+    const lotGuard = await guardLotAvailabilityBeforeSalePOS(curId, productName, qty);
+    if (lotGuard && lotGuard.presKey){
+      if (!lotGuard.ok){
+        alert(lotGuard.msg || 'No hay lotes asignados a este evento para vender esta presentación.');
+        return;
+      }
+      if (lotGuard.warn){
+        const goLots = confirm(
+          `Lotes insuficientes para ${productName}.
+
+` +
+          `Disponible en lotes: ${lotGuard.remaining}
+` +
+          `Intentas vender: ${qty}
+` +
+          `Faltan: ${lotGuard.faltan}
+
+` +
+          `¿Continuar de todos modos?`
+        );
+        if (!goLots) return;
+      }
+    }
+  }
+
   if (prod && prod.manageStock!==false && !isReturn){
     const st = await computeStock(curId, productId);
     if (st < qty){
@@ -12149,12 +12625,7 @@ async function addSale(){
   const eventName = event ? event.name : 'General';
   const now = new Date(); const time = now.toTimeString().slice(0,5);
 
-  // Ajustar inventario central de producto terminado
-  try{
-    applyFinishedFromSalePOS({ productName, qty: finalQty }, +1);
-  }catch(e){
-    console.error('No se pudo actualizar inventario central desde venta', e);
-  }
+  // Nota: inventario central se ajusta SOLO si la venta quedó persistida (evita estados a medias)
 
   const saleRecord = {
     date,
@@ -12184,10 +12655,30 @@ async function addSale(){
     lineProfit
   };
 
-  try{ await ensureNewSaleSeqIdPOS(event, saleRecord); }catch(e){ console.warn('No se pudo asignar N° por evento a esta venta', e); }
+  // Validación mínima (bloqueante antes de guardar)
+  const vMin = validateSaleMinimalPOS(saleRecord);
+  if (!vMin.ok){ alert(vMin.msg); return; }
 
-  const saleId = await put('sales', saleRecord);
-  saleRecord.id = saleId;
+  // Reservar N° por evento en memoria y guardar atómico (sales + events)
+  try{
+    const allSales = await getAll('sales');
+    const salesForEvent = (allSales || []).filter(s => s && s.eventId === curId);
+    reserveSaleSeqInMemoryPOS(event, saleRecord, salesForEvent);
+    const saleId = await saveSaleAndEventAtomicPOS({ saleRecord, eventUpdated: event });
+    saleRecord.id = saleId;
+  }catch(err){
+    console.error('addSale persist error', err);
+    showPersistFailPOS('venta', err);
+    return;
+  }
+
+  // Ajustar inventario central de producto terminado (post-commit)
+  try{
+    applyFinishedFromSalePOS({ productName, qty: finalQty }, +1);
+  }catch(e){
+    console.error('Inventario central: no se pudo registrar salida (venta ya guardada)', e);
+    posBlockingAlert('Venta guardada, pero no se pudo actualizar Inventario central (storage lleno o bloqueado). Libera espacio y recarga.');
+  }
 
   // Crear/actualizar asiento contable automático en Finanzas
   try {
@@ -12217,7 +12708,13 @@ async function addSale(){
 
   // FIFO (Etapa 2): persistir snapshot por evento/lote (solo si aplica a presentaciones)
   try{
-    if (presKeyFromProductNamePOS(productName)) queueLotsUsageSyncPOS(curId);
+    if (presKeyFromProductNamePOS(productName)) {
+      queueLotsUsageSyncPOS(curId).then(res=>{
+        if (res && res.ok===false){
+          showToast('FIFO/Lotes: no se pudo actualizar el uso de lotes para este evento. Revisa asignación de lotes.', 'error', 7000);
+        }
+      });
+    }
   }catch(_){ }
 
 }
@@ -12327,7 +12824,7 @@ async function addExtraSale(extraId){
   extra.stock = (Number(extra.stock)||0) - finalQty;
   extra.updatedAt = Date.now();
   ev.extras = extras;
-  await put('events', ev);
+  // Nota: persistencia de stock+venta se hace atómica (events+sales) para evitar estados a medias
 
   // Construir venta (costo congelado)
   const now = new Date();
@@ -12369,10 +12866,30 @@ async function addExtraSale(extraId){
     lineProfit
   };
 
-  try{ await ensureNewSaleSeqIdPOS(ev, saleRecord); }catch(e){ console.warn('ensureNewSaleSeqIdPOS (extra) failed', e); }
+  // Validación mínima (bloqueante antes de guardar)
+  const vMin = validateSaleMinimalPOS(saleRecord);
+  if (!vMin.ok){ alert(vMin.msg); return; }
 
-  await put('sales', saleRecord);
-  await createJournalEntryForSalePOS(saleRecord);
+  // Reservar N° por evento en memoria y guardar atómico (events + sales)
+  try{
+    const allSales = await getAll('sales');
+    const salesForEvent = (allSales || []).filter(s => s && s.eventId === curId);
+    reserveSaleSeqInMemoryPOS(ev, saleRecord, salesForEvent);
+    await saveSaleAndEventAtomicPOS({ saleRecord, eventUpdated: ev });
+  }catch(err){
+    console.error('addExtraSale persist error', err);
+    showPersistFailPOS('venta extra', err);
+    await renderExtrasUI();
+    await refreshSaleStockLabel();
+    return;
+  }
+
+  // Crear/actualizar asiento contable automático en Finanzas
+  try{
+    await createJournalEntryForSalePOS(saleRecord);
+  }catch(err){
+    console.error('No se pudo generar el asiento automático de esta venta de Extra', err);
+  }
 
   // Cliente: catálogo + modo pegajoso
   afterSaleCustomerHousekeepingPOS(customerName, customerId);
@@ -13512,7 +14029,7 @@ async function onSavePettyInitial(){
   await savePettyCash(pc);
 }catch(err){
   console.error('onSavePettyInitial save error', err);
-  showToast('No se pudo guardar el saldo inicial', 'error', 5000);
+  showPersistFailPOS('caja chica (saldo inicial)', err);
   return;
 }
 
@@ -13586,7 +14103,7 @@ async function onCopyPettyInitialToFinal(){
     await savePettyCash(pc);
   }catch(err){
     console.error('onCopyPettyInitialToFinal save error', err);
-    showToast('No se pudo guardar el arqueo final', 'error', 5000);
+    showPersistFailPOS('caja chica (arqueo final)', err);
     await renderCajaChica();
     return;
   }
@@ -13652,7 +14169,7 @@ async function onSavePettyFinal(){
   await savePettyCash(pc);
 }catch(err){
   console.error('onSavePettyFinal save error', err);
-  showToast('No se pudo guardar el arqueo final', 'error', 5000);
+  showPersistFailPOS('caja chica (arqueo final)', err);
   return;
 }
 
@@ -13855,7 +14372,7 @@ async function onRevertPettyMovement(originalId){
     await savePettyCash(pc);
   }catch(err){
     console.error('onRevertPettyMovement save error', err);
-    showToast('No se pudo guardar el reverso', 'error', 5000);
+    showPersistFailPOS('caja chica (reverso)', err);
     await renderCajaChica();
     return;
   }
@@ -13979,7 +14496,7 @@ async function onAddPettyMovement(){
     await savePettyCash(pc);
   }catch(err){
     console.error('onAddPettyMovement save error', err);
-    showToast('No se pudo guardar el movimiento', 'error', 5000);
+    showPersistFailPOS('caja chica (movimiento)', err);
     await renderCajaChica();
     return;
   }
@@ -14290,7 +14807,7 @@ const btnAddMov = document.getElementById('pc-mov-add');
   if (pcSel){
     pcSel.addEventListener('change', async ()=>{
       // Etapa 2: limpiar cliente al cambiar evento
-      clearCustomerSelectionOnEventSwitchPOS();
+      await resetOperationalStateOnEventSwitchPOS();
       const raw = String(pcSel.value || '').trim();
       if (!raw) return;
       const nextId = parseInt(raw, 10);
@@ -14314,7 +14831,7 @@ const btnAddMov = document.getElementById('pc-mov-add');
     btnPrevEvent.addEventListener('click', async (e)=>{
       e.preventDefault();
       // Etapa 2: limpiar cliente al cambiar evento
-      clearCustomerSelectionOnEventSwitchPOS();
+      await resetOperationalStateOnEventSwitchPOS();
       const prevId = getPcPrevEventId();
       if (!prevId) return;
       const curId = await getMeta('currentEventId');
