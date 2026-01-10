@@ -36,7 +36,7 @@
       try{ return getStore(scope).getItem(key); }catch(_){ return null; }
     },
     setItem(key, value, scope='local'){
-      try{ getStore(scope).setItem(key, String(value ?? '')); return true; }catch(_){ return false; }
+      try{ getStore(scope).setItem(key, String(value == null ? '' : value)); return true; }catch(_){ return false; }
     },
     removeItem(key, scope='local'){
       try{ getStore(scope).removeItem(key); return true; }catch(_){ return false; }
@@ -59,7 +59,7 @@
       return (obj == null) ? fallback : obj;
     },
     setJSON(key, obj, scope='local'){
-      try{ return this.setItem(key, JSON.stringify(obj ?? null), scope); }catch(_){ return false; }
+      try{ return this.setItem(key, JSON.stringify(obj == null ? null : obj), scope); }catch(_){ return false; }
     },
 
     // Update JSON sin “dedazos” (lee, aplica función, escribe)

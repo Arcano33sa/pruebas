@@ -30,7 +30,7 @@
     const el = e.target;
     if (!shouldHandle(el)) return;
 
-    const raw = String(el.value ?? '').trim();
+    const raw = String(el.value == null ? '' : el.value).trim();
     const n = parseNum(raw);
 
     if (!Number.isNaN(n) && n === 0) {
@@ -45,7 +45,7 @@
     const el = e.target;
     if (!shouldHandle(el)) return;
 
-    if (String(el.value ?? '').trim() === '') {
+    if (String(el.value == null ? '' : el.value).trim() === '') {
       el.value = getDefault(el);
     }
   });
