@@ -72,15 +72,20 @@ function invPct(ratio){
 }
 
 function readInventorySafe(){
+  try{
+    if (window.A33Storage && typeof A33Storage.sharedGet === 'function'){
+      const data = A33Storage.sharedGet(INV_LS_KEY, null, 'local');
+      if (data && typeof data === 'object') return data;
+      return null;
+    }
+  }catch(_){ }
+
   let raw = null;
   try{
     if (window.A33Storage && typeof A33Storage.getItem === 'function') raw = A33Storage.getItem(INV_LS_KEY);
     else raw = localStorage.getItem(INV_LS_KEY);
-  }catch(_){
-    raw = null;
-  }
+  }catch(_){ raw = null; }
   if (!raw) return null;
-
   try{
     const data = JSON.parse(raw);
     if (!data || typeof data !== 'object') return null;
@@ -1376,6 +1381,17 @@ function normalizeYMD(s){
 }
 
 function loadPedidosSafe(){
+  try{
+    if (window.A33Storage && typeof A33Storage.sharedGet === 'function'){
+      const parsed = A33Storage.sharedGet(ORDERS_LS_KEY, [], 'local');
+      if (!parsed) return { ok:true, items:[], reason:'' };
+      if (!Array.isArray(parsed)) return { ok:false, items:[], reason:'No disponible' };
+      return { ok:true, items: parsed, reason:'' };
+    }
+  }catch(err){
+    console.warn('Centro de Mando: error leyendo pedidos (sharedGet)', err);
+  }
+
   try{
     const storage = (typeof A33Storage !== 'undefined' && A33Storage && typeof A33Storage.getItem === 'function')
       ? A33Storage

@@ -1111,7 +1111,8 @@
       if (!('caches' in window)) return;
       try{
         const names = await caches.keys();
-        await Promise.all(names.map(n => caches.delete(n)));
+        const victims = names.filter(n => { const s = String(n||"" ).toLowerCase(); return s.startsWith("a33-") || s.startsWith("arcano33-"); });
+        await Promise.all(victims.map(n => caches.delete(n)));
       }catch(_){ }
     }
 

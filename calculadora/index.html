@@ -611,6 +611,14 @@
 
     function invLoad() {
       try {
+        // Contrato compartido (anti-pisadas + data vieja segura)
+        if (window.A33Storage && typeof A33Storage.sharedGet === 'function'){
+          const data = A33Storage.sharedGet(STORAGE_KEY_INVENTARIO, invDefault());
+          if (data && typeof data === 'object') return data;
+          return invDefault();
+        }
+
+        // Fallback legacy
         const raw = A33Storage.getItem(STORAGE_KEY_INVENTARIO);
         let data = raw ? JSON.parse(raw) : null;
         if (!data || typeof data !== "object") data = invDefault();
@@ -640,6 +648,13 @@
 
     function invSave(inv) {
       try {
+        if (window.A33Storage && typeof A33Storage.sharedSet === 'function'){
+          const r = A33Storage.sharedSet(STORAGE_KEY_INVENTARIO, inv, { source: 'calculadora' });
+          if (r && r.ok === false && r.message){
+            try{ alert(r.message); }catch(_){ }
+          }
+          return;
+        }
         A33Storage.setItem(STORAGE_KEY_INVENTARIO, JSON.stringify(inv));
       } catch (e) {
         console.warn("No se pudo guardar el inventario.", e);
@@ -941,9 +956,9 @@
     function obtenerMaxSeqDesdeLotes() {
       let max = 0;
       try {
-        const raw = A33Storage.getItem("arcano33_lotes");
-        if (!raw) return 0;
-        const arr = JSON.parse(raw);
+        const arr = (window.A33Storage && typeof A33Storage.sharedGet === 'function')
+          ? A33Storage.sharedGet("arcano33_lotes", [])
+          : (() => { const raw = A33Storage.getItem("arcano33_lotes"); return raw ? JSON.parse(raw) : []; })();
         if (!Array.isArray(arr)) return 0;
         arr.forEach(l => {
           const c = l && (l.codigo || l.code || l.lote || "");
@@ -957,9 +972,9 @@
     function obtenerUsedSeqSetDesdeLotes() {
       const set = new Set();
       try {
-        const raw = A33Storage.getItem("arcano33_lotes");
-        if (!raw) return set;
-        const arr = JSON.parse(raw);
+        const arr = (window.A33Storage && typeof A33Storage.sharedGet === 'function')
+          ? A33Storage.sharedGet("arcano33_lotes", [])
+          : (() => { const raw = A33Storage.getItem("arcano33_lotes"); return raw ? JSON.parse(raw) : []; })();
         if (!Array.isArray(arr)) return set;
         arr.forEach(l => {
           const c = l && (l.codigo || l.code || l.lote || "");
@@ -1151,15 +1166,33 @@ async function recalcularCodigoLoteAuto(opts) {
         recetas,
         costosPresentacion
       };
-      A33Storage.setItem(STORAGE_RECETAS_KEY, JSON.stringify(payload));
+      try{
+        if (window.A33Storage && typeof A33Storage.sharedSet === 'function'){
+          const r = A33Storage.sharedSet(STORAGE_RECETAS_KEY, payload, { source: 'calculadora' });
+          if (r && r.ok === false && r.message){
+            alert(r.message);
+            return;
+          }
+        } else {
+          A33Storage.setItem(STORAGE_RECETAS_KEY, JSON.stringify(payload));
+        }
+      }catch(e){
+        console.warn('No se pudo guardar recetas:', e);
+      }
       alert("Recetas y costos guardados en este navegador ✅");
     }
 
     function cargarRecetas() {
-      const raw = A33Storage.getItem(STORAGE_RECETAS_KEY);
-      if (!raw) return;
+      // Contrato compartido (anti-pisadas + data vieja segura)
       try {
-        const data = JSON.parse(raw);
+        let data = null;
+        if (window.A33Storage && typeof A33Storage.sharedGet === 'function'){
+          data = A33Storage.sharedGet(STORAGE_RECETAS_KEY, null);
+        } else {
+          const raw = A33Storage.getItem(STORAGE_RECETAS_KEY);
+          data = raw ? JSON.parse(raw) : null;
+        }
+        if (!data) return;
         const recetas = data && data.recetas ? data.recetas : data;
         const costosPresentacion = data && data.costosPresentacion ? data.costosPresentacion : null;
 
@@ -1579,7 +1612,12 @@ async function recalcularCodigoLoteAuto(opts) {
 
       // Persistencia: solo si esto fue exitoso hacemos side-effects (inventario + consecutivo)
       try {
-        A33Storage.setItem("arcano33_lotes", JSON.stringify(lotes));
+        if (window.A33Storage && typeof A33Storage.sharedSet === 'function'){
+          const r = A33Storage.sharedSet("arcano33_lotes", lotes, { source: 'calculadora' });
+          if (r && r.ok === false) throw new Error(r.message || "No se pudo guardar el lote.");
+        } else {
+          A33Storage.setItem("arcano33_lotes", JSON.stringify(lotes));
+        }
       } catch (e) {
         alert("No se pudo guardar el lote en el navegador.");
         setPillEstadoCodigo(A33CodigoLoteMode === "MANUAL" ? "EDITADO" : "SUGERIDO");

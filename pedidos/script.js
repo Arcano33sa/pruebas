@@ -37,18 +37,50 @@ function $(id) {
 
 function loadPedidos() {
   try {
+    if (window.A33Storage && typeof A33Storage.sharedGet === 'function') {
+      const list = A33Storage.sharedGet(STORAGE_KEY_PEDIDOS, [], 'local');
+      return Array.isArray(list) ? list : [];
+    }
+  } catch (e) {
+    console.warn('Error leyendo pedidos (sharedGet)', e);
+  }
+
+  try {
     const raw = A33Storage.getItem(STORAGE_KEY_PEDIDOS);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch (e) {
-    console.error("Error leyendo pedidos", e);
+    console.error('Error leyendo pedidos', e);
     return [];
   }
 }
 
 function savePedidos(list) {
-  A33Storage.setItem(STORAGE_KEY_PEDIDOS, JSON.stringify(list));
+  const arr = Array.isArray(list) ? list : [];
+
+  try {
+    if (window.A33Storage && typeof A33Storage.sharedSet === 'function') {
+      const r = A33Storage.sharedSet(STORAGE_KEY_PEDIDOS, arr, { source: 'pedidos' });
+      if (!r || !r.ok) {
+        console.warn('No se pudo guardar pedidos', r);
+        showArchivedNotice((r && r.message) ? r.message : 'No se pudo guardar (conflicto). Recarga e intenta de nuevo.');
+        return false;
+      }
+      return true;
+    }
+  } catch (e) {
+    console.warn('Error guardando pedidos (sharedSet)', e);
+  }
+
+  try {
+    A33Storage.setItem(STORAGE_KEY_PEDIDOS, JSON.stringify(arr));
+    return true;
+  } catch (e) {
+    console.error('Error guardando pedidos', e);
+    showArchivedNotice('No se pudo guardar pedidos en este navegador.');
+    return false;
+  }
 }
 
 function loadArchivedPedidos() {
@@ -151,6 +183,13 @@ function normalizeCustomerKey(name){
 
 function readPosCustomersRaw(){
   try{
+    if (window.A33Storage && typeof A33Storage.sharedGet === 'function'){
+      const raw = A33Storage.sharedGet(POS_CUSTOMERS_KEY, [], 'local');
+      return Array.isArray(raw) ? raw : [];
+    }
+  }catch(_){ }
+
+  try{
     if (window.A33Storage && typeof A33Storage.getJSON === 'function'){
       const raw = A33Storage.getJSON(POS_CUSTOMERS_KEY, [], 'local');
       return Array.isArray(raw) ? raw : [];
@@ -167,13 +206,27 @@ function readPosCustomersRaw(){
 
 function writePosCustomersRaw(arr){
   const safe = Array.isArray(arr) ? arr : [];
+
+  try{
+    if (window.A33Storage && typeof A33Storage.sharedSet === 'function'){
+      const r = A33Storage.sharedSet(POS_CUSTOMERS_KEY, safe, { source: 'pedidos' });
+      if (!r || !r.ok){
+        console.warn('No se pudo guardar clientes (sharedSet)', r);
+        try { showArchivedNotice((r && r.message) ? r.message : 'Conflicto al guardar clientes. Recarga la pagina e intenta de nuevo.'); } catch(_){}
+        return false;
+      }
+      return true;
+    }
+  }catch(_){ }
+
   try{
     if (window.A33Storage && typeof A33Storage.setJSON === 'function'){
       A33Storage.setJSON(POS_CUSTOMERS_KEY, safe, 'local');
-      return;
+      return true;
     }
   }catch(_){ }
-  try{ localStorage.setItem(POS_CUSTOMERS_KEY, JSON.stringify(safe)); }catch(_){ }
+
+  try{ localStorage.setItem(POS_CUSTOMERS_KEY, JSON.stringify(safe)); return true; }catch(_){ return false; }
 }
 
 function detectCustomerCatalogType(arr){

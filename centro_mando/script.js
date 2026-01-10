@@ -102,9 +102,15 @@
 
   function readInventarioAlerts(){
     try{
-      const raw = A33Storage.getItem('arcano33_inventario');
-      if (!raw) return null;
-      const inv = JSON.parse(raw);
+      let inv = null;
+      if (window.A33Storage && typeof A33Storage.sharedGet === 'function'){
+        inv = A33Storage.sharedGet('arcano33_inventario', null, 'local');
+      } else {
+        const raw = A33Storage.getItem('arcano33_inventario');
+        if (!raw) return null;
+        inv = JSON.parse(raw);
+      }
+      if (!inv) return null;
       const liquids = inv?.liquids || {};
       let alerts = 0;
       for (const k of Object.keys(liquids)){

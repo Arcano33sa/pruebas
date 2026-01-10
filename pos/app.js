@@ -1280,7 +1280,12 @@ function migrateCustomerCatalogToObjectsPOS(){
     const oldDisabledArr = Array.from(disabled).sort().join('|');
     const newDisabledArr = Array.from(disabled2).sort().join('|');
     if (changed || oldDisabledArr !== newDisabledArr){
+      if (window.A33Storage && typeof A33Storage.sharedSet === 'function'){
+      const r = A33Storage.sharedSet(CUSTOMER_CATALOG_KEY, sorted, { source: 'pos' });
+      if (!r || !r.ok) throw new Error((r && r.message) ? r.message : 'No se pudo guardar catalogo de clientes.');
+    } else {
       A33Storage.setJSON(CUSTOMER_CATALOG_KEY, sorted, 'local');
+    }
       saveCustomerDisabledSetPOS(disabled2);
     }
   }catch(_){ }
@@ -1294,7 +1299,21 @@ function loadCustomerCatalogPOS(){
 }
 
 function saveCustomerCatalogPOS(list){
-  try{ A33Storage.setJSON(CUSTOMER_CATALOG_KEY, Array.isArray(list) ? list : [], 'local'); }catch(_){ }
+  const safe = Array.isArray(list) ? list : [];
+  try{
+    if (window.A33Storage && typeof A33Storage.sharedSet === 'function'){
+      const r = A33Storage.sharedSet(CUSTOMER_CATALOG_KEY, safe, { source: 'pos' });
+      if (!r || !r.ok){
+        try{ showToast((r && r.message) ? r.message : 'Conflicto al guardar clientes. Recarga e intenta de nuevo.', 'error', 4200); }catch(_){ }
+        return false;
+      }
+      return true;
+    }
+    A33Storage.setJSON(CUSTOMER_CATALOG_KEY, safe, 'local');
+    return true;
+  }catch(_){
+    return false;
+  }
 }
 
 function syncDisabledLegacyFromCatalogPOS(list){
@@ -3262,6 +3281,15 @@ function invCentralDefaultPOS(){
 }
 function invCentralLoadPOS(){
   try{
+    if (window.A33Storage && typeof A33Storage.sharedGet === 'function'){
+      const data = A33Storage.sharedGet(STORAGE_KEY_INVENTARIO, invCentralDefaultPOS(), 'local');
+      return (data && typeof data === 'object') ? data : invCentralDefaultPOS();
+    }
+  }catch(e){
+    console.warn('Error leyendo inventario central (sharedGet)', e);
+  }
+
+  try{
     const raw = A33Storage.getItem(STORAGE_KEY_INVENTARIO);
     let data = raw ? JSON.parse(raw) : null;
     if (!data || typeof data !== 'object') data = invCentralDefaultPOS();
@@ -3280,6 +3308,18 @@ function invCentralLoadPOS(){
   }
 }
 function invCentralSavePOS(inv){
+  try{
+    if (window.A33Storage && typeof A33Storage.sharedSet === 'function'){
+      const r = A33Storage.sharedSet(STORAGE_KEY_INVENTARIO, inv, { source: 'pos' });
+      if (!r || !r.ok){
+        console.warn('Error guardando inventario central (sharedSet)', r);
+      }
+      return;
+    }
+  }catch(e){
+    console.warn('Error guardando inventario central (sharedSet)', e);
+  }
+
   try{
     A33Storage.setItem(STORAGE_KEY_INVENTARIO, JSON.stringify(inv));
   }catch(e){
@@ -3338,6 +3378,18 @@ async function renderCentralFinishedPOS(){
 
 function leerCostosPresentacion() {
   try {
+    if (window.A33Storage && typeof A33Storage.sharedGet === 'function'){
+      const data = A33Storage.sharedGet(RECETAS_KEY, null, 'local');
+      if (data && data.costosPresentacion) {
+        return data.costosPresentacion;
+      }
+      return null;
+    }
+  } catch (e) {
+    console.warn('No se pudieron leer los costos de presentacion (sharedGet):', e);
+  }
+
+  try {
     const raw = A33Storage.getItem(RECETAS_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw);
@@ -3346,7 +3398,7 @@ function leerCostosPresentacion() {
     }
     return null;
   } catch (e) {
-    console.warn('No se pudieron leer los costos de presentación desde la Calculadora:', e);
+    console.warn('No se pudieron leer los costos de presentacion desde la Calculadora:', e);
     return null;
   }
 }
@@ -8020,11 +8072,16 @@ async function importFromLoteToInventory(){
 
   let lotes = [];
   try {
-    const raw = A33Storage.getItem('arcano33_lotes');
-    if (raw) lotes = JSON.parse(raw) || [];
-    if (!Array.isArray(lotes)) lotes = [];
+    if (window.A33Storage && typeof A33Storage.sharedGet === 'function'){
+      const arr = A33Storage.sharedGet('arcano33_lotes', [], 'local');
+      lotes = Array.isArray(arr) ? arr : [];
+    } else {
+      const raw = A33Storage.getItem('arcano33_lotes');
+      if (raw) lotes = JSON.parse(raw) || [];
+      if (!Array.isArray(lotes)) lotes = [];
+    }
   } catch (e) {
-    alert('No se pudo leer la información de lotes guardada en el navegador.');
+    alert('No se pudo leer la informacion de lotes guardada en el navegador.');
     return;
   }
   if (!lotes.length){
@@ -8136,7 +8193,12 @@ async function importFromLoteToInventory(){
         assignedCargaId: cargaId,
         assignmentHistory: hist
       };
-      A33Storage.setItem('arcano33_lotes', JSON.stringify(lotes));
+      if (window.A33Storage && typeof A33Storage.sharedSet === 'function'){
+        const r = A33Storage.sharedSet('arcano33_lotes', lotes, { source: 'pos' });
+        if (!r || !r.ok) throw new Error((r && r.message) ? r.message : 'No se pudo guardar lotes (conflicto).');
+      } else {
+        A33Storage.setItem('arcano33_lotes', JSON.stringify(lotes));
+      }
     }
   } catch (e){
     showToast('No se pudo marcar el lote como asignado. No se aplicó la carga.', 'error', 4200);
@@ -8272,7 +8334,12 @@ function effectiveLoteStatusPOS(lote){
 function readLotesLS_POS(){
   try{
     const LS = window.A33Storage;
-    const arr = LS ? LS.getJSON(LOTES_LS_KEY, []) : null;
+    if (!LS) return [];
+    if (typeof LS.sharedGet === 'function'){
+      const arr = LS.sharedGet(LOTES_LS_KEY, [], 'local');
+      return Array.isArray(arr) ? arr : [];
+    }
+    const arr = LS.getJSON(LOTES_LS_KEY, []);
     return Array.isArray(arr) ? arr : [];
   }catch(_){
     return [];
@@ -8283,7 +8350,16 @@ function writeLotesLS_POS(arr){
   try{
     const LS = window.A33Storage;
     if (!LS) return false;
-    LS.setJSON(LOTES_LS_KEY, Array.isArray(arr) ? arr : []);
+    const safe = Array.isArray(arr) ? arr : [];
+    if (typeof LS.sharedSet === 'function'){
+      const r = LS.sharedSet(LOTES_LS_KEY, safe, { source: 'pos' });
+      if (!r || !r.ok){
+        try{ showToast((r && r.message) ? r.message : 'Conflicto al guardar lotes. Recarga e intenta de nuevo.', 'error', 4200); }catch(_){ }
+        return false;
+      }
+      return true;
+    }
+    LS.setJSON(LOTES_LS_KEY, safe);
     return true;
   }catch(_){
     return false;

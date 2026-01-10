@@ -64,6 +64,14 @@ function markA33Num(input, { defaultValue = '0', mode = 'decimal' } = {}) {
 
 function loadInventario() {
   try {
+    // Contrato compartido (anti-pisadas + data vieja segura)
+    if (window.A33Storage && typeof A33Storage.sharedGet === 'function'){
+      const data = A33Storage.sharedGet(STORAGE_KEY_INVENTARIO, defaultInventario());
+      if (data && typeof data === 'object') return data;
+      return defaultInventario();
+    }
+
+    // Fallback legacy
     const raw = A33Storage.getItem(STORAGE_KEY_INVENTARIO);
     let data = raw ? JSON.parse(raw) : null;
     if (!data || typeof data !== "object") data = defaultInventario();
@@ -72,28 +80,18 @@ function loadInventario() {
     if (!data.bottles) data.bottles = {};
     if (!data.finished) data.finished = {};
 
-    // asegurar todas las claves
-    const def = defaultInventario();
     LIQUIDS.forEach((l) => {
       if (!data.liquids[l.id]) data.liquids[l.id] = { stock: 0, max: 0 };
-      if (typeof data.liquids[l.id].stock !== "number") {
-        data.liquids[l.id].stock = parseNumber(data.liquids[l.id].stock || 0);
-      }
-      if (typeof data.liquids[l.id].max !== "number") {
-        data.liquids[l.id].max = parseNumber(data.liquids[l.id].max || 0);
-      }
+      if (typeof data.liquids[l.id].stock !== "number") data.liquids[l.id].stock = parseNumber(data.liquids[l.id].stock || 0);
+      if (typeof data.liquids[l.id].max !== "number") data.liquids[l.id].max = parseNumber(data.liquids[l.id].max || 0);
     });
     BOTTLES.forEach((b) => {
       if (!data.bottles[b.id]) data.bottles[b.id] = { stock: 0 };
-      if (typeof data.bottles[b.id].stock !== "number") {
-        data.bottles[b.id].stock = parseNumber(data.bottles[b.id].stock || 0);
-      }
+      if (typeof data.bottles[b.id].stock !== "number") data.bottles[b.id].stock = parseNumber(data.bottles[b.id].stock || 0);
     });
     FINISHED.forEach((p) => {
       if (!data.finished[p.id]) data.finished[p.id] = { stock: 0 };
-      if (typeof data.finished[p.id].stock !== "number") {
-        data.finished[p.id].stock = parseNumber(data.finished[p.id].stock || 0);
-      }
+      if (typeof data.finished[p.id].stock !== "number") data.finished[p.id].stock = parseNumber(data.finished[p.id].stock || 0);
     });
 
     return data;
@@ -104,6 +102,15 @@ function loadInventario() {
 }
 
 function saveInventario(inv) {
+  try{
+    if (window.A33Storage && typeof A33Storage.sharedSet === 'function'){
+      const r = A33Storage.sharedSet(STORAGE_KEY_INVENTARIO, inv, { source: 'inventario' });
+      if (r && r.ok === false && r.message){
+        try{ alert(r.message); }catch(_){ }
+      }
+      return;
+    }
+  }catch(_){ }
   A33Storage.setItem(STORAGE_KEY_INVENTARIO, JSON.stringify(inv));
 }
 

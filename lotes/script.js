@@ -70,6 +70,10 @@ function $(id) {
 
 function loadLotes() {
   try {
+    if (window.A33Storage && typeof A33Storage.sharedGet === 'function') {
+      const arr = A33Storage.sharedGet(STORAGE_KEY, []);
+      return Array.isArray(arr) ? arr : [];
+    }
     const raw = A33Storage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
@@ -99,7 +103,20 @@ function saveArchivedLotes(data){
 }
 
 function saveLotes(data) {
+  try {
+    if (window.A33Storage && typeof A33Storage.sharedSet === 'function') {
+      const r = A33Storage.sharedSet(STORAGE_KEY, data, { source: 'lotes' });
+      if (r && r.ok === false) {
+        if (r.message) alert(r.message);
+        return false;
+      }
+      return true;
+    }
+  } catch (e) {
+    console.warn('saveLotes (shared) falló, usando fallback:', e);
+  }
   A33Storage.setItem(STORAGE_KEY, JSON.stringify(data));
+  return true;
 }
 
 function formatDate(value) {
