@@ -802,8 +802,7 @@
       // Ahora deriva SIEMPRE de la fecha de producción (no de "hoy").
       const span = document.getElementById("texto-fecha-hebreo");
       if (!span) return Promise.resolve(null);
-      const elFechaProd = document.getElementById("fecha-produccion");
-      const iso = ((elFechaProd && elFechaProd.value) || hoyLocalISO()).trim();
+      const iso = ((document.getElementById("fecha-produccion") && document.getElementById("fecha-produccion").value) || hoyLocalISO()).trim();
       return obtenerHebreaDesdeFechaISO(iso)
         .then(h => {
           if (h && h.hd && h.hm && h.hy) {
@@ -869,16 +868,9 @@
       try {
         const fmt = new Intl.DateTimeFormat("en-u-ca-hebrew-nu-latn", { day: "numeric", month: "long", year: "numeric" });
         const parts = fmt.formatToParts(dt);
-        const dayPart = parts.find(p => p.type === "day");
-        const dayVal = (dayPart && typeof dayPart.value !== "undefined") ? dayPart.value : "";
-        const dayMatch = String(dayVal || "").match(/\d+/);
-        const hd = (dayMatch && dayMatch[0]) ? dayMatch[0] : "";
-        const monthPart = parts.find(p => p.type === "month");
-        const hm = String((monthPart && typeof monthPart.value !== "undefined") ? monthPart.value : "").trim();
-        const yearPart = parts.find(p => p.type === "year");
-        const yearVal = (yearPart && typeof yearPart.value !== "undefined") ? yearPart.value : "";
-        const yearMatch = String(yearVal || "").match(/\d+/);
-        const hy = (yearMatch && yearMatch[0]) ? yearMatch[0] : "";
+        const hd = (((parts.find(p => p.type === "day") || {}).value || "").match(/\d+/) || [""])[0] || "";
+        const hm = ((parts.find(p => p.type === "month") || {}).value || "").trim();
+        const hy = (((parts.find(p => p.type === "year") || {}).value || "").match(/\d+/) || [""])[0] || "";
         const hm3 = sanitizeMonth3(hm);
         const hy4 = hy ? hy.slice(-4) : "";
         if (hd && hm && hm3.length === 3 && hy4.length === 4) {
@@ -898,11 +890,9 @@
         if (!res.ok) return null;
         const data = await res.json();
         if (data && typeof data.hd !== "undefined" && data.hm && data.hy) {
-          const hdMatch = String(data.hd).match(/\d+/);
-          const hd = (hdMatch && hdMatch[0]) ? hdMatch[0] : "";
+          const hd = (String(data.hd).match(/\d+/) || [""])[0] || "";
           const hm = String(data.hm || "").trim();
-          const hyMatch = String(data.hy).match(/\d+/);
-          const hy = (hyMatch && hyMatch[0]) ? hyMatch[0] : "";
+          const hy = (String(data.hy).match(/\d+/) || [""])[0] || "";
           const hm3 = sanitizeMonth3(hm);
           const hy4 = hy ? hy.slice(-4) : "";
           if (hd && hm && hm3.length === 3 && hy4.length === 4) {
@@ -1048,10 +1038,8 @@
       A33CodigoLoteMode = "MANUAL";
       try { A33Storage.setItem(STORAGE_LOTE_CODE_MODE_KEY, "MANUAL"); } catch (e) {}
       setPillEstadoCodigo("EDITADO");
-    } catch (e) {}
     }
-
-    async function recalcularCodigoLoteAuto(opts) {
+async function recalcularCodigoLoteAuto(opts) {
       const consumeNewSeq = !!(opts && opts.consumeNewSeq);
       if (consumeNewSeq || !/^\d{4}$/.test(String(A33AutoSeq || ""))) {
         A33AutoSeq = sugerirSeq4({ advance: consumeNewSeq });
@@ -1059,9 +1047,7 @@
       A33CodigoLoteMode = "AUTO";
       try { A33Storage.setItem(STORAGE_LOTE_CODE_MODE_KEY, "AUTO"); } catch (e) {}
 
-      const elFechaProd = document.getElementById("fecha-produccion");
-
-      const fechaProdIso = ((elFechaProd && elFechaProd.value) || hoyLocalISO()).trim();
+      const fechaProdIso = ((document.getElementById("fecha-produccion") && document.getElementById("fecha-produccion").value) || hoyLocalISO()).trim();
       const dt = parseISODateLocal(fechaProdIso) || new Date();
       const dia2 = pad2(dt.getDate());
 
