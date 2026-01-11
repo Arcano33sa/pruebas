@@ -2868,6 +2868,103 @@ function restoreGroupsPOS(snap){
   }catch(_){ }
 }
 
+
+
+// --- Recuperación conservadora de grupos (Evento Maestro) si 'events' quedó vacío
+function recoverGroupCatalogFromLocalStoragePOS(){
+  // Regla: no inventar nada. Solo reusar lo que ya exista en localStorage.
+  try{
+    const cur = readGroupCatalogPOS();
+    if (cur && cur.length) return { repaired:false, catalog:cur, reason:'catalog_ok' };
+
+    const out = [];
+    const seen = new Set();
+    const push = (val)=>{
+      const g = String(val || '').trim();
+      if (!g || seen.has(g) || g === '__new__') return;
+      out.push(g);
+      seen.add(g);
+    };
+
+    // 1) Último grupo usado
+    try{ push(getLastGroupName()); }catch(_){ }
+
+    // 2) Grupos ocultos (preserva nombres aunque no aparezcan en el combo)
+    try{
+      const hidden = getHiddenGroups();
+      if (Array.isArray(hidden)) hidden.forEach(push);
+    }catch(_){ }
+
+    // Helper lectura raw
+    const readRaw = (k)=>{
+      try{
+        const raw = (window.A33Storage && typeof A33Storage.getItem === 'function')
+          ? A33Storage.getItem(k)
+          : localStorage.getItem(k);
+        return raw || null;
+      }catch(_){ return null; }
+    };
+
+    // 3) Keys legacy conocidas (si existieran)
+    const legacyKeys = ['a33_pos_groupCatalog','a33_pos_groupCatalog_v0','a33_pos_groupsCatalog','a33_pos_groupsCatalog_v1'];
+    for (const k of legacyKeys){
+      const raw = readRaw(k);
+      if (!raw) continue;
+      try{
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) arr.forEach(push);
+      }catch(_){ }
+    }
+
+    // 4) Escaneo liviano: keys que parezcan catálogo de grupos
+    try{
+      for (let i=0; i<localStorage.length; i++){
+        const k = localStorage.key(i);
+        if (!k) continue;
+        if (k === GROUP_CATALOG_KEY) continue;
+        if (!/group.*catalog/i.test(k)) continue;
+        const raw = readRaw(k);
+        if (!raw) continue;
+        try{
+          const arr = JSON.parse(raw);
+          if (Array.isArray(arr)) arr.forEach(push);
+        }catch(_){ }
+      }
+    }catch(_){ }
+
+    if (out.length){
+      const saved = writeGroupCatalogPOS(out);
+      return { repaired:true, catalog:saved, reason:'recovered_from_localStorage' };
+    }
+    return { repaired:false, catalog:[], reason:'no_source' };
+  }catch(err){
+    console.warn('No se pudo recuperar catálogo de grupos', err);
+    try{ return { repaired:false, catalog: readGroupCatalogPOS(), reason:'error' }; }catch(_){ return { repaired:false, catalog:[], reason:'error' }; }
+  }
+}
+
+async function ensureGroupsAvailableAtStartupPOS(){
+  if (!db) await openDB();
+
+  let evs = [];
+  try{ evs = await getAll('events'); }catch(_){ evs = []; }
+
+  // Si hay eventos, asegurar catálogo (merge conservador)
+  if (evs.length){
+    try{ ensureGroupCatalogFromEventsPOS(evs); }catch(_){ }
+    return { eventsCount: evs.length, groupsCount: readGroupCatalogPOS().length, repaired: false };
+  }
+
+  // Si no hay eventos, intentar recuperar catálogo mínimo desde localStorage
+  const before = readGroupCatalogPOS();
+  const res = recoverGroupCatalogFromLocalStoragePOS();
+  const after = readGroupCatalogPOS();
+  const repaired = !!(res && res.repaired) || (before.length === 0 && after.length > 0);
+  if (repaired){
+    console.info('POS: catálogo de grupos recuperado (events vacío)', { before: before.length, after: after.length, reason: (res && res.reason) || '' });
+  }
+  return { eventsCount: 0, groupsCount: after.length, repaired };
+}
 // --- Caja Chica: helpers y denominaciones
 const NIO_DENOMS = [1,5,10,20,50,100,200,500,1000];
 const USD_DENOMS = [1,5,10,20,50,100];
@@ -6727,7 +6824,16 @@ function refreshGroupSelectFromEvents(evs) {
   if (!sel) return;
 
   // Asegurar catálogo persistente (para conservar grupos aunque se borren eventos)
-  const catalog = ensureGroupCatalogFromEventsPOS(evs);
+  let catalog = ensureGroupCatalogFromEventsPOS(evs);
+  // Si no hay eventos y el catálogo está vacío, intentar recuperar desde localStorage
+  if ((!catalog || !catalog.length) && (!evs || !evs.length)) {
+    try {
+      const rec = recoverGroupCatalogFromLocalStoragePOS();
+      catalog = (rec && rec.catalog) ? rec.catalog : readGroupCatalogPOS();
+    } catch (_e) {
+      try { catalog = readGroupCatalogPOS(); } catch(_){ catalog = []; }
+    }
+  }
   const hidden = new Set(getHiddenGroups());
   const groups = (catalog || []).filter(g => g && !hidden.has(g));
 
@@ -11318,7 +11424,7 @@ async function resetOperationalStoresAfterArchivePOS(){
   rm(A33_PC_PREV_EVENT_KEY);
 
   // --- Limpiar stores operativos de forma ATÓMICA
-  const stores = ['sales','events','inventory','pettyCash','dayLocks','dailyClosures','posRemindersIndex'];
+  const stores = ['sales','inventory','pettyCash','dayLocks','dailyClosures','posRemindersIndex'];
   try{
     await clearStoresAtomicPOS(stores);
   }catch(err){
@@ -11472,7 +11578,7 @@ async function confirmClosePeriodPOS(){
 
       closeSummaryClosePeriodModalPOS();
       const gc = (resetRes && Number(resetRes.groupsCount)) || 0;
-      showToast(`Período cerrado ✅ · Grupos conservados: ${gc}`, 'ok', 4500);
+      showToast(`Período cerrado ✅ · Estructura conservada: Evento Maestro/Grupos · Grupos: ${gc}`, 'ok', 4500);
 
       try{ await refreshEventUI(); }catch(e){}
       try{ await renderDay(); }catch(e){}
@@ -11719,7 +11825,16 @@ function bindSummaryPeriodCloseAndArchivePOS(){
 
   const btnClosePeriod = document.getElementById('btn-summary-close-period');
   if (btnClosePeriod){
-    btnClosePeriod.addEventListener('click', ()=>{ openSummaryClosePeriodModalPOS().catch(err=>console.error(err)); });
+    btnClosePeriod.addEventListener('click', ()=>{
+      runWithSavingLockPOS({
+        key: 'cerrar_período_modal',
+        btnIds: ['btn-summary-close-period'],
+        labelSaving: 'Procesando…',
+        busyToast: 'Procesando…',
+        onError: (err)=> console.error(err),
+        fn: async()=>{ await openSummaryClosePeriodModalPOS(); }
+      });
+    });
   }
 
   const btnArchive = document.getElementById('btn-summary-archive');
@@ -12639,6 +12754,9 @@ async function init(){
 
   // Paso 2: defaults y migraciones
   await runStep('ensureDefaults', ensureDefaults);
+
+  // Paso 2.1: recuperación conservadora de grupos si events quedó vacío
+  await runStep('recoverGroupsIfEventsEmpty', ensureGroupsAvailableAtStartupPOS);
 
   // Paso 3: preparar fecha por defecto
   try{
