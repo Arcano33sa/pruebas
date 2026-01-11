@@ -540,8 +540,20 @@ tr:nth-child(even) td {
   max-width: 160px;
 }
 
-/* iPad / pantallas estrechas: tabla -> tarjetas (sin overflow-x) */
+/* iPad (y tablets): mantener tabla compacta (NO tarjetas) */
 @media (max-width: 920px) {
+  .inv-table input[type="number"] {
+    max-width: 120px;
+  }
+
+  .inv-table th,
+  .inv-table td {
+    padding: 0.42rem 0.48rem;
+  }
+}
+
+/* Teléfonos: tabla -> tarjetas (sin overflow-x) */
+@media (max-width: 640px) {
   .table-wrapper {
     overflow-x: hidden;
     overflow-y: visible;
