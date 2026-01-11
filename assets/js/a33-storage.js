@@ -170,6 +170,16 @@
   const INV_BOTTLE_IDS = ['pulso','media','djeba','litro','galon'];
   const INV_FINISHED_IDS = ['pulso','media','djeba','litro','galon'];
 
+  function stableItemId(prefix, key, src){
+    try{
+      const s = src && (src.itemId || src.sku || src.id);
+      const v = (s != null) ? String(s).trim() : '';
+      if (v) return v;
+    }catch(_){ }
+    const k = (key != null) ? String(key).trim() : '';
+    return String(prefix || '') + k;
+  }
+
   function normalizeInventario(raw){
     const d = isPlainObject(raw) ? raw : {};
     const liquidsIn = isPlainObject(d.liquids) ? d.liquids : {};
@@ -184,6 +194,9 @@
     for (const id of INV_LIQUID_IDS){
       const src = isPlainObject(liquidsIn[id]) ? liquidsIn[id] : {};
       liquids[id] = {
+        ...src,
+        itemId: stableItemId('liq:', id, src),
+        sku: (src.sku != null && String(src.sku).trim()) ? String(src.sku).trim() : stableItemId('liq:', id, src),
         stock: coerceNumber(src.stock, 0, 'arcano33_inventario.liquids.' + id + '.stock'),
         max:   coerceNumber(src.max,   0, 'arcano33_inventario.liquids.' + id + '.max'),
       };
@@ -191,12 +204,18 @@
     for (const id of INV_BOTTLE_IDS){
       const src = isPlainObject(bottlesIn[id]) ? bottlesIn[id] : {};
       bottles[id] = {
+        ...src,
+        itemId: stableItemId('bot:', id, src),
+        sku: (src.sku != null && String(src.sku).trim()) ? String(src.sku).trim() : stableItemId('bot:', id, src),
         stock: coerceNumber(src.stock, 0, 'arcano33_inventario.bottles.' + id + '.stock'),
       };
     }
     for (const id of INV_FINISHED_IDS){
       const src = isPlainObject(finishedIn[id]) ? finishedIn[id] : {};
       finished[id] = {
+        ...src,
+        itemId: stableItemId('fin:', id, src),
+        sku: (src.sku != null && String(src.sku).trim()) ? String(src.sku).trim() : stableItemId('fin:', id, src),
         stock: coerceNumber(src.stock, 0, 'arcano33_inventario.finished.' + id + '.stock'),
       };
     }
@@ -206,6 +225,9 @@
       if (liquids[k]) continue;
       const src = isPlainObject(liquidsIn[k]) ? liquidsIn[k] : {};
       liquids[k] = {
+        ...src,
+        itemId: stableItemId('liq:', k, src),
+        sku: (src.sku != null && String(src.sku).trim()) ? String(src.sku).trim() : stableItemId('liq:', k, src),
         stock: coerceNumber(src.stock, 0, 'arcano33_inventario.liquids.' + k + '.stock'),
         max:   coerceNumber(src.max,   0, 'arcano33_inventario.liquids.' + k + '.max'),
       };
@@ -214,6 +236,9 @@
       if (bottles[k]) continue;
       const src = isPlainObject(bottlesIn[k]) ? bottlesIn[k] : {};
       bottles[k] = {
+        ...src,
+        itemId: stableItemId('bot:', k, src),
+        sku: (src.sku != null && String(src.sku).trim()) ? String(src.sku).trim() : stableItemId('bot:', k, src),
         stock: coerceNumber(src.stock, 0, 'arcano33_inventario.bottles.' + k + '.stock'),
       };
     }
@@ -221,6 +246,9 @@
       if (finished[k]) continue;
       const src = isPlainObject(finishedIn[k]) ? finishedIn[k] : {};
       finished[k] = {
+        ...src,
+        itemId: stableItemId('fin:', k, src),
+        sku: (src.sku != null && String(src.sku).trim()) ? String(src.sku).trim() : stableItemId('fin:', k, src),
         stock: coerceNumber(src.stock, 0, 'arcano33_inventario.finished.' + k + '.stock'),
       };
     }
@@ -233,9 +261,21 @@
     const b = normalizeInventario(next);
     // Merge por secciones/ID (no pisar todo si no hace falta)
     const out = { ...a };
-    out.liquids = { ...a.liquids, ...b.liquids };
-    out.bottles = { ...a.bottles, ...b.bottles };
-    out.finished = { ...a.finished, ...b.finished };
+    const mergeSection = (x, y)=>{
+      const xo = isPlainObject(x) ? x : {};
+      const yo = isPlainObject(y) ? y : {};
+      const r = { ...xo };
+      for (const k of Object.keys(yo)){
+        const aIt = r[k];
+        const bIt = yo[k];
+        if (isPlainObject(aIt) && isPlainObject(bIt)) r[k] = { ...aIt, ...bIt };
+        else r[k] = bIt;
+      }
+      return r;
+    };
+    out.liquids = mergeSection(a.liquids, b.liquids);
+    out.bottles = mergeSection(a.bottles, b.bottles);
+    out.finished = mergeSection(a.finished, b.finished);
     return out;
   }
 

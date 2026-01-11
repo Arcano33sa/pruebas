@@ -21,6 +21,13 @@
     <div class="a33-version">v4.20.7</div>
   </header>
   <main class="app-main">
+    <section class="card inv-toolbar" aria-label="Herramientas de inventario">
+      <div class="inv-toolbar-row">
+        <input id="inv-search" class="inv-search" type="search" placeholder="Buscar en inventario…" autocomplete="off" />
+        <button id="inv-clear-search" class="btn-secondary btn-pill" type="button">Limpiar</button>
+      </div>
+      <div id="inv-status" class="inv-status" aria-live="polite"></div>
+    </section>
     <section class="card form-card">
       <h2>Inventario de materia prima líquida</h2>
       <p class="hint">Control en mililitros de los líquidos base que se utilizan en las recetas y producción.</p>
@@ -40,6 +47,11 @@
             <!-- Filas dinámicas -->
           </tbody>
         </table>
+      </div>
+
+      <div class="table-footer">
+        <div id="inv-liquidos-empty" class="empty-state" hidden>Sin resultados.</div>
+        <button id="inv-liquidos-more" class="btn-secondary btn-pill" type="button" hidden>Cargar más</button>
       </div>
       <p class="legend">
         Alerta cuando un ingrediente esté por debajo del <strong>20&nbsp;%</strong> de su stock máximo configurado.
@@ -64,6 +76,11 @@
           </tbody>
         </table>
       </div>
+
+      <div class="table-footer">
+        <div id="inv-botellas-empty" class="empty-state" hidden>Sin resultados.</div>
+        <button id="inv-botellas-more" class="btn-secondary btn-pill" type="button" hidden>Cargar más</button>
+      </div>
       <p class="legend">
         Alerta cuando una presentación tenga <strong>10 botellas o menos</strong> en inventario.
       </p>
@@ -85,6 +102,11 @@
             <!-- Filas dinámicas de producto terminado -->
           </tbody>
         </table>
+      </div>
+
+      <div class="table-footer">
+        <div id="inv-productos-empty" class="empty-state" hidden>Sin resultados.</div>
+        <button id="inv-productos-more" class="btn-secondary btn-pill" type="button" hidden>Cargar más</button>
       </div>
       <p class="legend">
         Este bloque es solo de consulta. Se alimenta de la producción registrada y de las ventas / devoluciones del POS.
