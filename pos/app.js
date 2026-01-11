@@ -964,6 +964,30 @@ function clearStore(name){
     }catch(err){ rej(err); }
   });
 }
+
+// Limpiar múltiples stores de forma atómica (si falla uno, no se borra ninguno).
+function clearStoresAtomicPOS(storeNames){
+  return new Promise((resolve, reject)=>{
+    try{
+      const stores = Array.isArray(storeNames) ? storeNames.filter(Boolean) : [];
+      if (!stores.length) { resolve(true); return; }
+      const t = db.transaction(stores, 'readwrite');
+      for (const s of stores){
+        try{ t.objectStore(s).clear(); }
+        catch(err){
+          try{ t.abort(); }catch(_){ }
+          reject(err);
+          return;
+        }
+      }
+      t.oncomplete = ()=>resolve(true);
+      t.onerror = ()=>reject(t.error || new Error('Error limpiando stores'));
+      t.onabort = ()=>reject(t.error || new Error('Transacción abortada limpiando stores'));
+    }catch(err){
+      reject(err);
+    }
+  });
+}
 function del(name, key){
   // Borrado robusto (especialmente para 'sales'):
   // - Evita TransactionInactiveError (no dejamos una tx abierta esperando promesas externas)
@@ -1079,6 +1103,10 @@ async function getMeta(key){
 
 const LAST_GROUP_KEY = 'a33_pos_lastGroupName';
 const HIDDEN_GROUPS_KEY = 'a33_pos_hiddenGroups';
+// Catálogo persistente de grupos (Evento Maestro) para NO depender de eventos históricos.
+// - Se usa para mantener: nombres + orden de grupos, incluso después de Cerrar período.
+// - Compatibilidad: si no existe, se deriva de eventos existentes.
+const GROUP_CATALOG_KEY = 'a33_pos_groupCatalog_v1';
 
 
 // --- Ventas: Cliente (Clientes v2: picker propio + pegajoso + gestión)
@@ -2733,6 +2761,111 @@ function setHiddenGroups(list) {
   } catch (e) {
     console.warn('No se pudieron guardar grupos ocultos', e);
   }
+}
+
+// --- Evento Maestro / Grupos: catálogo persistente (nombres + orden)
+function readGroupCatalogPOS(){
+  try{
+    const raw = A33Storage.getItem(GROUP_CATALOG_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    const out = [];
+    const seen = new Set();
+    for (const it of arr){
+      const g = String(it || '').trim();
+      if (!g || seen.has(g)) continue;
+      out.push(g);
+      seen.add(g);
+    }
+    return out;
+  }catch(_){
+    return [];
+  }
+}
+
+function writeGroupCatalogPOS(list){
+  try{
+    const out = [];
+    const seen = new Set();
+    for (const it of (list || [])){
+      const g = String(it || '').trim();
+      if (!g || seen.has(g)) continue;
+      out.push(g);
+      seen.add(g);
+    }
+    A33Storage.setItem(GROUP_CATALOG_KEY, JSON.stringify(out));
+    return out;
+  }catch(e){
+    console.warn('No se pudo guardar el catálogo de grupos', e);
+    return readGroupCatalogPOS();
+  }
+}
+
+function deriveGroupCatalogFromEventsPOS(evs){
+  const events = Array.isArray(evs) ? evs.slice() : [];
+  // Orden conservador: por createdAt asc (o id), para aproximar “orden de creación/uso”.
+  events.sort((a,b)=>{
+    const aa = String(a && a.createdAt || '');
+    const bb = String(b && b.createdAt || '');
+    if (aa && bb && aa !== bb) return aa.localeCompare(bb);
+    return (Number(a && a.id || 0) - Number(b && b.id || 0));
+  });
+
+  const out = [];
+  const seen = new Set();
+  for (const ev of events){
+    const g = String(ev && ev.groupName || '').trim();
+    if (!g || seen.has(g)) continue;
+    out.push(g);
+    seen.add(g);
+  }
+  return out;
+}
+
+function ensureGroupCatalogFromEventsPOS(evs){
+  const current = readGroupCatalogPOS();
+  const derived = deriveGroupCatalogFromEventsPOS(evs);
+  // Si no existe catálogo, se inicializa con lo derivado.
+  if (!current.length && derived.length){
+    return writeGroupCatalogPOS(derived);
+  }
+  // Si ya existe, se mergea conservadoramente (append de nuevos).
+  const merged = current.slice();
+  const seen = new Set(merged);
+  for (const g of derived){
+    if (!seen.has(g)){
+      merged.push(g);
+      seen.add(g);
+    }
+  }
+  return writeGroupCatalogPOS(merged);
+}
+
+function addGroupToCatalogPOS(name){
+  const g = String(name || '').trim();
+  if (!g || g === '__new__') return;
+  const cur = readGroupCatalogPOS();
+  if (cur.includes(g)) return;
+  cur.push(g);
+  writeGroupCatalogPOS(cur);
+}
+
+function snapshotGroupsPOS(){
+  return {
+    catalog: readGroupCatalogPOS(),
+    hidden: getHiddenGroups(),
+    last: getLastGroupName(),
+  };
+}
+
+function restoreGroupsPOS(snap){
+  if (!snap || typeof snap !== 'object') return;
+  try{
+    if (Array.isArray(snap.catalog)) writeGroupCatalogPOS(snap.catalog);
+    if (Array.isArray(snap.hidden)) setHiddenGroups(snap.hidden);
+    if (snap.last != null) setLastGroupName(String(snap.last || ''));
+  }catch(_){ }
 }
 
 // --- Caja Chica: helpers y denominaciones
@@ -6593,15 +6726,10 @@ function refreshGroupSelectFromEvents(evs) {
   const sel = $('#event-group-select');
   if (!sel) return;
 
+  // Asegurar catálogo persistente (para conservar grupos aunque se borren eventos)
+  const catalog = ensureGroupCatalogFromEventsPOS(evs);
   const hidden = new Set(getHiddenGroups());
-  const groups = [];
-
-  for (const ev of evs) {
-    const g = (ev.groupName || '').trim();
-    if (!g) continue;
-    if (hidden.has(g)) continue;
-    if (!groups.includes(g)) groups.push(g);
-  }
+  const groups = (catalog || []).filter(g => g && !hidden.has(g));
 
   sel.innerHTML = '';
 
@@ -11158,13 +11286,54 @@ async function exportSummaryPeriodExcelPOS({ periodKey, filename }){
 }
 
 async function resetOperationalStoresAfterArchivePOS(){
-  // Solo stores operativos (no products, no banks, no meta)
-  const stores = ['sales','events','inventory','pettyCash','dayLocks','dailyClosures'];
-  for (const s of stores){
-    try{ await clearStore(s); }catch(e){ console.warn('No se pudo limpiar store', s, e); }
+  // Solo stores operativos (no products, no banks, no meta, no summaryArchives)
+  // IMPORTANTE: debe conservar “Evento Maestro / Grupos” (nombres + orden).
+  // Checklist manual (obligatorio):
+  // 1) Tener grupos “2026” y “Emprendedores” con eventos adentro.
+  // 2) Hacer ventas + cierre + movimientos.
+  // 3) Resumen > Cerrar período.
+  // 4) Verificar: ventas/cierres/movimientos se borraron; grupos siguen igual (nombres + orden);
+  //    puedes crear eventos nuevos y seguir usando esos grupos.
+
+  if (!db) await openDB();
+
+  // --- Snapshot conservador de grupos/orden (se deriva de eventos si el catálogo aún no existe)
+  let evsForGroups = [];
+  try{ evsForGroups = await getAll('events'); }catch(_){ evsForGroups = []; }
+  try{ ensureGroupCatalogFromEventsPOS(evsForGroups); }catch(_){ }
+  const groupsSnap = snapshotGroupsPOS();
+  const groupsCount = Array.isArray(groupsSnap.catalog) ? groupsSnap.catalog.length : 0;
+
+  // --- Limpiar localStorage operativo (sin “lanzallamas”)
+  // Regla: si hay duda, NO se borra.
+  const rm = (k)=>{
+    try{
+      if (window.A33Storage && typeof A33Storage.removeItem === 'function') A33Storage.removeItem(k, 'local');
+      else localStorage.removeItem(k);
+    }catch(_){ }
+  };
+  rm(A33_PENDING_SALE_UID_KEY);
+  rm(A33_PENDING_SALE_FP_KEY);
+  rm(A33_PENDING_SALE_AT_KEY);
+  rm(A33_PC_PREV_EVENT_KEY);
+
+  // --- Limpiar stores operativos de forma ATÓMICA
+  const stores = ['sales','events','inventory','pettyCash','dayLocks','dailyClosures','posRemindersIndex'];
+  try{
+    await clearStoresAtomicPOS(stores);
+  }catch(err){
+    // Restaurar snapshot de grupos por si algún paso tocó keys por accidente
+    try{ restoreGroupsPOS(groupsSnap); }catch(_){ }
+    throw err;
   }
+
   // Reset meta.currentEventId (sin tocar el consecutivo de períodos)
   try{ await setMeta('currentEventId', null); }catch(e){}
+
+  // Reforzar grupos (por si se tocó algo): restaurar catálogo/ocultos/último
+  try{ restoreGroupsPOS(groupsSnap); }catch(_){ }
+
+  return { groupsCount };
 }
 
 async function openSummaryClosePeriodModalPOS(){
@@ -11218,86 +11387,101 @@ async function confirmClosePeriodPOS(){
     showToast('Estás viendo un período archivado. Volvé a En vivo para cerrar.', 'error', 3500);
     return;
   }
-  const periodKey = getSummarySelectedPeriodKeyPOS();
-  const openEvents = await listOpenEventsPOS();
-  if (openEvents.length){
-    const lines = openEvents.map(ev => `- ${(ev.name || ('Evento #' + ev.id))}`).join('\n');
-    setClosePeriodErrorPOS(`No se puede cerrar el período. Eventos abiertos:\n${lines}`);
-    return;
-  }
 
-  const existing = await getArchiveByPeriodKeyPOS(periodKey);
-  if (existing){
-    setClosePeriodErrorPOS(`Este período ya fue archivado (Seq ${existing.seqStr || existing.seq}).`);
-    return;
-  }
+  await runWithSavingLockPOS({
+    key: 'closePeriod',
+    btnIds: ['summary-close-confirm','summary-close-export','summary-close-cancel'],
+    labelSaving: 'Procesando…',
+    busyToast: 'Procesando…',
+    onError: (err)=>{
+      console.error('closePeriod fatal', err);
+      setClosePeriodErrorPOS('Error al cerrar período (no se borró nada).\n\nDetalle: ' + humanizeError(err));
+    },
+    fn: async ()=>{
+      const periodKey = getSummarySelectedPeriodKeyPOS();
+      const openEvents = await listOpenEventsPOS();
+      if (openEvents.length){
+        const lines = openEvents.map(ev => `- ${(ev.name || ('Evento #' + ev.id))}`).join('\n');
+        setClosePeriodErrorPOS(`No se puede cerrar el período. Eventos abiertos:\n${lines}`);
+        return;
+      }
 
-  // Seq persistente
-  let lastSeq = 0;
-  try{ lastSeq = Number(await getMeta('periodArchiveSeq') || 0) || 0; }catch(e){ lastSeq = 0; }
-  const seq = lastSeq + 1;
-  const seqStr = pad3POS(seq);
-  const fileName = `${seqStr}-${periodFilePartPOS(periodKey)}.xlsx`;
+      const existing = await getArchiveByPeriodKeyPOS(periodKey);
+      if (existing){
+        setClosePeriodErrorPOS(`Este período ya fue archivado (Seq ${existing.seqStr || existing.seq}).`);
+        return;
+      }
 
-  // Export FORZADO (si falla, NO se archiva)
-  let sheets = null;
-  let exportData = null;
-  try{
-    const r = await exportSummaryPeriodExcelPOS({ periodKey, filename: fileName });
-    sheets = r.sheets;
-    exportData = r.data;
-  }catch(err){
-    console.error('Export Excel forzado falló', err);
-    setClosePeriodErrorPOS('No se pudo exportar el Excel. Sin Excel, no hay cierre de período.\n\nDetalle: ' + humanizeError(err));
-    return;
-  }
+      // Seq persistente
+      let lastSeq = 0;
+      try{ lastSeq = Number(await getMeta('periodArchiveSeq') || 0) || 0; }catch(e){ lastSeq = 0; }
+      const seq = lastSeq + 1;
+      const seqStr = pad3POS(seq);
+      const fileName = `${seqStr}-${periodFilePartPOS(periodKey)}.xlsx`;
 
-  const createdAt = Date.now();
-  const archive = {
-    id: `PA-${Date.now()}-${Math.floor(Math.random()*1e6)}`,
-    seq,
-    seqStr,
-    periodKey,
-    periodLabel: periodLabelPOS(periodKey),
-    name: (document.getElementById('summary-close-name')?.value || '').toString().trim() || `Período ${periodLabelPOS(periodKey)}`,
-    fileName,
-    createdAt,
-    exportedAt: createdAt,
-    snapshot: {
-      periodKey,
-      periodLabel: periodLabelPOS(periodKey),
-      sheets,
-      metrics: (exportData && exportData.metrics) ? exportData.metrics : null
+      // Export FORZADO (si falla, NO se archiva)
+      let sheets = null;
+      let exportData = null;
+      try{
+        const r = await exportSummaryPeriodExcelPOS({ periodKey, filename: fileName });
+        sheets = r.sheets;
+        exportData = r.data;
+      }catch(err){
+        console.error('Export Excel forzado falló', err);
+        setClosePeriodErrorPOS('No se pudo exportar el Excel. Sin Excel, no hay cierre de período.\n\nDetalle: ' + humanizeError(err));
+        return;
+      }
+
+      const createdAt = Date.now();
+      const archive = {
+        id: `PA-${Date.now()}-${Math.floor(Math.random()*1e6)}`,
+        seq,
+        seqStr,
+        periodKey,
+        periodLabel: periodLabelPOS(periodKey),
+        name: (document.getElementById('summary-close-name')?.value || '').toString().trim() || `Período ${periodLabelPOS(periodKey)}`,
+        fileName,
+        createdAt,
+        exportedAt: createdAt,
+        snapshot: {
+          periodKey,
+          periodLabel: periodLabelPOS(periodKey),
+          sheets,
+          metrics: (exportData && exportData.metrics) ? exportData.metrics : null
+        }
+      };
+
+      try{
+        await put('summaryArchives', archive);
+        await setMeta('periodArchiveSeq', seq);
+      }catch(err){
+        console.error('No se pudo guardar el archive', err);
+        setClosePeriodErrorPOS('Se exportó el Excel, pero NO se pudo guardar el snapshot del período.\nNo se hará el reset para evitar perder datos.\n\nDetalle: ' + humanizeError(err));
+        return;
+      }
+
+      // Reset a 0 (selectivo y conservador)
+      let resetRes = null;
+      try{
+        resetRes = await resetOperationalStoresAfterArchivePOS();
+      }catch(err){
+        console.error('Reset falló', err);
+        setClosePeriodErrorPOS('Error al cerrar período (no se borró nada).\n\nDetalle: ' + humanizeError(err));
+        return;
+      }
+
+      closeSummaryClosePeriodModalPOS();
+      const gc = (resetRes && Number(resetRes.groupsCount)) || 0;
+      showToast(`Período cerrado ✅ · Grupos conservados: ${gc}`, 'ok', 4500);
+
+      try{ await refreshEventUI(); }catch(e){}
+      try{ await renderDay(); }catch(e){}
+      try{ await renderSummary(); }catch(e){}
+      try{ await renderEventos(); }catch(e){}
+      try{ await renderInventario(); }catch(e){}
+      try{ await renderCajaChica(); }catch(e){}
     }
-  };
-
-  try{
-    await put('summaryArchives', archive);
-    await setMeta('periodArchiveSeq', seq);
-  }catch(err){
-    console.error('No se pudo guardar el archive', err);
-    setClosePeriodErrorPOS('Se exportó el Excel, pero NO se pudo guardar el snapshot del período.\nNo se hará el reset para evitar perder datos.\n\nDetalle: ' + humanizeError(err));
-    return;
-  }
-
-  // Reset a 0
-  try{
-    await resetOperationalStoresAfterArchivePOS();
-  }catch(err){
-    console.error('Reset falló', err);
-    setClosePeriodErrorPOS('Se archivó el período, pero falló el reset.\nRecomendación: recarga la app y revisa manualmente.\n\nDetalle: ' + humanizeError(err));
-    return;
-  }
-
-  closeSummaryClosePeriodModalPOS();
-  showToast('Período cerrado y archivado. Resumen quedó en 0.', 'ok', 4500);
-
-  try{ await refreshEventUI(); }catch(e){}
-  try{ await renderDay(); }catch(e){}
-  try{ await renderSummary(); }catch(e){}
-  try{ await renderEventos(); }catch(e){}
-  try{ await renderInventario(); }catch(e){}
-  try{ await renderCajaChica(); }catch(e){}
+  });
 }
 
 async function manualExportClosePeriodPOS(){
@@ -12591,7 +12775,10 @@ async function init(){
   if (groupNewInput) {
     const saveTyped = ()=>{
       const t = (groupNewInput.value || '').trim();
-      if (t) setLastGroupName(t);
+      if (t){
+        setLastGroupName(t);
+        addGroupToCatalogPOS(t);
+      }
     };
     groupNewInput.addEventListener('blur', saveTyped);
     groupNewInput.addEventListener('keydown', (ev)=>{
@@ -12607,13 +12794,9 @@ async function init(){
     btnManageGroups.addEventListener('click', async ()=>{
       const evs = await getAll('events');
       const hidden = new Set(getHiddenGroups());
-      const allGroups = [];
-      for (const ev of evs) {
-        const g = (ev.groupName || '').trim();
-        if (!g) continue;
-        if (!allGroups.includes(g)) allGroups.push(g);
-      }
-      const visible = allGroups.filter(g => !hidden.has(g));
+      // Usar catálogo persistente (si está vacío, se deriva de eventos actuales)
+      const catalog = ensureGroupCatalogFromEventsPOS(evs);
+      const visible = (catalog || []).filter(g => g && !hidden.has(g));
       if (!visible.length) {
         alert('No hay grupos disponibles para gestionar.');
         return;
@@ -12670,6 +12853,7 @@ async function init(){
 
   if (groupName) {
     setLastGroupName(groupName);
+    addGroupToCatalogPOS(groupName);
   }
 
   await refreshEventUI();
