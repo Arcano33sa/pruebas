@@ -7461,6 +7461,27 @@ async function computeLotFifoForEvent(eventId){
     if (!q) continue;
     soldNeedByKey[key] = (Number(soldNeedByKey[key]) || 0) + q;
   }
+  // Incluir también consumos que NO pasan por "sales" pero sí descuentan inventario del evento.
+  // Ej: fraccionamiento de galones a vasos (adjust negativo del Galón) o ajustes manuales negativos.
+  // Nota: excluimos reversos/ajustes vinculados a lotes para no doble-contar (ya afectan la carga neta del lote).
+  for (const e of inv){
+    if (!e || e.type !== 'adjust') continue;
+    const qtyAdj = Number(e.qty) || 0;
+    if (!(qtyAdj < 0)) continue;
+
+    // Si está ligado a un lote (reverso/corrección por lote), NO cuenta como consumo adicional:
+    if (e.source === 'lote_reverso' || e.loteCargaId != null || e.loteGroupKey != null) continue;
+
+    const pid = Number(e.productId);
+    if (!Number.isFinite(pid) || pid <= 0) continue;
+    const prod = pMap.get(pid) || null;
+    const key = lotFifoKeyFromProductPOS(prod, pid, (prod && prod.name) ? prod.name : '');
+    if (!key) continue;
+
+    soldNeedByKey[key] = (Number(soldNeedByKey[key]) || 0) + Math.abs(qtyAdj);
+  }
+
+
 
   // Normalizar: no asignamos consumo negativo (devoluciones) en esta etapa.
   for (const k of Object.keys(soldNeedByKey)){
@@ -8068,7 +8089,23 @@ async function fractionGallonsToCupsPOS(){
   });
 
   ev.fractionBatches = batches;
-  // Nota: persistencia de cups+venta se hace atómica (events+sales) más abajo
+
+  // Persistir fraccionamiento en el evento (esta acción NO crea "sale", así que no pasa por el guardado atómico).
+  try{
+    const evFresh = await getEventByIdPOS(evId);
+    if (evFresh){
+      evFresh.fractionBatches = batches;
+      await put('events', evFresh);
+    } else {
+      await put('events', ev);
+    }
+  }catch(e){
+    console.error('No se pudo persistir fraccionamiento en evento', e);
+    try{ showPersistFailPOS('fraccionamiento', e); }catch(_){ }
+  }
+
+  // Actualizar snapshot de Lotes para este evento (evita "galones fantasma" tras fraccionar a vasos)
+  try{ queueLotsUsageSyncPOS(evId); }catch(_){ }
 
   await renderInventario();
   await refreshSaleStockLabel();
@@ -8293,6 +8330,9 @@ async function sellCupsPOS(isCourtesy){
   await renderInventario();
   await refreshCupBlock();
   toast(isCourtesy ? 'Cortesía registrada' : 'Venta por vaso agregada');
+
+  // Actualizar snapshot de Lotes para este evento (si hubo fraccionamiento, el Galón debe reflejarse como consumido)
+  try{ queueLotsUsageSyncPOS(evId); }catch(_){ }
 
   // Etapa 2D: limpiar UID pendiente al finalizar el flujo
   clearPendingSaleUidPOS();
