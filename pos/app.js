@@ -1,8 +1,110 @@
 // --- IndexedDB helpers POS
 const DB_NAME = 'a33-pos';
-const DB_VER = 26; // + posRemindersIndex (índice liviano de recordatorios)
+const DB_VER = 27; // Etapa 2D: índice sales.by_uid (anti-duplicados)
 let db;
 
+
+
+// --- Etapa 2D: anti-duplicados en ventas (uid estable + dedupe)
+const A33_PENDING_SALE_UID_KEY = 'a33_pos_pending_sale_uid_v1';
+const A33_PENDING_SALE_FP_KEY = 'a33_pos_pending_sale_fp_v1';
+const A33_PENDING_SALE_AT_KEY = 'a33_pos_pending_sale_at_v1';
+const A33_PENDING_SALE_TTL_MS = 15 * 60 * 1000; // 15 min
+
+function genSaleUidPOS(){
+  return 'S-' + Date.now().toString(36) + '-' + Math.random().toString(16).slice(2,10);
+}
+
+function saleFingerprintPOS(sale){
+  try{
+    if (!sale || typeof sale !== 'object') return '';
+    const fp = {
+      eventId: Number(sale.eventId || 0) || 0,
+      date: safeYMD(sale.date || ''),
+      productId: (sale.productId == null ? null : Number(sale.productId)),
+      extraId: (sale.extraId == null ? null : Number(sale.extraId)),
+      productName: String(sale.productName || ''),
+      qty: Number(sale.qty || 0),
+      unitPrice: Number(sale.unitPrice || 0),
+      discount: Number(sale.discount || 0),
+      discountPerUnit: (sale.discountPerUnit == null ? null : Number(sale.discountPerUnit)),
+      total: Number(sale.total || 0),
+      payment: String(sale.payment || ''),
+      bankId: (sale.bankId == null ? null : Number(sale.bankId)),
+      courtesy: !!sale.courtesy,
+      isReturn: !!sale.isReturn,
+      customerId: (sale.customerId == null ? null : Number(sale.customerId)),
+      customerName: String(sale.customerName || sale.customer || ''),
+      courtesyTo: String(sale.courtesyTo || ''),
+      notes: String(sale.notes || '')
+    };
+    return JSON.stringify(fp);
+  }catch(e){
+    return '';
+  }
+}
+
+function getOrCreatePendingSaleUidPOS(fingerprint){
+  const fp = String(fingerprint || '');
+  try{
+    const now = Date.now();
+    const existingUid = (localStorage.getItem(A33_PENDING_SALE_UID_KEY) || '').toString().trim();
+    const existingFp = (localStorage.getItem(A33_PENDING_SALE_FP_KEY) || '').toString();
+    const at = parseInt(localStorage.getItem(A33_PENDING_SALE_AT_KEY) || '0', 10);
+    const fresh = (at && Number.isFinite(at) && (now - at) < A33_PENDING_SALE_TTL_MS);
+    if (existingUid && fresh && existingFp === fp){
+      return existingUid;
+    }
+  }catch(e){}
+
+  const uid = genSaleUidPOS();
+  try{
+    localStorage.setItem(A33_PENDING_SALE_UID_KEY, uid);
+    localStorage.setItem(A33_PENDING_SALE_FP_KEY, fp);
+    localStorage.setItem(A33_PENDING_SALE_AT_KEY, String(Date.now()));
+  }catch(e){}
+  return uid;
+}
+
+function clearPendingSaleUidPOS(){
+  try{ localStorage.removeItem(A33_PENDING_SALE_UID_KEY); }catch(e){}
+  try{ localStorage.removeItem(A33_PENDING_SALE_FP_KEY); }catch(e){}
+  try{ localStorage.removeItem(A33_PENDING_SALE_AT_KEY); }catch(e){}
+}
+
+async function getSaleByUidPOS(uid){
+  const key = String(uid || '').trim();
+  if (!key) return null;
+  try{
+    if (!db) await openDB();
+    return await new Promise((resolve, reject)=>{
+      const tr = db.transaction(['sales'], 'readonly');
+      const store = tr.objectStore('sales');
+      let idx = null;
+      try{ idx = store.index('by_uid'); }catch(_){ idx = null; }
+
+      if (idx){
+        const r = idx.get(key);
+        r.onsuccess = ()=> resolve(r.result || null);
+        r.onerror = ()=> reject(r.error);
+      } else {
+        const r = store.getAll();
+        r.onsuccess = ()=>{
+          const arr = r.result || [];
+          resolve((arr || []).find(s => s && s.uid === key) || null);
+        };
+        r.onerror = ()=> reject(r.error);
+      }
+    });
+  }catch(e){
+    try{
+      const all = await getAll('sales');
+      return (all || []).find(s => s && s.uid === key) || null;
+    }catch(_){
+      return null;
+    }
+  }
+}
 // --- Caja Chica (Etapa 2): recordar evento previo cuando se cambia desde Caja Chica
 const A33_PC_PREV_EVENT_KEY = 'a33_pos_pc_prev_event_id';
 function getPcPrevEventId(){
@@ -85,9 +187,11 @@ function openDB() {
         const os3 = d.createObjectStore('sales', { keyPath: 'id', autoIncrement: true });
         os3.createIndex('by_date', 'date', { unique: false });
         os3.createIndex('by_event', 'eventId', { unique: false });
+        try { os3.createIndex('by_uid', 'uid', { unique: true }); } catch {}
       } else {
         try { e.target.transaction.objectStore('sales').createIndex('by_date','date'); } catch {}
         try { e.target.transaction.objectStore('sales').createIndex('by_event','eventId'); } catch {}
+        try { e.target.transaction.objectStore('sales').createIndex('by_uid','uid',{ unique:true }); } catch {}
       }
       if (!d.objectStoreNames.contains('inventory')) {
         const inv = d.createObjectStore('inventory', { keyPath: 'id', autoIncrement: true });
@@ -3732,11 +3836,76 @@ function persistFailHelpPOS(){
   return 'Libera espacio, cierra otras pestañas del POS/Suite A33 y reintenta. No se registró la operación.';
 }
 
+function a33ValidationErrorPOS(msg){
+  const e = new Error(String(msg || 'Validación fallida.'));
+  e.name = 'A33ValidationError';
+  return e;
+}
+
 function showPersistFailPOS(action, err){
+  if (err && String(err.name || '') === 'A33ValidationError'){
+    posBlockingAlert(String(err.message || err || 'Validación fallida.'));
+    return;
+  }
   const a = (action || 'operación').toString();
   const detail = humanizeError(err);
   const msg = `No se pudo guardar (${a}).\n\n${detail}\n\n${persistFailHelpPOS()}`;
   posBlockingAlert(msg);
+}
+
+// --- UI: candados de guardado (anti doble-click) + estado visible
+// Objetivo: impedir doble click en acciones críticas y mostrar "Guardando…" mientras corre el guardado.
+const __A33_SAVE_LOCKS_POS = new Set();
+
+function getBtnByIdPOS(id){
+  try{ return document.getElementById(id); }catch(_){ return null; }
+}
+
+function setBtnSavingStatePOS(btn, saving, label){
+  if (!btn) return;
+  try{
+    if (saving){
+      if (!btn.dataset.a33OrigText) btn.dataset.a33OrigText = btn.textContent || '';
+      btn.disabled = true;
+      btn.setAttribute('aria-busy','true');
+      btn.textContent = label || 'Guardando…';
+      btn.classList.add('is-saving');
+    } else {
+      btn.disabled = false;
+      btn.removeAttribute('aria-busy');
+      const orig = btn.dataset.a33OrigText;
+      if (orig != null) btn.textContent = orig;
+      delete btn.dataset.a33OrigText;
+      btn.classList.remove('is-saving');
+    }
+  }catch(_){ }
+}
+
+async function runWithSavingLockPOS({ key, btnIds, labelSaving, busyToast, onError, fn }){
+  const lockKey = String(key || 'save');
+  if (__A33_SAVE_LOCKS_POS.has(lockKey)){
+    try{ if (busyToast) showToast(busyToast, 'error', 2500); }catch(_){ }
+    return;
+  }
+
+  __A33_SAVE_LOCKS_POS.add(lockKey);
+  const ids = Array.isArray(btnIds) ? btnIds : [];
+  const btns = ids.map(getBtnByIdPOS).filter(Boolean);
+
+  // Bloquear y mostrar estado
+  for (const b of btns) setBtnSavingStatePOS(b, true, labelSaving || 'Guardando…');
+
+  try{
+    await (fn ? fn() : Promise.resolve());
+  }catch(err){
+    try{
+      if (typeof onError === 'function') onError(err);
+      else showPersistFailPOS(lockKey, err);
+    }catch(_){ }
+  }finally{
+    for (const b of btns) setBtnSavingStatePOS(b, false);
+    __A33_SAVE_LOCKS_POS.delete(lockKey);
+  }
 }
 
 function isValidYmdStrictPOS(v){
@@ -3782,6 +3951,38 @@ function validateSaleMinimalPOS(sale){
   if (isReturn && qty > 0) return { ok:false, msg:'Venta inválida: devolución requiere cantidad negativa.' };
   const name = String(sale.productName || '').trim();
   if (!name) return { ok:false, msg:'Venta inválida: nombre de producto vacío.' };
+
+  // Validaciones duras (anti-NaN/negativos donde no aplica) antes de persistir
+  const unitPrice = Number(sale.unitPrice);
+  if (!Number.isFinite(unitPrice) || unitPrice < 0) return { ok:false, msg:'Venta inválida: precio inválido.' };
+  const discPU = Number(sale.discountPerUnit);
+  if (!Number.isFinite(discPU) || discPU < 0) return { ok:false, msg:'Venta inválida: descuento inválido.' };
+  const disc = Number(sale.discount);
+  if (!Number.isFinite(disc) || disc < 0) return { ok:false, msg:'Venta inválida: descuento total inválido.' };
+
+  const pid = Number(sale.productId);
+  const isExtra = !!sale.isExtra;
+  if (isExtra){
+    const ex = Number(sale.extraId);
+    if (!(Number.isFinite(ex) && ex > 0)) return { ok:false, msg:'Venta inválida: extra inválido.' };
+  } else {
+    if (!(Number.isFinite(pid) && pid > 0)) return { ok:false, msg:'Venta inválida: producto inválido.' };
+  }
+
+  const pay = String(sale.payment || '');
+  if (pay === 'transferencia'){
+    const bid = Number(sale.bankId);
+    if (!(Number.isFinite(bid) && bid > 0)) return { ok:false, msg:'Venta inválida: falta banco de transferencia.' };
+  }
+
+  const costPU = Number(sale.costPerUnit);
+  if (!Number.isFinite(costPU) || costPU < 0) return { ok:false, msg:'Venta inválida: costo unitario inválido.' };
+  const lineCost = Number(sale.lineCost);
+  if (!Number.isFinite(lineCost)) return { ok:false, msg:'Venta inválida: costo de línea inválido.' };
+  if (!isReturn && lineCost < -0.00001) return { ok:false, msg:'Venta inválida: costo negativo.' };
+  const lineProfit = Number(sale.lineProfit);
+  if (!Number.isFinite(lineProfit)) return { ok:false, msg:'Venta inválida: ganancia inválida.' };
+
   return { ok:true, msg:'' };
 }
 
@@ -3900,19 +4101,28 @@ async function guardLotAvailabilityBeforeSalePOS(eventId, productName, qty){
   }
 }
 function reserveSaleSeqInMemoryPOS(event, saleRecord, salesForEvent){
+  // Etapa 2C: NO avanzar contadores del evento antes de confirmar persistencia.
+  // Calcula el próximo seqId y devuelve un eventUpdated para persistir en la misma transacción.
   try{
-    if (!event || !saleRecord) return;
+    if (!event || !saleRecord) return { nextSeq:null, eventUpdated:event || null };
+
     let curSeq = Number(event.saleSeq || 0);
     if (!Number.isFinite(curSeq) || curSeq <= 0){
       const base = computeEventSaleSeqBasePOS(Array.isArray(salesForEvent) ? salesForEvent : []);
       curSeq = Number.isFinite(base) ? base : 0;
-      event.saleSeq = curSeq;
     }
-    const next = Number(event.saleSeq || curSeq || 0) + 1;
+
+    const next = curSeq + 1;
     saleRecord.seqId = next;
-    event.saleSeq = next;
-  }catch(_){ }
+
+    // Importante: NO mutar `event` aquí. Solo devolvemos el patch para persistir.
+    const eventUpdated = Object.assign({}, event, { saleSeq: next });
+    return { nextSeq: next, eventUpdated };
+  }catch(_){
+    return { nextSeq:null, eventUpdated:event || null };
+  }
 }
+
 
 // Guardar venta + actualizar contador del evento en una sola transacción (sales + events)
 async function saveSaleAndEventAtomicPOS({ saleRecord, eventUpdated }){
@@ -4335,6 +4545,66 @@ async function buildPettyCashAccountingBlockForClosePOS(event, eventId, dayKey){
 
 // Candado en memoria (mínimo) para evitar doble click / doble ejecución del mismo cierre.
 // La unicidad final la impone IndexedDB (store + índice), pero esto reduce carreras y compute duplicado.
+function validateDailyClosureBeforePersistPOS({ record, lockPatch }){
+  if (!record || typeof record !== 'object') return { ok:false, msg:'Cierre inválido.' };
+
+  const evId = Number(record.eventId);
+  if (!(Number.isFinite(evId) && evId > 0)) return { ok:false, msg:'Cierre inválido: falta eventId.' };
+
+  const dk = String(record.dateKey || '');
+  if (!isValidYmdCalendarPOS(dk)) return { ok:false, msg:'Cierre inválido: dateKey inválido (YYYY-MM-DD).' };
+
+  const v = Number(record.version);
+  if (!(Number.isFinite(v) && v > 0)) return { ok:false, msg:'Cierre inválido: versión inválida.' };
+
+  const t = (record.totals && typeof record.totals === 'object') ? record.totals : null;
+  if (!t) return { ok:false, msg:'Cierre inválido: totales faltantes.' };
+
+  const grand = Number(t.totalGeneral);
+  if (!Number.isFinite(grand)) return { ok:false, msg:'Cierre inválido: totalGeneral inválido.' };
+
+  const byPay = (t.ventasPorMetodo && typeof t.ventasPorMetodo === 'object') ? t.ventasPorMetodo : null;
+  if (!byPay) return { ok:false, msg:'Cierre inválido: ventasPorMetodo inválido.' };
+  for (const [k,val] of Object.entries(byPay)){
+    const n = Number(val);
+    if (!Number.isFinite(n)) return { ok:false, msg:`Cierre inválido: ventasPorMetodo(${k}) inválido.` };
+  }
+
+  const cq = Number(t.cortesiaCantidad);
+  if (!Number.isFinite(cq) || cq < -0.00001) return { ok:false, msg:'Cierre inválido: cortesías inválidas.' };
+
+  // Costos: permitir negativos si hubo devoluciones (reversos), pero jamás NaN
+  const c1 = Number(t.costoVentasTotal);
+  const c2 = Number(t.costoCortesiasTotal);
+  const c3 = Number(t.costoTotalSalidaInventario);
+  if (!Number.isFinite(c1)) return { ok:false, msg:'Cierre inválido: costoVentasTotal inválido.' };
+  if (!Number.isFinite(c2)) return { ok:false, msg:'Cierre inválido: costoCortesiasTotal inválido.' };
+  if (!Number.isFinite(c3)) return { ok:false, msg:'Cierre inválido: costoTotalSalidaInventario inválido.' };
+
+  // Caja Chica (opcional)
+  if (t.pettyCash != null){
+    const pc = (t.pettyCash && typeof t.pettyCash === 'object') ? t.pettyCash : null;
+    if (!pc) return { ok:false, msg:'Cierre inválido: Caja Chica inválida.' };
+    const keys = ['ingresosNio','egresosNio','ingresosNioOriginal','egresosNioOriginal','ingresosUsd','egresosUsd'];
+    for (const kk of keys){
+      if (pc[kk] == null) continue;
+      const n = Number(pc[kk]);
+      if (!Number.isFinite(n) || n < -0.00001) return { ok:false, msg:`Cierre inválido: Caja Chica ${kk} inválido.` };
+    }
+    if (pc.fxRateUsed != null){
+      const fx = Number(pc.fxRateUsed);
+      if (!Number.isFinite(fx) || fx <= 0) return { ok:false, msg:'Cierre inválido: tasa de cambio inválida.' };
+    }
+  }
+
+  if (lockPatch && typeof lockPatch === 'object'){
+    const lv = Number(lockPatch.lastClosureVersion);
+    if (!(Number.isFinite(lv) && lv > 0)) return { ok:false, msg:'Cierre inválido: candado inválido.' };
+  }
+
+  return { ok:true, msg:'' };
+}
+
 const __A33_DAILY_CLOSE_MUTEX = new Set();
 
 async function closeDailyPOS({ event, dateKey, source }){
@@ -4362,9 +4632,19 @@ async function closeDailyPOS({ event, dateKey, source }){
   }
   __A33_DAILY_CLOSE_MUTEX.add(mutexKey);
 
+  let version = null;
+  let key = null;
+
   try{
     const maxV = await getMaxDailyClosureVersionPOS(eventId, dk);
-    const version = maxV + 1;
+    version = maxV + 1;
+
+    key = makeDailyClosureKeyPOS(eventId, dk, version);
+    const dup = await getDailyClosureByKeyPOS(key);
+    if (dup){
+      try{ if (typeof showToast === 'function') showToast('Cierre ya guardado (duplicado bloqueado).', 'error', 4500); else alert('Cierre ya guardado (duplicado bloqueado).'); }catch(_){ try{ alert('Cierre ya guardado (duplicado bloqueado).'); }catch(__){ } }
+      return { already:true, lock: await getDayLockRecordPOS(eventId, dk), closure: dup, duplicate:true };
+    }
 
   const snapshot = await computeDailySnapshotFromSalesPOS(eventId, dk);
 
@@ -4372,7 +4652,6 @@ async function closeDailyPOS({ event, dateKey, source }){
   const pcBlock = await buildPettyCashAccountingBlockForClosePOS(event, eventId, dk);
 
   const closureId = genClosureIdPOS();
-  const key = makeDailyClosureKeyPOS(eventId, dk, version);
   const createdAt = Date.now();
 
   const record = {
@@ -4416,6 +4695,9 @@ async function closeDailyPOS({ event, dateKey, source }){
     lastClosureId: closureId,
     lastClosureKey: key
   };
+
+    const vHard = validateDailyClosureBeforePersistPOS({ record, lockPatch });
+    if (!vHard.ok) throw a33ValidationErrorPOS(vHard.msg);
 
     const saved = await saveDailyClosureAndLockAtomicPOS({
       closureRecord: record,
@@ -7678,7 +7960,8 @@ function computeCupStatsFromEvent(ev, allSales){
 }
 
 async function refreshCupBlock(){
-  const evId = await getMeta('currentEventId');
+  const evIdRaw = await getMeta('currentEventId');
+  const evId = Number(evIdRaw);
   const block = document.getElementById('cup-block');
   if (!block) return;
 
@@ -7960,12 +8243,31 @@ async function sellCupsPOS(isCourtesy){
   const vMin = validateSaleMinimalPOS(saleRecord);
   if (!vMin.ok){ alert(vMin.msg); return; }
 
+  // Etapa 2D: UID estable por intento + dedupe conservador (antes de insertar)
+  try{
+    const fp = saleFingerprintPOS(saleRecord);
+    const uid = getOrCreatePendingSaleUidPOS(fp);
+    saleRecord.uid = uid;
+    const existing = await getSaleByUidPOS(uid);
+    if (existing){
+      clearPendingSaleUidPOS();
+      try{ await renderDay(); await renderSummary(); }catch(_){ }
+      try{ if (typeof showToast === 'function') showToast('Venta ya guardada (duplicado bloqueado).', 'error', 4500); else alert('Venta ya guardada (duplicado bloqueado).'); }catch(_){ try{ alert('Venta ya guardada (duplicado bloqueado).'); }catch(__){ } }
+      try{ await refreshCupBlock(); }catch(_e){}
+      return;
+    }
+  }catch(_){ }
+
+
   // Reservar N° por evento en memoria y guardar atómico (events + sales)
   try{
     const salesForEvent = (allSales || []).filter(s => s && s.eventId === evId);
-    reserveSaleSeqInMemoryPOS(ev, saleRecord, salesForEvent);
-    const saleId = await saveSaleAndEventAtomicPOS({ saleRecord, eventUpdated: ev });
+    const seqInfo = reserveSaleSeqInMemoryPOS(ev, saleRecord, salesForEvent);
+    const evUpdated = (seqInfo && seqInfo.eventUpdated) ? seqInfo.eventUpdated : ev;
+    const saleId = await saveSaleAndEventAtomicPOS({ saleRecord, eventUpdated: evUpdated });
     saleRecord.id = saleId;
+    // Commit en memoria SOLO después de persistir
+    try{ if (seqInfo && seqInfo.nextSeq != null) ev.saleSeq = seqInfo.nextSeq; }catch(_){ }
   }catch(err){
     console.error('sellCupsPOS persist error', err);
     showPersistFailPOS('venta por vaso', err);
@@ -7991,6 +8293,9 @@ async function sellCupsPOS(isCourtesy){
   await renderInventario();
   await refreshCupBlock();
   toast(isCourtesy ? 'Cortesía registrada' : 'Venta por vaso agregada');
+
+  // Etapa 2D: limpiar UID pendiente al finalizar el flujo
+  clearPendingSaleUidPOS();
 }
 
 async function revertCupConsumptionFromSalePOS(sale){
@@ -10418,7 +10723,16 @@ function bindSummaryDailyClosePOS(){
 
   const btnClose = document.getElementById('btn-summary-close-day');
   if (btnClose){
-    btnClose.addEventListener('click', ()=>{ onSummaryCloseDayPOS(); });
+    btnClose.addEventListener('click', ()=>{
+      runWithSavingLockPOS({
+        key: 'cierre del día',
+        btnIds: ['btn-summary-close-day'],
+        labelSaving: 'Guardando…',
+        busyToast: 'Guardando cierre…',
+        onError: (err)=> showPersistFailPOS('cierre del día', err),
+        fn: onSummaryCloseDayPOS
+      });
+    });
   }
 
   const btnReopen = document.getElementById('btn-summary-reopen-day');
@@ -10786,7 +11100,7 @@ function buildSummarySheetsFromDataPOS(data){
 
 function writeWorkbookFromSheetsPOS(filename, sheets){
   if (typeof XLSX === 'undefined'){
-    throw new Error('No se pudo generar el archivo de Excel (librería XLSX no cargada).');
+    throw new Error('No se pudo generar el archivo de Excel (librería XLSX no cargada). Si estás sin conexión por primera vez, abrí el POS con internet una vez para cachear todo y reintentá.');
   }
   const wb = XLSX.utils.book_new();
   for (const sh of (sheets || [])){
@@ -11249,7 +11563,7 @@ function downloadCSV(name, rows){
 
 function downloadExcel(filename, sheetName, rows){
   if (typeof XLSX === 'undefined'){
-    alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Revisa tu conexión a internet.');
+    alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Si estás sin conexión por primera vez, abrí el POS con internet una vez para cachear todo y reintentá. Revisa tu conexión a internet.');
     return;
   }
   const ws = XLSX.utils.aoa_to_sheet(rows);
@@ -11655,7 +11969,7 @@ async function generateCorteCSV(eventId){
 
 async function exportEventExcel(eventId){
   if (typeof XLSX === 'undefined'){
-    alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Revisa tu conexión a internet.');
+    alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Si estás sin conexión por primera vez, abrí el POS con internet una vez para cachear todo y reintentá. Revisa tu conexión a internet.');
     return;
   }
 
@@ -11969,7 +12283,8 @@ async function closeEvent(eventId){
         for (const dayKey of sorted){
           const cashSalesNio = cashByDay.get(dayKey) || 0;
           const day = ensurePcDay(pc, dayKey);
-          const fx = ev ? Number(ev.fxRate || 0) : null;
+          const fxRaw = ev ? Number(ev.fxRate || 0) : null;
+  const fx = (fxRaw == null) ? null : (Number.isFinite(Number(fxRaw)) ? Number(fxRaw) : null);
           const check = await getPettyCloseCheck(eventId, pc, dayKey, cashSalesNio, fx);
 
           if (!check.isClosed){
@@ -12017,8 +12332,11 @@ async function closeEvent(eventId){
     if (!ok) return;
   }
 
-  ev.closedAt = new Date().toISOString();
-  await put('events', ev);
+  // Etapa 2C: NO mutar estado del evento hasta confirmar persistencia.
+  const closedAtIso = new Date().toISOString();
+  const evUpdated = Object.assign({}, ev, { closedAt: closedAtIso });
+  await put('events', evUpdated);
+  try{ ev.closedAt = closedAtIso; }catch(_){ }
   const curId = await getMeta('currentEventId');
   if (curId === eventId){
     // Etapa 2: al dejar evento activo, limpiar cliente
@@ -12320,7 +12638,22 @@ async function init(){
   await renderDay();
   toast('Evento creado');
 });
-  $('#btn-close-event').addEventListener('click', async()=>{ const id = parseInt($('#sale-event').value||'0',10); const current = await getMeta('currentEventId'); const useId = id || current; if (!useId) return alert('Selecciona un evento'); await closeEvent(parseInt(useId,10)); });
+  $('#btn-close-event').addEventListener('click', async()=>{
+    await runWithSavingLockPOS({
+      key: 'cierre de evento',
+      btnIds: ['btn-close-event'],
+      labelSaving: 'Guardando…',
+      busyToast: 'Cierre en curso…',
+      onError: (err)=> showPersistFailPOS('cierre de evento', err),
+      fn: async()=>{
+        const id = parseInt($('#sale-event').value||'0',10);
+        const current = await getMeta('currentEventId');
+        const useId = id || current;
+        if (!useId) { alert('Selecciona un evento'); return; }
+        await closeEvent(parseInt(useId,10));
+      }
+    });
+  });
   $('#btn-reopen-event').addEventListener('click', async()=>{ const val = $('#sale-event').value; const id = parseInt(val||'0',10); if (!id) return alert('Selecciona un evento cerrado'); await reopenEvent(id); });
 
   $('#sale-product').addEventListener('change', async()=>{
@@ -12383,10 +12716,28 @@ async function init(){
     });
   }
 
-  $('#btn-add').addEventListener('click', addSale);
+  $('#btn-add').addEventListener('click', ()=>{
+    runWithSavingLockPOS({
+      key: 'venta',
+      btnIds: ['btn-add','btn-add-sticky'],
+      labelSaving: 'Guardando…',
+      busyToast: 'Guardando venta…',
+      onError: (err)=> showPersistFailPOS('venta', err),
+      fn: addSale
+    });
+  });
   const stickyBtn = $('#btn-add-sticky');
   if (stickyBtn) {
-    stickyBtn.addEventListener('click', addSale);
+    stickyBtn.addEventListener('click', ()=>{
+      runWithSavingLockPOS({
+        key: 'venta',
+        btnIds: ['btn-add','btn-add-sticky'],
+        labelSaving: 'Guardando…',
+        busyToast: 'Guardando venta…',
+        onError: (err)=> showPersistFailPOS('venta', err),
+        fn: addSale
+      });
+    });
   }
 
   // Venta por vaso (fraccionamiento de galones)
@@ -12633,7 +12984,19 @@ async function exportEventosExcel(){
     if (btn.classList.contains('act-ver')) await openEventView(id);
     else if (btn.classList.contains('act-activar')) await activateEvent(id);
     else if (btn.classList.contains('act-reabrir')) await reopenEvent(id);
-    else if (btn.classList.contains('act-cerrar')) await closeEvent(id);
+    else if (btn.classList.contains('act-cerrar')){
+      // Guardas visibles + anti doble-click
+      setBtnSavingStatePOS(btn, true, 'Guardando…');
+      await runWithSavingLockPOS({
+        key: 'cierre de evento',
+        btnIds: ['btn-close-event'],
+        labelSaving: 'Guardando…',
+        busyToast: 'Cierre en curso…',
+        onError: (err)=> showPersistFailPOS('cierre de evento', err),
+        fn: async()=>{ await closeEvent(id); }
+      });
+      setBtnSavingStatePOS(btn, false);
+    }
     else if (btn.classList.contains('act-corte')) await generateCorteCSV(id);
     else if (btn.classList.contains('act-ventas')) await exportEventSalesCSV(id);
     else if (btn.classList.contains('act-inv')) await generateInventoryCSV(id);
@@ -12855,13 +13218,30 @@ async function addSale(){
   const vMin = validateSaleMinimalPOS(saleRecord);
   if (!vMin.ok){ alert(vMin.msg); return; }
 
+  // Etapa 2D: UID estable por intento + dedupe conservador (antes de insertar)
+  try{
+    const fp = saleFingerprintPOS(saleRecord);
+    const uid = getOrCreatePendingSaleUidPOS(fp);
+    saleRecord.uid = uid;
+    const existing = await getSaleByUidPOS(uid);
+    if (existing){
+      clearPendingSaleUidPOS();
+      try{ await renderDay(); await renderSummary(); }catch(_){ }
+      try{ if (typeof showToast === 'function') showToast('Venta ya guardada (duplicado bloqueado).', 'error', 4500); else alert('Venta ya guardada (duplicado bloqueado).'); }catch(_){ try{ alert('Venta ya guardada (duplicado bloqueado).'); }catch(__){ } }
+      return;
+    }
+  }catch(_){ }
+
   // Reservar N° por evento en memoria y guardar atómico (sales + events)
   try{
     const allSales = await getAll('sales');
     const salesForEvent = (allSales || []).filter(s => s && s.eventId === curId);
-    reserveSaleSeqInMemoryPOS(event, saleRecord, salesForEvent);
-    const saleId = await saveSaleAndEventAtomicPOS({ saleRecord, eventUpdated: event });
+    const seqInfo = reserveSaleSeqInMemoryPOS(event, saleRecord, salesForEvent);
+    const evUpdated = (seqInfo && seqInfo.eventUpdated) ? seqInfo.eventUpdated : event;
+    const saleId = await saveSaleAndEventAtomicPOS({ saleRecord, eventUpdated: evUpdated });
     saleRecord.id = saleId;
+    // Commit en memoria SOLO después de persistir
+    try{ if (seqInfo && seqInfo.nextSeq != null) event.saleSeq = seqInfo.nextSeq; }catch(_){ }
   }catch(err){
     console.error('addSale persist error', err);
     showPersistFailPOS('venta', err);
@@ -12881,6 +13261,8 @@ async function addSale(){
     await createJournalEntryForSalePOS(saleRecord);
   } catch (err) {
     console.error('No se pudo generar el asiento automático de esta venta', err);
+    // Error visible (no silencioso): la venta ya quedó guardada, pero Finanzas no.
+    try{ showToast('Venta guardada, pero falló el registro automático en Finanzas. Revisá y reintenta si aplica.', 'error', 6500); }catch(_){ }
   }
 
   // limpiar campos para el siguiente registro (incluye NOTAS)
@@ -12901,6 +13283,10 @@ async function addSale(){
 
   await renderDay(); await renderSummary(); await refreshSaleStockLabel(); await renderInventario();
   toast('Venta agregada');
+
+
+  // Etapa 2D: limpieza de UID pendiente (venta completada)
+  clearPendingSaleUidPOS();
 
   // FIFO (Etapa 2): persistir snapshot por evento/lote (solo si aplica a presentaciones)
   try{
@@ -13066,12 +13452,32 @@ async function addExtraSale(extraId){
   const vMin = validateSaleMinimalPOS(saleRecord);
   if (!vMin.ok){ alert(vMin.msg); return; }
 
+  // Etapa 2D: UID estable por intento + dedupe conservador (antes de insertar)
+  try{
+    const fp = saleFingerprintPOS(saleRecord);
+    const uid = getOrCreatePendingSaleUidPOS(fp);
+    saleRecord.uid = uid;
+    const existing = await getSaleByUidPOS(uid);
+    if (existing){
+      // Revertir stock en memoria (aún no persistido) para evitar UI confusa
+      try{ if (typeof extra !== 'undefined' && extra) extra.stock = (Number(extra.stock)||0) + finalQty; }catch(_){ }
+      clearPendingSaleUidPOS();
+      try{ await renderDay(); await renderSummary(); }catch(_){ }
+      try{ await renderExtrasUI(); await refreshProductSelect({ keepSelection:true }); await refreshSaleStockLabel(); }catch(_){ }
+      try{ if (typeof showToast === 'function') showToast('Venta ya guardada (duplicado bloqueado).', 'error', 4500); else alert('Venta ya guardada (duplicado bloqueado).'); }catch(_){ try{ alert('Venta ya guardada (duplicado bloqueado).'); }catch(__){ } }
+      return;
+    }
+  }catch(_){ }
+
   // Reservar N° por evento en memoria y guardar atómico (events + sales)
   try{
     const allSales = await getAll('sales');
     const salesForEvent = (allSales || []).filter(s => s && s.eventId === curId);
-    reserveSaleSeqInMemoryPOS(ev, saleRecord, salesForEvent);
-    await saveSaleAndEventAtomicPOS({ saleRecord, eventUpdated: ev });
+    const seqInfo = reserveSaleSeqInMemoryPOS(ev, saleRecord, salesForEvent);
+    const evUpdated = (seqInfo && seqInfo.eventUpdated) ? seqInfo.eventUpdated : ev;
+    await saveSaleAndEventAtomicPOS({ saleRecord, eventUpdated: evUpdated });
+    // Commit en memoria SOLO después de persistir
+    try{ if (seqInfo && seqInfo.nextSeq != null) ev.saleSeq = seqInfo.nextSeq; }catch(_){ }
   }catch(err){
     console.error('addExtraSale persist error', err);
     showPersistFailPOS('venta extra', err);
@@ -13085,6 +13491,8 @@ async function addExtraSale(extraId){
     await createJournalEntryForSalePOS(saleRecord);
   }catch(err){
     console.error('No se pudo generar el asiento automático de esta venta de Extra', err);
+    // Error visible (no silencioso): la venta ya quedó guardada, pero Finanzas no.
+    try{ showToast('Venta guardada, pero falló el registro automático en Finanzas (Extra).', 'error', 6500); }catch(_){ }
   }
 
   // Cliente: catálogo + modo pegajoso
@@ -13105,6 +13513,10 @@ async function addExtraSale(extraId){
   await refreshProductSelect({ keepSelection:true });
 
   toast(courtesy ? 'Cortesía de Extra registrada' : 'Venta de Extra registrada');
+
+
+  // Etapa 2D: limpieza de UID pendiente (venta completada)
+  clearPendingSaleUidPOS();
 }
 
 function getSelectedPcDay(){
@@ -13361,14 +13773,20 @@ async function onClosePettyDay(){
     alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para editar.');
     return;
   }
-  const evId = await getMeta('currentEventId');
-  if (!evId){
-    alert('Debes activar un evento antes de cerrar el día.');
+  const evIdRaw = await getMeta('currentEventId');
+  const evId = Number(evIdRaw);
+  if (!(Number.isFinite(evId) && evId > 0)){
+    alert('Debes activar un evento válido antes de cerrar el día.');
     return;
   }
 
   if (!(await ensurePettyEnabledForEvent(evId))) return;
   const dayKey = getSelectedPcDay();
+  const dk = normalizeDateKeyForClosePOS(dayKey);
+  if (!dk || dk !== dayKey){
+    alert('Fecha inválida para cerrar: usa formato YYYY-MM-DD.');
+    return;
+  }
   let pc = await getPettyCash(evId);
 
   // IMPORTANTE:
@@ -13382,9 +13800,14 @@ async function onClosePettyDay(){
   }
 
   const cashSales = await getCashSalesNioForDay(evId, dayKey);
+  if (!Number.isFinite(Number(cashSales)) || Number(cashSales) < -0.00001){
+    alert('Caja Chica: ventas en efectivo inválidas.');
+    return;
+  }
   const evs = await getAll('events');
   const ev = (evs || []).find(e => e && e.id === evId);
-  const fx = ev ? Number(ev.fxRate || 0) : null;
+  const fxRaw = ev ? Number(ev.fxRate || 0) : null;
+  const fx = (fxRaw == null) ? null : (Number.isFinite(Number(fxRaw)) ? Number(fxRaw) : null);
   const check = await getPettyCloseCheck(evId, pc, dayKey, cashSales, fx);
 
   if (!check.canClose){
@@ -15316,7 +15739,7 @@ async function exportCierreTotalGrupoExcel(){
 
 
   if (typeof XLSX === 'undefined'){
-    alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Revisa tu conexión a internet.');
+    alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Si estás sin conexión por primera vez, abrí el POS con internet una vez para cachear todo y reintentá. Revisa tu conexión a internet.');
     return;
   }
 
@@ -15577,7 +16000,7 @@ async function exportCierreCajaChicaGrupoExcel(){
   if (!data) return;
 
   if (typeof XLSX === 'undefined'){
-    alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Revisa tu conexión a internet.');
+    alert('No se pudo generar el archivo de Excel (librería XLSX no cargada). Si estás sin conexión por primera vez, abrí el POS con internet una vez para cachear todo y reintentá. Revisa tu conexión a internet.');
     return;
   }
 

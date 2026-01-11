@@ -14,10 +14,10 @@ const PRECACHE_URLS = [
   './manifest.webmanifest?v=4.20.7',
   './offline.html',
   './logo.png',
-  './brand_symbol.jpg',
-  './brand_wordmark.jpg',
+  './vendor/xlsx.full.min.js?v=0.18.5',
   '/assets/js/a33-input-ux.js?v=4.20.7',
   '/assets/js/a33-storage.js?v=4.20.7',
+  '/assets/js/a33-presentations.js?v=4.20.7',
   '/assets/js/a33-auth.js?v=4.20.7',
   '/assets/css/a33-header.css?v=4.20.7'
 ];

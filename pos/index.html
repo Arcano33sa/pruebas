@@ -1381,14 +1381,33 @@
   <button data-tab="checklist">Checklist</button>
 </nav>
 
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js?v=4.20.7"></script>
+<script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
 <script src="/assets/js/a33-storage.js?v=4.20.7"></script>
   <script src="/assets/js/a33-presentations.js?v=4.20.7"></script>
 <script src="/assets/js/a33-auth.js?v=4.20.7"></script>
 <script>
-  if (!(A33Auth.isConfigured() && A33Auth.isAuthenticated())){
-    location.href = "../index.html";
-  }
+  (function(){
+    try{
+      const ok = (window.A33Auth && typeof A33Auth.isConfigured === 'function' && typeof A33Auth.isAuthenticated === 'function')
+        ? (A33Auth.isConfigured() && A33Auth.isAuthenticated())
+        : false;
+      if (!ok){
+        const offline = (typeof navigator !== 'undefined' && navigator.onLine === false);
+        if (offline){
+          location.replace('./offline.html?reason=auth');
+        }else{
+          location.replace('../index.html');
+        }
+      }
+    }catch(_){
+      const offline = (typeof navigator !== 'undefined' && navigator.onLine === false);
+      if (offline){
+        location.replace('./offline.html?reason=auth');
+      }else{
+        location.replace('../index.html');
+      }
+    }
+  })();
 </script>
 <script src="app.js?v=4.20.7"></script>
 <script src="/assets/js/a33-input-ux.js?v=4.20.7"></script>
