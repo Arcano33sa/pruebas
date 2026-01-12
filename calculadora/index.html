@@ -1292,11 +1292,14 @@ async function recalcularCodigoLoteAuto(opts) {
 
       const fechaProdIso = ((document.getElementById("fecha-produccion") && document.getElementById("fecha-produccion").value) || hoyLocalISO()).trim();
       const dt = parseISODateLocal(fechaProdIso) || new Date();
-      const dia2 = pad2(dt.getDate());
 
       const heb = await actualizarFechaHebrea(); // Etapa 3: resuelve rápido (sin bloquear por red)
-      const hm3 = (heb && heb.hm3) ? heb.hm3 : (leerHebreoCache(fechaProdIso)?.hm3 || "OFF");
-      const hy4 = (heb && heb.hy4) ? heb.hy4 : (leerHebreoCache(fechaProdIso)?.hy4 || String(dt.getFullYear()).slice(-4));
+      const heb2 = (heb && heb.hd && heb.hm3 && heb.hy4) ? heb : (leerHebreoCache(fechaProdIso) || null);
+
+      // Día SIEMPRE desde la misma fuente hebrea (si existe). Fallback controlado: gregoriano.
+      const dia2 = pad2((heb2 && heb2.hd) ? heb2.hd : dt.getDate());
+      const hm3 = (heb2 && heb2.hm3) ? heb2.hm3 : "OFF";
+      const hy4 = (heb2 && heb2.hy4) ? heb2.hy4 : String(dt.getFullYear()).slice(-4);
 
       const consecMask = ecoMaskX(A33AutoSeq);
       const code = "A33" + consecMask + dia2 + hm3 + hy4;
