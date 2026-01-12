@@ -680,7 +680,7 @@
       try{ return readMeta(key, scope); }catch(_){ return { rev:0, updatedAt:null, writer:'' }; }
     },
 
-    sharedSet(key, next, { scope='local', source='', baseRev=null } = {}){
+    sharedSet(key, next, { scope='local', source='', baseRev=null, conflictPolicy='merge' } = {}){
       const contract = SHARED_CONTRACTS[key];
       if (!contract){
         const ok = this.setJSON(key, next, scope);
@@ -711,6 +711,10 @@
       // Releer meta justo antes de escribir (anti race)
       const metaNow = readMeta(key, scope);
       let hardConflict = conflict || (metaNow.rev !== curMeta.rev);
+
+      if (hardConflict && conflictPolicy === 'block'){
+        return { ok:false, data: cur, meta: metaNow, conflict: true, message: 'Conflicto detectado: datos cambiaron en otra pestaña/módulo. Recargá y reintentá.' };
+      }
 
       // Decidir merge/bloqueo
       let finalData = nextNorm;
