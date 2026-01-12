@@ -11,6 +11,7 @@ const PRECACHE_URLS = [
   './index.html?v=4.20.7',
   './style.css?v=4.20.7',
   './script.js?v=4.20.7',
+  './vendor/xlsx.full.min.js?v=4.20.7',
   './manifest.webmanifest?v=4.20.7',
   './offline.html',
   './images/logo.png',

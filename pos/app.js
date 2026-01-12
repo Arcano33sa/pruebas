@@ -1364,7 +1364,11 @@ function buildCustomerResolverPOS(catalog){
 }
 
 function migrateCustomerCatalogToObjectsPOS(){
-  const raw = A33Storage.getJSON(CUSTOMER_CATALOG_KEY, [], 'local');
+  let raw = [];
+  try{
+    if (window.A33Storage && typeof A33Storage.sharedGet === 'function') raw = A33Storage.sharedGet(CUSTOMER_CATALOG_KEY, [], 'local');
+    else raw = A33Storage.getJSON(CUSTOMER_CATALOG_KEY, [], 'local');
+  }catch(_){ raw = []; }
   const disabled = loadCustomerDisabledSetPOS();
 
   const existingIds = new Set();
@@ -1430,17 +1434,51 @@ function loadCustomerCatalogPOS(){
   return migrateCustomerCatalogToObjectsPOS();
 }
 
+
+function mergeCustomerCatalogByIdKeepPOS(cur, next){
+  const map = new Map();
+  const order = [];
+  const add = (item) => {
+    if (!item || item.id == null) return;
+    const id = String(item.id);
+    if (!id) return;
+    if (!map.has(id)) order.push(id);
+    map.set(id, item);
+  };
+  for (const c of (Array.isArray(cur) ? cur : [])) add(c);
+  for (const c of (Array.isArray(next) ? next : [])) add(c);
+  return order.map(id => map.get(id)).filter(Boolean);
+}
+
 function saveCustomerCatalogPOS(list){
   const safe = Array.isArray(list) ? list : [];
   try{
-    if (window.A33Storage && typeof A33Storage.sharedSet === 'function'){
-      const r = A33Storage.sharedSet(CUSTOMER_CATALOG_KEY, safe, { source: 'pos' });
+    if (window.A33Storage && typeof A33Storage.sharedRead === 'function' && typeof A33Storage.sharedSet === 'function'){
+      const r0 = A33Storage.sharedRead(CUSTOMER_CATALOG_KEY, [], 'local');
+      const cur = (r0 && Array.isArray(r0.data)) ? r0.data : [];
+      const baseRev = (r0 && r0.meta && typeof r0.meta.rev === 'number') ? r0.meta.rev : null;
+
+      // Releer + merge conservador por ID: nunca sobrescribir todo a ciegas.
+      const merged = mergeCustomerCatalogByIdKeepPOS(cur, safe);
+      const sorted = sortCustomerObjectsAZ_POS(merged);
+
+      const r = A33Storage.sharedSet(CUSTOMER_CATALOG_KEY, sorted, { source: 'pos', baseRev });
       if (!r || !r.ok){
-        try{ showToast((r && r.message) ? r.message : 'Conflicto al guardar clientes. Recarga e intenta de nuevo.', 'error', 4200); }catch(_){ }
+        try{ showToast((r && r.message) ? r.message : 'Conflicto al guardar clientes. Recargá e intentá de nuevo.', 'error', 4200); }catch(_){ }
         return false;
       }
       return true;
     }
+
+    if (window.A33Storage && typeof A33Storage.sharedSet === 'function'){
+      const r = A33Storage.sharedSet(CUSTOMER_CATALOG_KEY, safe, { source: 'pos' });
+      if (!r || !r.ok){
+        try{ showToast((r && r.message) ? r.message : 'Conflicto al guardar clientes. Recargá e intentá de nuevo.', 'error', 4200); }catch(_){ }
+        return false;
+      }
+      return true;
+    }
+
     A33Storage.setJSON(CUSTOMER_CATALOG_KEY, safe, 'local');
     return true;
   }catch(_){
@@ -1449,8 +1487,11 @@ function saveCustomerCatalogPOS(list){
 }
 
 function syncDisabledLegacyFromCatalogPOS(list){
+  // Siempre recalcular sobre el estado guardado (evita perder flags si hubo merge)
+  let latest = [];
+  try{ latest = loadCustomerCatalogPOS(); }catch(_){ latest = Array.isArray(list) ? list : []; }
   const set = new Set();
-  for (const c of (Array.isArray(list) ? list : [])){
+  for (const c of (Array.isArray(latest) ? latest : [])){
     if (c && c.isActive === false && c.normalizedName) set.add(c.normalizedName);
   }
   saveCustomerDisabledSetPOS(set);
