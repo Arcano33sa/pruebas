@@ -1244,7 +1244,16 @@ function renderArchivedTable() {
       }catch(_){}
     });
 
+    const borrarBtn = document.createElement("button");
+    borrarBtn.textContent = "🗑";
+    borrarBtn.className = "btn-danger a33-icon-btn";
+    borrarBtn.type = "button";
+    borrarBtn.title = "Borrar (definitivo)";
+    borrarBtn.setAttribute("aria-label", "Borrar (definitivo)");
+    borrarBtn.addEventListener("click", () => deleteArchivedPedido(p.id));
+
     accionesTd.appendChild(verBtn);
+    accionesTd.appendChild(borrarBtn);
     tr.appendChild(accionesTd);
 
     tbody.appendChild(tr);
@@ -1372,6 +1381,62 @@ async function deletePedido(id) {
   renderArchivedTable();
   if (String(editingId) === String(id)) clearForm();
   showArchivedNotice("Archivado ✓");
+}
+
+async function deleteArchivedPedido(id){
+  const archived = loadArchivedPedidos();
+  const idx = archived.findIndex((p) => String(p && p.id) === String(id));
+  if (idx < 0) return;
+
+  const p = archived[idx] || {};
+  const codigo = String(p.codigo || '').trim();
+  const cliente = String(p.customerName || p.clienteNombre || '').trim();
+  const entrega = formatDate(p.fechaEntrega);
+
+  const msgLines = [
+    '¿Borrar definitivamente este pedido del Histórico?',
+    '',
+    (codigo ? `Código: ${codigo}` : null),
+    (cliente ? `Cliente: ${cliente}` : null),
+    (entrega ? `Entrega: ${entrega}` : null),
+    '',
+    'Esto no se puede deshacer.'
+  ].filter(Boolean);
+
+  if (!confirm(msgLines.join('\n'))) return;
+
+  const res = await withSavingLock('Borrando…', async () => {
+    // Releer antes de guardar (multi-tab / reintentos)
+    const latest = loadArchivedPedidos();
+    const i2 = latest.findIndex((x) => String(x && x.id) === String(id));
+    if (i2 < 0) return { ok:false, message:'Ya no existe en Histórico.' };
+
+    const next = latest.filter((_, i) => i !== i2);
+    const ok = saveArchivedPedidos(next);
+    if (!ok) return { ok:false, message:'No se pudo borrar (error de almacenamiento).' };
+
+    // Si estábamos “viendo” este archivado, limpiar modo
+    if (viewingArchivedId != null && String(viewingArchivedId) === String(id)){
+      viewingArchivedId = null;
+      try{ showArchivedModeBanner(''); }catch(_){ }
+      try{
+        const sb = $('save-btn');
+        if (sb) sb.textContent = 'Guardar pedido';
+      }catch(_){ }
+    }
+
+    return { ok:true, message:'Borrado ✓' };
+  });
+
+  if (!res || !res.ok){
+    const msg = (res && res.message) ? res.message : 'No se pudo borrar del Histórico.';
+    showArchivedNotice(msg);
+    alert(msg);
+    return;
+  }
+
+  renderArchivedTable();
+  showArchivedNotice('Borrado ✓');
 }
 
 function createICSEventFromPedido(p) {
@@ -2004,7 +2069,7 @@ document.addEventListener("DOMContentLoaded", () => {
 function registerServiceWorker() {
   try {
     if (!('serviceWorker' in navigator)) return;
-    navigator.serviceWorker.register('./sw.js?v=4.20.7').catch((err) => {
+    navigator.serviceWorker.register('./sw.js?v=4.20.8').catch((err) => {
       console.warn('Pedidos: no se pudo registrar el Service Worker', err);
     });
   } catch (err) {

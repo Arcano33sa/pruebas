@@ -2,17 +2,17 @@
    Objetivo: cachés acotadas por módulo (sin “guerra” entre SW).
 */
 
-const SW_VERSION = '4.20.7';
+const SW_VERSION = '4.20.8';
 const MODULE = 'pedidos';
 const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}`;
 
 const PRECACHE_URLS = [
   './',
-  './index.html?v=4.20.7',
-  './style.css?v=4.20.7',
-  './script.js?v=4.20.7',
-  './vendor/xlsx.full.min.js?v=4.20.7',
-  './manifest.webmanifest?v=4.20.7',
+  './index.html?v=4.20.8',
+  './style.css?v=4.20.8',
+  './script.js?v=4.20.8',
+  './vendor/xlsx.full.min.js?v=4.20.8',
+  './manifest.webmanifest?v=4.20.8',
   './offline.html',
   './images/logo.png',
   '/assets/js/a33-input-ux.js?v=4.20.7',
@@ -67,7 +67,7 @@ async function handleNavigate(request){
     const cache = await caches.open(CACHE_NAME);
     return (
       (await cache.match(request)) ||
-      (await cache.match('./index.html?v=4.20.7')) ||
+      (await cache.match('./index.html?v=4.20.8')) ||
       (await cache.match('./index.html')) ||
       (await cache.match('./offline.html')) ||
       (await cache.match('./')) ||
