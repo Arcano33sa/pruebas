@@ -23,6 +23,10 @@ header.brandbar{position:sticky;top:0;background:#121212;border-bottom:1px solid
 .card{background:var(--panel);border:1px solid #2a2a2a;border-radius:14px;padding:14px;margin:12px 0}
 label{font-size:13px;color:var(--muted);display:block;margin:8px 0 6px}
 input,select,button,textarea{width:100%;padding:12px;border-radius:12px;border:1px solid #333;background:#141414;color:#f0f0f0;font-size:16px;line-height:1.2}
+
+/* Validación visual (bordes) */
+.a33-invalid{border-color:#7b1818 !important;box-shadow:0 0 0 2px rgba(123,24,24,.18)}
+
 input[type="date"]{padding:10px}
 .row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:end}
 .row .card.full{grid-column:1 / -1}

@@ -4226,10 +4226,27 @@ function validateSaleMinimalPOS(sale){
   // Validaciones duras (anti-NaN/negativos donde no aplica) antes de persistir
   const unitPrice = Number(sale.unitPrice);
   if (!Number.isFinite(unitPrice) || unitPrice < 0) return { ok:false, msg:'Venta inválida: precio inválido.' };
-  const discPU = Number(sale.discountPerUnit);
+  // Compat: ventas viejas no guardaban discountPerUnit → interpretar como 0.
+  const discPU = (sale.discountPerUnit == null || sale.discountPerUnit === '')
+    ? 0
+    : Number(sale.discountPerUnit);
   if (!Number.isFinite(discPU) || discPU < 0) return { ok:false, msg:'Venta inválida: descuento inválido.' };
-  const disc = Number(sale.discount);
+  const disc = (sale.discount == null || sale.discount === '') ? 0 : Number(sale.discount);
   if (!Number.isFinite(disc) || disc < 0) return { ok:false, msg:'Venta inválida: descuento total inválido.' };
+  const hasDiscPU = !(sale.discountPerUnit == null || sale.discountPerUnit === '');
+  const qtyAbs = Math.abs(qty);
+  const subtotal = round2(unitPrice * qtyAbs);
+  if (!sale.courtesy && discPU > unitPrice + 1e-9) return { ok:false, msg:'Venta inválida: descuento por unidad mayor que precio.' };
+  if (!sale.courtesy && disc > subtotal + 1e-9) return { ok:false, msg:'Venta inválida: descuento total supera subtotal.' };
+  // Consistencia (solo cuando existe discountPerUnit: regla final por unidad)
+  if (hasDiscPU){
+    const expectedDisc = round2(discPU * qtyAbs);
+    if (!moneyEquals(disc, expectedDisc)) return { ok:false, msg:'Venta inválida: descuento inconsistente.' };
+    const expectedTotalNoReturn = sale.courtesy ? 0 : round2(Math.max(0, subtotal - expectedDisc));
+    const expectedTotal = isReturn ? -expectedTotalNoReturn : expectedTotalNoReturn;
+    if (!moneyEquals(total, expectedTotal)) return { ok:false, msg:'Venta inválida: total inconsistente.' };
+  }
+
 
   const pid = Number(sale.productId);
   const isExtra = !!sale.isExtra;
@@ -8531,6 +8548,7 @@ async function sellCupsPOS(isCourtesy){
     unitPrice,
     qty,
     discount: 0,
+    discountPerUnit: 0,
     payment,
     bankId: (payment === 'transferencia') ? bankId : null,
     bankName: (payment === 'transferencia') ? bankName : null,
@@ -13426,12 +13444,45 @@ async function exportEventosExcel(){
 }
 
 // Totales y ventas
+function parseNumPOS(v, fallback=0){
+  const s = String(v ?? '').trim();
+  if (!s) return fallback;
+  const cleaned = s.replace(',', '.');
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : NaN;
+}
+function toggleInvalidBorderPOS(el, isBad){
+  try{ if (el && el.classList) el.classList.toggle('a33-invalid', !!isBad); }catch(_){ }
+}
+
 function recomputeTotal(){
-  const price = parseFloat($('#sale-price').value||'0');
-  const qty = Math.max(0, parseFloat($('#sale-qty').value||'0'));
-  const discountPerUnit = Math.max(0, parseFloat($('#sale-discount').value||'0'));
+  const priceEl = $('#sale-price');
+  const qtyEl = $('#sale-qty');
+  const discEl = $('#sale-discount');
+
+  const priceRaw = parseNumPOS(priceEl ? priceEl.value : '', 0);
+  const price = Number.isFinite(priceRaw) ? priceRaw : 0;
+
+  const qtyRaw = parseNumPOS(qtyEl ? qtyEl.value : '', 0);
+  const qty = Number.isFinite(qtyRaw) ? Math.max(0, qtyRaw) : 0;
+
+  const discStr = discEl ? String(discEl.value ?? '') : '';
+  const discTrim = discStr.trim();
+  const discParsed = parseNumPOS(discStr, 0);
+
   const courtesy = $('#sale-courtesy').checked;
   const isReturn = $('#sale-return').checked;
+
+  const badDiscount =
+    (!courtesy && discTrim && !Number.isFinite(discParsed)) ||
+    (Number.isFinite(discParsed) && discParsed < 0) ||
+    (!courtesy && Number.isFinite(discParsed) && discParsed > price + 1e-9);
+
+  // Bordes: invalidar visualmente el descuento cuando aplica
+  toggleInvalidBorderPOS(discEl, badDiscount);
+
+  // Para el cálculo en pantalla, si el input es basura lo tratamos como 0 (pero queda marcado en rojo)
+  const discountPerUnit = (Number.isFinite(discParsed) ? Math.max(0, discParsed) : 0);
 
   // Precio efectivo por unidad luego del descuento fijo
   const effectiveUnit = Math.max(0, price - discountPerUnit);
@@ -13444,7 +13495,7 @@ function recomputeTotal(){
     total = -total;
   }
 
-  const t = total.toFixed(2);
+  const t = round2(total).toFixed(2);
   const saleTotalInput = $('#sale-total');
   if (saleTotalInput) {
     saleTotalInput.value = t;
@@ -13466,10 +13517,16 @@ async function addSale(){
     return;
   }
   const productId = (parsed && parsed.kind === 'product') ? parsed.id : parseInt(selVal||'0',10);
-  const qtyIn = parseFloat($('#sale-qty').value||'0');
-  const qty = Math.abs(qtyIn);
-  const price = parseFloat($('#sale-price').value||'0');
-  const discountPerUnit = Math.max(0, parseFloat($('#sale-discount').value||'0'));
+  const qtyRaw = parseNumPOS($('#sale-qty').value, 0);
+  const qty = Math.abs(qtyRaw);
+  const priceRaw = parseNumPOS($('#sale-price').value, 0);
+  const price = priceRaw;
+  const discStr = ($('#sale-discount') ? $('#sale-discount').value : '');
+  const discTrim = String(discStr ?? '').trim();
+  const discParsed = parseNumPOS(discStr, 0);
+  if (discTrim && !Number.isFinite(discParsed)) { alert('Descuento inválido'); return; }
+  if (Number.isFinite(discParsed) && discParsed < 0) { alert('Descuento inválido'); return; }
+  const discountPerUnit = Math.max(0, Number.isFinite(discParsed) ? discParsed : 0);
   const payment = $('#sale-payment').value;
   const courtesy = $('#sale-courtesy').checked;
   const isReturn = $('#sale-return').checked;
@@ -13480,6 +13537,13 @@ async function addSale(){
   const courtesyTo = $('#sale-courtesy-to').value || '';
   const notes = $('#sale-notes').value || '';
   if (!date || !productId || !qty) { alert('Completa fecha, producto y cantidad'); return; }
+
+  // Regla final: descuento por unidad NO puede superar el precio unitario (si no es cortesía)
+  if (!courtesy && Number.isFinite(price) && discountPerUnit > price + 1e-9) {
+    alert('Descuento por unidad no puede ser mayor que el precio unitario');
+    return;
+  }
+
 
   // Etapa 1: confirmación si no hay cliente seleccionado
   if (!confirmProceedSaleWithoutCustomerPOS()) return;
@@ -13551,12 +13615,11 @@ async function addSale(){
     }
   }
 
-  let subtotal = price * qty;
-  let discount = discountPerUnit * qty;
-  if (courtesy) {
-    discount = 0;
-  }
-  let total = courtesy ? 0 : Math.max(0, subtotal - discount);
+  let subtotal = round2(price * qty);
+  // Regla de negocio: descuento total = descuentoPorUnidad × cantidad (cortesía fuerza 0)
+  const discountPerUnitEff = courtesy ? 0 : discountPerUnit;
+  let discount = round2(discountPerUnitEff * qty);
+  let total = courtesy ? 0 : round2(Math.max(0, subtotal - discount));
   const finalQty = isReturn ? -qty : qty;
   if (isReturn) total = -total;
 
@@ -13580,6 +13643,7 @@ async function addSale(){
     unitPrice:price,
     qty:finalQty,
     discount,
+    discountPerUnit: discountPerUnitEff,
     payment,
     bankId: (payment === 'transferencia') ? bankId : null,
     bankName: (payment === 'transferencia') ? bankName : null,
