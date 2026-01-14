@@ -1101,6 +1101,42 @@ async function getMeta(key){
   return row ? row.value : null;
 }
 
+// --- Resumen: selector GLOBAL vs Evento (estado separado, persistente)
+const SUMMARY_EVENT_GLOBAL_POS = 'GLOBAL';
+const SUMMARY_EVENT_META_KEY_POS = 'selectedSummaryEventId';
+let __A33_SELECTED_SUMMARY_EVENT_ID_CACHE = null;
+
+async function getSelectedSummaryEventIdPOS(){
+  try{
+    if (__A33_SELECTED_SUMMARY_EVENT_ID_CACHE != null) return String(__A33_SELECTED_SUMMARY_EVENT_ID_CACHE);
+  }catch(_){ }
+  let v = null;
+  try{ v = await getMeta(SUMMARY_EVENT_META_KEY_POS); }catch(_){ v = null; }
+  if (v == null || v === '') v = SUMMARY_EVENT_GLOBAL_POS;
+  const s = String(v);
+  __A33_SELECTED_SUMMARY_EVENT_ID_CACHE = s;
+  return s;
+}
+
+async function setSelectedSummaryEventIdPOS(val){
+  let v = (val == null || val === '') ? SUMMARY_EVENT_GLOBAL_POS : String(val);
+  __A33_SELECTED_SUMMARY_EVENT_ID_CACHE = v;
+  try{ await setMeta(SUMMARY_EVENT_META_KEY_POS, v); }catch(_){ }
+  return v;
+}
+
+function isSummaryGlobalPOS(v){
+  return String(v || '') === SUMMARY_EVENT_GLOBAL_POS;
+}
+
+function parseSummaryEventIdPOS(v){
+  if (isSummaryGlobalPOS(v)) return null;
+  const n = parseInt(String(v || ''), 10);
+  if (!Number.isFinite(n)) return null;
+  return n;
+}
+
+
 const LAST_GROUP_KEY = 'a33_pos_lastGroupName';
 const HIDDEN_GROUPS_KEY = 'a33_pos_hiddenGroups';
 // Catálogo persistente de grupos (Evento Maestro) para NO depender de eventos históricos.
@@ -7001,35 +7037,44 @@ async function refreshEventUI(){
     else chkSel.value = '';
   }
 
-  // Selector de evento en Resumen (Cierre diario): mostrar solo eventos activos
+  // Selector de evento en Resumen (GLOBAL vs Evento): estado separado
   const sumSel = document.getElementById('summary-close-event');
   if (sumSel){
-    const actives = evs.filter(e=>!e.closedAt);
-    const curEv = evs.find(e=> current && e.id == current) || null;
+    let saved = SUMMARY_EVENT_GLOBAL_POS;
+    try{ saved = await getSelectedSummaryEventIdPOS(); }catch(_){ saved = SUMMARY_EVENT_GLOBAL_POS; }
 
-    sumSel.innerHTML = '<option value="">— Selecciona evento —</option>';
+    const actives = (evs || []).filter(e=>e && !e.closedAt);
+    const closeds = (evs || []).filter(e=>e && e.closedAt);
+
+    sumSel.innerHTML = '';
+
+    const og = document.createElement('option');
+    og.value = SUMMARY_EVENT_GLOBAL_POS;
+    og.textContent = 'GLOBAL — Todos los eventos';
+    sumSel.appendChild(og);
+
     for (const ev of actives){
       const o = document.createElement('option');
       o.value = ev.id;
-      o.textContent = ev.name;
+      o.textContent = ev.name || 'Evento';
       sumSel.appendChild(o);
     }
-
-    // Si el evento actual está cerrado, lo mostramos como opción (solo lectura) para que no desaparezca.
-    if (curEv && curEv.closedAt && !actives.some(e=>e.id===curEv.id)){
+    for (const ev of closeds){
       const o = document.createElement('option');
-      o.value = curEv.id;
-      o.textContent = (curEv.name || 'Evento') + ' (cerrado)';
-      o.disabled = true;
+      o.value = ev.id;
+      o.textContent = (ev.name || 'Evento') + ' (cerrado)';
       sumSel.appendChild(o);
     }
 
-    if (current && Array.from(sumSel.options).some(o=> String(o.value) === String(current))){
-      sumSel.value = current;
+    const hasSaved = Array.from(sumSel.options).some(o=> String(o.value) === String(saved));
+    if (hasSaved){
+      sumSel.value = String(saved);
     } else {
-      sumSel.value = '';
+      sumSel.value = SUMMARY_EVENT_GLOBAL_POS;
+      try{ await setSelectedSummaryEventIdPOS(SUMMARY_EVENT_GLOBAL_POS); }catch(_){ }
     }
-    sumSel.disabled = (actives.length === 0);
+
+    sumSel.disabled = false;
   }
 
   await updateSellEnabled();
@@ -10223,6 +10268,17 @@ async function renderSummary(){
     }
   }catch(_){ }
 
+  // Gatekeeper de cierre de período: necesita ventas del período SIN filtrar por evento
+  const __A33_salesInPeriodAllEvents = Array.isArray(sales) ? sales.slice() : [];
+
+  // Filtro por evento en Resumen (GLOBAL vs EVENTO)
+  let selectedSummaryEventId = SUMMARY_EVENT_GLOBAL_POS;
+  try{ selectedSummaryEventId = await getSelectedSummaryEventIdPOS(); }catch(_){ selectedSummaryEventId = SUMMARY_EVENT_GLOBAL_POS; }
+  const selectedSummaryEventNum = parseSummaryEventIdPOS(selectedSummaryEventId);
+  if (selectedSummaryEventNum != null){
+    sales = (sales || []).filter(s => (s && s.eventId != null && Number(s.eventId) === selectedSummaryEventNum));
+  }
+
   const productById = new Map();
   const productByName = new Map();
   for (const p of (products || [])){
@@ -10653,6 +10709,7 @@ async function renderSummary(){
   try{ await renderSummaryDailyCloseCardPOS(); }catch(e){}
   // Guardas por modo (restaura botones al salir de Archivo)
   try{ applySummaryArchiveGuardsPOS(); }catch(_){ }
+  try{ await applyClosePeriodGatekeeperUI_POS({ periodKey: getSummarySelectedPeriodKeyPOS(), salesInPeriod: __A33_salesInPeriodAllEvents, eventsAll: events }); }catch(_){ }
 }
 
 async function renderSummaryDailyCloseCardPOS(){
@@ -10675,8 +10732,10 @@ async function renderSummaryDailyCloseCardPOS(){
   const targetEl = document.getElementById('summary-close-target');
   const returnEl = document.getElementById('summary-close-return');
 
-  const currentEventId = await getMeta('currentEventId');
-  const ev = currentEventId ? await getEventByIdPOS(currentEventId) : null;
+  let selectedSummaryEventId = SUMMARY_EVENT_GLOBAL_POS;
+  try{ selectedSummaryEventId = await getSelectedSummaryEventIdPOS(); }catch(_){ selectedSummaryEventId = SUMMARY_EVENT_GLOBAL_POS; }
+  const selectedSummaryEventNum = parseSummaryEventIdPOS(selectedSummaryEventId);
+  const ev = (selectedSummaryEventNum != null) ? await getEventByIdPOS(selectedSummaryEventNum) : null;
 
   const saleDate = document.getElementById('sale-date')?.value || '';
   if (dateEl && !dateEl.value){
@@ -10684,12 +10743,11 @@ async function renderSummaryDailyCloseCardPOS(){
   }
   const dayKey = safeYMD(dateEl ? dateEl.value : (saleDate || todayYMD()));
 
-  // Mantener selector sincronizado con el evento activo global
+  // Mantener selector sincronizado con el evento seleccionado en Resumen (GLOBAL vs evento)
   if (eventSel){
-    const want = currentEventId ? String(currentEventId) : '';
+    const want = String(selectedSummaryEventId || SUMMARY_EVENT_GLOBAL_POS);
     const has = want && Array.from(eventSel.options).some(o=> String(o.value) === want);
-    if (has) eventSel.value = want;
-    else eventSel.value = '';
+    eventSel.value = has ? want : SUMMARY_EVENT_GLOBAL_POS;
   }
 
   // Defaults
@@ -10699,12 +10757,33 @@ async function renderSummaryDailyCloseCardPOS(){
   // No tocamos blockerEl aquí: se usa para mensajes de bloqueo al intentar cerrar.
 
   if (!ev){
-    if (statusEl){ statusEl.className = 'pill'; statusEl.textContent = '—'; }
-    if (btnClose) btnClose.disabled = true;
-    if (btnReopen) btnReopen.disabled = true;
-    if (noteEl){ noteEl.style.display = 'block'; noteEl.textContent = 'Selecciona un evento aquí para poder cerrar o reabrir el día.'; }
+    const isGlobal = isSummaryEventGlobalPOS(selectedSummaryEventId);
+
+    if (statusEl){
+      statusEl.className = 'pill';
+      statusEl.textContent = isGlobal ? 'GLOBAL' : '—';
+    }
+
+    if (btnClose){
+      btnClose.disabled = true;
+      if (isGlobal) btnClose.style.display = 'none';
+    }
+
+    if (btnReopen){
+      btnReopen.disabled = true;
+      if (isGlobal) btnReopen.style.display = 'none';
+    }
+
+    if (noteEl){
+      noteEl.style.display = 'block';
+      noteEl.textContent = isGlobal
+        ? 'GLOBAL es solo lectura. Selecciona un evento para cerrar.'
+        : 'Selecciona un evento aquí para poder cerrar o reabrir el día.';
+    }
+
     if (targetEl){ targetEl.style.display = 'none'; targetEl.textContent = ''; }
     if (returnEl){ returnEl.style.display = 'none'; returnEl.innerHTML = ''; delete returnEl.dataset.forEventId; delete returnEl.dataset.prevEventId; }
+    if (blockerEl){ blockerEl.style.display = 'none'; blockerEl.innerHTML = ''; }
     return;
   }
 
@@ -10901,9 +10980,11 @@ async function onSummaryCloseDayPOS(){
     showToast('Estás viendo un período archivado. Volvé a En vivo para cerrar el día.', 'error', 3500);
     return;
   }
-  const evId = await getMeta('currentEventId');
+  let selectedSummaryEventId = SUMMARY_EVENT_GLOBAL_POS;
+  try{ selectedSummaryEventId = await getSelectedSummaryEventIdPOS(); }catch(_){ selectedSummaryEventId = SUMMARY_EVENT_GLOBAL_POS; }
+  const evId = parseSummaryEventIdPOS(selectedSummaryEventId);
   if (!evId){
-    showToast('Selecciona un evento para cerrar el día.', 'error', 4000);
+    showToast('GLOBAL es solo lectura. Selecciona un evento para cerrar el día.', 'error', 4500);
     return;
   }
   const ev = await getEventByIdPOS(evId);
@@ -10990,9 +11071,11 @@ async function onSummaryReopenDayPOS(){
     showToast('Estás viendo un período archivado. Volvé a En vivo para reabrir.', 'error', 3500);
     return;
   }
-  const evId = await getMeta('currentEventId');
+  let selectedSummaryEventId = SUMMARY_EVENT_GLOBAL_POS;
+  try{ selectedSummaryEventId = await getSelectedSummaryEventIdPOS(); }catch(_){ selectedSummaryEventId = SUMMARY_EVENT_GLOBAL_POS; }
+  const evId = parseSummaryEventIdPOS(selectedSummaryEventId);
   if (!evId){
-    showToast('Selecciona un evento para reabrir el día.', 'error', 4000);
+    showToast('GLOBAL es solo lectura. Selecciona un evento para reabrir el día.', 'error', 4500);
     return;
   }
   const ev = await getEventByIdPOS(evId);
@@ -11042,14 +11125,12 @@ function bindSummaryDailyClosePOS(){
   if (sumEv){
     sumEv.addEventListener('change', ()=>{
       (async()=>{
-        // Etapa 2: limpiar cliente al cambiar evento
-        await resetOperationalStateOnEventSwitchPOS();
-        const val = sumEv.value;
-        if (val === '') { await setMeta('currentEventId', null); }
-        else { await setMeta('currentEventId', parseInt(val,10)); }
-        await refreshEventUI();
-        try{ await renderDay(); }catch(e){}
-        try{ await renderSummaryDailyCloseCardPOS(); }catch(e){}
+        const valRaw = sumEv.value;
+        const val = (valRaw == null || String(valRaw) === '') ? SUMMARY_EVENT_GLOBAL_POS : String(valRaw);
+        await setSelectedSummaryEventIdPOS(val);
+        // Recalcular Resumen (totales + tablas) según GLOBAL vs evento
+        try{ await renderSummary(); }catch(e){ console.error('renderSummary (selector Resumen)', e); }
+        try{ await renderSummaryDailyCloseCardPOS(); }catch(e){ }
       })();
     });
   }
@@ -11196,6 +11277,173 @@ async function listOpenEventsPOS(){
   return (events || []).filter(ev => ev && !ev.closedAt);
 }
 
+
+function toValidEventIdPOS(v){
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  const id = Math.floor(n);
+  return (id > 0) ? id : null;
+}
+
+function isDateKeyInPeriodPOS(dateKey, periodKey){
+  const d = String(dateKey || '');
+  const pk = String(periodKey || '').trim();
+  return !!(pk && d && d.startsWith(pk + '-'));
+}
+
+function formatPendingEventsInlinePOS(events, maxItems){
+  const arr = Array.isArray(events) ? events : [];
+  const max = Number(maxItems || 6) || 6;
+  const names = arr.map(ev => (ev && ev.name) ? String(ev.name) : (ev && ev.id != null ? ('Evento #' + ev.id) : 'Evento'));
+  const shown = names.slice(0, max);
+  const more = Math.max(0, names.length - shown.length);
+  return shown.join(', ') + (more ? `… +${more}` : '');
+}
+
+async function collectRelevantEventIdsForPeriodPOS(periodKey, salesInPeriod){
+  const ids = new Set();
+  const pk = String(periodKey || '').trim();
+  if (!pk) return ids;
+
+  let sales = Array.isArray(salesInPeriod) ? salesInPeriod : null;
+  if (!sales){
+    try{
+      const all = await getAll('sales');
+      sales = (all || []).filter(s => isSaleInPeriodPOS(s, pk));
+    }catch(_){ sales = []; }
+  }
+
+  for (const s of (sales || [])){
+    const id = toValidEventIdPOS(s && s.eventId);
+    if (id != null) ids.add(id);
+  }
+
+  // Cierres/candados del período (si existen) para no perder eventos sin ventas
+  try{
+    const locks = await getAll('dayLocks');
+    for (const l of (locks || [])){
+      if (!l) continue;
+      if (!isDateKeyInPeriodPOS(l.dateKey, pk)) continue;
+      const id = toValidEventIdPOS(l.eventId);
+      if (id != null) ids.add(id);
+    }
+  }catch(_){ }
+
+  try{
+    const closes = await getAll('dailyClosures');
+    for (const c of (closes || [])){
+      if (!c) continue;
+      if (!isDateKeyInPeriodPOS(c.dateKey, pk)) continue;
+      const id = toValidEventIdPOS(c.eventId);
+      if (id != null) ids.add(id);
+    }
+  }catch(_){ }
+
+  return ids;
+}
+
+async function computeClosePeriodGatekeeperPOS(periodKey, opts){
+  const pk = String(periodKey || '').trim();
+
+  // 1) Modo / período válido
+  if (__A33_SUMMARY_MODE === 'archive'){
+    return {
+      ok: false,
+      reason: 'Viendo un período archivado (snapshot). Volvé a En vivo para cerrar períodos.',
+      hint: 'Viendo un período archivado (snapshot).'
+    };
+  }
+  if (__A33_SUMMARY_VIEW_MODE === 'all'){
+    return {
+      ok: false,
+      reason: 'Selecciona un período (mes) para cerrar.',
+      hint: 'Mostrando todos los meses. Selecciona un mes para cerrar período.'
+    };
+  }
+  if (!/^\d{4}-\d{2}$/.test(pk)){
+    return {
+      ok: false,
+      reason: 'Selecciona un período válido (YYYY-MM) para cerrar.',
+      hint: 'Selecciona un período válido (YYYY-MM) para cerrar.'
+    };
+  }
+
+  // 2) Ya archivado
+  const existing = await getArchiveByPeriodKeyPOS(pk);
+  if (existing){
+    const seqTxt = (existing.seqStr || existing.seq || '').toString();
+    return {
+      ok: false,
+      existing,
+      reason: `Este período ya fue archivado (Seq ${seqTxt}).
+No se reescribe el histórico.`,
+      hint: `Período ya cerrado (Seq ${seqTxt}).`
+    };
+  }
+
+  // 3) Eventos relevantes del período
+  const salesInPeriod = opts && Array.isArray(opts.salesInPeriod) ? opts.salesInPeriod : null;
+  const ids = await collectRelevantEventIdsForPeriodPOS(pk, salesInPeriod);
+
+  // Si no hay eventos relevantes (o solo legacy sin eventId), no bloquea el cierre.
+  if (!ids.size){
+    return { ok: true, pending: [], hint: '' };
+  }
+
+  const eventsAll = (opts && Array.isArray(opts.eventsAll)) ? opts.eventsAll : await getAll('events');
+  const map = new Map();
+  for (const ev of (eventsAll || [])){
+    if (ev && ev.id != null) map.set(Number(ev.id), ev);
+  }
+
+  const pending = [];
+  for (const id of ids){
+    const ev = map.get(Number(id));
+    if (!ev) continue; // no bloquear por eventos inexistentes
+    if (!ev.closedAt) pending.push(ev);
+  }
+
+  if (pending.length){
+    const lines = pending.map(ev => `- ${(ev.name || ('Evento #' + ev.id))}`).join('\n');
+    const short = formatPendingEventsInlinePOS(pending, 6);
+    return {
+      ok: false,
+      pending,
+      reason: `No se puede cerrar el período. Eventos del período sin cerrar:
+${lines}
+
+Recuerda: Día cerrado no es evento cerrado.`,
+      hint: `No se puede cerrar período: faltan eventos por cerrar: ${short}.`
+    };
+  }
+
+  return { ok: true, pending: [], hint: '' };
+}
+
+async function applyClosePeriodGatekeeperUI_POS(opts){
+  if (__A33_SUMMARY_MODE === 'archive') return;
+  try{ syncSummaryPeriodLabelPOS(); }catch(_){ }
+  const btn = document.getElementById('btn-summary-close-period');
+  if (!btn) return;
+
+  const hintEl = document.getElementById('summary-period-hint');
+
+  const pk = (opts && opts.periodKey) ? String(opts.periodKey) : getSummarySelectedPeriodKeyPOS();
+  const gate = await computeClosePeriodGatekeeperPOS(pk, opts || {});
+
+  // En Archivo, applySummaryArchiveGuardsPOS ya oculta el botón.
+  if (!gate.ok){
+    try{ btn.disabled = true; }catch(_){ }
+    if (hintEl && gate.hint){
+      hintEl.textContent = gate.hint;
+    }
+    return;
+  }
+
+  // OK
+  try{ btn.disabled = false; }catch(_){ }
+}
+
 async function getArchiveByPeriodKeyPOS(periodKey){
   const all = await getAll('summaryArchives');
   const pk = String(periodKey || '').trim();
@@ -11207,12 +11455,23 @@ function isSaleInPeriodPOS(s, periodKey){
   return !!(periodKey && d.startsWith(periodKey + '-'));
 }
 
-async function computeSummaryDataForPeriodPOS(periodKey){
+// Resumen (export): dataset por período alineado a GLOBAL vs EVENTO.
+// Nota: por diseño, ventas sin eventId solo entran en GLOBAL.
+async function computeSummaryDataForPeriodPOS(periodKey, selectedSummaryEventId){
   const salesAll = await getAll('sales');
   const eventsAll = await getAll('events');
   const products = await getAll('products');
 
-  const sales = (salesAll || []).filter(s => isSaleInPeriodPOS(s, periodKey));
+  let sales = (salesAll || []).filter(s => isSaleInPeriodPOS(s, periodKey));
+
+  // Filtro por evento (GLOBAL vs EVENTO) — mismo criterio que la pantalla.
+  // Compat: ventas sin eventId solo cuentan en GLOBAL.
+  try{
+    const evId = parseSummaryEventIdPOS(selectedSummaryEventId);
+    if (evId != null){
+      sales = (sales || []).filter(s => (s && s.eventId != null && Number(s.eventId) === evId));
+    }
+  }catch(_){ }
   const events = (eventsAll || []);
 
   const productById = new Map();
@@ -11506,6 +11765,10 @@ async function openSummaryClosePeriodModalPOS(){
     showToast('Estás viendo un período archivado. Volvé a En vivo para cerrar períodos.', 'error', 3500);
     return;
   }
+  if (__A33_SUMMARY_VIEW_MODE === 'all'){
+    showToast('Selecciona un período para cerrar.', 'error', 3500);
+    return;
+  }
   setClosePeriodErrorPOS('');
 
   // Autocompletar período actual si está vacío
@@ -11517,31 +11780,23 @@ async function openSummaryClosePeriodModalPOS(){
     inp.value = `Período ${periodLabelPOS(periodKey)}`;
   }
 
-  // Prevalidar
-  const openEvents = await listOpenEventsPOS();
   const btnConfirm = document.getElementById('summary-close-confirm');
   const btnExport = document.getElementById('summary-close-export');
 
-  if (openEvents.length){
-    const lines = openEvents.map(ev => `- ${(ev.name || ('Evento #' + ev.id))}`).join('\n');
-    setClosePeriodErrorPOS(`No se puede cerrar el período. Eventos abiertos:\n${lines}\n\nRecuerda: Día cerrado no es evento cerrado.`);
+  // Gatekeeper (eventos relevantes del período + archive existente)
+  const gate = await computeClosePeriodGatekeeperPOS(periodKey, null);
+  if (!gate.ok){
+    setClosePeriodErrorPOS(gate.reason || 'No se puede cerrar el período.');
     if (btnConfirm) btnConfirm.disabled = true;
     if (btnExport) btnExport.disabled = true;
   } else {
-    // Bloquear si ya existe un archive para este periodKey
-    const existing = await getArchiveByPeriodKeyPOS(periodKey);
-    if (existing){
-      setClosePeriodErrorPOS(`Este período ya fue archivado (Seq ${existing.seqStr || existing.seq}).\nNo se reescribe el histórico.`);
-      if (btnConfirm) btnConfirm.disabled = true;
-      if (btnExport) btnExport.disabled = true;
-    } else {
-      if (btnConfirm) btnConfirm.disabled = false;
-      if (btnExport) btnExport.disabled = false;
-    }
+    if (btnConfirm) btnConfirm.disabled = false;
+    if (btnExport) btnExport.disabled = false;
   }
 
   openModalPOS('summary-close-modal');
 }
+
 
 function closeSummaryClosePeriodModalPOS(){
   closeModalPOS('summary-close-modal');
@@ -11564,16 +11819,9 @@ async function confirmClosePeriodPOS(){
     },
     fn: async ()=>{
       const periodKey = getSummarySelectedPeriodKeyPOS();
-      const openEvents = await listOpenEventsPOS();
-      if (openEvents.length){
-        const lines = openEvents.map(ev => `- ${(ev.name || ('Evento #' + ev.id))}`).join('\n');
-        setClosePeriodErrorPOS(`No se puede cerrar el período. Eventos abiertos:\n${lines}`);
-        return;
-      }
-
-      const existing = await getArchiveByPeriodKeyPOS(periodKey);
-      if (existing){
-        setClosePeriodErrorPOS(`Este período ya fue archivado (Seq ${existing.seqStr || existing.seq}).`);
+      const gate = await computeClosePeriodGatekeeperPOS(periodKey, null);
+      if (!gate.ok){
+        setClosePeriodErrorPOS(gate.reason || 'No se puede cerrar el período.');
         return;
       }
 
@@ -11831,7 +12079,9 @@ async function onSummaryExportExcelPOS(){
     return;
   }
   const periodKey = getSummarySelectedPeriodKeyPOS();
-  const data = await computeSummaryDataForPeriodPOS(periodKey);
+  let selectedSummaryEventId = SUMMARY_EVENT_GLOBAL_POS;
+  try{ selectedSummaryEventId = await getSelectedSummaryEventIdPOS(); }catch(_){ selectedSummaryEventId = SUMMARY_EVENT_GLOBAL_POS; }
+  const data = await computeSummaryDataForPeriodPOS(periodKey, selectedSummaryEventId);
   const sheets = buildSummarySheetsFromDataPOS(data);
   const fname = `Resumen-${periodFilePartPOS(periodKey)}.xlsx`;
   writeWorkbookFromSheetsPOS(fname, sheets);
@@ -11876,6 +12126,8 @@ function bindSummaryPeriodCloseAndArchivePOS(){
   setSummaryModeBadgePOS();
   syncSummaryPeriodLabelPOS();
   applySummaryArchiveGuardsPOS();
+  // Estado del botón Cerrar período (gatekeeper)
+  applyClosePeriodGatekeeperUI_POS({ periodKey: getSummarySelectedPeriodKeyPOS() }).catch(_=>{});
 
   const btnMainExport = document.getElementById('btn-summary-export');
   if (btnMainExport){
