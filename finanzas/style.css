@@ -1399,7 +1399,6 @@ body.rc-printing .rc-print-root{
 @media print{
   @page{ size: Letter; margin: 0; }
 
-  /* Reset de márgenes/paddings para que la hoja no "crezca" y no aparezcan páginas fantasma */
   html, body{
     margin:0 !important;
     padding:0 !important;
@@ -1410,46 +1409,44 @@ body.rc-printing .rc-print-root{
     color:#000 !important;
   }
 
-  /* Print aislado: ocultar TODA la app sin dejar huella de layout (visibility no basta) */
-  body.fin-body > *:not(#rc-print-root){
-    display:none !important;
-  }
+  /* Print aislado (sin “fantasmas”):
+     - NO usar visibility:hidden como método principal (deja el layout vivo y puede crear páginas en blanco).
+     - Solo participa #rc-print-root.
+  */
+  body.fin-body > *{ display:none !important; }
+  #rc-print-root{ display:block !important; }
 
-  /* Solo existe en impresión el contenedor del recibo */
+  /* Asegurar que el root imprimible no herede comportamiento de overlay (screen preview) */
   #rc-print-root{
-    display:block !important;
     position:relative !important;
-    left:0 !important;
-    top:0 !important;
+    left:auto !important;
+    top:auto !important;
     width:8.5in !important;
-    margin:0 !important;
-    padding:0 !important;
+    height:auto !important;
     overflow:visible !important;
+    background:#fff !important;
   }
 
-  .rc-print-page{
-    margin:0 !important;
-    page-break-after:avoid !important;
-    break-after:avoid-page !important;
+  #rc-print-root, #rc-print-root *{
+    visibility:visible !important;
   }
 
-  /* Firmas: más aire y área firmable (solo impresión) */
-  .rc-print-sign{ margin-top:26px !important; }
-  .rc-sign-box{
-    position:relative !important;
-    min-height:92px !important;
-    padding-top:66px !important;
-    border-top:none !important;
-  }
-  .rc-sign-box::before{
-    content:'';
-    position:absolute;
-    left:0;
-    right:0;
-    top:52px;
-    border-top:1px solid rgba(0,0,0,0.25);
-  }
+  .rc-print-page{ margin:0; }
+
+  /* Firmas: bajar un poco el bloque para dejar área real de firma */
+  .rc-print-sign{ margin-top:28px !important; }
+  .rc-sign-box{ padding-top:28px !important; }
 
   /* Evitar cortes extra */
   .rc-print-page{ break-inside: avoid; page-break-inside: avoid; }
+
+  /* Cerrar cualquier salto accidental que genere hoja extra */
+  .rc-print-page{
+    width:8.5in !important;
+    height:11in !important;
+    max-height:11in !important;
+    overflow:hidden !important;
+    page-break-after: avoid;
+    break-after: avoid-page;
+  }
 }

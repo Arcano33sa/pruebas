@@ -5668,6 +5668,15 @@ function rcParseNumberOrZero(v){
   if (!Number.isFinite(n)) return NaN;
   return n;
 }
+
+// Para inputs numéricos editables: mostrar vacío cuando el valor lógico es 0.
+// (El placeholder "0" guía visual; el parsing vacío→0 se mantiene en rcParseNumberOrZero).
+function rcNumInputValueOrBlank(v){
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '';
+  if (n === 0) return '';
+  return String(n);
+}
 function rcPayLabel(pt){
   return (pt === 'TRANSFER') ? 'TRANSFERENCIA' : 'EFECTIVO';
 }
@@ -5743,7 +5752,8 @@ function rcNormalizeReceipt(r){
     clientName: r && r.clientName ? String(r.clientName) : '',
     clientPhone: r && r.clientPhone ? String(r.clientPhone) : '',
     paymentType: r && r.paymentType ? String(r.paymentType) : 'CASH',
-    paymentRef: r && r.paymentRef ? String(r.paymentRef) : '',
+    paymentBank: (r && (r.paymentBank !== undefined && r.paymentBank !== null)) ? String(r.paymentBank) : '',
+    paymentRef: (r && (r.paymentRef !== undefined && r.paymentRef !== null)) ? String(r.paymentRef) : '',
     lines: Array.isArray(r && r.lines) ? r.lines.map(l => ({
       itemName: l && l.itemName ? String(l.itemName) : '',
       qty: rcSafeNum(l && l.qty),
@@ -5763,7 +5773,7 @@ function rcNormalizeReceipt(r){
   }
 
   if (out.paymentType !== 'CASH' && out.paymentType !== 'TRANSFER') out.paymentType = 'CASH';
-  if (out.paymentType === 'CASH') out.paymentRef = '';
+  if (out.paymentType === 'CASH') { out.paymentBank = ''; out.paymentRef = ''; }
 
   rcRecalc(out);
   return out;
@@ -5929,6 +5939,7 @@ function rcUpdateEditorMeta(){
   const st = String(rcCurrent.status || 'DRAFT');
   const stLabel = (st === 'ISSUED') ? 'EMITIDO' : (st === 'VOID') ? 'ANULADO' : 'BORRADOR';
   const pay = rcPayLabel(rcCurrent.paymentType);
+  const bank = String(rcCurrent.paymentBank || '').trim();
   const ref = String(rcCurrent.paymentRef || '').trim();
 
   const fecha = String(rcCurrent.dateDisplay || rcDateDisplayFromISO(rcCurrent.dateISO) || '').trim();
@@ -5938,6 +5949,7 @@ function rcUpdateEditorMeta(){
     `Estado: ${escapeHTML(stLabel)}`,
     `Pago: ${escapeHTML(pay)}`
   ];
+  if (rcCurrent.paymentType === 'TRANSFER' && bank) parts.push(`Banco: ${escapeHTML(bank)}`);
   if (rcCurrent.paymentType === 'TRANSFER' && ref) parts.push(`Ref: ${escapeHTML(ref)}`);
 
   if (st === 'VOID') {
@@ -5971,7 +5983,7 @@ function rcSetEditorMode(mode){
 
   const isView = (rcEditorMode === 'view');
 
-  const idsDisable = ['rec-client','rec-date','rec-ref'];
+  const idsDisable = ['rec-client','rec-date','rec-bank','rec-ref'];
   idsDisable.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = isView;
@@ -6012,17 +6024,25 @@ function rcSetPaymentType(pt){
   rcPaymentType = (pt === 'TRANSFER') ? 'TRANSFER' : 'CASH';
   const bCash = document.getElementById('rec-pay-cash');
   const bTr = document.getElementById('rec-pay-transfer');
-  const wrap = document.getElementById('rec-ref-wrap');
+
+  const bankWrap = document.getElementById('rec-bank-wrap');
+  const bankInput = document.getElementById('rec-bank');
+  const refWrap = document.getElementById('rec-ref-wrap');
   const refInput = document.getElementById('rec-ref');
 
   if (bCash) bCash.classList.toggle('active', rcPaymentType === 'CASH');
   if (bTr) bTr.classList.toggle('active', rcPaymentType === 'TRANSFER');
-  if (wrap) wrap.classList.toggle('hidden', rcPaymentType !== 'TRANSFER');
+
+  const isTransfer = (rcPaymentType === 'TRANSFER');
+  if (bankWrap) bankWrap.classList.toggle('hidden', !isTransfer);
+  if (refWrap) refWrap.classList.toggle('hidden', !isTransfer);
 
   if (rcCurrent) {
     rcCurrent.paymentType = rcPaymentType;
     if (rcPaymentType === 'CASH') {
+      rcCurrent.paymentBank = '';
       rcCurrent.paymentRef = '';
+      if (bankInput) bankInput.value = '';
       if (refInput) refInput.value = '';
     }
   }
@@ -6088,9 +6108,9 @@ function rcRenderLines(){
 
     tr.innerHTML = `
       <td><input type="text" ${dis} data-f="itemName" value="${escapeAttr(ln.itemName || '')}" placeholder="Ej: Djeba 750 ml"></td>
-      <td class="num"><input type="number" ${dis} inputmode="decimal" step="1" min="0" data-f="qty" value="${Number.isFinite(Number(ln.qty)) ? ln.qty : 0}"></td>
-      <td class="num"><input type="number" ${dis} inputmode="decimal" step="0.01" min="0" data-f="unitPrice" value="${Number.isFinite(Number(ln.unitPrice)) ? ln.unitPrice : 0}"></td>
-      <td class="num"><input type="number" ${dis} inputmode="decimal" step="0.01" min="0" data-f="discountPerUnit" value="${Number.isFinite(Number(ln.discountPerUnit)) ? ln.discountPerUnit : 0}"></td>
+      <td class="num"><input type="number" ${dis} inputmode="decimal" step="1" min="0" data-f="qty" value="${escapeAttr(rcNumInputValueOrBlank(ln.qty))}" placeholder="0"></td>
+      <td class="num"><input type="number" ${dis} inputmode="decimal" step="0.01" min="0" data-f="unitPrice" value="${escapeAttr(rcNumInputValueOrBlank(ln.unitPrice))}" placeholder="0"></td>
+      <td class="num"><input type="number" ${dis} inputmode="decimal" step="0.01" min="0" data-f="discountPerUnit" value="${escapeAttr(rcNumInputValueOrBlank(ln.discountPerUnit))}" placeholder="0"></td>
       <td class="num"><span class="rec-line-total">${rcFmtMoney(ln.lineTotal || 0)}</span></td>
       <td class="num">${delBtn}</td>
     `;
@@ -6105,12 +6125,14 @@ function rcFillEditor(){
   const id = document.getElementById('rec-id');
   const cli = document.getElementById('rec-client');
   const date = document.getElementById('rec-date');
+  const bank = document.getElementById('rec-bank');
   const ref = document.getElementById('rec-ref');
 
   if (id) id.value = rcCurrent.receiptId;
   if (cli) cli.value = rcCurrent.clientName || '';
   // No fabricar fecha para recibos viejos sin dateISO.
   if (date) date.value = rcCurrent.dateISO || '';
+  if (bank) bank.value = rcCurrent.paymentBank || '';
   if (ref) ref.value = rcCurrent.paymentRef || '';
 
   rcSetPaymentType(rcCurrent.paymentType || 'CASH');
@@ -6133,6 +6155,7 @@ function rcNewDraft(){
     dateDisplay: rcDateDisplayFromISO(dateISO),
     clientName: '',
     paymentType: 'CASH',
+    paymentBank: '',
     paymentRef: '',
     lines: [{ itemName: '', qty: 1, unitPrice: 0, discountPerUnit: 0, lineTotal: 0 }],
     totals: { subtotal: 0, discountTotal: 0, total: 0 }
@@ -6155,8 +6178,10 @@ function rcOpenReceiptById(id, mode){
   rcFillEditor();
 }
 
-function rcValidateCurrent(){
+function rcValidateCurrent(opts={}){
   if (!rcCurrent) return { ok:false, msg:'No hay recibo en edición.' };
+
+  const forIssue = !!(opts && opts.forIssue);
 
   const clientName = String(rcCurrent.clientName || '').trim();
   if (!clientName) return { ok:false, msg:'Cliente es obligatorio.' };
@@ -6164,9 +6189,20 @@ function rcValidateCurrent(){
   const pt = rcCurrent.paymentType;
   if (pt !== 'CASH' && pt !== 'TRANSFER') return { ok:false, msg:'Tipo de pago inválido.' };
 
+  const bank = String(rcCurrent.paymentBank || '').trim();
   const ref = String(rcCurrent.paymentRef || '').trim();
-  if (pt === 'TRANSFER' && !ref) return { ok:false, msg:'Referencia obligatoria para Transferencia.' };
-  if (pt === 'CASH') rcCurrent.paymentRef = '';
+
+  if (pt === 'TRANSFER') {
+    if (forIssue && !bank) return { ok:false, msg:'Banco requerido para Transferencia.' };
+    // Referencia opcional
+    rcCurrent.paymentBank = bank;
+    rcCurrent.paymentRef = ref; // puede ser ''
+  } else {
+    // EFECTIVO: no se usan campos de transferencia
+    rcCurrent.paymentBank = '';
+    rcCurrent.paymentRef = '';
+  }
+
 
   const lines = Array.isArray(rcCurrent.lines) ? rcCurrent.lines : [];
   if (!lines.length) return { ok:false, msg:'Debe existir al menos 1 línea.' };
@@ -6204,7 +6240,6 @@ function rcValidateCurrent(){
   }
 
   rcCurrent.clientName = clientName;
-  if (pt === 'TRANSFER') rcCurrent.paymentRef = ref;
 
   return { ok:true, msg:'' };
 }
@@ -6231,7 +6266,7 @@ function rcSetSaving(on){
   if (btnRef) btnRef.disabled = rcSaving;
 
   // Inputs principales
-  const ids = ['rec-client','rec-date','rec-ref'];
+  const ids = ['rec-client','rec-date','rec-bank','rec-ref'];
   ids.forEach(id => {
     const el = document.getElementById(id);
     if (el && rcEditorMode === 'edit') el.disabled = rcSaving;
@@ -6261,7 +6296,7 @@ async function rcIssueCurrent(){
   if (rcEditorMode !== 'edit') return false;
   if (String(rcCurrent.status || 'DRAFT') !== 'DRAFT') return false;
 
-  const v = rcValidateCurrent();
+  const v = rcValidateCurrent({ forIssue:true });
   if (!v.ok) {
     rcShowAlert(v.msg, 'error');
     return false;
@@ -6289,8 +6324,12 @@ async function rcIssueCurrent(){
     rcCurrent.dateISO = todayISO;
     rcCurrent.dateDisplay = rcLongDateDisplay(now);
 
-    // Pago/referencia sellados (normalizar)
-    if (rcCurrent.paymentType === 'CASH') rcCurrent.paymentRef = '';
+    // Pago/referencia/banco sellados (normalizar)
+    if (rcCurrent.paymentType === 'CASH') { rcCurrent.paymentBank = ''; rcCurrent.paymentRef = ''; }
+    if (rcCurrent.paymentType === 'TRANSFER') {
+      rcCurrent.paymentBank = String(rcCurrent.paymentBank || '').trim();
+      rcCurrent.paymentRef = String(rcCurrent.paymentRef || '').trim();
+    }
 
     rcRecalc(rcCurrent);
 
@@ -6388,6 +6427,7 @@ function rcReemitReceiptById(id){
     clientName: base.clientName || '',
     clientPhone: base.clientPhone || '',
     paymentType: (base.paymentType === 'TRANSFER') ? 'TRANSFER' : 'CASH',
+    paymentBank: (base.paymentType === 'TRANSFER') ? String(base.paymentBank || '') : '',
     paymentRef: (base.paymentType === 'TRANSFER') ? String(base.paymentRef || '') : '',
     lines: (base.lines || []).map(l => ({
       itemName: String(l.itemName || ''),
@@ -6415,26 +6455,25 @@ function rcBuildPrintReceiptInnerHTML(r){
   const num4 = rcNumber4(receipt.number);
   const fecha = String(receipt.dateDisplay || rcDateDisplayFromISO(receipt.dateISO) || '').trim() || '—';
   const payLbl = rcPayLabel(receipt.paymentType);
+  const bank = String(receipt.paymentBank || '').trim();
   const ref = String(receipt.paymentRef || '').trim();
-  const showRef = (receipt.paymentType === 'TRANSFER');
-  const refDisp = ref || '—';
+  const showTransfer = (receipt.paymentType === 'TRANSFER');
+  const showRef = showTransfer && (ref.trim() !== '');
+  const bankDisp = bank || '—';
 
   const cli = String(receipt.clientName || '').trim() || '—';
-
-  // En impresión: cuando un valor sea 0 (o redondee a 0.00), mostrar vacío para evitar confusión.
-  const rcPrintBlankIfZero = (v) => (rcRound2(v) === 0 ? '' : rcFmtMoneyPrint(v));
 
   const rows = (receipt.lines || []).map((ln, idx) => {
     const q = rcSafeNum(ln.qty);
     const nameBase = String(ln.itemName || '').trim() || '—';
     const name = (q && q !== 1) ? `${nameBase} ×${q}` : nameBase;
-    const dpu = rcSafeNum(ln.discountPerUnit);
+    const discCell = (rcSafeNum(ln.discountPerUnit) === 0) ? '' : rcFmtMoneyPrint(ln.discountPerUnit || 0);
     return `
       <tr>
         <td class="ncol">${idx + 1}</td>
         <td>${escapeHTML(name)}</td>
         <td class="num pcol">${rcFmtMoneyPrint(ln.unitPrice || 0)}</td>
-        <td class="num dcol">${rcPrintBlankIfZero(dpu)}</td>
+        <td class="num dcol">${discCell}</td>
         <td class="num tcol">${rcFmtMoneyPrint(ln.lineTotal || 0)}</td>
       </tr>
     `;
@@ -6443,6 +6482,8 @@ function rcBuildPrintReceiptInnerHTML(r){
   const sub = receipt.totals?.subtotal ?? 0;
   const disc = receipt.totals?.discountTotal ?? 0;
   const tot = receipt.totals?.total ?? 0;
+
+  const discTotalDisp = (rcSafeNum(disc) === 0) ? '' : rcFmtMoneyPrint(disc);
 
   return `
     <div class="rc-print-header">
@@ -6455,7 +6496,8 @@ function rcBuildPrintReceiptInnerHTML(r){
       <div><span class="lbl">N°:</span> <span class="rc-num-red">${escapeHTML(num4 || '—')}</span></div>
       <div><span class="lbl">PAGO:</span> ${escapeHTML(payLbl)}</div>
       <div><span class="lbl">CLIENTE:</span> ${escapeHTML(cli)}</div>
-      ${showRef ? `<div><span class="lbl">REF:</span> ${escapeHTML(refDisp)}</div><div></div>` : ``}
+      ${showTransfer ? `<div><span class="lbl">BANCO:</span> ${escapeHTML(bankDisp)}</div><div></div>` : ``}
+      ${showRef ? `<div><span class="lbl">REF:</span> ${escapeHTML(ref)}</div><div></div>` : ``}
     </div>
 
     <table class="rc-print-table">
@@ -6475,7 +6517,7 @@ function rcBuildPrintReceiptInnerHTML(r){
 
     <div class="rc-print-totals">
       <div class="row"><div><strong>SUBTOTAL</strong></div><div>${rcFmtMoneyPrint(sub)}</div></div>
-      <div class="row"><div><strong>DESCUENTO</strong></div><div>${rcPrintBlankIfZero(disc)}</div></div>
+      <div class="row"><div><strong>DESCUENTO</strong></div><div>${discTotalDisp}</div></div>
       <div class="row"><div><strong>TOTAL</strong></div><div><strong>${rcFmtMoneyPrint(tot)}</strong></div></div>
     </div>
 
@@ -6640,6 +6682,7 @@ function setupRecibosUI(){
 
   const cli = document.getElementById('rec-client');
   const date = document.getElementById('rec-date');
+  const bank = document.getElementById('rec-bank');
   const ref = document.getElementById('rec-ref');
   const payCash = document.getElementById('rec-pay-cash');
   const payTr = document.getElementById('rec-pay-transfer');
@@ -6719,6 +6762,7 @@ function setupRecibosUI(){
       rcUpdateEditorMeta();
     }
   });
+  if (bank) bank.addEventListener('input', () => { if (rcCurrent && rcEditorMode === 'edit') { rcCurrent.paymentBank = bank.value; rcUpdateEditorMeta(); } });
   if (ref) ref.addEventListener('input', () => { if (rcCurrent && rcEditorMode === 'edit') { rcCurrent.paymentRef = ref.value; rcUpdateEditorMeta(); } });
 
   if (btnAdd) btnAdd.addEventListener('click', () => {
@@ -6729,6 +6773,16 @@ function setupRecibosUI(){
 
   const linesTbody = document.getElementById('rec-lines-tbody');
   if (linesTbody) {
+    // UX: al tocar un input numérico, seleccionar todo para evitar append accidental ("0"+"30" => "030").
+    linesTbody.addEventListener('focusin', (ev) => {
+      const t = ev.target;
+      if (!(t instanceof HTMLInputElement)) return;
+      if (t.type !== 'number') return;
+      if (t.disabled) return;
+      // iOS/Safari a veces requiere defer.
+      setTimeout(() => { try { t.select(); } catch(_) {} }, 0);
+    });
+
     linesTbody.addEventListener('input', (ev) => {
       if (rcEditorMode !== 'edit' || rcSaving) return;
       const t = ev.target;

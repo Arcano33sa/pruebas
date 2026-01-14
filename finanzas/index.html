@@ -779,8 +779,15 @@
           </div>
         </div>
 
+
+        <label id="rec-bank-wrap" class="fin-form-grow hidden">
+          Banco (solo transferencia)
+          <input type="text" id="rec-bank" placeholder="Ej: BAC, Lafise, Banpro">
+        </label>
+
+
         <label id="rec-ref-wrap" class="fin-form-grow hidden">
-          Referencia (solo transferencia)
+          Referencia (solo transferencia, opcional)
           <input type="text" id="rec-ref" placeholder="Ej: #TRX-1234">
         </label>
       </div>
@@ -827,7 +834,7 @@
         </div>
       </div>
 
-      <p class="fin-help">Regla: si el pago es <strong>Transferencia</strong>, la referencia es obligatoria.</p>
+      <p class="fin-help">Regla: si el pago es <strong>Transferencia</strong>, el <strong>Banco</strong> es obligatorio. La referencia es opcional.</p>
     </form>
   </div>
 </section>
