@@ -1359,6 +1359,7 @@ body.rc-printing .rc-print-root{
 
 .rc-print-table .num{ text-align:right; white-space:nowrap; }
 .rc-print-table .ncol{ width:34px; text-align:center; }
+.rc-print-table .qcol{ width:60px; text-align:center; white-space:nowrap; }
 .rc-print-table .pcol{ width:100px; }
 .rc-print-table .dcol{ width:90px; }
 .rc-print-table .tcol{ width:100px; }

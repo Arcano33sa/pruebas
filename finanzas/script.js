@@ -6466,12 +6466,14 @@ function rcBuildPrintReceiptInnerHTML(r){
   const rows = (receipt.lines || []).map((ln, idx) => {
     const q = rcSafeNum(ln.qty);
     const nameBase = String(ln.itemName || '').trim() || '—';
-    const name = (q && q !== 1) ? `${nameBase} ×${q}` : nameBase;
+    const name = nameBase;
+    const qDisp = (Number.isFinite(q) && q > 0) ? pcFmtQty(q) : '';
     const discCell = (rcSafeNum(ln.discountPerUnit) === 0) ? '' : rcFmtMoneyPrint(ln.discountPerUnit || 0);
     return `
       <tr>
         <td class="ncol">${idx + 1}</td>
         <td>${escapeHTML(name)}</td>
+        <td class="num qcol">${escapeHTML(qDisp)}</td>
         <td class="num pcol">${rcFmtMoneyPrint(ln.unitPrice || 0)}</td>
         <td class="num dcol">${discCell}</td>
         <td class="num tcol">${rcFmtMoneyPrint(ln.lineTotal || 0)}</td>
@@ -6505,6 +6507,7 @@ function rcBuildPrintReceiptInnerHTML(r){
         <tr>
           <th class="ncol">N°</th>
           <th>PRODUCTO</th>
+          <th class="num qcol">CANTIDAD</th>
           <th class="num pcol">P/UNITARIO</th>
           <th class="num dcol">DESC. UNIT</th>
           <th class="num tcol">TOTAL</th>
