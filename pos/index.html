@@ -471,18 +471,14 @@
   <section id="tab-caja" class="tab card" style="display:none">
     <h2>Caja Chica</h2>
 
-    <!-- Etapa 2: cambiar evento desde Caja Chica + volver al evento previo -->
+        <!-- Etapa 1: selector único para todos los eventos abiertos (con o sin Caja Chica) -->
     <div class="row" id="pc-event-switch-row">
       <div>
         <label>Evento (Caja Chica)</label>
         <select id="pc-event-select">
-          <option value="">— Selecciona evento con Caja Chica activa —</option>
+          <option value="">— Selecciona evento —</option>
         </select>
-        <small class="muted">Solo muestra eventos abiertos con Caja Chica activa. Cambia el evento activo global del POS.</small>
-      </div>
-      <div style="text-align:right">
-        <label>&nbsp;</label>
-        <button id="pc-btn-prev-event" class="btn-outline" type="button" style="display:none">Volver</button>
+        <small class="muted">Elige un evento abierto. Si aparece “(Sin Caja Chica)”, esta pantalla queda en solo lectura.</small>
       </div>
     </div>
 

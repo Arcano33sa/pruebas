@@ -105,30 +105,6 @@ async function getSaleByUidPOS(uid){
     }
   }
 }
-// --- Caja Chica (Etapa 2): recordar evento previo cuando se cambia desde Caja Chica
-const A33_PC_PREV_EVENT_KEY = 'a33_pos_pc_prev_event_id';
-function getPcPrevEventId(){
-  try{
-    const v = (localStorage.getItem(A33_PC_PREV_EVENT_KEY) || '').toString().trim();
-    if (!v) return null;
-    const n = parseInt(v, 10);
-    return Number.isFinite(n) ? n : null;
-  }catch(_){
-    return null;
-  }
-}
-function setPcPrevEventId(id){
-  try{
-    if (id == null){ localStorage.removeItem(A33_PC_PREV_EVENT_KEY); return; }
-    const n = parseInt(String(id), 10);
-    if (!Number.isFinite(n)) { localStorage.removeItem(A33_PC_PREV_EVENT_KEY); return; }
-    localStorage.setItem(A33_PC_PREV_EVENT_KEY, String(n));
-  }catch(_){ }
-}
-function clearPcPrevEventId(){
-  try{ localStorage.removeItem(A33_PC_PREV_EVENT_KEY); }catch(_){ }
-}
-
 // --- Caja Chica: gatekeeper duro (Etapa 2)
 let __A33_PC_LAST_RENDER_EVENT_ID = null;
 function setPcLastRenderEventId(id){
@@ -7160,25 +7136,30 @@ function pcDayMetaForSort(day){
 
 async function buildPcEligibleEventsList(dayKey){
   const evs = await getAll('events');
-  const eligible = (evs || []).filter(e => e && !e.closedAt && eventPettyEnabled(e));
+  const openEvents = (evs || []).filter(e => e && !e.closedAt);
   const items = [];
 
   // Criterio confiable: actividad real en Caja Chica del día seleccionado (movs / inicial / final / closedAt)
-  for (const ev of eligible){
+  for (const ev of openEvents){
+    const pettyEnabled = eventPettyEnabled(ev);
     let urgent = false;
     let lastTs = 0;
-    try{
-      const pc = await getPettyCash(ev.id);
-      const dk = dayKey || todayYMD();
-      const day = pc && pc.days ? pc.days[dk] : null;
-      const meta = pcDayMetaForSort(day);
-      urgent = meta.urgent;
-      lastTs = meta.lastTs;
-    }catch(_){ }
+
+    if (pettyEnabled){
+      try{
+        const pc = await getPettyCash(ev.id);
+        const dk = dayKey || todayYMD();
+        const day = pc && pc.days ? pc.days[dk] : null;
+        const meta = pcDayMetaForSort(day);
+        urgent = meta.urgent;
+        lastTs = meta.lastTs;
+      }catch(_){ }
+    }
 
     items.push({
       id: ev.id,
       name: (ev.name || '').toString(),
+      pettyEnabled,
       urgent,
       lastTs
     });
@@ -7193,6 +7174,7 @@ async function buildPcEligibleEventsList(dayKey){
   return items;
 }
 
+
 async function renderPcEventSwitchUI(dayKey){
   const sel = document.getElementById('pc-event-select');
   if (!sel) return;
@@ -7202,15 +7184,20 @@ async function renderPcEventSwitchUI(dayKey){
 
   // Rebuild options
   const prev = String(sel.value || '').trim();
-  sel.innerHTML = '<option value="">— Selecciona evento con Caja Chica activa —</option>';
+  sel.innerHTML = '<option value="">— Selecciona evento —</option>';
   for (const it of items){
     const o = document.createElement('option');
     o.value = it.id;
-    o.textContent = it.name + (it.urgent ? ' · con actividad' : '');
+
+    let label = it.name;
+    if (!it.pettyEnabled) label += ' (Sin Caja Chica)';
+    else if (it.urgent) label += ' · con actividad';
+
+    o.textContent = label;
     sel.appendChild(o);
   }
 
-  // Sync selection to evento activo global si aplica
+  // Sync selection: SIEMPRE el evento activo si está disponible
   if (currentId && items.some(i => String(i.id) === String(currentId))){
     sel.value = currentId;
   } else {
@@ -7220,24 +7207,8 @@ async function renderPcEventSwitchUI(dayKey){
   }
 
   sel.disabled = (items.length === 0);
-
-  // Botón Volver
-  const btn = document.getElementById('pc-btn-prev-event');
-  if (btn){
-    const prevId = getPcPrevEventId();
-    if (prevId && String(prevId) !== String(currentId)){
-      const prevEv = await getEventByIdSafe(prevId);
-      if (prevEv && !prevEv.closedAt){
-        btn.style.display = 'inline-flex';
-        btn.textContent = 'Volver' + (prevEv.name ? ` a ${prevEv.name}` : '');
-      } else {
-        btn.style.display = 'none';
-      }
-    } else {
-      btn.style.display = 'none';
-    }
-  }
 }
+
 
 async function updatePettyToggleUI(curEvent){
   const t = document.getElementById('pc-event-toggle');
@@ -11055,8 +11026,7 @@ async function showSummaryReturnBannerPOS({ currentEventId, prevEventId }){
     // Etapa 2: limpiar cliente al cambiar evento
     await resetOperationalStateOnEventSwitchPOS();
     await setMeta('currentEventId', prevEventId);
-    clearPcPrevEventId();
-    hideSummaryReturnBannerPOS();
+hideSummaryReturnBannerPOS();
     await refreshEventUI();
     try{ await renderDay(); }catch(_){ }
     try{ await renderSummaryDailyCloseCardPOS(); }catch(_){ }
@@ -11142,16 +11112,8 @@ async function onSummaryCloseDayPOS(){
     } else {
       showToast(`Cierre guardado${v ? ` (v${v})` : ''}.`, 'ok', 4500);
     }
-
-    // Etapa 2: ofrecer volver al evento previo (si el cambio se hizo desde Caja Chica)
-    if (!(r && r.already)){
-      const prevId = getPcPrevEventId();
-      if (prevId && String(prevId) !== String(ev.id)){
-        await showSummaryReturnBannerPOS({ currentEventId: ev.id, prevEventId: prevId });
-      } else {
-        hideSummaryReturnBannerPOS();
-      }
-    }
+    // Etapa 2: (removido) sin flujo de “volver al evento previo”
+    try{ hideSummaryReturnBannerPOS(); }catch(_){ }
   }catch(err){
     console.error('onSummaryCloseDayPOS', err);
     showToast('No se pudo cerrar el día: ' + humanizeError(err), 'error', 5000);
@@ -11833,9 +11795,7 @@ async function resetOperationalStoresAfterArchivePOS(){
   rm(A33_PENDING_SALE_UID_KEY);
   rm(A33_PENDING_SALE_FP_KEY);
   rm(A33_PENDING_SALE_AT_KEY);
-  rm(A33_PC_PREV_EVENT_KEY);
-
-  // --- Limpiar stores operativos de forma ATÓMICA
+// --- Limpiar stores operativos de forma ATÓMICA
   const stores = ['sales','inventory','pettyCash','dayLocks','dailyClosures','posRemindersIndex'];
   try{
     await clearStoresAtomicPOS(stores);
@@ -16300,36 +16260,7 @@ const btnAddMov = document.getElementById('pc-mov-add');
       const nextId = parseInt(raw, 10);
       if (!Number.isFinite(nextId)) return;
 
-      const curId = await getMeta('currentEventId');
-      if (curId && String(curId) !== String(nextId)){
-        setPcPrevEventId(curId);
-      }
-
       await setMeta('currentEventId', nextId);
-      await refreshEventUI();
-      try{ await renderDay(); }catch(_){ }
-      try{ await renderSummaryDailyCloseCardPOS(); }catch(_){ }
-      try{ await renderPcEventSwitchUI(getSelectedPcDay()); }catch(_){ }
-    });
-  }
-
-  const btnPrevEvent = document.getElementById('pc-btn-prev-event');
-  if (btnPrevEvent){
-    btnPrevEvent.addEventListener('click', async (e)=>{
-      e.preventDefault();
-      // Etapa 2: limpiar cliente al cambiar evento
-      await resetOperationalStateOnEventSwitchPOS();
-      const prevId = getPcPrevEventId();
-      if (!prevId) return;
-      const curId = await getMeta('currentEventId');
-      if (curId && String(curId) === String(prevId)){
-        clearPcPrevEventId();
-        try{ await renderPcEventSwitchUI(getSelectedPcDay()); }catch(_){ }
-        return;
-      }
-
-      await setMeta('currentEventId', prevId);
-      clearPcPrevEventId();
       await refreshEventUI();
       try{ await renderDay(); }catch(_){ }
       try{ await renderSummaryDailyCloseCardPOS(); }catch(_){ }
