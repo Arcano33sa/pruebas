@@ -1383,11 +1383,13 @@ body.rc-printing .rc-print-root{
   display:grid;
   grid-template-columns: 1fr 1fr;
   gap:28px;
-  margin-top:18px;
+  /* Dejar un área limpia para firmar (arriba de la línea) */
+  margin-top:46px;
 }
 
 .rc-sign-box{
-  padding-top:22px;
+  /* La línea debe quedar casi pegada al texto */
+  padding-top:2px;
   border-top:1px solid rgba(0,0,0,0.25);
   font-size:11px;
   letter-spacing:0.04em;
@@ -1433,9 +1435,12 @@ body.rc-printing .rc-print-root{
 
   .rc-print-page{ margin:0; }
 
-  /* Firmas: bajar un poco el bloque para dejar área real de firma */
-  .rc-print-sign{ margin-top:28px !important; }
-  .rc-sign-box{ padding-top:28px !important; }
+  /* Firmas:
+     - Bajar el bloque para dar más área real de firma (arriba de la línea)
+     - Línea casi pegada al texto “Recibí/Entregué”
+  */
+  .rc-print-sign{ margin-top:66px !important; }
+  .rc-sign-box{ padding-top:2px !important; }
 
   /* Evitar cortes extra */
   .rc-print-page{ break-inside: avoid; page-break-inside: avoid; }
