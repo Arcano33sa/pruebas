@@ -15438,9 +15438,20 @@ async function onSavePettyInitial(){
   return;
 }
 
-updatePettySummaryUI(pc, dayKey);
+  const cashSalesNio = await getCashSalesNioForDay(evId, dayKey);
+  updatePettySummaryUI(pc, dayKey, { cashSalesNio });
   fillPettyInitialFromPc(pc, dayKey);
   setPrevCierreUI(pc, dayKey);
+
+  // Refrescar candado de cierre inmediatamente (habilitar/deshabilitar botón según cuadre)
+  const evs = await getAll('events');
+  const ev = (evs || []).find(e => e && e.id === evId);
+  const fxRaw = ev ? Number(ev.fxRate || 0) : null;
+  const fx = (fxRaw == null) ? null : (Number.isFinite(Number(fxRaw)) ? Number(fxRaw) : null);
+  const check = await getPettyCloseCheck(evId, pc, dayKey, cashSalesNio, fx);
+  renderPettyCloseUI(check, false);
+
+  await updateCopyInitialButtonState(pc, dayKey, cashSalesNio, { eventId: evId });
   showToast('Saldo inicial guardado', 'ok', 5000);
 }
 
@@ -15585,9 +15596,20 @@ async function onSavePettyFinal(){
   return;
 }
 
-updatePettySummaryUI(pc, dayKey);
+  const cashSalesNio = await getCashSalesNioForDay(evId, dayKey);
+  updatePettySummaryUI(pc, dayKey, { cashSalesNio });
   fillPettyFinalFromPc(pc, dayKey);
   setPrevCierreUI(pc, dayKey);
+
+  // Refrescar candado de cierre inmediatamente (habilitar/deshabilitar botón según cuadre)
+  const evs = await getAll('events');
+  const ev = (evs || []).find(e => e && e.id === evId);
+  const fxRaw = ev ? Number(ev.fxRate || 0) : null;
+  const fx = (fxRaw == null) ? null : (Number.isFinite(Number(fxRaw)) ? Number(fxRaw) : null);
+  const check = await getPettyCloseCheck(evId, pc, dayKey, cashSalesNio, fx);
+  renderPettyCloseUI(check, false);
+
+  await updateCopyInitialButtonState(pc, dayKey, cashSalesNio, { eventId: evId });
   showToast('Arqueo final guardado', 'ok', 5000);
 }
 
@@ -16264,7 +16286,8 @@ const btnAddMov = document.getElementById('pc-mov-add');
       await refreshEventUI();
       try{ await renderDay(); }catch(_){ }
       try{ await renderSummaryDailyCloseCardPOS(); }catch(_){ }
-      try{ await renderPcEventSwitchUI(getSelectedPcDay()); }catch(_){ }
+      // Importante: re-render completo de Caja Chica para sincronizar validaciones (Cerrar día) con el evento seleccionado
+      try{ await renderCajaChica(); }catch(_){ }
     });
   }
 
