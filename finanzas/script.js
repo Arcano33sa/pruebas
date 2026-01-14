@@ -6421,16 +6421,20 @@ function rcBuildPrintReceiptInnerHTML(r){
 
   const cli = String(receipt.clientName || '').trim() || '—';
 
+  // En impresión: cuando un valor sea 0 (o redondee a 0.00), mostrar vacío para evitar confusión.
+  const rcPrintBlankIfZero = (v) => (rcRound2(v) === 0 ? '' : rcFmtMoneyPrint(v));
+
   const rows = (receipt.lines || []).map((ln, idx) => {
     const q = rcSafeNum(ln.qty);
     const nameBase = String(ln.itemName || '').trim() || '—';
     const name = (q && q !== 1) ? `${nameBase} ×${q}` : nameBase;
+    const dpu = rcSafeNum(ln.discountPerUnit);
     return `
       <tr>
         <td class="ncol">${idx + 1}</td>
         <td>${escapeHTML(name)}</td>
         <td class="num pcol">${rcFmtMoneyPrint(ln.unitPrice || 0)}</td>
-        <td class="num dcol">${rcFmtMoneyPrint(ln.discountPerUnit || 0)}</td>
+        <td class="num dcol">${rcPrintBlankIfZero(dpu)}</td>
         <td class="num tcol">${rcFmtMoneyPrint(ln.lineTotal || 0)}</td>
       </tr>
     `;
@@ -6471,7 +6475,7 @@ function rcBuildPrintReceiptInnerHTML(r){
 
     <div class="rc-print-totals">
       <div class="row"><div><strong>SUBTOTAL</strong></div><div>${rcFmtMoneyPrint(sub)}</div></div>
-      <div class="row"><div><strong>DESCUENTO</strong></div><div>${rcFmtMoneyPrint(disc)}</div></div>
+      <div class="row"><div><strong>DESCUENTO</strong></div><div>${rcPrintBlankIfZero(disc)}</div></div>
       <div class="row"><div><strong>TOTAL</strong></div><div><strong>${rcFmtMoneyPrint(tot)}</strong></div></div>
     </div>
 

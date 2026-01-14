@@ -1399,24 +1399,56 @@ body.rc-printing .rc-print-root{
 @media print{
   @page{ size: Letter; margin: 0; }
 
+  /* Reset de márgenes/paddings para que la hoja no "crezca" y no aparezcan páginas fantasma */
+  html, body{
+    margin:0 !important;
+    padding:0 !important;
+  }
+
   body.fin-body{
     background:#fff !important;
     color:#000 !important;
   }
 
-  /* Mostrar solo el recibo imprimible */
-  body *{ visibility:hidden !important; }
-  #rc-print-root, #rc-print-root *{ visibility:visible !important; }
-
-  #rc-print-root{
-    display:block !important;
-    position:absolute;
-    left:0;
-    top:0;
-    width:8.5in;
+  /* Print aislado: ocultar TODA la app sin dejar huella de layout (visibility no basta) */
+  body.fin-body > *:not(#rc-print-root){
+    display:none !important;
   }
 
-  .rc-print-page{ margin:0; }
+  /* Solo existe en impresión el contenedor del recibo */
+  #rc-print-root{
+    display:block !important;
+    position:relative !important;
+    left:0 !important;
+    top:0 !important;
+    width:8.5in !important;
+    margin:0 !important;
+    padding:0 !important;
+    overflow:visible !important;
+  }
+
+  .rc-print-page{
+    margin:0 !important;
+    page-break-after:avoid !important;
+    break-after:avoid-page !important;
+  }
+
+  /* Firmas: más aire y área firmable (solo impresión) */
+  .rc-print-sign{ margin-top:26px !important; }
+  .rc-sign-box{
+    position:relative !important;
+    min-height:92px !important;
+    padding-top:66px !important;
+    border-top:none !important;
+  }
+  .rc-sign-box::before{
+    content:'';
+    position:absolute;
+    left:0;
+    right:0;
+    top:52px;
+    border-top:1px solid rgba(0,0,0,0.25);
+  }
 
   /* Evitar cortes extra */
   .rc-print-page{ break-inside: avoid; page-break-inside: avoid; }
