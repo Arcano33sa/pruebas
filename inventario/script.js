@@ -333,13 +333,13 @@ function markA33Num(input, { defaultValue = '0', mode = 'decimal' } = {}) {
 // Inventario — Etapa 3 (iPad-first + rendimiento)
 // - Sin scroll horizontal en iPad (tarjetas via CSS + data-labels en celdas)
 // - Render incremental (sin rehacer listas completas)
-// - Filtros con debounce + paginación simple ("Cargar más")
+// - Paginación simple ("Cargar más")
 // - Estados visibles: cargando / guardando / sin resultados / errores
 // ------------------------------
 
 const INV_UI = {
-  search: "",
-  pageSize: 30,
+  // suficientemente alto para mostrar todo por defecto (sin filtros)
+  pageSize: 9999,
   pages: { liquids: 1, bottles: 1, finished: 1 },
 };
 
@@ -363,10 +363,6 @@ function debounce(fn, waitMs) {
   };
 }
 
-function normalizeSearch(v) {
-  return String(v || "").trim().toLowerCase();
-}
-
 function setStatus(text, kind = "info", { sticky = false, timeoutMs = 2200 } = {}) {
   const el = $("inv-status");
   if (!el) return;
@@ -387,18 +383,11 @@ function setStatus(text, kind = "info", { sticky = false, timeoutMs = 2200 } = {
   }
 }
 
-function resetPages() {
-  INV_UI.pages.liquids = 1;
-  INV_UI.pages.bottles = 1;
-  INV_UI.pages.finished = 1;
-}
-
 function applyView(section) {
   const view = INV_VIEW[section];
   const cache = INV_ROW_CACHE[section];
   if (!view || !cache) return;
 
-  const q = INV_UI.search;
   const page = INV_UI.pages[section] || 1;
   const limit = INV_UI.pageSize * page;
 
@@ -408,12 +397,6 @@ function applyView(section) {
   defs.forEach((d) => {
     const row = cache.get(d.id);
     if (!row || !row.tr) return;
-
-    const hay = !q || String(row.tr.dataset.search || "").includes(q);
-    if (!hay) {
-      row.tr.hidden = true;
-      return;
-    }
     matched += 1;
     row.tr.hidden = matched > limit;
   });
@@ -432,29 +415,7 @@ function applyAllViews() {
 }
 
 function wireViewControls() {
-  const input = $("inv-search");
-  const clearBtn = $("inv-clear-search");
-
-  const applyFilter = () => {
-    INV_UI.search = normalizeSearch(input ? input.value : "");
-    resetPages();
-    applyAllViews();
-  };
-
-  if (input) {
-    input.addEventListener("input", debounce(applyFilter, 180));
-  }
-
-  if (clearBtn) {
-    clearBtn.addEventListener("click", () => {
-      if (input) input.value = "";
-      INV_UI.search = "";
-      resetPages();
-      applyAllViews();
-      setStatus("Filtro limpio.", "ok", { timeoutMs: 900 });
-    });
-  }
-
+  // Solo paginación ("Cargar más"). Sin buscador.
   ["liquids", "bottles", "finished"].forEach((section) => {
     const view = INV_VIEW[section];
     if (!view) return;
@@ -484,7 +445,6 @@ function ensureLiquidoRow(tbody, def) {
   const tr = document.createElement("tr");
   tr.dataset.section = "liquids";
   tr.dataset.rowId = id;
-  tr.dataset.search = String(def.nombre || "").toLowerCase();
 
   const tdNombre = tdLabel(document.createElement("td"), "Ingrediente");
   tdNombre.textContent = def.nombre;
@@ -591,7 +551,7 @@ function ensureBottleRow(tbody, def) {
   const tr = document.createElement("tr");
   tr.dataset.section = "bottles";
   tr.dataset.rowId = id;
-  tr.dataset.search = String(def.nombre || "").toLowerCase();
+	  
 
   const tdNombre = tdLabel(document.createElement("td"), "Presentación");
   tdNombre.textContent = def.nombre;
@@ -678,7 +638,7 @@ function ensureFinishedRow(tbody, def) {
   const tr = document.createElement("tr");
   tr.dataset.section = "finished";
   tr.dataset.rowId = id;
-  tr.dataset.search = String(def.nombre || "").toLowerCase();
+	  
 
   const tdNombre = tdLabel(document.createElement("td"), "Presentación");
   tdNombre.textContent = def.nombre;
@@ -851,11 +811,9 @@ function renderLiquidos(inv) {
   if (!tbody) return;
 
   LIQUIDS.forEach((l) => {
-    const row = ensureLiquidoRow(tbody, l);
+    ensureLiquidoRow(tbody, l);
     // setear valores
     updateLiquidoRow(inv, l.id);
-    // asegurar search estable
-    row.tr.dataset.search = String(l.nombre || "").toLowerCase();
   });
 
   applyView("liquids");
@@ -868,9 +826,8 @@ function renderBotellas(inv) {
   if (!tbody) return;
 
   BOTTLES.forEach((b) => {
-    const row = ensureBottleRow(tbody, b);
+    ensureBottleRow(tbody, b);
     updateBottleRow(inv, b.id);
-    row.tr.dataset.search = String(b.nombre || "").toLowerCase();
   });
 
   applyView("bottles");
@@ -1094,9 +1051,8 @@ function renderProductosTerminados(inv) {
   if (!tbody) return;
 
   FINISHED.forEach((pDef) => {
-    const row = ensureFinishedRow(tbody, pDef);
+		ensureFinishedRow(tbody, pDef);
     updateFinishedRow(inv, pDef.id);
-    row.tr.dataset.search = String(pDef.nombre || "").toLowerCase();
   });
 
   applyView("finished");
