@@ -4,20 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.8">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.9">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.8">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.8" />
+<link rel="stylesheet" href="styles.css?v=4.20.9">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.9" />
 </head>
 <body>
   <header class="a33-header" role="banner">
     <a class="a33-btn-menu" href="../index.html" aria-label="Volver al Menú principal">← Menú principal</a>
     <div class="a33-title">POS · Eventos</div>
-    <div class="a33-version">v4.20.8</div>
+    <div class="a33-version">v4.20.9</div>
   </header>
 <div id="offlineBar" class="offline">Trabajando sin conexión</div>
 <div class="container">
@@ -1265,19 +1265,83 @@
     <button id="summary-archive-close" class="close btn-warn btn-pill">Cerrar</button>
     <h3>Archivo de Resúmenes</h3>
 
-    <div class="row" style="gap:8px">
-      <input id="summary-archive-search" placeholder="Buscar (ej: Diciembre 2025)">
-      <button id="summary-archive-refresh" class="btn-pill" type="button">Actualizar</button>
+    <div class="actions" id="summary-archive-toolbar" style="margin-top:8px">
+      <input id="summary-archive-search" placeholder="Buscar (ej: Diciembre 2025)" style="flex:1 1 260px; width:auto">
+      <button id="summary-archive-refresh" class="btn-pill btn-pill-mini" type="button">Actualizar</button>
+      <button id="summary-archive-consolidated" class="btn-outline btn-pill btn-pill-mini" type="button" title="Ver acumulado (Archivo + Vivo)">CONSOLIDADO</button>
     </div>
 
-    <div class="scroll">
-      <table id="tbl-summary-archives">
-        <thead><tr><th style="width:70px">Seq</th><th>Período</th><th style="width:170px">Fecha cierre</th><th style="width:170px">Acciones</th></tr></thead>
-        <tbody></tbody>
-      </table>
+    <div id="summary-archive-view-list">
+      <div class="scroll">
+        <table id="tbl-summary-archives">
+          <thead><tr><th style="width:70px">Seq</th><th>Período</th><th style="width:170px">Fecha cierre</th><th style="width:170px">Acciones</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="info"><small>Los archivos son snapshots (solo lectura). Puedes re-exportar Excel cuando quieras.</small></div>
     </div>
 
-    <div class="info"><small>Los archivos son snapshots (solo lectura). Puedes re-exportar Excel cuando quieras.</small></div>
+    <div id="summary-archive-view-consolidated" style="display:none">
+      <div class="warn a33-guard-banner" style="margin-top:10px">
+        <div class="a33-guard-text">
+          <div class="a33-guard-title">CONSOLIDADO (solo lectura)</div>
+          <div class="a33-guard-sub">Vista acumulada: ARCHIVADO + VIVO. No es un período (no se cierra, no se exporta).</div>
+          <div id="summary-consolidated-updated" class="muted small">Actualizado: …</div>
+        </div>
+        <div class="a33-guard-actions">
+          <button id="summary-archive-consolidated-back" class="btn-pill btn-pill-mini" type="button">Volver</button>
+        </div>
+      </div>
+
+      <div class="consolidated-grid">
+        <div class="card consolidated-card">
+          <div class="consolidated-title">ARCHIVADO</div>
+          <div id="summary-consolidated-arch-count" class="muted small">Períodos archivados incluidos: 0</div>
+          <div class="consolidated-kpi">
+            <div class="consolidated-row"><span>Total general</span><b>C$ <span id="summary-consolidated-arch-grand">0</span></b></div>
+            <div class="consolidated-row"><span>Costo estimado</span><b>C$ <span id="summary-consolidated-arch-grandCost">0</span></b></div>
+            <div class="consolidated-row"><span>Utilidad bruta</span><b>C$ <span id="summary-consolidated-arch-grandProfit">0</span></b></div>
+            <div class="consolidated-row"><span>Cortesías (Costo real)</span><b>C$ <span id="summary-consolidated-arch-courtesyCost">0</span></b></div>
+            <div class="consolidated-row"><span>Utilidad después de cortesías</span><b>C$ <span id="summary-consolidated-arch-profitAfterCourtesy">0</span></b></div>
+            <div class="consolidated-row consolidated-row-mini"><span>Cortesías (unidades)</span><b><span id="summary-consolidated-arch-courtesyQty">0</span></b></div>
+            <div class="consolidated-row consolidated-row-mini"><span>Cortesías (movimientos)</span><b><span id="summary-consolidated-arch-courtesyTx">0</span></b></div>
+            <div class="consolidated-row consolidated-row-mini"><span>Cortesías (equivalente ventas)</span><b>C$ <span id="summary-consolidated-arch-courtesyEquiv">0</span></b></div>
+          </div>
+        </div>
+        <div class="card consolidated-card">
+          <div class="consolidated-title">VIVO (PERÍODO ABIERTO)</div>
+          <div id="summary-consolidated-live-period" class="muted small">Período: …</div>
+          <div id="summary-consolidated-live-note" class="muted small" style="display:none">Este período ya está archivado: VIVO queda en 0 para evitar doble conteo.</div>
+          <div class="consolidated-kpi">
+            <div class="consolidated-row"><span>Total general</span><b>C$ <span id="summary-consolidated-live-grand">0</span></b></div>
+            <div class="consolidated-row"><span>Costo estimado</span><b>C$ <span id="summary-consolidated-live-grandCost">0</span></b></div>
+            <div class="consolidated-row"><span>Utilidad bruta</span><b>C$ <span id="summary-consolidated-live-grandProfit">0</span></b></div>
+            <div class="consolidated-row"><span>Cortesías (Costo real)</span><b>C$ <span id="summary-consolidated-live-courtesyCost">0</span></b></div>
+            <div class="consolidated-row"><span>Utilidad después de cortesías</span><b>C$ <span id="summary-consolidated-live-profitAfterCourtesy">0</span></b></div>
+            <div class="consolidated-row consolidated-row-mini"><span>Cortesías (unidades)</span><b><span id="summary-consolidated-live-courtesyQty">0</span></b></div>
+            <div class="consolidated-row consolidated-row-mini"><span>Cortesías (movimientos)</span><b><span id="summary-consolidated-live-courtesyTx">0</span></b></div>
+            <div class="consolidated-row consolidated-row-mini"><span>Cortesías (equivalente ventas)</span><b>C$ <span id="summary-consolidated-live-courtesyEquiv">0</span></b></div>
+          </div>
+        </div>
+        <div class="card consolidated-card">
+          <div class="consolidated-title">CONSOLIDADO (TOTAL)</div>
+          <div class="muted small">ARCHIVADO + VIVO</div>
+          <div class="consolidated-kpi">
+            <div class="consolidated-row"><span>Total general</span><b>C$ <span id="summary-consolidated-total-grand">0</span></b></div>
+            <div class="consolidated-row"><span>Costo estimado</span><b>C$ <span id="summary-consolidated-total-grandCost">0</span></b></div>
+            <div class="consolidated-row"><span>Utilidad bruta</span><b>C$ <span id="summary-consolidated-total-grandProfit">0</span></b></div>
+            <div class="consolidated-row"><span>Cortesías (Costo real)</span><b>C$ <span id="summary-consolidated-total-courtesyCost">0</span></b></div>
+            <div class="consolidated-row"><span>Utilidad después de cortesías</span><b>C$ <span id="summary-consolidated-total-profitAfterCourtesy">0</span></b></div>
+            <div class="consolidated-row consolidated-row-mini"><span>Cortesías (unidades)</span><b><span id="summary-consolidated-total-courtesyQty">0</span></b></div>
+            <div class="consolidated-row consolidated-row-mini"><span>Cortesías (movimientos)</span><b><span id="summary-consolidated-total-courtesyTx">0</span></b></div>
+            <div class="consolidated-row consolidated-row-mini"><span>Cortesías (equivalente ventas)</span><b>C$ <span id="summary-consolidated-total-courtesyEquiv">0</span></b></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="info"><small>Nota: VIVO se calcula solo para el período mensual activo (YYYY-MM). Si el período ya está archivado, VIVO no se suma (anti doble conteo).</small></div>
+    </div>
   </div>
 </div>
 
@@ -1378,9 +1442,9 @@
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
-<script src="/assets/js/a33-storage.js?v=4.20.8"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.8"></script>
-<script src="/assets/js/a33-auth.js?v=4.20.8"></script>
+<script src="/assets/js/a33-storage.js?v=4.20.9"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.9"></script>
+<script src="/assets/js/a33-auth.js?v=4.20.9"></script>
 <script>
   (function(){
     try{
@@ -1405,10 +1469,10 @@
     }
   })();
 </script>
-<script src="app.js?v=4.20.8"></script>
-<script src="/assets/js/a33-input-ux.js?v=4.20.8"></script>
+<script src="app.js?v=4.20.9"></script>
+<script src="/assets/js/a33-input-ux.js?v=4.20.9"></script>
 <script>
-  if ('serviceWorker' in navigator) { navigator.serviceWorker.register('./sw.js?v=4.20.8'); }
+  if ('serviceWorker' in navigator) { navigator.serviceWorker.register('./sw.js?v=4.20.9'); }
 </script>
 </body>
 </html>

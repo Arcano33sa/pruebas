@@ -8715,6 +8715,13 @@ async function sellCupsPOS(isCourtesy){
     return;
   }
 
+  // Invalida cache liviano de Consolidado (ventas del período actual)
+  try{
+    const pk = periodKeyFromDatePOS(saleRecord.date);
+    bumpConsolSalesRevPOS(pk);
+    clearConsolLiveCachePOS(pk);
+  }catch(_){ }
+
   try{
     await createJournalEntryForSalePOS(saleRecord);
   }catch(e){
@@ -11815,6 +11822,10 @@ async function resetOperationalStoresAfterArchivePOS(){
 }
 
 async function openSummaryClosePeriodModalPOS(){
+  if (isSummaryConsolidatedViewActivePOS()){
+    showToast('CONSOLIDADO es solo lectura. Volvé a Archivo normal para cerrar períodos.', 'error', 4000);
+    return;
+  }
   if (__A33_SUMMARY_MODE === 'archive'){
     showToast('Estás viendo un período archivado. Volvé a En vivo para cerrar períodos.', 'error', 3500);
     return;
@@ -11857,6 +11868,10 @@ function closeSummaryClosePeriodModalPOS(){
 }
 
 async function confirmClosePeriodPOS(){
+  if (isSummaryConsolidatedViewActivePOS()){
+    showToast('CONSOLIDADO es solo lectura. No se puede cerrar/archivar desde esa vista.', 'error', 4000);
+    return;
+  }
   if (__A33_SUMMARY_MODE === 'archive'){
     showToast('Estás viendo un período archivado. Volvé a En vivo para cerrar.', 'error', 3500);
     return;
@@ -11920,10 +11935,23 @@ async function confirmClosePeriodPOS(){
 
       try{
         await put('summaryArchives', archive);
-        await setMeta('periodArchiveSeq', seq);
       }catch(err){
         console.error('No se pudo guardar el archive', err);
         setClosePeriodErrorPOS('Se exportó el Excel, pero NO se pudo guardar el snapshot del período.\nNo se hará el reset para evitar perder datos.\n\nDetalle: ' + humanizeError(err));
+        return;
+      }
+
+      // Invalida caches livianos de Archivo/Consolidado tan pronto el snapshot existe
+      try{ bumpConsolArchRevPOS(); }catch(_){ }
+      try{ bumpConsolSalesRevPOS(periodKey); }catch(_){ }
+      try{ clearConsolLiveCachePOS(periodKey); }catch(_){ }
+
+      try{
+        await setMeta('periodArchiveSeq', seq);
+      }catch(err){
+        // El snapshot ya existe; evitamos reset por seguridad, pero dejamos caches coherentes.
+        console.error('No se pudo actualizar periodArchiveSeq', err);
+        setClosePeriodErrorPOS('Se exportó el Excel y se guardó el snapshot, pero NO se pudo actualizar el contador de secuencia.\nNo se hará el reset para evitar perder datos.\n\nDetalle: ' + humanizeError(err));
         return;
       }
 
@@ -11952,6 +11980,10 @@ async function confirmClosePeriodPOS(){
 }
 
 async function manualExportClosePeriodPOS(){
+  if (isSummaryConsolidatedViewActivePOS()){
+    showToast('CONSOLIDADO es solo lectura. No se puede exportar desde esa vista.', 'error', 4000);
+    return;
+  }
   const periodKey = getSummarySelectedPeriodKeyPOS();
   let lastSeq = 0;
   try{ lastSeq = Number(await getMeta('periodArchiveSeq') || 0) || 0; }catch(e){ lastSeq = 0; }
@@ -12061,13 +12093,245 @@ function renderSummaryArchivesTablePOS(list){
   }
 }
 
-async function loadAndRenderArchivesPOS(){
+// -----------------------------
+// Archivo (modal) · Caches livianos (Etapa 4)
+// - Evitan lecturas pesadas de summaryArchives al abrir Archivo/Consolidado en iPad.
+// - Se invalidan por:
+//   - Cambio en summaryArchives (archRev)
+//   - Cambio en ventas del período activo (salesRev[YYYY-MM])
+//   - Cambio del período mensual activo (YYYY-MM) (cache por periodKey)
+// -----------------------------
+const A33_POS_CONSOL_CACHE_VER = 1;
+const LS_A33_POS_CONSOL_ARCH_REV = 'a33_pos_consol_arch_rev_v1';
+const LS_A33_POS_CONSOL_SALES_REV_MAP = 'a33_pos_consol_sales_rev_map_v1';
+const LS_A33_POS_SUMMARY_ARCH_INDEX = 'a33_pos_summary_archives_index_v1';
+const LS_A33_POS_CONSOL_ARCH_AGG = 'a33_pos_consol_arch_agg_v1';
+const LS_A33_POS_CONSOL_LIVE_CACHE = 'a33_pos_consol_live_cache_v1';
+
+function lsGetJsonPOS(key, fallback){
+  try{
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const obj = JSON.parse(raw);
+    return (obj == null) ? fallback : obj;
+  }catch(_){
+    return fallback;
+  }
+}
+
+function lsSetJsonPOS(key, obj){
+  try{ localStorage.setItem(key, JSON.stringify(obj)); }catch(_){ }
+}
+
+function lsRemovePOS(key){
+  try{ localStorage.removeItem(key); }catch(_){ }
+}
+
+function getConsolArchRevPOS(){
+  try{
+    const raw = localStorage.getItem(LS_A33_POS_CONSOL_ARCH_REV);
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : 0;
+  }catch(_){
+    return 0;
+  }
+}
+
+function bumpConsolArchRevPOS(){
+  const v = Date.now();
+  try{ localStorage.setItem(LS_A33_POS_CONSOL_ARCH_REV, String(v)); }catch(_){ }
+  // invalidar caches derivados
+  lsRemovePOS(LS_A33_POS_SUMMARY_ARCH_INDEX);
+  lsRemovePOS(LS_A33_POS_CONSOL_ARCH_AGG);
+  return v;
+}
+
+function getSalesRevMapPOS(){
+  const m = lsGetJsonPOS(LS_A33_POS_CONSOL_SALES_REV_MAP, {});
+  return (m && typeof m === 'object') ? m : {};
+}
+
+function getConsolSalesRevPOS(periodKey){
+  const pk = String(periodKey || '').trim();
+  if (!pk) return 0;
+  const m = getSalesRevMapPOS();
+  const v = Number(m[pk]);
+  return Number.isFinite(v) ? v : 0;
+}
+
+function bumpConsolSalesRevPOS(periodKey){
+  const pk = String(periodKey || '').trim();
+  if (!pk) return;
+  const m = getSalesRevMapPOS();
+  m[pk] = Date.now();
+
+  // Prune simple: mantener solo los más recientes (evita crecer infinito)
+  try{
+    const entries = Object.entries(m).map(([k,val])=>({k, t: Number(val)||0}));
+    entries.sort((a,b)=> (b.t||0) - (a.t||0));
+    const keep = entries.slice(0, 18);
+    const next = {};
+    for (const it of keep) next[it.k] = it.t;
+    lsSetJsonPOS(LS_A33_POS_CONSOL_SALES_REV_MAP, next);
+  }catch(_){
+    lsSetJsonPOS(LS_A33_POS_CONSOL_SALES_REV_MAP, m);
+  }
+
+  // live cache por período queda invalidado por rev
+}
+
+function getConsolLiveCacheMapPOS(){
+  const m = lsGetJsonPOS(LS_A33_POS_CONSOL_LIVE_CACHE, {});
+  return (m && typeof m === 'object') ? m : {};
+}
+
+function getConsolLiveCachePOS(periodKey){
+  const pk = String(periodKey || '').trim();
+  if (!pk) return null;
+  const m = getConsolLiveCacheMapPOS();
+  const c = m[pk];
+  return (c && typeof c === 'object') ? c : null;
+}
+
+function setConsolLiveCachePOS(periodKey, cacheObj){
+  const pk = String(periodKey || '').trim();
+  if (!pk) return;
+  const m = getConsolLiveCacheMapPOS();
+  m[pk] = cacheObj;
+  // Prune simple: mantener últimos 12
+  try{
+    const entries = Object.entries(m).map(([k,val])=>({k, t: Number(val && val.computedAt)||0}));
+    entries.sort((a,b)=> (b.t||0) - (a.t||0));
+    const keep = entries.slice(0, 12);
+    const next = {};
+    for (const it of keep) next[it.k] = m[it.k];
+    lsSetJsonPOS(LS_A33_POS_CONSOL_LIVE_CACHE, next);
+  }catch(_){
+    lsSetJsonPOS(LS_A33_POS_CONSOL_LIVE_CACHE, m);
+  }
+}
+
+function clearConsolLiveCachePOS(periodKey){
+  const pk = String(periodKey || '').trim();
+  if (!pk) return;
+  const m = getConsolLiveCacheMapPOS();
+  if (m && Object.prototype.hasOwnProperty.call(m, pk)){
+    try{ delete m[pk]; }catch(_){ }
+    lsSetJsonPOS(LS_A33_POS_CONSOL_LIVE_CACHE, m);
+  }
+}
+
+function extractArchiveIndexItemPOS(a){
+  if (!a) return null;
+  const periodKey = String(a.periodKey || '').trim();
+  return {
+    id: a.id,
+    seq: Number(a.seq || 0) || 0,
+    seqStr: String(a.seqStr || pad3POS(a.seq || 0)),
+    periodKey,
+    periodLabel: String(a.periodLabel || periodLabelPOS(periodKey)),
+    createdAt: a.createdAt || a.exportedAt || '',
+    exportedAt: a.exportedAt || '',
+    name: a.name || '',
+    fileName: a.fileName || ''
+  };
+}
+
+async function rebuildSummaryArchivesCachesPOS(){
   const all = await getAll('summaryArchives');
-  const list = (all || []).slice().sort((a,b)=>{
+  const list = Array.isArray(all) ? all : [];
+
+  const items = [];
+  const periodIndex = {}; // periodKey -> { id, seq, seqStr, createdAt, periodLabel }
+
+  const acc = { grand:0, grandCost:0, grandProfit:0, courtesyCost:0, profitAfterCourtesy:0, courtesyQty:0, courtesyTx:0, courtesyEquiv:0 };
+
+  for (const a of list){
+    if (!a) continue;
+
+    // Index liviano (para tabla)
+    const it = extractArchiveIndexItemPOS(a);
+    if (it){
+      items.push(it);
+      if (it.periodKey){
+        periodIndex[it.periodKey] = {
+          id: it.id,
+          seq: it.seq,
+          seqStr: it.seqStr,
+          createdAt: it.createdAt,
+          periodLabel: it.periodLabel
+        };
+      }
+    }
+
+    // Métricas archivadas (para Consolidado)
+    const snap = (a.snapshot && typeof a.snapshot === 'object') ? a.snapshot : {};
+    const sheets = Array.isArray(snap.sheets) ? snap.sheets : [];
+    let m = (snap.metrics && typeof snap.metrics === 'object') ? snap.metrics : null;
+    if (!m){
+      try{ m = parseArchiveMetricsFromSummarySheetPOS(sheets); }catch(_){ m = null; }
+    }
+    const nm = normalizeArchiveMetricsPOS(m || {});
+    acc.grand += nm.grand;
+    acc.grandCost += nm.grandCost;
+    acc.grandProfit += nm.grandProfit;
+    acc.courtesyCost += nm.courtesyCost;
+    acc.profitAfterCourtesy += nm.profitAfterCourtesy;
+    acc.courtesyQty += nm.courtesyQty;
+    acc.courtesyTx += nm.courtesyTx;
+    acc.courtesyEquiv += nm.courtesyEquiv;
+  }
+
+  // Orden descendente por fecha
+  items.sort((a,b)=>{
     const aa = Number(a && (a.createdAt || a.exportedAt) || 0);
     const bb = Number(b && (b.createdAt || b.exportedAt) || 0);
     return bb - aa;
   });
+
+  const archRev = getConsolArchRevPOS();
+  const computedAt = Date.now();
+  const indexCache = { v: A33_POS_CONSOL_CACHE_VER, archRev, computedAt, items };
+  const archAggCache = {
+    v: A33_POS_CONSOL_CACHE_VER,
+    archRev,
+    computedAt,
+    count: items.length,
+    metrics: acc,
+    periodKeys: Object.keys(periodIndex),
+    periodIndex
+  };
+  lsSetJsonPOS(LS_A33_POS_SUMMARY_ARCH_INDEX, indexCache);
+  lsSetJsonPOS(LS_A33_POS_CONSOL_ARCH_AGG, archAggCache);
+
+  return { indexCache, archAggCache };
+}
+
+async function getSummaryArchivesIndexPOS(opts){
+  const force = !!(opts && opts.force);
+  const archRev = getConsolArchRevPOS();
+  const cached = lsGetJsonPOS(LS_A33_POS_SUMMARY_ARCH_INDEX, null);
+  if (!force && cached && cached.v === A33_POS_CONSOL_CACHE_VER && Number(cached.archRev) === archRev && Array.isArray(cached.items)){
+    return cached.items;
+  }
+  const rebuilt = await rebuildSummaryArchivesCachesPOS();
+  return (rebuilt && rebuilt.indexCache && Array.isArray(rebuilt.indexCache.items)) ? rebuilt.indexCache.items : [];
+}
+
+async function getConsolidatedArchivedAggPOS(opts){
+  const force = !!(opts && opts.force);
+  const archRev = getConsolArchRevPOS();
+  const cached = lsGetJsonPOS(LS_A33_POS_CONSOL_ARCH_AGG, null);
+  if (!force && cached && cached.v === A33_POS_CONSOL_CACHE_VER && Number(cached.archRev) === archRev && cached.metrics){
+    return cached;
+  }
+  const rebuilt = await rebuildSummaryArchivesCachesPOS();
+  return (rebuilt && rebuilt.archAggCache) ? rebuilt.archAggCache : { count:0, metrics: zeroArchiveMetricsPOS(), periodKeys:[], periodIndex:{} };
+}
+
+async function loadAndRenderArchivesPOS(opts){
+  const force = !!(opts && opts.force);
+  const list = await getSummaryArchivesIndexPOS({ force });
 
   const q = (document.getElementById('summary-archive-search')?.value || '').toString().trim().toLowerCase();
   const filtered = q
@@ -12080,12 +12344,320 @@ async function loadAndRenderArchivesPOS(){
   renderSummaryArchivesTablePOS(filtered);
 }
 
+// -----------------------------
+// Archivo (modal) · Vista CONSOLIDADO (solo UI en Etapa 1)
+// -----------------------------
+let __A33_SUMMARY_ARCHIVE_PANEL_MODE = 'list'; // 'list' | 'consolidated'
+
+function isSummaryConsolidatedViewActivePOS(){
+  return (__A33_SUMMARY_ARCHIVE_PANEL_MODE === 'consolidated');
+}
+
+function applySummaryConsolidatedGuardsPOS(){
+  const active = isSummaryConsolidatedViewActivePOS();
+  // Bloqueos duros: acciones peligrosas (cierre/archivo/export oficial)
+  const ids = ['btn-summary-close-day','btn-summary-reopen-day','btn-summary-close-period','btn-summary-export','summary-close-export','summary-close-confirm'];
+  for (const id of ids){
+    const el = document.getElementById(id);
+    if (!el) continue;
+    if (el.dataset && el.dataset.prevDisabledConsolidated == null) el.dataset.prevDisabledConsolidated = el.disabled ? '1' : '0';
+    if (active){
+      try{ el.disabled = true; }catch(_){ }
+    } else {
+      try{ el.disabled = (el.dataset && el.dataset.prevDisabledConsolidated === '1'); }catch(_){ }
+    }
+  }
+}
+
+function setSummaryArchivePanelModePOS(mode){
+  __A33_SUMMARY_ARCHIVE_PANEL_MODE = (mode === 'consolidated') ? 'consolidated' : 'list';
+
+  const listView = document.getElementById('summary-archive-view-list');
+  const consView = document.getElementById('summary-archive-view-consolidated');
+  if (listView) listView.style.display = (__A33_SUMMARY_ARCHIVE_PANEL_MODE === 'list') ? '' : 'none';
+  if (consView) consView.style.display = (__A33_SUMMARY_ARCHIVE_PANEL_MODE === 'consolidated') ? '' : 'none';
+
+  const search = document.getElementById('summary-archive-search');
+  const btnRefresh = document.getElementById('summary-archive-refresh');
+  const btnCon = document.getElementById('summary-archive-consolidated');
+
+  // En consolidado ocultamos controles de archivo (no aplican)
+  const showListControls = (__A33_SUMMARY_ARCHIVE_PANEL_MODE === 'list');
+  if (search) search.style.display = showListControls ? '' : 'none';
+  if (btnRefresh) btnRefresh.style.display = showListControls ? '' : 'none';
+  if (btnCon) btnCon.style.display = showListControls ? '' : 'none';
+
+  applySummaryConsolidatedGuardsPOS();
+
+  // Al entrar a CONSOLIDADO recalcular ARCHIVADO (Etapa 2)
+  if (__A33_SUMMARY_ARCHIVE_PANEL_MODE === 'consolidated'){
+    renderSummaryArchiveConsolidatedPOS().catch(err=>{
+      console.error('render consolidated', err);
+    });
+  }
+}
+
+function __numPOS(v){
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function parseArchiveMetricsFromSummarySheetPOS(sheets){
+  const rows = readSheetRowsPOS(sheets, 'Resumen');
+  const out = {};
+  for (const r of (rows || [])){
+    if (!r || r.length < 2) continue;
+    const label = String(r[0] || '').trim();
+    if (!label) continue;
+    const val = __numPOS(r[1]);
+    switch (label){
+      case 'Total general': out.grand = val; break;
+      case 'Costo estimado': out.grandCost = val; break;
+      case 'Utilidad bruta': out.grandProfit = val; break;
+      case 'Cortesías (Costo real)': out.courtesyCost = val; break;
+      case 'Utilidad después de cortesías': out.profitAfterCourtesy = val; break;
+      case 'Cortesías (unidades)': out.courtesyQty = val; break;
+      case 'Cortesías (movimientos)': out.courtesyTx = val; break;
+      case 'Cortesías (equivalente ventas)': out.courtesyEquiv = val; break;
+      default: break;
+    }
+  }
+  return out;
+}
+
+function normalizeArchiveMetricsPOS(m){
+  const grand = __numPOS(m && m.grand);
+  const grandCost = __numPOS(m && m.grandCost);
+  const grandProfit = __numPOS(m && m.grandProfit);
+  const courtesyCost = __numPOS(m && m.courtesyCost);
+  const courtesyQty = __numPOS(m && m.courtesyQty);
+  const courtesyTx = __numPOS(m && m.courtesyTx);
+  const courtesyEquiv = __numPOS(m && m.courtesyEquiv);
+  const profitAfterCourtesy = (m && m.profitAfterCourtesy != null) ? __numPOS(m.profitAfterCourtesy) : (grandProfit - courtesyCost);
+  return { grand, grandCost, grandProfit, courtesyCost, profitAfterCourtesy, courtesyQty, courtesyTx, courtesyEquiv };
+}
+
+function zeroArchiveMetricsPOS(){
+  return { grand:0, grandCost:0, grandProfit:0, courtesyCost:0, profitAfterCourtesy:0, courtesyQty:0, courtesyTx:0, courtesyEquiv:0 };
+}
+
+function sumArchiveMetricsPOS(a, b){
+  const x = normalizeArchiveMetricsPOS(a || {});
+  const y = normalizeArchiveMetricsPOS(b || {});
+  return {
+    grand: x.grand + y.grand,
+    grandCost: x.grandCost + y.grandCost,
+    grandProfit: x.grandProfit + y.grandProfit,
+    courtesyCost: x.courtesyCost + y.courtesyCost,
+    profitAfterCourtesy: x.profitAfterCourtesy + y.profitAfterCourtesy,
+    courtesyQty: x.courtesyQty + y.courtesyQty,
+    courtesyTx: x.courtesyTx + y.courtesyTx,
+    courtesyEquiv: x.courtesyEquiv + y.courtesyEquiv,
+  };
+}
+
+function writeConsolidatedMetricsToCardPOS(prefix, m){
+  const id = (s)=> document.getElementById(`${prefix}-${s}`);
+  const nm = normalizeArchiveMetricsPOS(m || {});
+  const elGrand = id('grand');
+  if (elGrand) elGrand.textContent = fmt(__numPOS(nm.grand));
+  const elCost = id('grandCost');
+  if (elCost) elCost.textContent = fmt(__numPOS(nm.grandCost));
+  const elProfit = id('grandProfit');
+  if (elProfit) elProfit.textContent = fmt(__numPOS(nm.grandProfit));
+  const elCourCost = id('courtesyCost');
+  if (elCourCost) elCourCost.textContent = fmt(__numPOS(nm.courtesyCost));
+  const elPA = id('profitAfterCourtesy');
+  if (elPA) elPA.textContent = fmt(__numPOS(nm.profitAfterCourtesy));
+  const elCQ = id('courtesyQty');
+  if (elCQ) elCQ.textContent = String(Math.round(__numPOS(nm.courtesyQty)));
+  const elCT = id('courtesyTx');
+  if (elCT) elCT.textContent = String(Math.round(__numPOS(nm.courtesyTx)));
+  const elCE = id('courtesyEquiv');
+  if (elCE) elCE.textContent = fmt(__numPOS(nm.courtesyEquiv));
+}
+
+// Render token para evitar updates tardíos si el usuario sale rápido
+let __A33_CONSOLIDATED_RENDER_TOKEN = 0;
+
+function fmtConsolidatedUpdatedPOS(ts){
+  const t = Number(ts) || 0;
+  if (!t) return '…';
+  try{ return fmtDateTimePOS(t); }catch(_){
+    try{ return new Date(t).toLocaleString(); }catch(__){ return String(t); }
+  }
+}
+
+async function computeArchivedConsolidatedMetricsPOS(opts){
+  const force = !!(opts && opts.force);
+  const res = await getConsolidatedArchivedAggPOS({ force });
+  return {
+    count: Number(res && res.count) || 0,
+    metrics: normalizeArchiveMetricsPOS((res && res.metrics) ? res.metrics : {}),
+    periodIndex: (res && res.periodIndex && typeof res.periodIndex === 'object') ? res.periodIndex : {},
+    computedAt: Number(res && res.computedAt) || 0,
+  };
+}
+
+async function renderSummaryArchiveConsolidatedPOS(){
+  if (!isSummaryConsolidatedViewActivePOS()) return;
+  const token = ++__A33_CONSOLIDATED_RENDER_TOKEN;
+
+  const id = (s)=> document.getElementById(s);
+  const countEl = id('summary-consolidated-arch-count');
+  const updatedEl = id('summary-consolidated-updated');
+  const livePeriodEl = id('summary-consolidated-live-period');
+  const liveNoteEl = id('summary-consolidated-live-note');
+
+  if (!countEl) return;
+
+  const periodKey = getSummarySelectedPeriodKeyPOS();
+  const salesRev = getConsolSalesRevPOS(periodKey);
+  const archRev = getConsolArchRevPOS();
+
+  // Render inmediato (cache localStorage si está)
+  if (livePeriodEl) livePeriodEl.textContent = `Período: ${periodLabelPOS(periodKey)} (${periodKey})`;
+
+  let archCached = lsGetJsonPOS(LS_A33_POS_CONSOL_ARCH_AGG, null);
+  let hasArchCache = !!(archCached && archCached.v === A33_POS_CONSOL_CACHE_VER && Number(archCached.archRev) === archRev && archCached.metrics);
+
+  if (hasArchCache){
+    const n = Number(archCached.count) || 0;
+    countEl.textContent = `Períodos archivados incluidos: ${n}`;
+    const archMetrics0 = normalizeArchiveMetricsPOS(archCached.metrics);
+    writeConsolidatedMetricsToCardPOS('summary-consolidated-arch', archMetrics0);
+  } else {
+    countEl.textContent = 'Períodos archivados incluidos: …';
+  }
+
+  let periodIndex0 = (hasArchCache && archCached.periodIndex && typeof archCached.periodIndex === 'object') ? archCached.periodIndex : {};
+  let alreadyInfo0 = periodIndex0 ? periodIndex0[periodKey] : null;
+  let alreadyArchived0 = !!alreadyInfo0;
+
+  if (liveNoteEl){
+    if (alreadyArchived0){
+      const tag = (alreadyInfo0 && alreadyInfo0.seqStr) ? ` (Seq ${alreadyInfo0.seqStr})` : '';
+      liveNoteEl.textContent = `Este período ya está archivado${tag}: VIVO queda en 0 para evitar doble conteo.`;
+      liveNoteEl.style.display = '';
+    } else {
+      liveNoteEl.style.display = 'none';
+    }
+  }
+
+  let liveMetrics0 = zeroArchiveMetricsPOS();
+  let liveCache0 = null;
+  let usedLiveCache0 = false;
+  if (!alreadyArchived0){
+    liveCache0 = getConsolLiveCachePOS(periodKey);
+    if (liveCache0 && liveCache0.v === A33_POS_CONSOL_CACHE_VER && Number(liveCache0.salesRev) === salesRev && liveCache0.metrics){
+      liveMetrics0 = normalizeArchiveMetricsPOS(liveCache0.metrics);
+      usedLiveCache0 = true;
+    }
+  }
+  writeConsolidatedMetricsToCardPOS('summary-consolidated-live', liveMetrics0);
+
+  // Total (si ya hay archivado en cache)
+  if (hasArchCache){
+    const archMetrics0 = normalizeArchiveMetricsPOS(archCached.metrics);
+    const total0 = alreadyArchived0 ? archMetrics0 : sumArchiveMetricsPOS(archMetrics0, liveMetrics0);
+    writeConsolidatedMetricsToCardPOS('summary-consolidated-total', total0);
+  } else {
+    writeConsolidatedMetricsToCardPOS('summary-consolidated-total', zeroArchiveMetricsPOS());
+  }
+
+  // Updated microtexto
+  if (updatedEl){
+    const tArch = hasArchCache ? (Number(archCached.computedAt)||0) : 0;
+    const tLive = usedLiveCache0 && liveCache0 ? (Number(liveCache0.computedAt)||0) : 0;
+    const t = Math.max(tArch, tLive);
+    updatedEl.textContent = `Actualizado: ${fmtConsolidatedUpdatedPOS(t)}`;
+  }
+
+  // Dejar pintar UI antes de cálculos pesados
+  await new Promise(r=>setTimeout(r,0));
+  if (!isSummaryConsolidatedViewActivePOS() || token !== __A33_CONSOLIDATED_RENDER_TOKEN) return;
+
+  // 1) ARCHIVADO (rebuild si hace falta)
+  let archRes = null;
+  try{
+    archRes = await computeArchivedConsolidatedMetricsPOS({ force: false });
+  }catch(err){
+    console.error('compute archived consolidated', err);
+    archRes = { count:0, metrics: zeroArchiveMetricsPOS(), periodIndex: {}, computedAt: 0 };
+  }
+
+  if (!isSummaryConsolidatedViewActivePOS() || token !== __A33_CONSOLIDATED_RENDER_TOKEN) return;
+
+  const archMetrics = normalizeArchiveMetricsPOS(archRes.metrics);
+  countEl.textContent = `Períodos archivados incluidos: ${Number(archRes.count)||0}`;
+  writeConsolidatedMetricsToCardPOS('summary-consolidated-arch', archMetrics);
+
+  const periodIndex = (archRes && archRes.periodIndex) ? archRes.periodIndex : {};
+  const alreadyInfo = periodIndex ? periodIndex[periodKey] : null;
+  const alreadyArchived = !!alreadyInfo;
+
+  if (liveNoteEl){
+    if (alreadyArchived){
+      const tag = (alreadyInfo && alreadyInfo.seqStr) ? ` (Seq ${alreadyInfo.seqStr})` : '';
+      liveNoteEl.textContent = `Este período ya está archivado${tag}: VIVO queda en 0 para evitar doble conteo.`;
+      liveNoteEl.style.display = '';
+    } else {
+      liveNoteEl.style.display = 'none';
+    }
+  }
+
+  // 2) VIVO (solo si no está ya archivado)
+  let liveMetrics = zeroArchiveMetricsPOS();
+  let liveComputedAt = 0;
+  if (!alreadyArchived){
+    // re-check cache (por si se llenó mientras tanto)
+    const liveCache = getConsolLiveCachePOS(periodKey);
+    if (liveCache && liveCache.v === A33_POS_CONSOL_CACHE_VER && Number(liveCache.salesRev) === salesRev && liveCache.metrics){
+      liveMetrics = normalizeArchiveMetricsPOS(liveCache.metrics);
+      liveComputedAt = Number(liveCache.computedAt)||0;
+    } else {
+      try{
+        const data = await computeSummaryDataForPeriodPOS(periodKey, SUMMARY_EVENT_GLOBAL_POS);
+        liveMetrics = normalizeArchiveMetricsPOS((data && data.metrics) ? data.metrics : {});
+      }catch(err){
+        console.error('compute live consolidated', err);
+        liveMetrics = zeroArchiveMetricsPOS();
+      }
+      liveComputedAt = Date.now();
+      setConsolLiveCachePOS(periodKey, {
+        v: A33_POS_CONSOL_CACHE_VER,
+        periodKey,
+        archRev, // por depuración/observabilidad
+        salesRev,
+        computedAt: liveComputedAt,
+        metrics: liveMetrics,
+      });
+    }
+  }
+
+  if (!isSummaryConsolidatedViewActivePOS() || token !== __A33_CONSOLIDATED_RENDER_TOKEN) return;
+  writeConsolidatedMetricsToCardPOS('summary-consolidated-live', liveMetrics);
+
+  // 3) TOTAL (anti doble conteo)
+  const totalMetrics = alreadyArchived ? archMetrics : sumArchiveMetricsPOS(archMetrics, liveMetrics);
+  writeConsolidatedMetricsToCardPOS('summary-consolidated-total', totalMetrics);
+
+  // Updated microtexto final
+  if (updatedEl){
+    const t = Math.max(Number(archRes.computedAt)||0, liveComputedAt||0);
+    updatedEl.textContent = `Actualizado: ${fmtConsolidatedUpdatedPOS(t)}`;
+  }
+}
+
 async function openSummaryArchiveModalPOS(){
+  setSummaryArchivePanelModePOS('list');
   await loadAndRenderArchivesPOS();
   openModalPOS('summary-archive-modal');
 }
 
 function closeSummaryArchiveModalPOS(){
+  // Siempre restaurar a lista (y remover candados de Consolidado)
+  setSummaryArchivePanelModePOS('list');
   closeModalPOS('summary-archive-modal');
 }
 
@@ -12115,6 +12687,11 @@ function exitSummaryArchiveModePOS(){
 }
 
 async function onSummaryExportExcelPOS(){
+  if (isSummaryConsolidatedViewActivePOS()){
+    showToast('CONSOLIDADO es solo lectura. Volvé a Archivo normal para exportar/cerrar.', 'error', 4000);
+    return;
+  }
+
   // En Archivo: exportar exactamente lo archivado
   if (__A33_SUMMARY_MODE === 'archive' && __A33_ACTIVE_ARCHIVE){
     const a = __A33_ACTIVE_ARCHIVE;
@@ -12241,7 +12818,23 @@ function bindSummaryPeriodCloseAndArchivePOS(){
 
   const btnRefresh = document.getElementById('summary-archive-refresh');
   if (btnRefresh){
-    btnRefresh.addEventListener('click', ()=>{ loadAndRenderArchivesPOS().catch(err=>console.error(err)); });
+    // Force rebuild desde IndexedDB (si hubo cambios fuera de los flujos normales)
+    btnRefresh.addEventListener('click', ()=>{ loadAndRenderArchivesPOS({ force: true }).catch(err=>console.error(err)); });
+  }
+
+  const btnCons = document.getElementById('summary-archive-consolidated');
+  if (btnCons){
+    btnCons.addEventListener('click', ()=>{
+      setSummaryArchivePanelModePOS('consolidated');
+    });
+  }
+
+  const btnConsBack = document.getElementById('summary-archive-consolidated-back');
+  if (btnConsBack){
+    btnConsBack.addEventListener('click', ()=>{
+      setSummaryArchivePanelModePOS('list');
+      loadAndRenderArchivesPOS().catch(err=>console.error(err));
+    });
   }
 }
 
@@ -13482,6 +14075,13 @@ async function init(){
     const last = filtered.sort((a,b)=> a.id - b.id)[filtered.length - 1];
     if (!confirm('¿Eliminar la última venta registrada?')) return;
     const delRes = await del('sales', last.id);
+
+    // Invalida cache liviano de Consolidado (ventas del período)
+    try{
+      const pk = periodKeyFromDatePOS(last.date);
+      bumpConsolSalesRevPOS(pk);
+      clearConsolLiveCachePOS(pk);
+    }catch(_){ }
     try{ await revertExtraStockForSaleDeletePOS(last); }catch(e){}
     await renderDay();
     await renderSummary();
@@ -13538,6 +14138,13 @@ async function init(){
 
     try{
       const delRes = await del('sales', id);
+
+      // Invalida cache liviano de Consolidado (ventas del período)
+      try{
+        const pk = periodKeyFromDatePOS(saleToDelete.date);
+        bumpConsolSalesRevPOS(pk);
+        clearConsolLiveCachePOS(pk);
+      }catch(_){ }
       try{ if (saleToDelete) await revertExtraStockForSaleDeletePOS(saleToDelete); }catch(e){ console.warn('revertExtraStockForSaleDeletePOS (delete) failed', e); }
 
       // Refrescar UI
@@ -14001,6 +14608,13 @@ async function addSale(){
     return;
   }
 
+  // Invalida cache liviano de Consolidado (ventas del período actual)
+  try{
+    const pk = periodKeyFromDatePOS(saleRecord.date);
+    bumpConsolSalesRevPOS(pk);
+    clearConsolLiveCachePOS(pk);
+  }catch(_){ }
+
   // Ajustar inventario central de producto terminado (post-commit)
   try{
     applyFinishedFromSalePOS({ productName, qty: finalQty }, +1);
@@ -14238,6 +14852,13 @@ async function addExtraSale(extraId){
     await refreshSaleStockLabel();
     return;
   }
+
+  // Invalida cache liviano de Consolidado (ventas del período actual)
+  try{
+    const pk = periodKeyFromDatePOS(saleRecord.date);
+    bumpConsolSalesRevPOS(pk);
+    clearConsolLiveCachePOS(pk);
+  }catch(_){ }
 
   // Crear/actualizar asiento contable automático en Finanzas
   try{

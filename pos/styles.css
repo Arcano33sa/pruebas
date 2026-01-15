@@ -1253,3 +1253,25 @@ small.muted{color:var(--muted)}
   #checklist-reminder-due,
   #checklist-reminder-priority{flex:1 1 140px}
 }
+
+
+/* -----------------------------
+   Archivo · CONSOLIDADO (POS > Resumen)
+   Etapa 1: solo UI + candados
+----------------------------- */
+/* Mantener pastilla outline compacta cuando se combine con btn-pill-mini */
+.btn-outline.btn-pill-mini{padding:6px 10px;font-size:12px;line-height:1.05}
+
+.consolidated-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));
+  gap:12px;
+  margin-top:12px;
+}
+.consolidated-card{margin:0}
+.consolidated-title{font-weight:900;letter-spacing:.35px}
+
+.consolidated-kpi{margin-top:8px; display:flex; flex-direction:column; gap:6px}
+.consolidated-row{display:flex; justify-content:space-between; gap:10px; font-size:13px}
+.consolidated-row b{font-weight:850; white-space:nowrap}
+.consolidated-row-mini{font-size:12px; opacity:.95}
