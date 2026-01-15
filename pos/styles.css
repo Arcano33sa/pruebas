@@ -435,7 +435,15 @@ small.muted{color:var(--muted)}
 .a33-guard-text{min-width:220px}
 .a33-guard-title{font-weight:800;letter-spacing:.2px}
 .a33-guard-sub{font-size:13px;opacity:.92;margin-top:2px}
-.a33-guard-actions{flex:0 0 auto}
+.a33-guard-actions{
+  flex:0 0 auto;
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:flex-end;
+  max-width:100%;
+}
 
 /* Vender bloqueado por día cerrado: atenuar controles sin romper layout */
 .sell-locked #sell-block,

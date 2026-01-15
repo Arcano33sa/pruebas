@@ -12499,6 +12499,270 @@ async function computeArchivedConsolidatedMetricsPOS(opts){
   };
 }
 
+
+
+// -----------------------------
+// CONSOLIDADO · Exportar Excel (Gerente) — Etapa 1
+// -----------------------------
+function fmtArchiveAtCellPOS(v){
+  if (v == null) return '';
+  const n = Number(v);
+  if (Number.isFinite(n) && n > 0){
+    try{ return fmtDateTimePOS(n); }catch(_){
+      try{ return new Date(n).toLocaleString(); }catch(__){ return String(n); }
+    }
+  }
+  const s = String(v || '').trim();
+  if (!s) return '';
+  // ISO u otro
+  try{
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) return d.toLocaleString();
+  }catch(_){ }
+  return s;
+}
+
+async function getArchivedAggAndIndexPOS(opts){
+  const force = !!(opts && opts.force);
+  const requireFresh = !!(opts && opts.requireFresh);
+  const archRevExpected = (opts && Object.prototype.hasOwnProperty.call(opts, 'archRevExpected')) ? Number(opts.archRevExpected) : null;
+  const archRev = (Number.isFinite(archRevExpected) && archRevExpected != null) ? archRevExpected : getConsolArchRevPOS();
+  const cachedAgg = lsGetJsonPOS(LS_A33_POS_CONSOL_ARCH_AGG, null);
+  const cachedIdx = lsGetJsonPOS(LS_A33_POS_SUMMARY_ARCH_INDEX, null);
+
+  const okAgg = (!force && cachedAgg && cachedAgg.v === A33_POS_CONSOL_CACHE_VER && Number(cachedAgg.archRev) === archRev && cachedAgg.metrics);
+  const okIdx = (!force && cachedIdx && cachedIdx.v === A33_POS_CONSOL_CACHE_VER && Number(cachedIdx.archRev) === archRev && Array.isArray(cachedIdx.items));
+
+  if (okAgg && okIdx){
+    return { archAgg: cachedAgg, indexItems: cachedIdx.items };
+  }
+
+  try{
+    const rebuilt = await rebuildSummaryArchivesCachesPOS();
+    return {
+      archAgg: (rebuilt && rebuilt.archAggCache) ? rebuilt.archAggCache : { count:0, metrics: zeroArchiveMetricsPOS(), periodIndex:{}, computedAt:0 },
+      indexItems: (rebuilt && rebuilt.indexCache && Array.isArray(rebuilt.indexCache.items)) ? rebuilt.indexCache.items : []
+    };
+  }catch(err){
+    console.error('rebuildSummaryArchivesCachesPOS', err);
+    // En export gerencial, NO es aceptable caer en números viejos por accidente.
+    // Si se pide frescura, abortar y pedir reintento.
+    if (requireFresh){
+      throw err;
+    }
+    // Fallback: lo que haya en cache (aunque sea viejo)
+    return {
+      archAgg: cachedAgg || { count:0, metrics: zeroArchiveMetricsPOS(), periodIndex:{}, computedAt:0 },
+      indexItems: (cachedIdx && Array.isArray(cachedIdx.items)) ? cachedIdx.items : []
+    };
+  }
+}
+
+function buildConsolidatedGerenteSheetsPOS(payload){
+  const p = payload || {};
+  const periodKey = String(p.periodKey || '');
+  const periodLabel = String(p.periodLabel || '');
+  const updatedAt = Number(p.updatedAt) || 0;
+
+  const arch = normalizeArchiveMetricsPOS(p.archMetrics || {});
+  const live = normalizeArchiveMetricsPOS(p.liveMetrics || {});
+  const total = normalizeArchiveMetricsPOS(p.totalMetrics || {});
+
+  const archivesCount = (p && Object.prototype.hasOwnProperty.call(p, 'archivesCount')) ? (Number(p.archivesCount) || 0) : (Array.isArray(p.archivesIndex) ? p.archivesIndex.length : 0);
+  const liveIncluded = (p && p.liveIncluded === false) ? false : true;
+  const liveExcludedSeqStr = String((p && p.liveExcludedSeqStr) ? p.liveExcludedSeqStr : '').trim();
+  const activePeriodKey = String((p && p.activePeriodKey) ? p.activePeriodKey : (periodKey || ''));
+  const activeArchiveId = (p && Object.prototype.hasOwnProperty.call(p, 'activeArchiveId')) ? p.activeArchiveId : null;
+
+  const r = [];
+  r.push(['CONSOLIDADO (GERENTE)']);
+  r.push([]);
+  r.push(['Período activo (YYYY-MM)', periodKey]);
+  r.push(['Etiqueta del período', periodLabel]);
+  r.push(['Actualizado', fmtConsolidatedUpdatedPOS(updatedAt)]);
+  r.push([]);
+
+  // Trazabilidad (Etapa 2)
+  r.push(['Trazabilidad']);
+  r.push([`Períodos archivados incluidos: ${archivesCount}`]);
+  r.push([`VIVO incluido en TOTAL: ${liveIncluded ? 'SÍ' : 'NO'}`]);
+  if (!liveIncluded){
+    const reason = liveExcludedSeqStr ? `Motivo: Período actual ya archivado (Seq ${liveExcludedSeqStr})` : 'Motivo: Período actual ya archivado (anti doble conteo)';
+    r.push([reason]);
+  }
+  r.push([]);
+
+  const addBlock = (title, m)=>{
+    r.push([title]);
+    r.push(['Métrica','Monto C$']);
+    r.push(['Total general', __numPOS(m.grand)]);
+    r.push(['Costo estimado', __numPOS(m.grandCost)]);
+    r.push(['Utilidad bruta', __numPOS(m.grandProfit)]);
+    r.push(['Cortesías (Costo real)', __numPOS(m.courtesyCost)]);
+    r.push(['Utilidad después de cortesías', __numPOS(m.profitAfterCourtesy)]);
+  };
+
+  addBlock('ARCHIVADO', arch);
+  r.push([]);
+  addBlock('VIVO', live);
+  r.push([]);
+  addBlock('TOTAL CONSOLIDADO', total);
+
+  const aRows = [['Seq','Período (label)','PeriodKey','Fecha de archivo','Nombre','Archivo .xlsx','Es período activo','Nota']];
+  const list = Array.isArray(p.archivesIndex) ? p.archivesIndex : [];
+  for (const it of list){
+    if (!it) continue;
+    const itPeriodKey = String(it.periodKey || '');
+    const isActive = !!(activePeriodKey && itPeriodKey && itPeriodKey === activePeriodKey);
+    const isActiveExact = !!(activeArchiveId != null && it.id != null && it.id === activeArchiveId);
+    const markForNote = isActiveExact || (isActive && activeArchiveId == null);
+    aRows.push([
+      (String(it.seqStr || '').trim() || ((Number(it.seq || 0) || 0) ? pad3POS(it.seq) : '')),
+      (it.periodLabel || ''),
+      itPeriodKey,
+      fmtArchiveAtCellPOS(it.createdAt || it.exportedAt || ''),
+      (it.name || ''),
+      (it.fileName || ''),
+      (isActive ? 'SÍ' : 'NO'),
+      (!liveIncluded && markForNote ? 'Período activo ya archivado (anti doble conteo)' : '')
+    ]);
+  }
+
+  return [
+    { name: 'RESUMEN', rows: r },
+    { name: 'ARCHIVADOS_INCLUIDOS', rows: aRows }
+  ];
+}
+
+async function exportConsolidatedGerenteExcelPOS(){
+  // Guard para doble-click
+  if (window.__A33_CONSOL_EXPORT_GERENTE_BUSY) return;
+
+  const btn = document.getElementById('summary-consolidated-export-gerente');
+
+  const setBusy = (busy)=>{
+    try{
+      if (!btn) return;
+      btn.disabled = !!busy;
+      btn.setAttribute('aria-busy', busy ? 'true' : 'false');
+      if (busy){
+        if (!btn.dataset.prevTextGerente) btn.dataset.prevTextGerente = btn.textContent || '';
+        btn.textContent = 'Generando…';
+      } else {
+        const prev = btn.dataset.prevTextGerente;
+        if (prev != null) btn.textContent = prev;
+        try{ delete btn.dataset.prevTextGerente; }catch(_){ }
+      }
+    }catch(_){ }
+  };
+
+  // XLSX puede faltar si el módulo se abrió por primera vez sin conexión.
+  if (typeof XLSX === 'undefined'){
+    showToast('No se pudo generar el Excel (XLSX no cargado). Si es tu primera carga offline: abrí el POS una vez con internet para cachear y reintentá.', 'error', 7000);
+    return;
+  }
+
+  window.__A33_CONSOL_EXPORT_GERENTE_BUSY = true;
+  setBusy(true);
+
+  try{
+    showToast('Generando Excel…', 'ok', 15000);
+    // Dejar pintar UI antes de empezar
+    await new Promise(r=>setTimeout(r,0));
+
+    // Snapshot de revisiones (evita “números viejos” si algo cambia mientras exporta)
+    const periodKey0 = getSummarySelectedPeriodKeyPOS();
+    const periodLabel = periodLabelPOS(periodKey0);
+    const salesRev0 = getConsolSalesRevPOS(periodKey0);
+    const archRev0 = getConsolArchRevPOS();
+
+    // ARCHIVADO: caches livianos, pero SOLO si son frescos. Si no, abortar.
+    const { archAgg, indexItems } = await getArchivedAggAndIndexPOS({ force: false, requireFresh: true, archRevExpected: archRev0 });
+    if (Number(archAgg && archAgg.archRev) !== Number(archRev0)){
+      throw a33ValidationErrorPOS('El Archivo cambió mientras se preparaba el Excel. Reintentá para números actuales.');
+    }
+    const archMetrics = normalizeArchiveMetricsPOS((archAgg && archAgg.metrics) ? archAgg.metrics : {});
+    const periodIndex = (archAgg && archAgg.periodIndex && typeof archAgg.periodIndex === 'object') ? archAgg.periodIndex : {};
+    const alreadyInfo = (periodIndex && periodKey0) ? (periodIndex[periodKey0] || null) : null;
+    const alreadyArchived = !!alreadyInfo;
+
+    // Trazabilidad: Seq del período activo si ya está archivado
+    let alreadySeqStr = '';
+    let alreadyArchiveId = null;
+    if (alreadyInfo){
+      alreadyArchiveId = (Object.prototype.hasOwnProperty.call(alreadyInfo, 'id')) ? alreadyInfo.id : null;
+      const ss = String(alreadyInfo.seqStr || '').trim();
+      if (ss) alreadySeqStr = ss;
+      else {
+        const n = Number(alreadyInfo.seq || 0) || 0;
+        alreadySeqStr = n ? pad3POS(n) : '';
+      }
+    }
+
+    // VIVO: cache liviano por salesRev (o calcular 1 vez y actualizar cache)
+    let liveMetrics = zeroArchiveMetricsPOS();
+    let liveComputedAt = 0;
+    if (!alreadyArchived){
+      const liveCache = getConsolLiveCachePOS(periodKey0);
+      if (liveCache && liveCache.v === A33_POS_CONSOL_CACHE_VER && Number(liveCache.salesRev) === salesRev0 && liveCache.metrics){
+        liveMetrics = normalizeArchiveMetricsPOS(liveCache.metrics);
+        liveComputedAt = Number(liveCache.computedAt) || 0;
+      } else {
+        const data = await computeSummaryDataForPeriodPOS(periodKey0, SUMMARY_EVENT_GLOBAL_POS);
+        liveMetrics = normalizeArchiveMetricsPOS((data && data.metrics) ? data.metrics : {});
+        liveComputedAt = Date.now();
+        // Nota: solo localStorage (no IndexedDB / meta). Es cache liviano.
+        setConsolLiveCachePOS(periodKey0, {
+          v: A33_POS_CONSOL_CACHE_VER,
+          periodKey: periodKey0,
+          archRev: archRev0,
+          salesRev: salesRev0,
+          computedAt: liveComputedAt,
+          metrics: liveMetrics,
+        });
+      }
+    }
+
+    const totalMetrics = alreadyArchived ? archMetrics : sumArchiveMetricsPOS(archMetrics, liveMetrics);
+    const updatedAt = Math.max(Number(archAgg && archAgg.computedAt) || 0, liveComputedAt || 0);
+
+    // Revalidar snapshot antes de escribir archivo
+    const periodKey1 = getSummarySelectedPeriodKeyPOS();
+    const salesRev1 = getConsolSalesRevPOS(periodKey1);
+    const archRev1 = getConsolArchRevPOS();
+    if (periodKey1 !== periodKey0 || Number(salesRev1) !== Number(salesRev0) || Number(archRev1) !== Number(archRev0)){
+      throw a33ValidationErrorPOS('Hubo cambios (ventas/archivo/período) mientras se generaba el Excel. Reintentá para números actuales.');
+    }
+
+    const sheets = buildConsolidatedGerenteSheetsPOS({
+      periodKey: periodKey0,
+      periodLabel,
+      updatedAt,
+      archMetrics,
+      liveMetrics,
+      totalMetrics,
+      archivesIndex: indexItems,
+      archivesCount: Array.isArray(indexItems) ? indexItems.length : (Number(archAgg && archAgg.count) || 0),
+      liveIncluded: !alreadyArchived,
+      liveExcludedSeqStr: alreadySeqStr,
+      activePeriodKey: periodKey0,
+      activeArchiveId: alreadyArchiveId
+    });
+
+    const fname = `Consolidado-Gerente-${periodFilePartPOS(periodKey0)}.xlsx`;
+    writeWorkbookFromSheetsPOS(fname, sheets);
+    showToast('Excel generado ✅', 'ok', 2500);
+  }catch(err){
+    console.error('exportConsolidatedGerenteExcelPOS', err);
+    const detail = humanizeError(err);
+    // Mensaje corto pero claro (sin dejar botón muerto)
+    showToast(`No se pudo generar el Excel. ${detail}`, 'error', 8000);
+  }finally{
+    setBusy(false);
+    window.__A33_CONSOL_EXPORT_GERENTE_BUSY = false;
+  }
+}
+
 async function renderSummaryArchiveConsolidatedPOS(){
   if (!isSummaryConsolidatedViewActivePOS()) return;
   const token = ++__A33_CONSOLIDATED_RENDER_TOKEN;
@@ -12827,6 +13091,11 @@ function bindSummaryPeriodCloseAndArchivePOS(){
     btnCons.addEventListener('click', ()=>{
       setSummaryArchivePanelModePOS('consolidated');
     });
+  }
+
+  const btnConsExportGerente = document.getElementById('summary-consolidated-export-gerente');
+  if (btnConsExportGerente){
+    btnConsExportGerente.addEventListener('click', ()=>{ exportConsolidatedGerenteExcelPOS().catch(err=>console.error(err)); });
   }
 
   const btnConsBack = document.getElementById('summary-archive-consolidated-back');
