@@ -522,6 +522,20 @@
 
     <div id="pc-history-banner" class="warn" style="display:none"></div>
 
+    <div id="pc-diag" class="pc-diag" aria-label="Estado de Caja Chica" title="Diagnóstico del último intento (sin consola)">
+      <div class="pc-diag-line">
+        <span class="pc-diag-title">Estado</span>
+        <span id="pc-diag-last-at" class="muted" style="font-size:0.85rem">—</span>
+      </div>
+      <div class="pc-diag-grid">
+        <div><span class="muted">Activo:</span> <span id="pc-diag-active">—</span></div>
+        <div><span class="muted">UI:</span> <span id="pc-diag-ui">—</span></div>
+        <div><span class="muted">Último:</span> <span id="pc-diag-action">—</span> <span id="pc-diag-result" class="badge">—</span></div>
+        <div class="pc-diag-reason"><span class="muted">Motivo:</span> <span id="pc-diag-reason">—</span></div>
+      </div>
+    </div>
+
+
     <div id="pc-main" class="pc-main">
       <div class="row petty-summary">
         <div class="card">
