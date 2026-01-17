@@ -3,6 +3,15 @@ const DB_NAME = 'a33-pos';
 const DB_VER = 27; // Etapa 2D: índice sales.by_uid (anti-duplicados)
 let db;
 
+// --- Build / version (visible en UI para confirmar cache)
+const POS_BUILD = '4.20.12';
+try{ window.A33_POS_BUILD = POS_BUILD; }catch(_){ }
+try{
+  const el = document.getElementById('pos-build-id');
+  if (el) el.textContent = 'POS Build: ' + POS_BUILD;
+}catch(_){ }
+
+
 
 
 // --- Etapa 2D: anti-duplicados en ventas (uid estable + dedupe)

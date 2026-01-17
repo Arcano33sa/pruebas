@@ -2,24 +2,24 @@
    Objetivo: cachés acotadas por módulo (sin “guerra” entre SW).
 */
 
-const SW_VERSION = '4.20.11';
+const SW_VERSION = '4.20.12';
 const MODULE = 'pos';
 const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}`;
 
 const PRECACHE_URLS = [
   './',
-  './index.html?v=4.20.11',
-  './styles.css?v=4.20.11',
-  './app.js?v=4.20.11',
-  './manifest.webmanifest?v=4.20.11',
+  './index.html?v=4.20.12',
+  './styles.css?v=4.20.12',
+  './app.js?v=4.20.12',
+  './manifest.webmanifest?v=4.20.12',
   './offline.html',
   './logo.png',
   './vendor/xlsx.full.min.js?v=0.18.5',
-  '/assets/js/a33-input-ux.js?v=4.20.11',
-  '/assets/js/a33-storage.js?v=4.20.11',
-  '/assets/js/a33-presentations.js?v=4.20.11',
-  '/assets/js/a33-auth.js?v=4.20.11',
-  '/assets/css/a33-header.css?v=4.20.11'
+  '/assets/js/a33-input-ux.js?v=4.20.12',
+  '/assets/js/a33-storage.js?v=4.20.12',
+  '/assets/js/a33-presentations.js?v=4.20.12',
+  '/assets/js/a33-auth.js?v=4.20.12',
+  '/assets/css/a33-header.css?v=4.20.12'
 ];
 
 function sameOrigin(url){
@@ -34,11 +34,19 @@ function shouldCache(url){
   }catch(_){ return false; }
 }
 
+self.addEventListener('message', (event) => {
+  try{
+    if (event && event.data && event.data.type === 'SKIP_WAITING'){
+      self.skipWaiting();
+    }
+  }catch(_){}
+});
+
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
     await cache.addAll(PRECACHE_URLS.filter(Boolean));
-    try{ await self.skipWaiting(); }catch(_){ }
+
   })());
 });
 
@@ -68,7 +76,7 @@ async function handleNavigate(request){
     const cache = await caches.open(CACHE_NAME);
     return (
       (await cache.match(request)) ||
-      (await cache.match('./index.html?v=4.20.11')) ||
+      (await cache.match('./index.html?v=4.20.12')) ||
       (await cache.match('./index.html')) ||
       (await cache.match('./offline.html')) ||
       (await cache.match('./')) ||

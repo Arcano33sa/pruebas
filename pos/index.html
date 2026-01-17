@@ -4,20 +4,23 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.11">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.12">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.11">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.11" />
+<link rel="stylesheet" href="styles.css?v=4.20.12">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.12" />
 </head>
 <body>
   <header class="a33-header" role="banner">
     <a class="a33-btn-menu" href="../index.html" aria-label="Volver al Menú principal">← Menú principal</a>
     <div class="a33-title">POS · Eventos</div>
-    <div class="a33-version">v4.20.11</div>
+    <div class="a33-right">
+      <button id="btn-update" class="a33-btn-update" type="button" style="display:none" aria-label="Actualizar a la nueva versión">Actualizar</button>
+      <div class="a33-version">v4.20.12</div>
+    </div>
   </header>
 <div id="offlineBar" class="offline">Trabajando sin conexión</div>
 <div class="container">
@@ -525,7 +528,10 @@
     <div id="pc-diag" class="pc-diag" aria-label="Estado de Caja Chica" title="Diagnóstico del último intento (sin consola)">
       <div class="pc-diag-line">
         <span class="pc-diag-title">Estado</span>
-        <span id="pc-diag-last-at" class="muted" style="font-size:0.85rem">—</span>
+        <span class="pc-diag-meta">
+          <span id="pos-build-id" class="muted" style="font-size:0.85rem">POS Build: —</span>
+          <span id="pc-diag-last-at" class="muted" style="font-size:0.85rem">—</span>
+        </span>
       </div>
       <div class="pc-diag-grid">
         <div><span class="muted">Activo:</span> <span id="pc-diag-active">—</span></div>
@@ -1457,9 +1463,9 @@
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
-<script src="/assets/js/a33-storage.js?v=4.20.11"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.11"></script>
-<script src="/assets/js/a33-auth.js?v=4.20.11"></script>
+<script src="/assets/js/a33-storage.js?v=4.20.12"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.12"></script>
+<script src="/assets/js/a33-auth.js?v=4.20.12"></script>
 <script>
   (function(){
     try{
@@ -1484,10 +1490,56 @@
     }
   })();
 </script>
-<script src="app.js?v=4.20.11"></script>
-<script src="/assets/js/a33-input-ux.js?v=4.20.11"></script>
+<script src="app.js?v=4.20.12"></script>
+<script src="/assets/js/a33-input-ux.js?v=4.20.12"></script>
 <script>
-  if ('serviceWorker' in navigator) { navigator.serviceWorker.register('./sw.js?v=4.20.11'); }
+  (function(){
+    const BUILD = '4.20.12';
+    const btn = document.getElementById('btn-update');
+    let refreshing = false;
+
+    function showUpdate(){ try{ if(btn) btn.style.display = 'inline-flex'; }catch(_){} }
+
+    if(!('serviceWorker' in navigator)) return;
+
+    navigator.serviceWorker.register('./sw.js?v=' + encodeURIComponent(BUILD)).then((reg)=>{
+      try{
+        if (reg.waiting && navigator.serviceWorker.controller){ showUpdate(); }
+      }catch(_){}
+
+      try{
+        reg.addEventListener('updatefound', ()=>{
+          const nw = reg.installing;
+          if(!nw) return;
+          nw.addEventListener('statechange', ()=>{
+            try{
+              if (nw.state === 'installed' && navigator.serviceWorker.controller){
+                showUpdate();
+              }
+            }catch(_){}
+          });
+        });
+      }catch(_){}
+
+      if (btn){
+        btn.addEventListener('click', ()=>{
+          try{
+            if (reg.waiting){
+              reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+              return;
+            }
+            reg.update().catch(()=>{});
+          }catch(_){}
+        });
+      }
+    }).catch(()=>{});
+
+    navigator.serviceWorker.addEventListener('controllerchange', ()=>{
+      if (refreshing) return;
+      refreshing = true;
+      try{ location.reload(); }catch(_){}
+    });
+  })();
 </script>
 </body>
 </html>

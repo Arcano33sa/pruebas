@@ -20,6 +20,17 @@ header.brandbar{position:sticky;top:0;background:#121212;border-bottom:1px solid
   .app-title{order:3;width:100%;margin-top:6px}
 }
 .container{padding:12px 12px 80px;width:100%;max-width:100%}
+
+/* Encabezado premium: acciones derecha (PWA update) */
+.a33-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.a33-btn-update{appearance:none;display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:8px 12px;border-radius:999px;border:1px solid rgba(221,191,100,0.75);background:rgba(221,191,100,0.14);color:#fefefe;font-weight:800;font-size:12px;line-height:1;letter-spacing:.02em;box-shadow:0 10px 20px rgba(0,0,0,0.55);cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent}
+.a33-btn-update:hover{filter:brightness(1.05);border-color:rgba(221,191,100,0.95)}
+.a33-btn-update:active{transform:scale(0.98);box-shadow:0 6px 14px rgba(0,0,0,0.45);filter:brightness(0.98)}
+.a33-btn-update:focus-visible{outline:2px solid rgba(221,191,100,0.95);outline-offset:3px}
+
+/* Caja Chica — meta derecha (Build + timestamp) */
+.pc-diag-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+
 .card{background:var(--panel);border:1px solid #2a2a2a;border-radius:14px;padding:14px;margin:12px 0}
 label{font-size:13px;color:var(--muted);display:block;margin:8px 0 6px}
 input,select,button,textarea{width:100%;padding:12px;border-radius:12px;border:1px solid #333;background:#141414;color:#f0f0f0;font-size:16px;line-height:1.2}
