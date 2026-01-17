@@ -4,7 +4,7 @@ const DB_VER = 27; // Etapa 2D: índice sales.by_uid (anti-duplicados)
 let db;
 
 // --- Build / version (visible en UI para confirmar cache)
-const POS_BUILD = '4.20.14';
+const POS_BUILD = '4.20.13';
 try{ window.A33_POS_BUILD = POS_BUILD; }catch(_){ }
 try{
   const el = document.getElementById('pos-build-id');
@@ -468,7 +468,6 @@ function pcDiagUpdateContext(activeId, activeName, uiId, uiName){
   __A33_PC_DIAG.uiEventId = uiId || null;
   __A33_PC_DIAG.uiEventName = uiName || null;
   try{ pcDiagRender(); }catch(e){}
-  try{ pcDiagRenderLog(); }catch(_){ }
 }
 
 function pcDiagMark(action, result, reason, details){
@@ -483,92 +482,9 @@ function pcDiagMark(action, result, reason, details){
   __A33_PC_DIAG.lastAtDisplay = stamp;
   __A33_PC_DIAG.lastDetails = details || null;
 
-  try{
-    pcDiagLogAppend({
-      atISO: __A33_PC_DIAG.lastAtISO,
-      atDisplay: __A33_PC_DIAG.lastAtDisplay,
-      action: __A33_PC_DIAG.lastAction,
-      result: __A33_PC_DIAG.lastResult,
-      reason: __A33_PC_DIAG.lastReason,
-      activeEventId: __A33_PC_DIAG.activeEventId,
-      uiEventId: __A33_PC_DIAG.uiEventId,
-      details: __A33_PC_DIAG.lastDetails
-    });
-  }catch(_){ }
-
   try{ pcDiagRender(); }catch(e){}
-  try{ pcDiagRenderLog(); }catch(_){ }
 }
 
-
-
-
-// --- Caja Chica: Estado (historial) — Etapa 3
-const A33_PC_DIAG_LOG_KEY = 'a33_pc_diag_log_v1';
-
-function pcDiagLogLoad(){
-  try{
-    const raw = (localStorage.getItem(A33_PC_DIAG_LOG_KEY) || '').toString();
-    if (!raw.trim()) return [];
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr : [];
-  }catch(_){
-    return [];
-  }
-}
-
-function pcDiagLogSave(arr){
-  try{
-    const a = Array.isArray(arr) ? arr : [];
-    localStorage.setItem(A33_PC_DIAG_LOG_KEY, JSON.stringify(a));
-  }catch(_){ }
-}
-
-function pcDiagLogAppend(entry){
-  const e = (entry && typeof entry === 'object') ? entry : null;
-  if (!e) return;
-  const arr = pcDiagLogLoad();
-  arr.push(e);
-  while (arr.length > 20) arr.shift();
-  pcDiagLogSave(arr);
-}
-
-function pcDiagTrunc(s, maxLen){
-  const t = String(s || '');
-  const n = Number(maxLen || 0);
-  if (!(Number.isFinite(n) && n > 0)) return t;
-  return (t.length > n) ? (t.slice(0, Math.max(0, n-1)) + '…') : t;
-}
-
-function pcDiagRenderLog(){
-  const box = document.getElementById('pc-diag-log');
-  if (!box) return;
-  const arr = pcDiagLogLoad();
-  if (!arr.length){ box.textContent = '—'; return; }
-
-  const last = arr.slice(-10).reverse();
-  box.innerHTML = '';
-
-  for (const it of last){
-    const row = document.createElement('div');
-    row.className = 'pc-diag-log-item';
-
-    const left = document.createElement('span');
-    const right = document.createElement('span');
-
-    const at = it.atDisplay || '';
-    const act = it.action || '';
-    const res = pcDiagResultLabel(it.result);
-    const why = it.reason || '';
-
-    left.textContent = `${at} · ${act}`;
-    right.textContent = `${res} · ${pcDiagTrunc(why, 90)}`;
-
-    row.appendChild(left);
-    row.appendChild(right);
-    box.appendChild(row);
-  }
-}
 
 // --- Resumen: modo de vista (por período vs todo)
 let __A33_SUMMARY_VIEW_MODE = 'period'; // 'period' | 'all'
@@ -16380,82 +16296,12 @@ function setPrevCierreUI(pc, dayKey){
   }
 }
 
-
-// --- Caja Chica: Sync Finanzas → POS (helpers) — Etapa 3
-const A33_FIN_CC_STORAGE_KEY_POS = 'a33_finanzas_caja_chica_v1';
-
-function finPosGetCajaChicaSnapState(){
-  const KEY = A33_FIN_CC_STORAGE_KEY_POS;
-  let raw = '';
-  try{ raw = (localStorage.getItem(KEY) || '').toString(); }catch(_){ raw = ''; }
-  if (!raw.trim()) return { ok:false, code:'FIN_NOT_CONFIG', msg:'Caja Chica (Finanzas) no configurada.' };
-
-  let snap = null;
-  try{ snap = JSON.parse(raw); }catch(err){
-    return { ok:false, code:'PARSE_ERROR', msg:'Error: datos inválidos en Finanzas (parse).', err: String(err||'') };
-  }
-
-  if (!snap || !snap.currencies || !snap.currencies.NIO || !snap.currencies.USD){
-    return { ok:false, code:'FIN_NOT_READY', msg:'Caja Chica (Finanzas) no configurada.' };
-  }
-
-  return { ok:true, code:'OK', msg:'OK', snap };
-}
-
-function pcFinStatusClearStickyIfContextMismatch(evId, dayKey){
-  const s = document.getElementById('pc-init-from-fin-status');
-  if (!s) return;
-  if (String(s.dataset.sticky || '') !== '1') return;
-  const se = String(s.dataset.stickyEvId || '');
-  const sd = String(s.dataset.stickyDayKey || '');
-  const ce = String(evId || '');
-  const cd = String(dayKey || '');
-  if (se === ce && sd === cd) return;
-  s.dataset.sticky = '';
-  s.dataset.stickyEvId = '';
-  s.dataset.stickyDayKey = '';
-  s.textContent = '';
-}
-
-function pcFinStatusIsStickyForContext(evId, dayKey){
-  const s = document.getElementById('pc-init-from-fin-status');
-  if (!s) return false;
-  if (String(s.dataset.sticky || '') !== '1') return false;
-  const se = String(s.dataset.stickyEvId || '');
-  const sd = String(s.dataset.stickyDayKey || '');
-  const ce = String(evId || '');
-  const cd = String(dayKey || '');
-  return (se === ce && sd === cd);
-}
-
-function pcFinStatusSet(msg, { html=false, sticky=false, evId=null, dayKey=null } = {}){
-  const s = document.getElementById('pc-init-from-fin-status');
-  if (!s) return;
-
-  if (sticky){
-    s.dataset.sticky = '1';
-    s.dataset.stickyEvId = (evId == null) ? '' : String(evId);
-    s.dataset.stickyDayKey = (dayKey == null) ? '' : String(dayKey);
-  } else {
-    s.dataset.sticky = '';
-    s.dataset.stickyEvId = '';
-    s.dataset.stickyDayKey = '';
-  }
-
-  if (html) s.innerHTML = msg || '';
-  else s.textContent = msg || '';
-}
-
-function updatePcFinSyncUI(ev, canInteract, readOnlyDay, dayKey){
+function updatePcFinSyncUI(ev, canInteract, readOnlyDay){
   const t = document.getElementById('pc-init-from-fin-toggle');
   const b = document.getElementById('pc-init-from-fin-sync');
+  const s = document.getElementById('pc-init-from-fin-status');
 
-  const dKey = dayKey || (typeof getSelectedPcDay === 'function' ? getSelectedPcDay() : null);
-  const evId = (ev && ev.id != null) ? ev.id : null;
-
-  // Si cambió el contexto, limpiar estado "sticky".
-  pcFinStatusClearStickyIfContextMismatch(evId, dKey);
-
+  if (s) s.textContent = '';
   if (!t || !b) return;
 
   const checked = !!(ev && ev.pcInitFromFinanzasEnabled);
@@ -16465,49 +16311,10 @@ function updatePcFinSyncUI(ev, canInteract, readOnlyDay, dayKey){
   t.disabled = locked;
   b.disabled = locked || !checked;
 
-  // No pisar el mensaje del último intento si aplica en este mismo contexto.
-  if (pcFinStatusIsStickyForContext(evId, dKey)) return;
-
-  if (!ev){
-    pcFinStatusSet('Activa un evento para sincronizar.');
-    return;
+  if (s && ev){
+    const last = ev.pcInitFromFinanzasLastSyncDisplay || (ev.pcInitFromFinanzasLastSync ? fmtDDMMYYYYHHMM_POS(ev.pcInitFromFinanzasLastSync) : '');
+    if (last) s.textContent = 'Sincronizado: ' + last;
   }
-
-  if (ev.closedAt){
-    pcFinStatusSet('Evento cerrado: no se sincroniza.');
-    return;
-  }
-
-  if (!eventPettyEnabled(ev)){
-    pcFinStatusSet('Caja Chica desactivada en este evento.');
-    return;
-  }
-
-  if (readOnlyDay){
-    pcFinStatusSet('Día cerrado o histórico: no se sincroniza.');
-    return;
-  }
-
-  if (!checked){
-    pcFinStatusSet('Switch apagado: actívalo para sincronizar.');
-    return;
-  }
-
-  const st = finPosGetCajaChicaSnapState();
-  if (!st.ok){
-    if (st.code === 'FIN_NOT_CONFIG' || st.code === 'FIN_NOT_READY'){
-      pcFinStatusSet('Caja Chica (Finanzas) no configurada. <a class="a33-link" href="../finanzas/index.html#tab=cajachica">Ir a Finanzas</a>', { html:true });
-    } else if (st.code === 'PARSE_ERROR'){
-      pcFinStatusSet('Error: datos inválidos en Finanzas (parse).');
-    } else {
-      pcFinStatusSet(st.msg || 'Finanzas no configurada.');
-    }
-    return;
-  }
-
-  const last = ev.pcInitFromFinanzasLastSyncDisplay || (ev.pcInitFromFinanzasLastSync ? fmtDDMMYYYYHHMM_POS(ev.pcInitFromFinanzasLastSync) : '');
-  if (last) pcFinStatusSet('Sincronizado: ' + last);
-  else pcFinStatusSet('Listo para sincronizar.');
 }
 
 async function renderCajaChica(){
@@ -16547,7 +16354,7 @@ async function renderCajaChica(){
     renderPettyHistoryControls(null);
     setPettyCloseUIEmpty();
     setPettyReadOnly(false, false);
-    updatePcFinSyncUI(null, false, false, null);
+    updatePcFinSyncUI(null, false, false);
 
     const movDate = document.getElementById('pc-mov-date');
     if (movDate){
@@ -16573,7 +16380,7 @@ async function renderCajaChica(){
     renderPettyHistoryControls(null);
     setPettyCloseUIEmpty();
     setPettyReadOnly(false, false);
-    updatePcFinSyncUI(ev, false, false, getSelectedPcDay());
+    updatePcFinSyncUI(ev, false, false);
 
     const movDate = document.getElementById('pc-mov-date');
     if (movDate){
@@ -16658,7 +16465,7 @@ async function renderCajaChica(){
   renderPettyCloseUI(check, hist);
 
   setPettyReadOnly(readOnly, false);
-  updatePcFinSyncUI(ev, !eventClosed, readOnly, dayKey);
+  updatePcFinSyncUI(ev, !eventClosed, readOnly);
 
   // Etapa 3: si hubo fallo/guardia y el render repintó, restaurar lo digitado (solo si es editable).
   if (!readOnly){
@@ -17668,132 +17475,104 @@ function sumCountsByValue(denoms){
 
 async function syncPettyInitialFromFinanzas(){
   const ACTION = 'Sincronizar';
+  const KEY = 'a33_finanzas_caja_chica_v1';
 
   const finBtn = document.getElementById('pc-init-from-fin-sync');
   const finTog = document.getElementById('pc-init-from-fin-toggle');
-
-  let evId = null;
-  let dayKey = null;
-  const uiSnapBefore = pcCaptureInitialDenomsSnap();
+  const statusEl = document.getElementById('pc-init-from-fin-status');
 
   const setBusy = (busy)=>{
     if (finBtn) finBtn.disabled = !!busy;
-    if (!!busy && evId && dayKey){
-      pcFinStatusSet('Sincronizando…', { sticky:true, evId, dayKey });
-    }
+    if (statusEl && busy) statusEl.textContent = 'Sincronizando…';
   };
 
   const setButtonState = async ()=>{
+    // Re-habilitar sin borrar el mensaje de estado.
     try{
-      const curEvId = await getMeta('currentEventId');
-      const ev = curEvId ? await getEventByIdSafe(curEvId) : null;
-      const dKey = getSelectedPcDay();
-      const checked = finTog ? !!finTog.checked : !!(ev && ev.pcInitFromFinanzasEnabled);
+      const evId = await getMeta('currentEventId');
+      const ev = evId ? await getEventByIdSafe(evId) : null;
+      const checked = finTog ? !!finTog.checked : true;
 
       let canInteract = !!(ev && !ev.closedAt && eventPettyEnabled(ev));
       let readOnlyDay = false;
-      if (canInteract && curEvId){
+      if (canInteract && evId){
         try{
-          const pc = await getPettyCash(curEvId);
-          readOnlyDay = isPettyHistoryMode() || await isPettyDayLockedPOS(curEvId, dKey, pc);
+          const dayKey = getSelectedPcDay();
+          const pc = await getPettyCash(evId);
+          readOnlyDay = isPettyHistoryMode() || await isPettyDayLockedPOS(evId, dayKey, pc);
         }catch(_){ readOnlyDay = isPettyHistoryMode(); }
       }
 
       const locked = (!canInteract) || !!readOnlyDay;
       if (finTog) finTog.disabled = locked;
       if (finBtn) finBtn.disabled = locked || !checked;
-
-      // Mostrar razón (y respetar sticky) en el estado.
-      try{ updatePcFinSyncUI(ev, canInteract, readOnlyDay, dKey); }catch(_){ }
     }catch(_){
       if (finBtn) finBtn.disabled = false;
     }
   };
 
-  const fail = (msg, { toastMsg=null, diagResult='blocked', reasonKey='FAIL', html=false } = {})=>{
-    if (evId && dayKey){
-      pcFinStatusSet(msg, { html, sticky:true, evId, dayKey });
-      try{ pcRestoreInitialDenomsSnap(uiSnapBefore); }catch(_){ }
-      try{ pcSetDraftInitial(evId, dayKey, uiSnapBefore, reasonKey); }catch(_){ }
-    }
-    if (toastMsg){
-      try{ showToast(toastMsg, diagResult === 'error' ? 'error' : 'info', 4500); }catch(_){ try{ toast(toastMsg); }catch(__){} }
-    }
-    try{ pcDiagMark(ACTION, diagResult, msg, { reasonKey, eventId: evId, dayKey }); }catch(_){ }
-  };
-
   try{
     if (isPettyHistoryMode()){
-      fail('Vista histórica (solo lectura).', { toastMsg:'Vista histórica (solo lectura). Vuelve al día operativo para sincronizar.', reasonKey:'HISTORY_MODE' });
+      alert('Estás en Vista histórica (solo lectura). Pulsa “Volver al día operativo” para sincronizar.');
+      try{ pcDiagMark(ACTION, 'blocked', 'Vista histórica (solo lectura).', { reasonKey:'HISTORY_MODE' }); }catch(_){ }
       return;
     }
 
-    evId = await getMeta('currentEventId');
-    dayKey = getSelectedPcDay();
-
+    const evId = await getMeta('currentEventId');
     if (!evId){
-      try{ toast('No hay evento activo'); }catch(_){ }
+      toast('No hay evento activo');
       try{ pcDiagMark(ACTION, 'blocked', 'No hay evento activo.', { reasonKey:'NO_EVENT' }); }catch(_){ }
       return;
     }
 
-    // Proteger lo digitado (si luego hay render/guardia)
-    try{ pcSetDraftInitial(evId, dayKey, uiSnapBefore, 'SYNC_START'); }catch(_){ }
-
-    const ev = await getEventByIdSafe(evId);
-    if (!ev){
-      fail('Evento no encontrado.', { toastMsg:'Evento no encontrado.', reasonKey:'NO_EVENT_ROW' });
-      return;
-    }
-
-    const checked = finTog ? !!finTog.checked : !!ev.pcInitFromFinanzasEnabled;
-    if (!checked || !ev.pcInitFromFinanzasEnabled){
-      fail('Switch apagado: actívalo para sincronizar.', { toastMsg:'Activa el switch para sincronizar con Finanzas.', reasonKey:'TOGGLE_OFF' });
-      return;
-    }
-
-    if (ev.closedAt){
-      fail('No se aplicó: evento cerrado.', { toastMsg:'Este evento está cerrado.', reasonKey:'EVENT_CLOSED' });
-      return;
-    }
-
-    if (!eventPettyEnabled(ev)){
-      fail('No se aplicó: Caja Chica desactivada.', { toastMsg:'Este evento no tiene Caja Chica activa.', reasonKey:'PETTY_DISABLED' });
-      return;
-    }
-
-    // Finanzas snapshot preflight
-    const st = finPosGetCajaChicaSnapState();
-    if (!st.ok){
-      if (st.code === 'FIN_NOT_CONFIG' || st.code === 'FIN_NOT_READY'){
-        fail('Caja Chica (Finanzas) no configurada. <a class="a33-link" href="../finanzas/index.html#tab=cajachica">Ir a Finanzas</a>', { toastMsg:'Caja Chica (Finanzas) no configurada', reasonKey: st.code, html:true });
-      } else if (st.code === 'PARSE_ERROR'){
-        fail('Error: datos inválidos en Finanzas (parse).', { toastMsg:'Error de lectura: Caja Chica (Finanzas)', diagResult:'error', reasonKey:'PARSE_ERROR' });
-      } else {
-        fail(st.msg || 'Finanzas no configurada.', { toastMsg:'Finanzas no configurada', reasonKey:'FIN_BAD' });
+    // 1) Validar existencia de la key antes de iniciar
+    const raw = (localStorage.getItem(KEY) || '').toString();
+    if (!raw.trim()){
+      if (statusEl){
+        statusEl.innerHTML = 'Caja Chica (Finanzas) no configurada. <a class="a33-link" href="../finanzas/index.html#tab=cajachica">Ir a Finanzas</a>';
       }
+      toast('Caja Chica (Finanzas) no configurada');
+      try{ pcDiagMark(ACTION, 'blocked', 'Finanzas no configurada.', { reasonKey:'FIN_NOT_CONFIG', eventId: evId }); }catch(_){ }
       return;
     }
 
-    // Día editable preflight
-    const pc0 = await getPettyCash(evId);
-    if (await isPettyDayLockedPOS(evId, dayKey, pc0)){
-      fail('No se aplicó: día cerrado.', { toastMsg:'Este día está cerrado. No se puede modificar Caja Chica.', reasonKey:'DAY_LOCKED' });
+    // 2) Parse seguro con diagnóstico visible
+    let snap = null;
+    try{
+      snap = JSON.parse(raw);
+    }catch(err){
+      if (statusEl) statusEl.textContent = 'Error: datos inválidos en Finanzas (parse)';
+      toast('Error de lectura: Caja Chica (Finanzas)');
+      try{ pcDiagMark(ACTION, 'error', 'Parse inválido.', { reasonKey:'PARSE_ERROR', eventId: evId, err: String(err||'') }); }catch(_){ }
       return;
     }
 
-    // Evento alineado (fuente única) preflight
-    const ctx = await guardPettyWritePOS(evId, { action: ACTION, diag: true, allowRestore: true });
-    if (!ctx){
-      fail('No se aplicó: evento no alineado.', { toastMsg:'No se aplicó: evento no alineado', reasonKey:'GUARD_BLOCK' });
+    if (!snap || !snap.currencies){
+      if (statusEl){
+        statusEl.innerHTML = 'Caja Chica (Finanzas) no configurada. <a class="a33-link" href="../finanzas/index.html#tab=cajachica">Ir a Finanzas</a>';
+      }
+      toast('Caja Chica (Finanzas) no configurada');
+      try{ pcDiagMark(ACTION, 'blocked', 'Finanzas no configurada.', { reasonKey:'FIN_NOT_READY', eventId: evId }); }catch(_){ }
       return;
     }
 
-    // Desde aquí, ya se permite escribir.
+    const dayKey = getSelectedPcDay();
+    const uiSnapBefore = pcCaptureInitialDenomsSnap();
+    pcSetDraftInitial(evId, dayKey, uiSnapBefore, 'SYNC_START');
+
     setBusy(true);
+    try{ pcDiagUpdateContext(evId, null, getPcLastRenderEventId(), null); }catch(_){ }
     try{ pcDiagMark(ACTION, 'running', 'Sincronizando…', { reasonKey:'RUN', eventId: evId, dayKey }); }catch(_){ }
 
-    const snap = st.snap;
+    // 3) Guardia (anti desfase) con diagnóstico + IDs
+    const ctx = await guardPettyWritePOS(evId, { action: ACTION, diag: true, allowRestore: true });
+    if (!ctx){
+      if (statusEl) statusEl.textContent = 'No se aplicó: evento no alineado';
+      try{ pcRestoreInitialDenomsSnap(uiSnapBefore); }catch(_){ }
+      pcSetDraftInitial(evId, dayKey, uiSnapBefore, 'GUARD_BLOCK');
+      return;
+    }
+    const ev = ctx.ev;
 
     const pcBefore = await getPettyCash(evId);
     const prevInitialStamp = (ensurePcDay(pcBefore, dayKey).initial || {}).savedAt || null;
@@ -17803,12 +17582,15 @@ async function syncPettyInitialFromFinanzas(){
     const nioMap = sumCountsByValue(nio.denoms);
     const usdMap = sumCountsByValue(usd.denoms);
 
+    // Guardar saldo inicial desde Finanzas (sin tocar inputs antes de confirmar persistencia)
     const pc = await getPettyCash(evId);
     const day = ensurePcDay(pc, dayKey);
-
-    // Re-chequear candado antes de guardar
     if (await isPettyDayLockedPOS(evId, dayKey, pc)){
-      fail('No se aplicó: día cerrado.', { toastMsg:'Este día está cerrado. No se puede modificar Caja Chica.', reasonKey:'DAY_LOCKED' });
+      if (statusEl) statusEl.textContent = 'No se aplicó: día cerrado';
+      showToast('Este día está cerrado. No se puede modificar Caja Chica.', 'error', 4500);
+      try{ pcDiagMark(ACTION, 'blocked', 'Día cerrado.', { reasonKey:'DAY_LOCKED', eventId: evId, dayKey }); }catch(_){ }
+      try{ pcRestoreInitialDenomsSnap(uiSnapBefore); }catch(_){ }
+      pcSetDraftInitial(evId, dayKey, uiSnapBefore, 'DAY_LOCKED');
       return;
     }
 
@@ -17839,27 +17621,34 @@ async function syncPettyInitialFromFinanzas(){
       await savePettyCash(pc);
     }catch(err){
       console.error('syncPettyInitialFromFinanzas save error', err);
-      fail('No se aplicó: error al guardar.', { toastMsg:'No se aplicó: error al guardar', diagResult:'error', reasonKey:'SAVE_FAIL' });
+      if (statusEl) statusEl.textContent = 'No se aplicó: error al guardar';
+      showPersistFailPOS('caja chica (sync desde finanzas)', err);
+      try{ pcDiagMark(ACTION, 'error', 'Error al guardar.', { reasonKey:'SAVE_FAIL', eventId: evId, dayKey, err: String(err||'') }); }catch(_){ }
+      try{ pcRestoreInitialDenomsSnap(uiSnapBefore); }catch(_){ }
+      pcSetDraftInitial(evId, dayKey, uiSnapBefore, 'SAVE_FAIL');
       return;
     }
 
-    // Confirmación real: re-leer persistido
+    // Verificar que se haya persistido realmente
     const pcAfter = await getPettyCash(evId);
     const newInitialStamp = (ensurePcDay(pcAfter, dayKey).initial || {}).savedAt || null;
     if (!newInitialStamp || newInitialStamp == prevInitialStamp){
-      fail('No se pudo aplicar desde Finanzas.', { toastMsg:'No se pudo aplicar desde Finanzas', diagResult:'error', reasonKey:'NO_WRITE' });
+      if (statusEl) statusEl.textContent = 'No se pudo aplicar desde Finanzas';
+      toast('No se pudo aplicar desde Finanzas');
+      try{ pcDiagMark(ACTION, 'error', 'No se pudo aplicar desde Finanzas.', { reasonKey:'NO_WRITE', eventId: evId, dayKey }); }catch(_){ }
+      try{ pcRestoreInitialDenomsSnap(uiSnapBefore); }catch(_){ }
+      pcSetDraftInitial(evId, dayKey, uiSnapBefore, 'NO_WRITE');
       return;
     }
 
     // Éxito confirmado: pintar desde lectura persistida y limpiar draft
-    try{ pcClearDraftInitial(evId, dayKey); }catch(_){ }
+    pcClearDraftInitial(evId, dayKey);
 
     const cashSalesNio = await getCashSalesNioForDay(evId, dayKey);
     updatePettySummaryUI(pcAfter, dayKey, { cashSalesNio });
     fillPettyInitialFromPc(pcAfter, dayKey);
     setPrevCierreUI(pcAfter, dayKey);
 
-    // Refrescar cierres (botón cerrar día)
     const evs = await getAll('events');
     const evFresh = (evs || []).find(e => e && e.id === evId);
     const fxRaw = evFresh ? Number(evFresh.fxRate || 0) : null;
@@ -17871,13 +17660,12 @@ async function syncPettyInitialFromFinanzas(){
     // Guardar marca de última sincronización a nivel de evento
     const now = new Date();
     const stamp = fmtDDMMYYYYHHMM_POS(now);
-    const evToSave = ctx.ev || ev;
-    evToSave.pcInitFromFinanzasLastSync = now.toISOString();
-    evToSave.pcInitFromFinanzasLastSyncDisplay = stamp;
-    await put('events', evToSave);
+    ev.pcInitFromFinanzasLastSync = now.toISOString();
+    ev.pcInitFromFinanzasLastSyncDisplay = stamp;
+    await put('events', ev);
 
-    pcFinStatusSet('Aplicado desde Finanzas: ' + stamp, { sticky:true, evId, dayKey });
-    try{ toast('Aplicado desde Finanzas'); }catch(_){ }
+    if (statusEl) statusEl.textContent = 'Aplicado desde Finanzas: ' + stamp;
+    toast('Aplicado desde Finanzas');
     try{ pcDiagMark(ACTION, 'ok', 'Aplicado desde Finanzas: ' + stamp, { reasonKey:'OK', eventId: evId, dayKey }); }catch(_){ }
 
   } finally {
@@ -17939,7 +17727,7 @@ function bindCajaChicaEvents(){
       const ev = evId ? await getEventByIdSafe(evId) : null;
       if (!evId || !ev){
         finTog.checked = false;
-        updatePcFinSyncUI(null, false, false, null);
+        updatePcFinSyncUI(null, false, false);
         return;
       }
       if (ev.closedAt){
