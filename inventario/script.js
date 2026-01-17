@@ -1073,7 +1073,7 @@ function checkAndAlert(inv) {
 function registerServiceWorker() {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker
-      .register("./sw.js?v=4.20.7")
+      .register("./sw.js?v=4.20.13")
       .catch((err) => console.error("SW error", err));
   }
 }

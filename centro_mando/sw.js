@@ -3,7 +3,7 @@
    y retirarse.
 */
 
-const SW_VERSION = '4.20.7';
+const SW_VERSION = '4.20.13';
 const MODULE = 'centro_mando';
 const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}`;
 

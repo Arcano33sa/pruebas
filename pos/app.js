@@ -4,7 +4,7 @@ const DB_VER = 27; // Etapa 2D: índice sales.by_uid (anti-duplicados)
 let db;
 
 // --- Build / version (visible en UI para confirmar cache)
-const POS_BUILD = '4.20.14';
+const POS_BUILD = '4.20.13';
 try{ window.A33_POS_BUILD = POS_BUILD; }catch(_){ }
 try{
   const el = document.getElementById('pos-build-id');
@@ -3491,6 +3491,114 @@ async function ensureGroupsAvailableAtStartupPOS(){
 const NIO_DENOMS = [1,5,10,20,50,100,200,500,1000];
 const USD_DENOMS = [1,5,10,20,50,100];
 
+// --- Caja Chica: limpieza automática de llaves de día (Etapa 2)
+let __A33_PC_PENDING_CLEANUP = null;
+const A33_PC_CLEANUP_AUDIT_KEY = 'a33_pc_cleanup_audit_v1';
+
+function pcCleanupAuditLoad(){
+  try{
+    const raw = (localStorage.getItem(A33_PC_CLEANUP_AUDIT_KEY) || '').toString();
+    if (!raw.trim()) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  }catch(_){ return []; }
+}
+function pcCleanupAuditSave(arr){
+  try{ localStorage.setItem(A33_PC_CLEANUP_AUDIT_KEY, JSON.stringify(Array.isArray(arr)?arr:[])); }catch(_){ }
+}
+function pcCleanupAuditAppend(eventId, items){
+  try{
+    const ev = eventId || null;
+    const nowISO = new Date().toISOString();
+    const arr = pcCleanupAuditLoad();
+    const it = Array.isArray(items) ? items : [];
+    for (const x of it){
+      if (!x || !x.day) continue;
+      const keys = Number(x.keys || 0) || 0;
+      arr.push({ atISO: nowISO, eventId: ev, day: x.day, keys });
+    }
+    while (arr.length > 60) arr.shift();
+    pcCleanupAuditSave(arr);
+  }catch(_){ }
+}
+
+function pcComputeCleanupReport(eventId, raw, coercedPc){
+  const report = { eventId: eventId || null, atISO: new Date().toISOString(), items: [] };
+  let needs = false;
+
+  if (raw && typeof raw === 'object' && raw.days && typeof raw.days === 'object'){
+    const map = {};
+    for (const rk in raw.days){
+      const canon = normalizePcDayKey(rk, raw.days[rk]);
+      if (!canon) continue;
+      if (!map[canon]) map[canon] = { day: canon, rawKeys: [] };
+      map[canon].rawKeys.push(rk);
+    }
+    const days = Object.keys(map).sort();
+    for (const d of days){
+      const rawKeys = map[d].rawKeys || [];
+      const uniq = Array.from(new Set(rawKeys.map(x=>String(x||'').trim()))).filter(Boolean);
+      if (!uniq.length) continue;
+      const hadDup = uniq.length > 1;
+      const hadNonCanonical = uniq.some(k => k !== d);
+      if (hadDup || hadNonCanonical){
+        needs = true;
+        report.items.push({ day: d, keys: uniq.length, hadDup, hadNonCanonical, rawKeys: uniq.slice(0,8) });
+      }
+    }
+  }
+
+  // Esquema legado: convertir a days canónico (idempotente)
+  const isLegacy = raw && typeof raw === 'object' && (!raw.days || typeof raw.days !== 'object') && (('initial' in raw) || ('movements' in raw) || ('finalCount' in raw));
+  if (isLegacy){
+    needs = true;
+    let dk = null;
+    try{
+      const keys = listPcDayKeys(coercedPc || null);
+      dk = (keys && keys.length) ? keys[0] : null;
+    }catch(_){ dk = null; }
+    report.items.push({ day: dk || todayYMD(), keys: 1, hadDup: false, hadNonCanonical: true, rawKeys: ['legacy'] });
+  }
+
+  if (!needs) return null;
+  report.items = report.items.map(it=>({
+    day: it.day,
+    keys: Number(it.keys||0)||0,
+    hadDup: !!it.hadDup,
+    hadNonCanonical: !!it.hadNonCanonical,
+    rawKeys: Array.isArray(it.rawKeys) ? it.rawKeys : []
+  })).sort((a,b)=> String(a.day).localeCompare(String(b.day)));
+  return report;
+}
+
+function pcSetPendingCleanup(report){
+  __A33_PC_PENDING_CLEANUP = report || null;
+}
+
+function pcEmitPendingCleanupDiag(eventId, eventName){
+  try{
+    const rep = __A33_PC_PENDING_CLEANUP;
+    if (!rep || rep.eventId !== eventId) return;
+    const items = Array.isArray(rep.items) ? rep.items : [];
+    if (!items.length){ __A33_PC_PENDING_CLEANUP = null; return; }
+
+    try{ pcDiagUpdateContext(eventId, eventName || null, eventId, eventName || null); }catch(_){ }
+
+    for (const it of items){
+      const day = it.day;
+      const keys = Number(it.keys || 0) || 0;
+      if (it.hadDup){
+        pcDiagMark('Caja Chica · Limpieza', 'ok', `Se consolidaron ${keys} llaves duplicadas → ${day}`, { eventId, day, keys, rawKeys: it.rawKeys || [] });
+      } else if (it.hadNonCanonical){
+        const from = (it.rawKeys && it.rawKeys[0]) ? it.rawKeys[0] : '';
+        pcDiagMark('Caja Chica · Limpieza', 'ok', `Se normalizó llave ${from ? ('"'+from+'" ') : ''}→ ${day}`, { eventId, day, keys: 1, rawKeys: it.rawKeys || [] });
+      }
+    }
+  }catch(_){ }
+  __A33_PC_PENDING_CLEANUP = null;
+}
+
+
 function normalizePettySection(section){
   const nio = {};
   const usd = {};
@@ -3530,8 +3638,26 @@ async function getPettyCash(eventId){
     try{
       const store = tx('pettyCash','readonly');
       const req = store.get(eventId);
-      req.onsuccess = ()=>{
-        const pc = coercePettyCashRecord(eventId, req.result);
+      req.onsuccess = async ()=>{
+        const raw = req.result;
+        const pc = coercePettyCashRecord(eventId, raw);
+
+        // Etapa 2: si hay llaves de día no canónicas o duplicadas, consolidar y persistir (idempotente).
+        const rep = pcComputeCleanupReport(eventId, raw, pc);
+        if (rep && rep.items && rep.items.length){
+          try{
+            await savePettyCash(pc);
+            pcSetPendingCleanup(rep);
+            try{ pcCleanupAuditAppend(eventId, rep.items); }catch(_){ }
+          }catch(err){
+            // No bloquear la UI: seguimos con la vista normalizada en memoria y registramos el fallo.
+            try{
+              pcSetPendingCleanup({ eventId, atISO: new Date().toISOString(), items: [{ day: todayYMD(), keys: 0, hadDup: false, hadNonCanonical: false, rawKeys: [] }], error: String(err||'') });
+              pcDiagMark('Caja Chica · Limpieza', 'error', 'No se pudo persistir la limpieza automática. Se usará la vista normalizada en memoria.', { eventId, err: String(err||'') });
+            }catch(_){ }
+          }
+        }
+
         resolve(pc);
       };
       req.onerror = ()=>{
@@ -3577,6 +3703,20 @@ function coercePettyCashRecord(eventId, raw){
   return base;
 }
 
+function normalizePettyMeta(day){
+  const meta = {};
+  if (!day || typeof day !== 'object') return meta;
+  const skip = new Set(['initial','movements','finalCount','fxRate','closedAt','arqueoAdjust']);
+  for (const k in day){
+    if (skip.has(k)) continue;
+    const v = day[k];
+    if (typeof v === 'undefined' || v === null) continue;
+    if (typeof v === 'string' && !v.trim()) continue;
+    meta[k] = v;
+  }
+  return meta;
+}
+
 function normalizePettyDay(day){
   const initial = day && day.initial ? normalizePettySection(day.initial) : normalizePettySection(null);
   const movements = Array.isArray(day && day.movements) ? day.movements.slice() : [];
@@ -3589,7 +3729,9 @@ function normalizePettyDay(day){
 
   const arqueoAdjust = normalizeArqueoAdjust(day && day.arqueoAdjust);
 
-  return { initial, movements, finalCount, fxRate, closedAt, arqueoAdjust };
+    const meta = normalizePettyMeta(day);
+
+  return { initial, movements, finalCount, fxRate, closedAt, arqueoAdjust, meta };
 }
 
 function round2(n){
@@ -3703,6 +3845,88 @@ function mergePettyMovements(a, b){
 
   A.forEach(push);
   B.forEach(push);
+
+  // Orden estable: si existe timestamp, ordenar por tiempo (sin perder estabilidad).
+  const getTs = (m)=>{
+    if (!m || typeof m !== 'object') return NaN;
+    const c = (m.createdAt != null) ? String(m.createdAt) : (m.ts != null) ? String(m.ts) : '';
+    if (c){
+      const t = Date.parse(c);
+      if (Number.isFinite(t)) return t;
+      const asNum = Number(c);
+      if (Number.isFinite(asNum)) return asNum;
+    }
+    const d = (m.date || '').toString();
+    const tt = (m.time || '').toString();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d) && /^\d{1,2}:\d{2}/.test(tt)){
+      const hhmm = tt.slice(0,5);
+      const iso = `${d}T${hhmm}:00`;
+      const t = Date.parse(iso);
+      if (Number.isFinite(t)) return t;
+    }
+    return NaN;
+  };
+
+  const hasTs = out.some(m => Number.isFinite(getTs(m)));
+  if (!hasTs) return out;
+
+  const decorated = out.map((m, idx)=>({ m, idx, ts: getTs(m) }));
+  decorated.sort((a,b)=>{
+    const at = a.ts, bt = b.ts;
+    const aOk = Number.isFinite(at), bOk = Number.isFinite(bt);
+    if (aOk && bOk){
+      if (at !== bt) return at - bt;
+      return a.idx - b.idx;
+    }
+    if (aOk && !bOk) return -1;
+    if (!aOk && bOk) return 1;
+    return a.idx - b.idx;
+  });
+
+  return decorated.map(x=>x.m);
+}
+
+function mergeMetaPreferInformative(aMeta, bMeta){
+  const a = (aMeta && typeof aMeta === 'object') ? aMeta : {};
+  const b = (bMeta && typeof bMeta === 'object') ? bMeta : {};
+  const out = { ...a };
+  const keys = Object.keys(b);
+  for (const k of keys){
+    const av = out[k];
+    const bv = b[k];
+    if (typeof bv === 'undefined' || bv === null) continue;
+    if (typeof av === 'undefined' || av === null){ out[k] = bv; continue; }
+
+    // Preferir texto más informativo
+    if (typeof av === 'string' && typeof bv === 'string'){
+      const at = av.trim(), bt = bv.trim();
+      if (!at && bt) out[k] = bv;
+      else if (bt.length > at.length) out[k] = bv;
+      continue;
+    }
+
+    // Preferir objetos que agregan campos
+    if (av && bv && typeof av === 'object' && typeof bv === 'object' && !Array.isArray(av) && !Array.isArray(bv)){
+      out[k] = { ...av, ...bv };
+      continue;
+    }
+
+    // Preferir true sobre false
+    if (typeof av === 'boolean' && typeof bv === 'boolean'){
+      out[k] = av || bv;
+      continue;
+    }
+
+    // Números: conservar el que sea finito y mayor en magnitud (más informativo)
+    if (typeof av === 'number' && typeof bv === 'number'){
+      if (!Number.isFinite(av) && Number.isFinite(bv)) out[k] = bv;
+      else if (Number.isFinite(av) && Number.isFinite(bv) && Math.abs(bv) > Math.abs(av)) out[k] = bv;
+      continue;
+    }
+
+    // Default: no pisar a menos que el anterior esté vacío
+    if ((typeof av === 'string' && !av.trim()) || (Array.isArray(av) && !av.length)) out[k] = bv;
+  }
   return out;
 }
 
@@ -3710,8 +3934,27 @@ function mergePettyDay(dayA, dayB){
   const a = normalizePettyDay(dayA || {});
   const b = normalizePettyDay(dayB || {});
 
-  // Initial: preferir el que tenga savedAt
-  if (!a.initial?.savedAt && b.initial?.savedAt) a.initial = b.initial;
+  // Initial: preferir el más reciente si ambos existen (por savedAt).
+  // Regla:
+  // - Si ambos tienen savedAt: conservar el de savedAt más reciente.
+  // - Si solo uno tiene savedAt: gana el que sí lo tenga.
+  // Nota: se usa parse de Date para evitar que el orden del merge decida el resultado.
+  const aI = (a.initial && a.initial.savedAt) ? a.initial.savedAt : null;
+  const bI = (b.initial && b.initial.savedAt) ? b.initial.savedAt : null;
+  if (!aI && bI){
+    a.initial = b.initial;
+  } else if (aI && bI){
+    const at = Date.parse(aI);
+    const bt = Date.parse(bI);
+    if (Number.isFinite(at) && Number.isFinite(bt)){
+      if (bt > at) a.initial = b.initial;
+    } else if (!Number.isFinite(at) && Number.isFinite(bt)){
+      a.initial = b.initial;
+    } else if (!Number.isFinite(at) && !Number.isFinite(bt)){
+      // Si ambos son inválidos, preferir el más nuevo en el merge (conservador)
+      a.initial = b.initial;
+    }
+  }
 
   // Final: preferir el más reciente si ambos existen
   const aF = a.finalCount?.savedAt ? a.finalCount.savedAt : null;
@@ -3747,6 +3990,9 @@ function mergePettyDay(dayA, dayB){
   const bAdj = b.arqueoAdjust || {};
   a.arqueoAdjust.NIO = pickAdj(a.arqueoAdjust.NIO, bAdj.NIO || null);
   a.arqueoAdjust.USD = pickAdj(a.arqueoAdjust.USD, bAdj.USD || null);
+
+  // Meta (campos extra): preservar lo más informativo
+  a.meta = mergeMetaPreferInformative(a.meta, b.meta);
 
   return a;
 }
@@ -3825,7 +4071,8 @@ function ensurePcDay(pc, dayKey){
       finalCount: null,
       fxRate: null,
       closedAt: null,
-      arqueoAdjust: { NIO: null, USD: null }
+      arqueoAdjust: { NIO: null, USD: null },
+      meta: {}
     };
   } else {
     pc.days[dk] = normalizePettyDay(pc.days[dk]);
@@ -16058,7 +16305,7 @@ async function onReopenPettyDay(){
   if (!ctx) return;
   const dayKey = getSelectedPcDay();
   const pc = await getPettyCash(evId);
-  const day = ensurePcDay(pc, dayKey);
+const day = ensurePcDay(pc, dayKey);
 
   if (await isPettyDayLockedPOS(evId, dayKey, pc)){
     showToast('Este día está cerrado. No se puede modificar Caja Chica.', 'error', 5000);
@@ -16597,6 +16844,7 @@ async function renderCajaChica(){
   else main.classList.remove('disabled');
 
   const pc = await getPettyCash(evId);
+  try{ pcEmitPendingCleanupDiag(evId, (ev && ev.name) ? ev.name : null); }catch(_){ }
   const day = ensurePcDay(pc, dayKey);
 
   // Mantener el campo de fecha de movimientos sincronizado con el día operativo
@@ -16975,7 +17223,6 @@ async function onSavePettyInitial(opts){
 
   const ctx = o.ctx || await guardPettyWritePOS(evId, { action, diag: !skipDiag, allowRestore: true });
   if (!ctx){
-    try{ pcRestoreInitialDenomsSnap(uiSnap); }catch(_){ }
     pcSetDraftInitial(evId, dayKey, uiSnap, 'GUARD_BLOCK');
     return false;
   }
@@ -16989,7 +17236,6 @@ async function onSavePettyInitial(opts){
     if (!skipDiag){
       try{ pcDiagMark(action, 'blocked', 'Día cerrado.', { reasonKey:'DAY_LOCKED', eventId: evId, dayKey }); }catch(_){ }
     }
-    try{ pcRestoreInitialDenomsSnap(uiSnap); }catch(_){ }
     pcSetDraftInitial(evId, dayKey, uiSnap, 'DAY_LOCKED');
     return false;
   }
@@ -17025,7 +17271,6 @@ async function onSavePettyInitial(opts){
     if (!skipDiag){
       try{ pcDiagMark(action, 'error', 'Error al guardar saldo inicial.', { reasonKey:'SAVE_FAIL', eventId: evId, dayKey, err: String(err||'') }); }catch(_){ }
     }
-    try{ pcRestoreInitialDenomsSnap(uiSnap); }catch(_){ }
     pcSetDraftInitial(evId, dayKey, uiSnap, 'SAVE_FAIL');
     return false;
   }
@@ -17038,7 +17283,6 @@ async function onSavePettyInitial(opts){
     if (!skipDiag){
       try{ pcDiagMark(action, 'error', 'No se pudo guardar el saldo inicial.', { reasonKey:'NO_WRITE', eventId: evId, dayKey }); }catch(_){ }
     }
-    try{ pcRestoreInitialDenomsSnap(uiSnap); }catch(_){ }
     pcSetDraftInitial(evId, dayKey, uiSnap, 'NO_WRITE');
     return false;
   }
@@ -17054,7 +17298,6 @@ async function onSavePettyInitial(opts){
       if (!skipDiag){
         try{ pcDiagMark(action, 'error', 'Guardado no confirmado (mismatch).', { reasonKey:'POST_READ_MISMATCH', eventId: evId, dayKey, mismatch }); }catch(_){ }
       }
-      try{ pcRestoreInitialDenomsSnap(uiSnap); }catch(_){ }
       pcSetDraftInitial(evId, dayKey, uiSnap, 'POST_READ_MISMATCH');
       return false;
     }
@@ -17713,7 +17956,6 @@ async function syncPettyInitialFromFinanzas(){
   const fail = (msg, { toastMsg=null, diagResult='blocked', reasonKey='FAIL', html=false } = {})=>{
     if (evId && dayKey){
       pcFinStatusSet(msg, { html, sticky:true, evId, dayKey });
-      try{ pcRestoreInitialDenomsSnap(uiSnapBefore); }catch(_){ }
       try{ pcSetDraftInitial(evId, dayKey, uiSnapBefore, reasonKey); }catch(_){ }
     }
     if (toastMsg){
