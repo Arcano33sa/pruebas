@@ -414,6 +414,23 @@ let __A33_PC_DIAG = {
   lastAtISO: null,
   lastAtDisplay: null,
   lastDetails: null,
+
+  // Etapa 1 (forense): código corto de causa + detalle corto (sin consola)
+  techCode: 'OK',
+  techDetail: null,
+  forensic: {
+    eventId: null,
+    dayKey: null,
+    normalizedDay: null,
+    snapshotSig: null,
+    beforeHash: null,
+    beforeSavedAt: null,
+    afterHash: null,
+    afterSavedAt: null,
+    extra: null
+  },
+
+  // Etapa 2/3 (legacy): bloqueo calculado + flags
   blockReason: 'OK',
   blockDetail: null,
   blockFlags: null
@@ -457,6 +474,208 @@ const A33_PC_BLOCK_REASONS = {
   MISMATCH_EVENTO: 'MISMATCH_EVENTO',
   OTRO: 'OTRO'
 };
+
+// --- Caja Chica: Taxonomía de causas técnicas (Etapa 1 forense)
+// Nota: estos códigos se muestran en UI (panel Estado) para diagnosticar sin consola.
+const A33_PC_TECH_CAUSES = {
+  OK: 'OK',
+  SNAPSHOT_MISSING: 'SNAPSHOT_MISSING',
+  SNAPSHOT_PARSE_ERROR: 'SNAPSHOT_PARSE_ERROR',
+  SNAPSHOT_SHAPE_INVALID: 'SNAPSHOT_SHAPE_INVALID',
+  IDB_BLOCKED: 'IDB_BLOCKED',
+  IDB_ABORT: 'IDB_ABORT',
+  IDB_QUOTA: 'IDB_QUOTA',
+  WRITE_NO_CHANGE: 'WRITE_NO_CHANGE',
+  READBACK_MISMATCH: 'READBACK_MISMATCH',
+  DUP_DAY_COLLISION: 'DUP_DAY_COLLISION',
+  EVENT_MISMATCH: 'EVENT_MISMATCH',
+  DAY_CLOSED: 'DAY_CLOSED',
+  TOGGLE_SYNC_OFF: 'TOGGLE_SYNC_OFF'
+};
+
+const __A33_PC_TECH_SET = new Set(Object.values(A33_PC_TECH_CAUSES));
+
+function pcTechNormalize(code){
+  const raw = String(code || '').trim();
+  if (!raw) return A33_PC_TECH_CAUSES.OK;
+  const up = raw.toUpperCase();
+  if (__A33_PC_TECH_SET.has(up)) return up;
+
+  // Mapeos legacy
+  if (up === 'FIN_NOT_CONFIG') return A33_PC_TECH_CAUSES.SNAPSHOT_MISSING;
+  if (up === 'FIN_NOT_READY') return A33_PC_TECH_CAUSES.SNAPSHOT_SHAPE_INVALID;
+  if (up === 'PARSE_ERROR') return A33_PC_TECH_CAUSES.SNAPSHOT_PARSE_ERROR;
+  if (up === 'TOGGLE_OFF') return A33_PC_TECH_CAUSES.TOGGLE_SYNC_OFF;
+  if (up === 'NO_WRITE' || up === 'NO_CHANGE') return A33_PC_TECH_CAUSES.WRITE_NO_CHANGE;
+  if (up === 'META_MISMATCH' || up === 'MISMATCH' || up === 'READBACK') return A33_PC_TECH_CAUSES.READBACK_MISMATCH;
+  if (up === 'EVENTO_DESFASE' || up === 'MISMATCH_EVENTO') return A33_PC_TECH_CAUSES.EVENT_MISMATCH;
+  if (up === 'DIA_CERRADO' || up === 'DAY_LOCKED') return A33_PC_TECH_CAUSES.DAY_CLOSED;
+
+  return A33_PC_TECH_CAUSES.EVENT_MISMATCH;
+}
+
+function pcForensicNormalize(f){
+  const o = (f && typeof f === 'object') ? f : {};
+  const pick = (k)=>{
+    const v = o[k];
+    if (v == null) return null;
+    const s = String(v);
+    return s.trim() ? s : null;
+  };
+  return {
+    eventId: pick('eventId'),
+    dayKey: pick('dayKey'),
+    normalizedDay: pick('normalizedDay'),
+    snapshotSig: pick('snapshotSig'),
+    beforeHash: pick('beforeHash'),
+    beforeSavedAt: pick('beforeSavedAt'),
+    afterHash: pick('afterHash'),
+    afterSavedAt: pick('afterSavedAt'),
+    extra: pick('extra')
+  };
+}
+
+function pcForensicFmtSavedAt(v){
+  if (!v) return '—';
+  try{
+    const s = fmtDDMMYYYYHHMM_POS(v);
+    return s ? s : pcDiagTrunc(String(v), 20);
+  }catch(_){
+    return pcDiagTrunc(String(v), 20);
+  }
+}
+
+function pcHashPettySection(section){
+  try{
+    const s = normalizePettySection(section || null) || {};
+    const sortKeys = (obj)=> Object.keys(obj || {}).sort((a,b)=>{
+      const na = Number(a), nb = Number(b);
+      if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+      return String(a).localeCompare(String(b));
+    });
+    const pack = (obj)=> sortKeys(obj).map(k=>`${k}:${Number(obj[k]||0)}`).join(',');
+    const savedAt = (s.savedAt != null) ? String(s.savedAt) : '';
+    const str = `nio:${pack(s.nio)}|usd:${pack(s.usd)}|savedAt:${savedAt}`;
+    const hash = a33HashStringPOS(str);
+    return { hash: hash ? String(hash) : null, savedAt: savedAt || null };
+  }catch(_){
+    return { hash: null, savedAt: null };
+  }
+}
+
+function pcHashPettyMovements(day){
+  try{
+    const d = day || {};
+    const arr = Array.isArray(d.movements) ? d.movements : [];
+    const last = arr.length ? arr[arr.length-1] : null;
+    const lastAt = last ? (last.createdAt ?? last.ts ?? last.timestamp ?? null) : null;
+    const str = `len:${arr.length}|lastAt:${lastAt || ''}`;
+    const hash = a33HashStringPOS(str);
+    return { hash: hash ? String(hash) : null, savedAt: (lastAt != null ? String(lastAt) : null) };
+  }catch(_){
+    return { hash: null, savedAt: null };
+  }
+}
+
+function pcFindDupDayCollision(pc, targetYmd){
+  try{
+    const y = String(targetYmd || '').trim();
+    if (!y) return [];
+    const days = pc && pc.days && typeof pc.days === 'object' ? pc.days : null;
+    if (!days) return [];
+    const keys = Object.keys(days);
+    const hits = [];
+    for (const k of keys){
+      const norm = normalizePcDayKey(k, days[k]);
+      if (norm === y) hits.push(k)
+    }
+    return hits;
+  }catch(_){
+    return [];
+  }
+}
+
+
+
+function pcGetDayInitialFromFinanzas(day){
+  try{
+    if (day && day.initialFromFinanzas && typeof day.initialFromFinanzas === 'object') return day.initialFromFinanzas;
+    if (day && day.meta && typeof day.meta === 'object'){
+      if (day.meta.initialFromFinanzas && typeof day.meta.initialFromFinanzas === 'object') return day.meta.initialFromFinanzas;
+      // Compat: anidado
+      if (day.meta.meta && typeof day.meta.meta === 'object' && day.meta.meta.initialFromFinanzas && typeof day.meta.meta.initialFromFinanzas === 'object'){
+        return day.meta.meta.initialFromFinanzas;
+      }
+    }
+  }catch(_){ }
+  return null;
+}
+
+function pcFindDupDayCollisionRaw(raw, targetYmd){
+  try{
+    const y = String(targetYmd || '').trim();
+    if (!y) return [];
+    const days = raw && raw.days && typeof raw.days === 'object' ? raw.days : null;
+    if (!days) return [];
+    const hits = [];
+    for (const k of Object.keys(days)){
+      const norm = normalizePcDayKey(k, days[k]);
+      if (norm === y) hits.push(k);
+    }
+    return hits;
+  }catch(_){
+    return [];
+  }
+}
+function pcMapIdbErrorToTech(err){
+  try{
+    const name = String(err && err.name ? err.name : '').toLowerCase();
+    const msg = String(err && err.message ? err.message : (err || '')).toLowerCase();
+    if (name.includes('quota') || msg.includes('quota') || msg.includes('exceed')){
+      return { code: A33_PC_TECH_CAUSES.IDB_QUOTA, detail: 'Cuota/espacio agotado.' };
+    }
+    if (name.includes('blocked') || msg.includes('blocked') || msg.includes('versionchange')){
+      return { code: A33_PC_TECH_CAUSES.IDB_BLOCKED, detail: 'IndexedDB bloqueada.' };
+    }
+    if (name.includes('abort') || msg.includes('abort')){
+      return { code: A33_PC_TECH_CAUSES.IDB_ABORT, detail: 'Transacción abortada.' };
+    }
+    return { code: A33_PC_TECH_CAUSES.IDB_ABORT, detail: 'Error de persistencia.' };
+  }catch(_){
+    return { code: A33_PC_TECH_CAUSES.IDB_ABORT, detail: 'Error de persistencia.' };
+  }
+}
+
+function pcDiagRenderForensics(){
+  const f = (__A33_PC_DIAG && __A33_PC_DIAG.forensic) ? __A33_PC_DIAG.forensic : null;
+  const o = pcForensicNormalize(f || {});
+  const set = (id, val, mono=false)=>{
+    const el = document.getElementById(id);
+    if (!el) return;
+    try{ el.textContent = (val != null && String(val).trim() !== '') ? String(val) : '—'; }catch(_){ }
+    try{
+      if (mono) el.classList.add('pc-forensic-mono');
+      else el.classList.remove('pc-forensic-mono');
+    }catch(_){ }
+  };
+
+  const evId = o.eventId ? String(o.eventId) : '';
+  set('pc-forensic-eventid', evId ? (evId.startsWith('#') ? evId : ('#' + evId)) : '—', true);
+  set('pc-forensic-daykey', o.dayKey || '—', true);
+  set('pc-forensic-ymd', o.normalizedDay || '—', true);
+  set('pc-forensic-snapsig', o.snapshotSig || '—', true);
+
+  const b = (o.beforeHash || '—') + ' @ ' + pcForensicFmtSavedAt(o.beforeSavedAt);
+  const a = (o.afterHash || '—') + ' @ ' + pcForensicFmtSavedAt(o.afterSavedAt);
+  set('pc-forensic-before', b, true);
+  set('pc-forensic-after', a, true);
+
+  const extra = document.getElementById('pc-forensic-extra');
+  if (extra){
+    try{ extra.textContent = o.extra ? String(o.extra) : ''; }catch(_){ }
+  }
+}
+
 
 function pcYN(v){ return v ? 'SI' : 'NO'; }
 
@@ -712,15 +931,20 @@ function pcDiagRender(){
     if (cls) resEl.classList.add(cls);
   }
 
-  const r = (d.blockReason != null) ? d.blockReason : d.lastReason;
-  const reasonTxt = (r != null && String(r).trim()) ? String(r).trim() : 'OK';
+  const r0 = (d.techCode != null && String(d.techCode).trim()) ? String(d.techCode).trim() : null;
+  const r1 = (d.blockReason != null && String(d.blockReason).trim()) ? String(d.blockReason).trim() : null;
+  const r2 = (d.lastReason != null && String(d.lastReason).trim()) ? String(d.lastReason).trim() : null;
+  const reasonTxt = r0 || r1 || r2 || 'OK';
   if (reasonEl) reasonEl.textContent = reasonTxt;
 
-  const det = (d.blockDetail != null && String(d.blockDetail).trim()) ? String(d.blockDetail).trim() : '';
+  const det0 = (d.techDetail != null && String(d.techDetail).trim()) ? String(d.techDetail).trim() : '';
+  const det1 = (d.blockDetail != null && String(d.blockDetail).trim()) ? String(d.blockDetail).trim() : '';
+  const det = det0 || det1 || '';
   if (detailEl) detailEl.textContent = det ? det : '—';
   if (detailRow) detailRow.style.display = det ? 'block' : 'none';
 
   try{ pcDiagRenderFlags(d.blockFlags || null); }catch(_){ }
+  try{ pcDiagRenderForensics(); }catch(_){ }
   if (atEl) atEl.textContent = d.lastAtDisplay ? String(d.lastAtDisplay) : '—';
 }
 
@@ -745,6 +969,27 @@ function pcDiagMark(action, result, reason, details){
   __A33_PC_DIAG.lastAtDisplay = stamp;
   __A33_PC_DIAG.lastDetails = details || null;
 
+  // Etapa 1 forense: setear código técnico + detalle + huella (si viene en details)
+  try{
+    const d = details && typeof details === 'object' ? details : {};
+    const code = d.causeCode ?? d.techCode ?? null;
+    const det = d.techDetail ?? d.detailText ?? d.detail ?? null;
+    if (code != null){
+      __A33_PC_DIAG.techCode = pcTechNormalize(code);
+      // Si no viene detalle explícito, usar una versión corta del motivo humano (si no es HTML)
+      if (det == null && typeof reason === 'string' && reason.indexOf('<') === -1){
+        __A33_PC_DIAG.techDetail = pcDiagTrunc(reason, 140);
+      }
+    }
+    if (det != null){
+      const s = String(det).trim();
+      __A33_PC_DIAG.techDetail = s ? s : null;
+    }
+    if ('forensic' in d){
+      __A33_PC_DIAG.forensic = pcForensicNormalize(d.forensic || {});
+    }
+  }catch(_){ }
+
   try{
     pcDiagLogAppend({
       atISO: __A33_PC_DIAG.lastAtISO,
@@ -760,37 +1005,6 @@ function pcDiagMark(action, result, reason, details){
 
   try{ pcDiagRender(); }catch(e){}
   try{ pcDiagRenderLog(); }catch(_){ }
-}
-
-function pcDiagSetLastSyncDisplay(text){
-  try{
-    const el = document.getElementById('pc-diag-last-sync');
-    if (el) el.textContent = (text && String(text).trim()) ? String(text).trim() : '—';
-  }catch(_){ }
-}
-
-
-
-
-// --- Caja Chica: Estado (historial) — Etapa 3
-const A33_PC_DIAG_LOG_KEY = 'a33_pc_diag_log_v1';
-
-function pcDiagLogLoad(){
-  try{
-    const raw = (localStorage.getItem(A33_PC_DIAG_LOG_KEY) || '').toString();
-    if (!raw.trim()) return [];
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr : [];
-  }catch(_){
-    return [];
-  }
-}
-
-function pcDiagLogSave(arr){
-  try{
-    const a = Array.isArray(arr) ? arr : [];
-    localStorage.setItem(A33_PC_DIAG_LOG_KEY, JSON.stringify(a));
-  }catch(_){ }
 }
 
 function pcDiagLogAppend(entry){
@@ -3914,15 +4128,58 @@ async function getPettyCash(eventId){
         // Etapa 2: si hay llaves de día no canónicas o duplicadas, consolidar y persistir (idempotente).
         const rep = pcComputeCleanupReport(eventId, raw, pc);
         if (rep && rep.items && rep.items.length){
+          // Etapa 4: si hay colisiones reales (>1 llave por normalizedDay), reportar DUP_DAY_COLLISION en Estado
+          // (solo durante el intento) y luego dejar el sistema en OK tras reparar.
+          const collDays = rep.items.filter(it=>it && it.hadDup).map(it=>it.day).filter(Boolean);
+          const hasColl = collDays.length > 0;
+          if (hasColl){
+            try{
+              pcDiagMark('Caja Chica · Saneamiento', 'running', 'Colisión de llaves por día detectada. Reparando…', {
+                causeCode: A33_PC_TECH_CAUSES.DUP_DAY_COLLISION,
+                techDetail: 'Colisión por llaves distintas del mismo día. Reparando…',
+                forensic: {
+                  eventId: eventId,
+                  dayKey: collDays[0] || null,
+                  normalizedDay: collDays[0] || null,
+                  extra: 'days: ' + collDays.join(', ')
+                }
+              });
+            }catch(_){ }
+          }
           try{
             await savePettyCash(pc);
             pcSetPendingCleanup(rep);
             try{ pcCleanupAuditAppend(eventId, rep.items); }catch(_){ }
+
+            if (hasColl){
+              try{
+                pcDiagMark('Caja Chica · Saneamiento', 'ok', 'Reparación aplicada.', {
+                  causeCode: A33_PC_TECH_CAUSES.OK,
+                  techDetail: 'Reparación aplicada: SI',
+                  forensic: {
+                    eventId: eventId,
+                    dayKey: collDays[0] || null,
+                    normalizedDay: collDays[0] || null,
+                    extra: 'days: ' + collDays.join(', ')
+                  }
+                });
+              }catch(_){ }
+            }
           }catch(err){
             // No bloquear la UI: seguimos con la vista normalizada en memoria y registramos el fallo.
             try{
               pcSetPendingCleanup({ eventId, atISO: new Date().toISOString(), items: [{ day: todayYMD(), keys: 0, hadDup: false, hadNonCanonical: false, rawKeys: [] }], error: String(err||'') });
-              pcDiagMark('Caja Chica · Limpieza', 'error', 'No se pudo persistir la limpieza automática. Se usará la vista normalizada en memoria.', { eventId, err: String(err||'') });
+              const code = (hasColl) ? A33_PC_TECH_CAUSES.DUP_DAY_COLLISION : A33_PC_TECH_CAUSES.IDB_ABORT;
+              pcDiagMark('Caja Chica · Limpieza', 'error', 'No se pudo persistir la limpieza automática. Se usará la vista normalizada en memoria.', {
+                causeCode: code,
+                techDetail: hasColl ? 'Colisión por día detectada. No se pudo reparar (persistencia).' : 'No se pudo persistir la limpieza automática.',
+                forensic: {
+                  eventId: eventId,
+                  dayKey: (collDays && collDays[0]) ? collDays[0] : null,
+                  normalizedDay: (collDays && collDays[0]) ? collDays[0] : null,
+                  extra: 'err: ' + String(err||'') + (hasColl ? (' | days: ' + collDays.join(', ')) : '')
+                }
+              });
             }catch(_){ }
           }
         }
@@ -3940,6 +4197,28 @@ async function getPettyCash(eventId){
   });
 }
 
+
+
+async function getPettyCashRawRecord(eventId){
+  if (eventId == null) return null;
+  if (!db) await openDB();
+
+  return new Promise((resolve)=>{
+    try{
+      const store = tx('pettyCash','readonly');
+      const req = store.get(eventId);
+      req.onsuccess = ()=> resolve(req.result || null);
+      req.onerror = ()=>{
+        console.warn('Error leyendo pettyCash (raw)', req.error);
+        resolve(null);
+      };
+    }catch(err){
+      console.error('Error getPettyCashRawRecord', err);
+      resolve(null);
+    }
+  });
+}
+
 function coercePettyCashRecord(eventId, raw){
   const base = { eventId, version: 2, days: {} };
   if (!raw || typeof raw !== 'object') return base;
@@ -3947,7 +4226,9 @@ function coercePettyCashRecord(eventId, raw){
   // Esquema nuevo
   if (raw.days && typeof raw.days === 'object'){
     const pc = { eventId, version: 2, days: {} };
-    for (const k in raw.days){
+    // Etapa 4: consolidación determinista (orden estable) para evitar merges no deterministas.
+    const keys = Object.keys(raw.days).sort((a,b)=> String(a).localeCompare(String(b)));
+    for (const k of keys){
       if (!raw.days[k]) continue;
       const dayKey = normalizePcDayKey(k, raw.days[k]);
       if (!dayKey) continue;
@@ -3975,14 +4256,41 @@ function coercePettyCashRecord(eventId, raw){
 function normalizePettyMeta(day){
   const meta = {};
   if (!day || typeof day !== 'object') return meta;
-  const skip = new Set(['initial','movements','finalCount','fxRate','closedAt','arqueoAdjust']);
+
+  // Base: meta existente (si existe)
+  const base = (day.meta && typeof day.meta === 'object' && !Array.isArray(day.meta)) ? day.meta : {};
+  const baseCopy = { ...base };
+
+  // Compat: en builds previas meta podía anidarse como meta.meta
+  try{
+    if (baseCopy.meta && typeof baseCopy.meta === 'object' && !Array.isArray(baseCopy.meta)){
+      const nested = baseCopy.meta;
+      delete baseCopy.meta;
+      // Preferir lo explícito (baseCopy) sobre lo anidado
+      Object.assign(baseCopy, nested, baseCopy);
+    }
+  }catch(_){ }
+
+  const cleanPut = (k, v)=>{
+    try{
+      if (typeof v === 'undefined' || v === null) return;
+      if (typeof v === 'string' && !v.trim()) return;
+      meta[k] = v;
+    }catch(_){ }
+  };
+
+  // 1) Cargar base meta
+  for (const k in baseCopy){
+    cleanPut(k, baseCopy[k]);
+  }
+
+  // 2) Capturar campos extra (pero nunca anidar 'meta')
+  const skip = new Set(['initial','movements','finalCount','fxRate','closedAt','arqueoAdjust','meta']);
   for (const k in day){
     if (skip.has(k)) continue;
-    const v = day[k];
-    if (typeof v === 'undefined' || v === null) continue;
-    if (typeof v === 'string' && !v.trim()) continue;
-    meta[k] = v;
+    cleanPut(k, day[k]);
   }
+
   return meta;
 }
 
@@ -4034,8 +4342,18 @@ function normalizeArqueoAdjust(adj){
   return out;
 }
 
-function safeYMD(s){
-  if (typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+function safeYMD(s, dayObj){
+  try{
+    const y = normalizePcDayKey(s, dayObj || null);
+    if (typeof y === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(y)) return y;
+  }catch(_){ }
+
+  if (typeof s === 'string'){
+    const t = s.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+    const m = t.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (m) return m[1];
+  }
   return todayYMD();
 }
 
@@ -4203,37 +4521,53 @@ function mergePettyDay(dayA, dayB){
   const a = normalizePettyDay(dayA || {});
   const b = normalizePettyDay(dayB || {});
 
+  // Helpers Etapa 4: preferir data más informativa cuando no hay timestamps válidos.
+  const secInfo = (sec)=>{
+    try{
+      const s = normalizePettySection(sec || null);
+      const total = Number(s.totalNio || 0) + Number(s.totalUsd || 0);
+      const stamp = (s.savedAt != null) ? String(s.savedAt) : '';
+      const t = stamp ? Date.parse(stamp) : NaN;
+      return { total: Number.isFinite(total) ? total : 0, stamp, t, tOK: Number.isFinite(t) };
+    }catch(_){
+      return { total: 0, stamp: '', t: NaN, tOK: false };
+    }
+  };
+  const pickMoreInformative = (secA, secB)=>{
+    const A = secInfo(secA);
+    const B = secInfo(secB);
+    if (!secA && secB) return secB;
+    if (secA && !secB) return secA;
+    if (!secA && !secB) return secA;
+
+    // Preferir timestamp válido más reciente
+    if (A.tOK && B.tOK){
+      if (B.t > A.t) return secB;
+      if (A.t > B.t) return secA;
+      // empate: seguir a heurísticas
+    } else if (!A.tOK && B.tOK){
+      return secB;
+    } else if (A.tOK && !B.tOK){
+      return secA;
+    }
+
+    // Sin timestamps válidos: preferir el que tenga más dinero (evita “pisar” con ceros).
+    if (Math.abs(B.total) > Math.abs(A.total) + 0.005) return secB;
+    if (Math.abs(A.total) > Math.abs(B.total) + 0.005) return secA;
+
+    // Empate: NO reemplazar (más conservador y estable)
+    return secA;
+  };
+
   // Initial: preferir el más reciente si ambos existen (por savedAt).
   // Regla:
   // - Si ambos tienen savedAt: conservar el de savedAt más reciente.
   // - Si solo uno tiene savedAt: gana el que sí lo tenga.
   // Nota: se usa parse de Date para evitar que el orden del merge decida el resultado.
-  const aI = (a.initial && a.initial.savedAt) ? a.initial.savedAt : null;
-  const bI = (b.initial && b.initial.savedAt) ? b.initial.savedAt : null;
-  if (!aI && bI){
-    a.initial = b.initial;
-  } else if (aI && bI){
-    const at = Date.parse(aI);
-    const bt = Date.parse(bI);
-    if (Number.isFinite(at) && Number.isFinite(bt)){
-      if (bt > at) a.initial = b.initial;
-    } else if (!Number.isFinite(at) && Number.isFinite(bt)){
-      a.initial = b.initial;
-    } else if (!Number.isFinite(at) && !Number.isFinite(bt)){
-      // Si ambos son inválidos, preferir el más nuevo en el merge (conservador)
-      a.initial = b.initial;
-    }
-  }
+  a.initial = pickMoreInformative(a.initial, b.initial);
 
   // Final: preferir el más reciente si ambos existen
-  const aF = a.finalCount?.savedAt ? a.finalCount.savedAt : null;
-  const bF = b.finalCount?.savedAt ? b.finalCount.savedAt : null;
-  if (!aF && bF) a.finalCount = b.finalCount;
-  else if (aF && bF){
-    try{
-      if (new Date(bF).getTime() > new Date(aF).getTime()) a.finalCount = b.finalCount;
-    }catch(e){}
-  }
+  a.finalCount = pickMoreInformative(a.finalCount, b.finalCount);
 
   // fxRate / closedAt: preferir el existente, o el nuevo si el anterior falta
   if (a.fxRate == null && b.fxRate != null) a.fxRate = b.fxRate;
@@ -4268,13 +4602,73 @@ function mergePettyDay(dayA, dayB){
 
 async function savePettyCash(pc){
   // IMPORTANTE: esta función debe FALLAR si no se pudo persistir en IndexedDB.
-  // Antes resolvía “silenciosamente” en error y eso hacía que “Cerrar día” pareciera funcionar,
-  // pero al recargar seguía “Día abierto” (closedAt null).
+  // Etapa 3/5: preservar llaves legacy (DD/MM/YYYY, etc.) sin usarlas como canónicas.
   if (!pc || pc.eventId == null) throw new Error('pettyCash inválido');
   if (!db) await openDB();
 
+  // Preservar data vieja: guardar llaves no canónicas bajo __legacyDays.
+  let legacyDays = null;
+  try{
+    const existing = await getPettyCashRawRecord(pc.eventId);
+    if (existing && typeof existing === 'object'){
+      const mergedAtISO = new Date().toISOString();
+      const markLegacy = (k, dayObj, mergedInto)=>{
+        try{
+          if (!legacyDays) legacyDays = {};
+          const prev = legacyDays[k];
+          // Conservar lo ya guardado si existe (evita churn y es idempotente)
+          const base = (prev && typeof prev === 'object' && !Array.isArray(prev))
+            ? ({ ...dayObj, ...prev })
+            : ((dayObj && typeof dayObj === 'object' && !Array.isArray(dayObj)) ? ({ ...dayObj }) : dayObj);
+
+          if (base && typeof base === 'object' && !Array.isArray(base)){
+            if (mergedInto){
+              // mergedInto estable (solo setear si falta o si es distinto)
+              if (!base.mergedInto || String(base.mergedInto) !== String(mergedInto)){
+                base.mergedInto = String(mergedInto);
+              }
+              // mergedAtISO solo la primera vez
+              if (!base.mergedAtISO) base.mergedAtISO = mergedAtISO;
+              if (!base.originalDayKey) base.originalDayKey = String(k);
+            }
+          }
+          legacyDays[k] = base;
+        }catch(_){ }
+      };
+
+      const prevLegacy = (existing.__legacyDays && typeof existing.__legacyDays === 'object') ? existing.__legacyDays : null;
+      if (prevLegacy){
+        legacyDays = { ...prevLegacy };
+        // Etapa 4: anotar mergedInto en legacy ya existente (idempotente)
+        try{
+          for (const lk of Object.keys(legacyDays)){
+            const v = legacyDays[lk];
+            const norm = normalizePcDayKey(lk, v);
+            if (norm && lk !== norm){
+              markLegacy(lk, v, norm);
+            }
+          }
+        }catch(_){ }
+      }
+
+      const exDays = (existing.days && typeof existing.days === 'object') ? existing.days : null;
+      if (exDays){
+        for (const k of Object.keys(exDays)){
+          const norm = normalizePcDayKey(k, exDays[k]);
+          if (norm && k !== norm){
+            // No destructivo: preservar el registro original (marcado como mergedInto)
+            markLegacy(k, exDays[k], norm);
+          }
+        }
+      }
+    }
+  }catch(_){ }
+
   // Normalizar / limpiar para evitar basura y mantener esquema estable
   const cleaned = { eventId: pc.eventId, version: 2, days: {} };
+  if (legacyDays && Object.keys(legacyDays).length){
+    cleaned.__legacyDays = legacyDays;
+  }
 
   const days = pc.days && typeof pc.days === 'object' ? pc.days : {};
   for (const k in days){
@@ -16936,30 +17330,47 @@ function a33HashStringPOS(str){
 
 function finPosGetCajaChicaSnapState(){
   const KEY = A33_FIN_CC_STORAGE_KEY_POS;
+  const linkUrl = '../finanzas/index.html#tab=cajachica';
+  const link = 'Snapshot faltante. <a class="a33-link" href="' + linkUrl + '">Ir a Finanzas</a>';
+
   let raw = '';
   try{ raw = (localStorage.getItem(KEY) || '').toString(); }catch(_){ raw = ''; }
-  if (!raw.trim()) return { ok:false, code:'FIN_NOT_CONFIG', msg:'Caja Chica (Finanzas) no configurada.' };
+  if (!raw.trim()){
+    return { ok:false, code:'FIN_NOT_CONFIG', msg:'No existe snapshot de Caja Chica desde Finanzas.', link, linkUrl };
+  }
 
   const hash = a33HashStringPOS(raw);
 
   let snap = null;
   try{ snap = JSON.parse(raw); }catch(err){
-    return { ok:false, code:'PARSE_ERROR', msg:'Error: datos inválidos en Finanzas (parse).', err: String(err||''), hash };
+    const e = String(err||'');
+    const short = (e.length > 160) ? (e.slice(0,157) + '...') : e;
+    return { ok:false, code:'PARSE_ERROR', msg:'Snapshot corrupto (JSON).', err: short, hash, link, linkUrl };
   }
 
   if (!snap || typeof snap !== 'object'){
-    return { ok:false, code:'PARSE_ERROR', msg:'Error: datos inválidos en Finanzas.', hash };
+    return { ok:false, code:'PARSE_ERROR', msg:'Snapshot inválido (no es objeto).', hash, link, linkUrl };
   }
 
+  // Validación de forma (decir qué campo falta)
   const cur = snap.currencies || null;
-  if (!cur || typeof cur !== 'object' || !cur.NIO || !cur.USD){
-    return { ok:false, code:'FIN_NOT_READY', msg:'Caja Chica (Finanzas) no configurada.', hash };
+  if (!cur || typeof cur !== 'object'){
+    return { ok:false, code:'FIN_NOT_READY', msg:'Snapshot inválido: falta currencies.', missingField:'currencies', hash, link, linkUrl };
+  }
+  if (!cur.NIO){
+    return { ok:false, code:'FIN_NOT_READY', msg:'Snapshot inválido: falta currencies.NIO.', missingField:'currencies.NIO', hash, link, linkUrl };
+  }
+  if (!cur.USD){
+    return { ok:false, code:'FIN_NOT_READY', msg:'Snapshot inválido: falta currencies.USD.', missingField:'currencies.USD', hash, link, linkUrl };
   }
 
   const nioDen = cur.NIO ? cur.NIO.denoms : null;
   const usdDen = cur.USD ? cur.USD.denoms : null;
-  if (!Array.isArray(nioDen) || !Array.isArray(usdDen)){
-    return { ok:false, code:'PARSE_ERROR', msg:'Error: datos inválidos en Finanzas (denoms).', hash };
+  if (!Array.isArray(nioDen)){
+    return { ok:false, code:'FIN_NOT_READY', msg:'Snapshot inválido: falta currencies.NIO.denoms.', missingField:'currencies.NIO.denoms', hash, link, linkUrl };
+  }
+  if (!Array.isArray(usdDen)){
+    return { ok:false, code:'FIN_NOT_READY', msg:'Snapshot inválido: falta currencies.USD.denoms.', missingField:'currencies.USD.denoms', hash, link, linkUrl };
   }
 
   // Meta de actualización (si existe)
@@ -16975,10 +17386,33 @@ function finPosGetCajaChicaSnapState(){
     try{ updatedAtDisplay = fmtDDMMYYYYHHMM_POS(updatedAtISO); }catch(_){ updatedAtDisplay = ''; }
   }
 
-  const sig = (updatedAtISO ? ('t:' + updatedAtISO) : 't:') + '|h:' + hash;
+  // Firma estable (sin dependencias): hash por contenido esencial (valores+cantidades)
+  const essential = (()=>{
+    try{
+      const norm = (arr)=>{
+        const m = new Map();
+        for (const d of (Array.isArray(arr) ? arr : [])){
+          const v = Number(d && d.value);
+          const c = (d && d.count == null) ? 0 : Number(d && d.count);
+          if (!Number.isFinite(v) || !Number.isFinite(c)) continue;
+          m.set(v, (m.get(v) || 0) + Math.trunc(c));
+        }
+        return Array.from(m.entries()).sort((a,b)=>a[0]-b[0]).map(([v,c])=>String(v) + ':' + String(c)).join(',');
+      };
+      return 'NIO[' + norm(nioDen) + ']|USD[' + norm(usdDen) + ']';
+    }catch(_){
+      return '';
+    }
+  })();
+  const essentialHash = a33HashStringPOS(essential);
 
-  return { ok:true, code:'OK', msg:'OK', snap, raw, hash, updatedAtISO, updatedAtDisplay, sig };
+  // Mantener hash raw para forense, pero usar firma estable para idempotencia.
+  const sig = (updatedAtISO ? ('t:' + updatedAtISO) : 't:') + '|e:' + essentialHash;
+  const sigLegacy = (updatedAtISO ? ('t:' + updatedAtISO) : 't:') + '|h:' + hash;
+
+  return { ok:true, code:'OK', msg:'OK', snap, raw, hash, essentialHash, updatedAtISO, updatedAtDisplay, sig, sigLegacy, link, linkUrl };
 }
+
 
 function pcFinStatusClearStickyIfContextMismatch(evId, dayKey){
   const s = document.getElementById('pc-init-from-fin-status');
@@ -17044,7 +17478,10 @@ function updatePcFinSyncUI(ev, canInteract, readOnlyDay, dayKey, blockState){
 
   const locked = bs ? !!bs.hardLocked : ((!canInteract) || !!readOnlyDay);
   t.disabled = locked;
-  b.disabled = locked || !checked;
+  // Etapa 2/5: carriles separados — el switch solo controla el intento de Sync,
+  // pero NO debe "apagar" el botón para que el usuario pueda ver un motivo claro.
+  // El bloqueo real (TOGGLE_SYNC_OFF) se reporta al intentar sincronizar.
+  b.disabled = locked;
 
   // No pisar el mensaje del último intento si aplica en este mismo contexto.
   if (pcFinStatusIsStickyForContext(evId, dKey)) return;
@@ -17095,7 +17532,7 @@ function updatePcFinSyncUI(ev, canInteract, readOnlyDay, dayKey, blockState){
     }
 
     const last = ev.pcInitFromFinanzasLastSyncDisplay || (ev.pcInitFromFinanzasLastSync ? fmtDDMMYYYYHHMM_POS(ev.pcInitFromFinanzasLastSync) : '');
-    if (last) pcFinStatusSet('Sincronizado: ' + last);
+    if (last) pcFinStatusSet('Último Sync: ' + last);
     else pcFinStatusSet('Listo para sincronizar.');
     return;
   }
@@ -17139,7 +17576,7 @@ function updatePcFinSyncUI(ev, canInteract, readOnlyDay, dayKey, blockState){
   }
 
   const last = ev.pcInitFromFinanzasLastSyncDisplay || (ev.pcInitFromFinanzasLastSync ? fmtDDMMYYYYHHMM_POS(ev.pcInitFromFinanzasLastSync) : '');
-  if (last) pcFinStatusSet('Sincronizado: ' + last);
+  if (last) pcFinStatusSet('Último Sync: ' + last);
   else pcFinStatusSet('Listo para sincronizar.');
 }
 
@@ -17149,7 +17586,7 @@ function pcGetLastSyncDisplayForContext(ev, pc, dayKey){
   try{
     if (pc && pc.days && dKey && pc.days[dKey]){
       const day = pc.days[dKey];
-      const meta = (day && day.initialFromFinanzas && typeof day.initialFromFinanzas === 'object') ? day.initialFromFinanzas : null;
+      const meta = pcGetDayInitialFromFinanzas(day);
       if (meta){
         const disp = (meta.appliedAtDisplay) ? String(meta.appliedAtDisplay) : (meta.appliedAtISO ? fmtDDMMYYYYHHMM_POS(meta.appliedAtISO) : '');
         if (disp && disp.trim()) return disp.trim();
@@ -17216,7 +17653,14 @@ async function renderCajaChica(){
         hist: false, dayClosed: false, eventClosed: false, cajaActiva: false,
         toggleExists, toggleChecked, finState, eventMatch: true
       });
-      pcDiagSetBlockState(bs);
+      // Etapa 2/5: carriles separados — el Estado (motivo) debe reflejar SOLO
+      // bloqueos del carril Manual. El carril Sync expone su motivo en su propia
+      // línea de estado y al intentar sincronizar.
+      const bsDiag = Object.assign({}, bs, {
+        reason: (bs && bs.manualBlocked) ? bs.manualReason : A33_PC_BLOCK_REASONS.OK,
+        detail: (bs && bs.manualBlocked) ? (bs.manualDetail || '') : ''
+      });
+      pcDiagSetBlockState(bsDiag);
       updatePcFinSyncUI(null, false, false, null, bs);
     }catch(_){
       updatePcFinSyncUI(null, false, false, null);
@@ -17261,7 +17705,13 @@ async function renderCajaChica(){
       hist: false, dayClosed: false, eventClosed: !!(ev && ev.closedAt), cajaActiva: false,
       toggleExists, toggleChecked, finState, eventMatch
     });
-    pcDiagSetBlockState(bs);
+    // Etapa 2/5: carriles separados — el Estado (motivo) debe reflejar SOLO
+    // bloqueos del carril Manual. El carril Sync reporta su motivo aparte.
+    const bsDiag = Object.assign({}, bs, {
+      reason: (bs && bs.manualBlocked) ? bs.manualReason : A33_PC_BLOCK_REASONS.OK,
+      detail: (bs && bs.manualBlocked) ? (bs.manualDetail || '') : ''
+    });
+    pcDiagSetBlockState(bsDiag);
     pcRenderUnlockActions(bs, evId, getSelectedPcDay());
     updatePcFinSyncUI(ev, false, false, getSelectedPcDay(), bs);
   }catch(_){
@@ -17367,7 +17817,13 @@ async function renderCajaChica(){
     toggleExists: __pcToggleExists, toggleChecked: __pcToggleChecked,
     finState: __pcFinState, eventMatch: __pcEventMatch
   });
-  pcDiagSetBlockState(__pcBlockState);
+  // Etapa 2/5: carriles separados — el Estado (motivo) refleja SOLO bloqueos
+  // del carril Manual. El carril Sync se explica en su propia línea y por intento.
+  const __pcDiagState = Object.assign({}, __pcBlockState, {
+    reason: (__pcBlockState && __pcBlockState.manualBlocked) ? __pcBlockState.manualReason : A33_PC_BLOCK_REASONS.OK,
+    detail: (__pcBlockState && __pcBlockState.manualBlocked) ? (__pcBlockState.manualDetail || '') : ''
+  });
+  pcDiagSetBlockState(__pcDiagState);
   pcRenderUnlockActions(__pcBlockState, evId, dayKey);
 
   setPettyReadOnly(readOnly, false);
@@ -17663,46 +18119,73 @@ async function onSavePettyInitial(opts){
   const skipDiag = !!o.skipDiag;
   const silentOk = !!o.silentOk;
 
+  let dayKey = getSelectedPcDay();
+  const normalizedDay = normalizePcDayKey(dayKey, null) || safeYMD(dayKey);
+  // Canon: operar SIEMPRE con la llave canónica del día
+  dayKey = normalizedDay || dayKey;
+  const canonicalDayKey = dayKey;
+
+  const mkFor = (patch={})=>{
+    const base = {
+      eventId: null,
+      dayKey: dayKey,
+      normalizedDay: normalizedDay,
+      snapshotSig: '—',
+      beforeHash: '—',
+      beforeSavedAt: null,
+      afterHash: '—',
+      afterSavedAt: null,
+      extra: ''
+    };
+    return pcForensicNormalize(Object.assign(base, patch || {}));
+  };
+
+  const diag = (result, msg, { causeCode='OK', techDetail=null, forensic=null } = {})=>{
+    if (skipDiag) return;
+    try{
+      pcDiagMark(action, result, String(msg||''), {
+        causeCode,
+        techDetail: techDetail || String(msg||''),
+        forensic: forensic || mkFor()
+      });
+    }catch(_){ }
+  };
+
   if (isPettyHistoryMode()){
     showToast('Vista histórica (solo lectura). Vuelve al día operativo para editar.', 'error', 4500);
-    if (!skipDiag){
-      try{ pcDiagMark(action, 'blocked', 'Vista histórica (solo lectura).', { reasonKey:'HISTORY_MODE' }); }catch(_){ }
-    }
+    diag('blocked', 'Vista histórica (solo lectura).', { causeCode:'DAY_CLOSED', techDetail:'Modo histórico (solo lectura).', forensic: mkFor({}) });
     return false;
   }
 
   const evId = (o.eventId != null) ? o.eventId : await getMeta('currentEventId');
   if (!evId){
     showToast('Debes activar un evento en Vender antes de guardar Caja Chica.', 'error', 4500);
-    if (!skipDiag){
-      try{ pcDiagMark(action, 'blocked', 'No hay evento activo.', { reasonKey:'NO_EVENT' }); }catch(_){ }
-    }
+    diag('blocked', 'No hay evento activo.', { causeCode:'EVENT_MISMATCH', techDetail:'No hay evento activo.' });
     return false;
   }
 
-  const dayKey = getSelectedPcDay();
   const uiSnap = pcCaptureInitialDenomsSnap();
   pcSetDraftInitial(evId, dayKey, uiSnap, 'SAVE_START');
 
-  if (!skipDiag){
-    try{ pcDiagMark(action, 'running', 'Guardando…', { eventId: evId, dayKey }); }catch(_){ }
-  }
+  diag('running', 'Guardando…', { causeCode:'OK', techDetail:'Guardando…', forensic: mkFor({ eventId: evId }) });
 
   const ctx = o.ctx || await guardPettyWritePOS(evId, { action, diag: !skipDiag, allowRestore: true });
   if (!ctx){
     pcSetDraftInitial(evId, dayKey, uiSnap, 'GUARD_BLOCK');
+    diag('blocked', 'Bloqueado: evento no alineado.', { causeCode:'EVENT_MISMATCH', techDetail:'Evento no alineado.', forensic: mkFor({ eventId: evId }) });
     return false;
   }
 
   const pc = o.pc || await getPettyCash(evId);
-  const prevInitialStamp = (ensurePcDay(pc, dayKey).initial || {}).savedAt || null;
-  const day = ensurePcDay(pc, dayKey);
+  const dayBefore = ensurePcDay(pc, canonicalDayKey);
+  const rawBefore = await getPettyCashRawRecord(evId);
+  const rawBeforeDay = (rawBefore && rawBefore.days && typeof rawBefore.days === 'object') ? rawBefore.days[canonicalDayKey] : null;
+  const bh = pcHashPettySection(rawBeforeDay ? rawBeforeDay.initial : (dayBefore || {}).initial);
+  const prevInitialStamp = bh.savedAt || null;
 
   if (await isPettyDayLockedPOS(evId, dayKey, pc)){
     showToast('Este día está cerrado. No se puede modificar Caja Chica.', 'error', 4500);
-    if (!skipDiag){
-      try{ pcDiagMark(action, 'blocked', 'Día cerrado.', { reasonKey:'DAY_LOCKED', eventId: evId, dayKey }); }catch(_){ }
-    }
+    diag('blocked', 'Día cerrado.', { causeCode:'DAY_CLOSED', techDetail:'Día cerrado (candado).', forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp }) });
     pcSetDraftInitial(evId, dayKey, uiSnap, 'DAY_LOCKED');
     return false;
   }
@@ -17724,52 +18207,64 @@ async function onSavePettyInitial(opts){
     usd[String(d)] = qty;
   });
 
-  day.initial = normalizePettySection({
-    nio,
-    usd,
-    savedAt: new Date().toISOString()
-  });
+  const nowISO = new Date().toISOString();
+  dayBefore.initial = normalizePettySection({ nio, usd, savedAt: nowISO });
+  const expectedHash = pcHashPettySection(dayBefore.initial).hash;
 
   try{
     await savePettyCash(pc);
   }catch(err){
     console.error('onSavePettyInitial save error', err);
     showPersistFailPOS('caja chica (saldo inicial)', err);
-    if (!skipDiag){
-      try{ pcDiagMark(action, 'error', 'Error al guardar saldo inicial.', { reasonKey:'SAVE_FAIL', eventId: evId, dayKey, err: String(err||'') }); }catch(_){ }
-    }
+    const m = pcMapIdbErrorToTech(err);
+    diag('error', 'Error al guardar saldo inicial.', { causeCode:m.code, techDetail:m.detail, forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, extra: 'err: ' + String(err||'') }) });
     pcSetDraftInitial(evId, dayKey, uiSnap, 'SAVE_FAIL');
     return false;
   }
 
-  // Confirmación real: re-leer de persistencia y pintar desde esa lectura.
-  const pcAfter = await getPettyCash(evId);
-  const newStamp = (ensurePcDay(pcAfter, dayKey).initial || {}).savedAt || null;
-  if (!newStamp || newStamp == prevInitialStamp){
-    showToast('No se pudo guardar el saldo inicial', 'error', 4500);
-    if (!skipDiag){
-      try{ pcDiagMark(action, 'error', 'No se pudo guardar el saldo inicial.', { reasonKey:'NO_WRITE', eventId: evId, dayKey }); }catch(_){ }
-    }
-    pcSetDraftInitial(evId, dayKey, uiSnap, 'NO_WRITE');
+  // Confirmación real: re-leer EXACTAMENTE la llave canónica (sin vista mergeada).
+  const rawAfter = await getPettyCashRawRecord(evId);
+  const rawAfterDay = (rawAfter && rawAfter.days && typeof rawAfter.days === 'object') ? rawAfter.days[canonicalDayKey] : null;
+  const ah = pcHashPettySection(rawAfterDay ? rawAfterDay.initial : null);
+  const newStamp = ah.savedAt || null;
+
+  const collisions = pcFindDupDayCollisionRaw(rawAfter, canonicalDayKey);
+  const collExtra = (collisions && collisions.length > 1) ? ('Colisión llaves: ' + collisions.join(', ')) : '';
+
+  if (!rawAfterDay){
+    const code = (collisions && collisions.length > 1) ? 'DUP_DAY_COLLISION' : 'READBACK_MISMATCH';
+    showToast('No se pudo confirmar el guardado ('+code+'). Tus valores se mantienen.', 'error', 5000);
+    diag('error', 'Guardado no confirmado (readback).', { causeCode: code, techDetail:'Se guardó, pero al re-leer no se encontró la llave canónica.', forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, afterHash: ah.hash, afterSavedAt: newStamp, extra: collExtra }) });
+    pcSetDraftInitial(evId, canonicalDayKey, uiSnap, 'POST_READ_MISMATCH');
     return false;
   }
 
+  if (!newStamp || newStamp == prevInitialStamp){
+    const code = (collisions && collisions.length > 1) ? 'DUP_DAY_COLLISION' : 'WRITE_NO_CHANGE';
+    showToast('No se pudo guardar el saldo inicial ('+code+')', 'error', 4500);
+    diag('error', 'No se pudo guardar el saldo inicial.', { causeCode: code, techDetail: (code==='DUP_DAY_COLLISION') ? 'Colisión de llaves por día.' : 'Se escribió pero no cambió lo re-leído.', forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, afterHash: ah.hash, afterSavedAt: newStamp, extra: collExtra + (collExtra ? ' | ' : '') + 'expectedHash: ' + expectedHash }) });
+    pcSetDraftInitial(evId, canonicalDayKey, uiSnap, 'NO_WRITE');
+    return false;
+  }
 
-  // Validacion extra: lo persistido coincide con lo digitado (normalizado).
+  // Validación extra: lo persistido coincide con lo digitado.
   try{
-    const dayAfter = ensurePcDay(pcAfter, dayKey);
-    const initAfter = dayAfter && dayAfter.initial ? normalizePettySection(dayAfter.initial) : normalizePettySection(null);
+    const initAfter = normalizePettySection(rawAfterDay.initial);
     const mismatch = pcInitialSnapMismatch(uiSnap, initAfter);
     if (mismatch){
-      showToast('No se pudo confirmar el guardado. Tus valores se mantienen.', 'error', 5000);
-      if (!skipDiag){
-        try{ pcDiagMark(action, 'error', 'Guardado no confirmado (mismatch).', { reasonKey:'POST_READ_MISMATCH', eventId: evId, dayKey, mismatch }); }catch(_){ }
-      }
-      pcSetDraftInitial(evId, dayKey, uiSnap, 'POST_READ_MISMATCH');
+      const code = (collisions && collisions.length > 1) ? 'DUP_DAY_COLLISION' : 'READBACK_MISMATCH';
+      showToast('No se pudo confirmar el guardado ('+code+'). Tus valores se mantienen.', 'error', 5000);
+      diag('error', 'Guardado no confirmado (mismatch).', { causeCode: code, techDetail:'Se guardó, pero al re-leer no coincide con lo digitado.', forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, afterHash: ah.hash, afterSavedAt: newStamp, extra: collExtra + (collExtra ? ' | ' : '') + 'mismatch: ' + String(mismatch) }) });
+      pcSetDraftInitial(evId, canonicalDayKey, uiSnap, 'POST_READ_MISMATCH');
       return false;
     }
   }catch(_){ }
+
   // Éxito: limpiar draft y refrescar UI desde datos persistidos.
+  pcClearDraftInitial(evId, canonicalDayKey);
+
+  const pcAfter = await getPettyCash(evId);
+
   pcClearDraftInitial(evId, dayKey);
 
   const cashSalesNio = await getCashSalesNioForDay(evId, dayKey);
@@ -17777,7 +18272,7 @@ async function onSavePettyInitial(opts){
   fillPettyInitialFromPc(pcAfter, dayKey);
   setPrevCierreUI(pcAfter, dayKey);
 
-  // Refrescar candado de cierre inmediatamente (habilitar/deshabilitar botón según cuadre)
+  // Refrescar candado de cierre inmediatamente
   const evs = await getAll('events');
   const ev = (evs || []).find(e => e && e.id === evId);
   const fxRaw = ev ? Number(ev.fxRate || 0) : null;
@@ -17791,12 +18286,11 @@ async function onSavePettyInitial(opts){
     showToast('Saldo inicial guardado', 'ok', 5000);
   }
 
-  if (!skipDiag){
-    try{ pcDiagMark(action, 'ok', 'Guardado.', { reasonKey:'OK', eventId: evId, dayKey }); }catch(_){ }
-  }
+  diag('ok', 'Guardado.', { causeCode:'OK', techDetail:'Guardado y confirmado (readback).', forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, afterHash: ah.hash, afterSavedAt: newStamp, extra: (collExtra ? (collExtra + ' | ') : '') + 'expectedHash: ' + expectedHash }) });
 
   return true;
 }
+
 async function onCopyPettyInitialToFinal(){
   if (isPettyHistoryMode()){
     showToast('Vista histórica (solo lectura). Vuelve al día operativo para editar.', 'error', 4500);
@@ -18166,20 +18660,49 @@ async function onRevertPettyMovement(originalId){
 }
 
 async function onAddPettyMovement(){
+  const ACTION = 'Agregar movimiento';
+  let evId = null;
+  let dayKey = null;
+  let normalizedDay = null;
+
+  const mkFor = (patch={})=>pcForensicNormalize({
+    eventId: evId,
+    dayKey: dayKey,
+    normalizedDay: normalizedDay,
+    snapshotSig: '—',
+    beforeHash: '—',
+    beforeSavedAt: null,
+    afterHash: '—',
+    afterSavedAt: null,
+    extra: '',
+    ...patch
+  });
+
+  const mark = (result, causeCode, techDetail, extra='', patch={})=>{
+    try{ pcDiagMark(ACTION, result, techDetail || '', { causeCode, techDetail, eventId: evId, dayKey, forensic: mkFor({ extra, ...patch }) }); }catch(_){ }
+  };
+
   if (isPettyHistoryMode()){
+    mark('blocked', A33_PC_TECH_CAUSES.DAY_CLOSED, 'Vista histórica (solo lectura).');
     showToast('Vista histórica (solo lectura). Vuelve al día operativo para editar.', 'error', 4500);
     return;
   }
-  const evId = await getMeta('currentEventId');
+
+  evId = await getMeta('currentEventId');
+  dayKey = getSelectedPcDay();
+  normalizedDay = normalizePcDayKey(dayKey, null) || safeYMD(dayKey);
+
   if (!evId){
+    mark('blocked', A33_PC_TECH_CAUSES.EVENT_MISMATCH, 'No hay evento activo.');
     alert('Debes activar un evento en la pestaña Vender antes de registrar movimientos de Caja Chica.');
     return;
   }
 
-  const ctx = await guardPettyWritePOS(evId, { action:'Agregar movimiento', diag:true, allowRestore:true });
-  if (!ctx) return;
-
-  const dayKey = getSelectedPcDay();
+  const ctx = await guardPettyWritePOS(evId, { action: ACTION, diag:true, allowRestore:true });
+  if (!ctx){
+    mark('blocked', A33_PC_TECH_CAUSES.EVENT_MISMATCH, 'Evento no alineado.');
+    return;
+  }
 
   const typeSel = document.getElementById('pc-mov-type');
   const kindSel = document.getElementById('pc-mov-adjust-kind');
@@ -18243,12 +18766,21 @@ async function onAddPettyMovement(){
     return;
   }
 
-  const pc = await getPettyCash(evId);
-  const day = ensurePcDay(pc, dayKey);
-  if (await isPettyDayLockedPOS(evId, dayKey, pc)){
+  mark('running', A33_PC_TECH_CAUSES.OK, 'Guardando movimiento…');
+
+  const pcBefore = await getPettyCash(evId);
+  const dayBefore = ensurePcDay(pcBefore, dayKey);
+  const bh = pcHashPettyMovements(dayBefore);
+
+  if (await isPettyDayLockedPOS(evId, dayKey, pcBefore)){
+    const f = mkFor({ beforeHash: bh.hash, beforeSavedAt: bh.savedAt });
+    pcDiagMark(ACTION, 'blocked', 'Día cerrado.', { causeCode: A33_PC_TECH_CAUSES.DAY_CLOSED, techDetail:'Día cerrado (candado).', eventId: evId, dayKey, forensic: f });
     showToast('Este día está cerrado. No se puede modificar Caja Chica.', 'error', 4500);
     return;
   }
+
+  const pc = await getPettyCash(evId);
+  const day = ensurePcDay(pc, dayKey);
   if (!Array.isArray(day.movements)) day.movements = [];
 
   const newId = day.movements.length ? Math.max(...day.movements.map(m=>m.id||0)) + 1 : 1;
@@ -18279,6 +18811,15 @@ async function onAddPettyMovement(){
   try{
     await savePettyCash(pc);
   }catch(err){
+    const idb = pcMapIdbErrorToTech(err);
+    const extra = `IDB: ${idb.detail}`;
+    pcDiagMark(ACTION, 'error', 'Error IndexedDB.', {
+      causeCode: idb.code,
+      techDetail: idb.detail,
+      eventId: evId,
+      dayKey,
+      forensic: mkFor({ beforeHash: bh.hash, beforeSavedAt: bh.savedAt, extra })
+    });
     console.error('onAddPettyMovement save error', err);
     showPersistFailPOS('caja chica (movimiento)', err);
     await renderCajaChica();
@@ -18292,6 +18833,39 @@ async function onAddPettyMovement(){
     console.warn('Finanzas bridge (pettycash) error', e);
   }
 
+  // Readback
+  const pcAfter = await getPettyCash(evId);
+  const dayAfter = ensurePcDay(pcAfter, dayKey);
+  const ah = pcHashPettyMovements(dayAfter);
+
+  const expectedLen = (Array.isArray(dayBefore.movements) ? dayBefore.movements.length : 0) + 1;
+  const afterLen = Array.isArray(dayAfter.movements) ? dayAfter.movements.length : 0;
+  const collisions = pcFindDupDayCollision(pcAfter, normalizedDay);
+  const collExtra = collisions.length ? `Colisión llaves: ${collisions.join(', ')}` : '';
+
+  if (afterLen != expectedLen){
+    const code = collisions.length ? A33_PC_TECH_CAUSES.DUP_DAY_COLLISION : (afterLen == (expectedLen - 1) ? A33_PC_TECH_CAUSES.WRITE_NO_CHANGE : A33_PC_TECH_CAUSES.READBACK_MISMATCH);
+    const detail = (code === A33_PC_TECH_CAUSES.WRITE_NO_CHANGE) ? 'Se escribió, pero la relectura no cambió.' : 'Se guardó, pero al re-leer no coincide.';
+    pcDiagMark(ACTION, 'error', 'Movimiento no confirmado.', {
+      causeCode: code,
+      techDetail: detail,
+      eventId: evId,
+      dayKey,
+      forensic: mkFor({ beforeHash: bh.hash, beforeSavedAt: bh.savedAt, afterHash: ah.hash, afterSavedAt: ah.savedAt, extra: collExtra })
+    });
+    showToast(`Movimiento no confirmado (${code})`, 'error', 4500);
+    await renderCajaChica();
+    return;
+  }
+
+  pcDiagMark(ACTION, 'ok', 'Movimiento guardado.', {
+    causeCode: A33_PC_TECH_CAUSES.OK,
+    techDetail: 'Guardado y confirmado (readback).',
+    eventId: evId,
+    dayKey,
+    forensic: mkFor({ beforeHash: bh.hash, beforeSavedAt: bh.savedAt, afterHash: ah.hash, afterSavedAt: ah.savedAt, extra: collExtra })
+  });
+
   // Re-render completo para refrescar candado de cierre
   await renderCajaChica();
 
@@ -18300,6 +18874,7 @@ async function onAddPettyMovement(){
   if (typeSel) typeSel.value = 'entrada';
   updatePettyMovementTypeUI();
 }
+
 
 async function onUsePrevCierre(){
   if (isPettyHistoryMode()){
@@ -18378,155 +18953,203 @@ function sumCountsByValue(denoms){
 
 async function syncPettyInitialFromFinanzas(){
   const ACTION = 'Sincronizar';
-
-  const finBtn = document.getElementById('pc-init-from-fin-sync');
-  const finTog = document.getElementById('pc-init-from-fin-toggle');
-
   let evId = null;
   let dayKey = null;
-  const uiSnapBefore = pcCaptureInitialDenomsSnap();
+  let normalizedDay = null;
+  let snapSig = '—';
+  let snapSigLegacy = '';
 
-  const setBusy = (busy)=>{
-    if (finBtn){
-      if (!!busy){
-        if (!finBtn.dataset.origText) finBtn.dataset.origText = (finBtn.textContent || 'Sincronizar');
-        finBtn.textContent = 'Sincronizando…';
-      } else {
-        if (finBtn.dataset.origText) finBtn.textContent = finBtn.dataset.origText;
-      }
-      finBtn.disabled = !!busy;
-    }
-    if (!!busy && evId && dayKey){
-      pcFinStatusSet('Sincronizando…', { sticky:true, evId, dayKey });
-    }
+  const mkForensic = (patch={})=>{
+    const base = {
+      eventId: evId,
+      dayKey: dayKey,
+      normalizedDay: normalizedDay,
+      snapshotSig: snapSig || '—',
+      beforeHash: '—',
+      beforeSavedAt: null,
+      afterHash: '—',
+      afterSavedAt: null,
+      extra: ''
+    };
+    return pcForensicNormalize(Object.assign(base, patch || {}));
   };
 
-  const setButtonState = async ()=>{
+  const stripHtml = (s)=>{
+    try{ return String(s || '').replace(/<[^>]*>/g, '').trim(); }catch(_){ return String(s || '').trim(); }
+  };
+
+  const fail = (uiMsg, {
+    toastMsg=null,
+    diagResult='blocked',
+    html=false,
+    causeCode='EVENT_MISMATCH',
+    techDetail=null,
+    forensic=null,
+    extra=''
+  } = {})=>{
+    const code = pcTechNormalize(causeCode);
+    const det = (techDetail != null) ? String(techDetail).trim() : pcDiagTrunc(stripHtml(uiMsg), 140);
+    const f = forensic || mkForensic({ extra });
     try{
-      const curEvId = await getMeta('currentEventId');
-      const ev = curEvId ? await getEventByIdSafe(curEvId) : null;
-      const dKey = getSelectedPcDay();
-      const checked = finTog ? !!finTog.checked : !!(ev && ev.pcInitFromFinanzasEnabled);
-
-      let canInteract = !!(ev && !ev.closedAt && eventPettyEnabled(ev));
-      let readOnlyDay = false;
-      if (canInteract && curEvId){
-        try{
-          const pc = await getPettyCash(curEvId);
-          readOnlyDay = isPettyHistoryMode() || await isPettyDayLockedPOS(curEvId, dKey, pc);
-        }catch(_){ readOnlyDay = isPettyHistoryMode(); }
-      }
-
-      const locked = (!canInteract) || !!readOnlyDay;
-      if (finTog) finTog.disabled = locked;
-      if (finBtn) finBtn.disabled = locked || !checked;
-
-      // Mostrar razón (y respetar sticky) en el estado.
-      try{ updatePcFinSyncUI(ev, canInteract, readOnlyDay, dKey); }catch(_){ }
-    }catch(_){
-      if (finBtn) finBtn.disabled = false;
-    }
-  };
-
-  const fail = (msg, { toastMsg=null, diagResult='blocked', reasonKey='FAIL', html=false } = {})=>{
-    if (evId && dayKey){
-      pcFinStatusSet(msg, { html, sticky:true, evId, dayKey });
-      try{ pcSetDraftInitial(evId, dayKey, uiSnapBefore, reasonKey); }catch(_){ }
-    }
+      pcFinStatusSet(uiMsg, { sticky:true, evId, dayKey, html: !!html });
+    }catch(_){ }
+    try{
+      pcDiagMark(ACTION, diagResult, stripHtml(uiMsg), {
+        reasonKey: 'FAIL',
+        causeCode: code,
+        techDetail: det,
+        eventId: evId,
+        dayKey: dayKey,
+        normalizedDay: normalizedDay,
+        snapshotSig: snapSig,
+        forensic: f
+      });
+    }catch(_){ }
     if (toastMsg){
-      try{ showToast(toastMsg, diagResult === 'error' ? 'error' : 'info', 4500); }catch(_){ try{ toast(toastMsg); }catch(__){} }
+      try{ showToast(String(toastMsg) + ' (' + code + ')', 'error', 3600); }catch(_){ }
     }
-    try{ pcDiagMark(ACTION, diagResult, msg, { reasonKey, eventId: evId, dayKey }); }catch(_){ }
   };
 
   try{
-    if (isPettyHistoryMode()){
-      fail('Vista histórica (solo lectura).', { toastMsg:'Vista histórica (solo lectura). Vuelve al día operativo para sincronizar.', reasonKey:'HISTORY_MODE' });
-      return;
-    }
-
     evId = await getMeta('currentEventId');
     dayKey = getSelectedPcDay();
+    normalizedDay = normalizePcDayKey(dayKey, null) || safeYMD(dayKey);
+    // Canon: a partir de aquí, el día operativo se trata SIEMPRE como llave canónica
+    dayKey = normalizedDay || dayKey;
 
-    if (!evId){
-      try{ toast('No hay evento activo'); }catch(_){ }
-      try{ pcDiagMark(ACTION, 'blocked', 'No hay evento activo.', { reasonKey:'NO_EVENT' }); }catch(_){ }
+    const ev = evId ? await getEventByIdSafe(evId) : null;
+
+    if (!evId || !ev){
+      fail('No se aplicó: evento no válido.', {
+        toastMsg: 'Evento no válido',
+        diagResult: 'blocked',
+        causeCode: 'EVENT_MISMATCH',
+        techDetail: 'No hay evento activo válido.'
+      });
       return;
     }
 
-    // Proteger lo digitado (si luego hay render/guardia)
-    try{ pcSetDraftInitial(evId, dayKey, uiSnapBefore, 'SYNC_START'); }catch(_){ }
-
-    const ev = await getEventByIdSafe(evId);
-    if (!ev){
-      fail('Evento no encontrado.', { toastMsg:'Evento no encontrado.', reasonKey:'NO_EVENT_ROW' });
+    // Toggle OFF (solo para Sync)
+    if (!ev.pcInitFromFinanzasEnabled){
+      // Etapa 2/5: carril Sync OFF no debe afectar Manual; aquí bloqueamos SOLO el Sync.
+      fail('Sync apagado: enciende el switch para aplicar desde Finanzas.', {
+        toastMsg: 'Enciende el switch',
+        diagResult: 'blocked',
+        causeCode: 'TOGGLE_SYNC_OFF',
+        techDetail: 'Toggle apagado (solo afecta Sincronizar).'
+      });
       return;
     }
 
-    const checked = finTog ? !!finTog.checked : !!ev.pcInitFromFinanzasEnabled;
-    if (!checked || !ev.pcInitFromFinanzasEnabled){
-      fail('Switch apagado: actívalo para sincronizar.', { toastMsg:'Activa el switch para sincronizar con Finanzas.', reasonKey:'TOGGLE_OFF' });
-      return;
-    }
+    try{
+      pcDiagMark(ACTION, 'running', 'Validando snapshot…', {
+        reasonKey: 'RUN',
+        causeCode: 'OK',
+        techDetail: 'Validando snapshot de Finanzas…',
+        eventId: evId,
+        dayKey: dayKey,
+        forensic: mkForensic()
+      });
+    }catch(_){ }
 
-    if (ev.closedAt){
-      fail('No se aplicó: evento cerrado.', { toastMsg:'Este evento está cerrado.', reasonKey:'EVENT_CLOSED' });
-      return;
-    }
+    try{ pcFinStatusSet('Validando snapshot…', { sticky:false, evId, dayKey }); }catch(_){ }
 
-    if (!eventPettyEnabled(ev)){
-      fail('No se aplicó: Caja Chica desactivada.', { toastMsg:'Este evento no tiene Caja Chica activa.', reasonKey:'PETTY_DISABLED' });
-      return;
-    }
-
-    // Finanzas snapshot preflight
-    const st = finPosGetCajaChicaSnapState();
-    if (!st.ok){
-      if (st.code === 'FIN_NOT_CONFIG' || st.code === 'FIN_NOT_READY'){
-        fail('Caja Chica (Finanzas) no configurada. <a class="a33-link" href="../finanzas/index.html#tab=cajachica">Ir a Finanzas</a>', {
-          toastMsg:'Caja Chica (Finanzas) no configurada',
-          reasonKey: A33_PC_BLOCK_REASONS.FINANZAS_NO_CONFIGURADA,
-          html:true
+    const st = await finPosGetCajaChicaSnapState();
+    if (!st || !st.ok){
+      // Mapear a taxonomía requerida
+      const code = st && st.code ? String(st.code) : '';
+      if (code === 'PARSE_ERROR'){
+        const det = (st && st.err) ? (String(st.msg || 'Snapshot corrupto.') + ' | ' + String(st.err)) : String(st.msg || 'Snapshot corrupto.');
+        fail(st.msg || 'Snapshot corrupto.', {
+          toastMsg: 'Snapshot corrupto',
+          diagResult: 'error',
+          causeCode: 'SNAPSHOT_PARSE_ERROR',
+          techDetail: pcDiagTrunc(det, 140)
         });
-      } else if (st.code === 'PARSE_ERROR'){
-        const det = (st.err ? String(st.err) : '').trim();
-        const det2 = det ? (' Detalle: ' + det.slice(0, 80)) : '';
-        fail('Error: datos inválidos en Finanzas (parse).' + det2, {
-          toastMsg:'Error de lectura: Caja Chica (Finanzas)',
-          diagResult:'error',
-          reasonKey: A33_PC_BLOCK_REASONS.FINANZAS_PARSE_ERROR
+        return;
+      }
+      if (code === 'FIN_NOT_READY'){
+        const mf = (st && st.missingField) ? ('Falta ' + String(st.missingField)) : '';
+        const det = mf ? (String(st.msg || 'Snapshot inválido.') + ' | ' + mf) : String(st.msg || 'Snapshot inválido.');
+        fail(st.msg || 'Snapshot incompleto.', {
+          toastMsg: 'Snapshot incompleto',
+          diagResult: 'error',
+          causeCode: 'SNAPSHOT_SHAPE_INVALID',
+          techDetail: pcDiagTrunc(det, 140)
+        });
+        return;
+      }
+      // FIN_NOT_CONFIG u otros => missing
+      if (st && st.link && st.linkUrl){
+        fail(st.link, {
+          html: true,
+          toastMsg: 'No hay snapshot',
+          diagResult: 'blocked',
+          causeCode: 'SNAPSHOT_MISSING',
+          techDetail: 'No existe snapshot de Caja Chica desde Finanzas.'
         });
       } else {
-        fail(st.msg || 'Finanzas no configurada.', { toastMsg:'Finanzas no configurada', reasonKey:'FIN_BAD' });
+        fail(st.msg || 'No hay snapshot de Finanzas.', {
+          toastMsg: 'No hay snapshot',
+          diagResult: 'blocked',
+          causeCode: 'SNAPSHOT_MISSING',
+          techDetail: st.msg || 'No existe snapshot de Caja Chica desde Finanzas.'
+        });
       }
       return;
     }
+
+    snapSig = st.sig || (st.sigLegacy ? String(st.sigLegacy) : ('h:' + String(st.hash || '')));
+    snapSigLegacy = st.sigLegacy ? String(st.sigLegacy) : '';
 
     // Día editable preflight
     const pc0 = await getPettyCash(evId);
     if (await isPettyDayLockedPOS(evId, dayKey, pc0)){
-      fail('No se aplicó: día cerrado.', { toastMsg:'Este día está cerrado. No se puede modificar Caja Chica.', reasonKey:'DAY_LOCKED' });
+      fail('No se aplicó: día cerrado.', {
+        toastMsg: 'Día cerrado',
+        diagResult: 'blocked',
+        causeCode: 'DAY_CLOSED',
+        techDetail: 'Día cerrado (candado de Caja Chica).',
+        forensic: mkForensic({ snapshotSig: snapSig })
+      });
       return;
     }
 
     // Evento alineado (fuente única) preflight
     const ctx = await guardPettyWritePOS(evId, { action: ACTION, diag: true, allowRestore: true });
     if (!ctx){
-      fail('No se aplicó: evento no alineado.', { toastMsg:'No se aplicó: evento no alineado', reasonKey: A33_PC_BLOCK_REASONS.EVENTO_DESFASE });
+      fail('No se aplicó: evento no alineado.', {
+        toastMsg: 'Evento no alineado',
+        diagResult: 'blocked',
+        causeCode: 'EVENT_MISMATCH',
+        techDetail: 'Evento no alineado con el estado operativo.',
+        forensic: mkForensic({ snapshotSig: snapSig })
+      });
       return;
     }
 
     // Idempotencia: no re-aplicar el mismo snapshot al mismo día
-    const snapSig = st.sig || ('h:' + String(st.hash || ''));
     try{
       const d0 = ensurePcDay(pc0, dayKey);
-      const meta0 = (d0 && d0.initialFromFinanzas && typeof d0.initialFromFinanzas === 'object') ? d0.initialFromFinanzas : null;
+      const meta0 = pcGetDayInitialFromFinanzas(d0);
       const prevSig = meta0 ? String(meta0.sig || '') : '';
-      if (prevSig && prevSig === snapSig){
+      const prevLegacy = meta0 ? String(meta0.sigLegacy || '') : '';
+      const match = (prevSig && (prevSig === snapSig || (snapSigLegacy && prevSig === snapSigLegacy))) || (prevLegacy && (prevLegacy === snapSig || (snapSigLegacy && prevLegacy === snapSigLegacy)));
+      if (match){
         const lastDisp = (meta0 && (meta0.appliedAtDisplay || (meta0.appliedAtISO ? fmtDDMMYYYYHHMM_POS(meta0.appliedAtISO) : ''))) || (ev ? (ev.pcInitFromFinanzasLastSyncDisplay || '') : '');
         const msg = lastDisp ? ('Ya aplicado: ' + String(lastDisp)) : 'Ya aplicado.';
         pcFinStatusSet(msg, { sticky:true, evId, dayKey });
-        try{ pcDiagMark(ACTION, 'ok', msg, { reasonKey:'ALREADY_APPLIED', snapSig, eventId: evId, dayKey }); }catch(_){ }
+        try{
+          pcDiagMark(ACTION, 'ok', msg, {
+            reasonKey: 'ALREADY_APPLIED',
+            causeCode: 'OK',
+            techDetail: 'Idempotente: mismo snapshotSig ya aplicado.',
+            snapSig,
+            eventId: evId,
+            dayKey,
+            forensic: mkForensic({ snapshotSig: snapSig })
+          });
+        }catch(_){ }
         try{ pcDiagSetLastSyncDisplay(lastDisp || '—'); }catch(_){ }
         showToast('Ya estaba aplicado (idempotente)', 'success', 2500);
         return;
@@ -18535,12 +19158,26 @@ async function syncPettyInitialFromFinanzas(){
 
     // Desde aquí, ya se permite escribir.
     setBusy(true);
-    try{ pcDiagMark(ACTION, 'running', 'Sincronizando…', { reasonKey:'RUN', eventId: evId, dayKey }); }catch(_){ }
+    try{
+      pcDiagMark(ACTION, 'running', 'Sincronizando…', {
+        reasonKey: 'RUN_WRITE',
+        causeCode: 'OK',
+        techDetail: 'Escribiendo saldo inicial desde snapshot…',
+        eventId: evId,
+        dayKey,
+        forensic: mkForensic({ snapshotSig: snapSig })
+      });
+    }catch(_){ }
 
     const snap = st.snap;
 
     const pcBefore = await getPettyCash(evId);
-    const prevInitialStamp = (ensurePcDay(pcBefore, dayKey).initial || {}).savedAt || null;
+    const dayBefore = ensurePcDay(pcBefore, dayKey);
+
+    const rawBefore = await getPettyCashRawRecord(evId);
+    const rawBeforeDay = (rawBefore && rawBefore.days && typeof rawBefore.days === 'object') ? rawBefore.days[dayKey] : null;
+    const b = pcHashPettySection(rawBeforeDay ? rawBeforeDay.initial : dayBefore.initial);
+    const prevInitialStamp = b.savedAt || null;
 
     const nio = snap.currencies.NIO || {};
     const usd = snap.currencies.USD || {};
@@ -18552,7 +19189,13 @@ async function syncPettyInitialFromFinanzas(){
 
     // Re-chequear candado antes de guardar
     if (await isPettyDayLockedPOS(evId, dayKey, pc)){
-      fail('No se aplicó: día cerrado.', { toastMsg:'Este día está cerrado. No se puede modificar Caja Chica.', reasonKey:'DAY_LOCKED' });
+      fail('No se aplicó: día cerrado.', {
+        toastMsg: 'Día cerrado',
+        diagResult: 'blocked',
+        causeCode: 'DAY_CLOSED',
+        techDetail: 'Día cerrado (candado de Caja Chica).',
+        forensic: mkForensic({ snapshotSig: snapSig, beforeHash: b.hash, beforeSavedAt: b.savedAt })
+      });
       return;
     }
 
@@ -18583,41 +19226,112 @@ async function syncPettyInitialFromFinanzas(){
       usd: usd2,
       savedAt: nowISO
     });
+
     // Meta de trazabilidad (no rompe data vieja)
-    day.initialFromFinanzas = {
+    if (!day.meta || typeof day.meta !== 'object') day.meta = {};
+    day.meta.initialFromFinanzas = {
       sig: snapSig,
+      sigLegacy: String(snapSigLegacy || ''),
       snapHash: String(st.hash || ''),
+      snapEssHash: String(st.essentialHash || ''),
       snapUpdatedAtISO: String(st.updatedAtISO || ''),
       snapUpdatedAtDisplay: String(st.updatedAtDisplay || ''),
       appliedAtISO: nowISO,
       appliedAtDisplay: String(stamp || '')
     };
 
+    const expectedHash = pcHashPettySection(day.initial).hash;
+
     try{
       await savePettyCash(pc);
     }catch(err){
-      console.error('syncPettyInitialFromFinanzas save error', err);
-      fail('No se aplicó: error al guardar.', { toastMsg:'No se aplicó: error al guardar', diagResult:'error', reasonKey:'SAVE_FAIL' });
+      const m = pcMapIdbErrorToTech(err);
+      fail('No se aplicó: error al guardar.', {
+        toastMsg: 'Error al guardar',
+        diagResult: 'error',
+        causeCode: m.code,
+        techDetail: m.detail,
+        forensic: mkForensic({ snapshotSig: snapSig, beforeHash: b.hash, beforeSavedAt: b.savedAt })
+      });
       return;
     }
 
-    // Confirmación real: re-leer persistido
-    const pcAfter = await getPettyCash(evId);
-    const newInitialStamp = (ensurePcDay(pcAfter, dayKey).initial || {}).savedAt || null;
-    if (!newInitialStamp || newInitialStamp == prevInitialStamp){
-      fail('No se pudo aplicar desde Finanzas.', { toastMsg:'No se pudo aplicar desde Finanzas', diagResult:'error', reasonKey:'NO_WRITE' });
+    // Confirmación real: re-leer EXACTAMENTE la llave canónica (sin vista mergeada)
+    const rawAfter = await getPettyCashRawRecord(evId);
+    const rawDayAfter = (rawAfter && rawAfter.days && typeof rawAfter.days === 'object') ? rawAfter.days[dayKey] : null;
+    const a = pcHashPettySection(rawDayAfter ? rawDayAfter.initial : null);
+
+    const collKeys = pcFindDupDayCollisionRaw(rawAfter, dayKey);
+    const collExtra = (collKeys && collKeys.length > 1) ? ('Colisión llaves: ' + collKeys.join(', ')) : '';
+
+    if (!rawDayAfter){
+      const code = (collKeys && collKeys.length > 1) ? 'DUP_DAY_COLLISION' : 'READBACK_MISMATCH';
+      fail('No se aplicó: relectura inconsistente.', {
+        toastMsg: 'No se aplicó',
+        diagResult: 'error',
+        causeCode: code,
+        techDetail: 'Se guardó, pero al re-leer no se encontró la llave canónica.',
+        extra: collExtra,
+        forensic: mkForensic({
+          snapshotSig: snapSig,
+          beforeHash: b.hash,
+          beforeSavedAt: b.savedAt,
+          afterHash: a.hash,
+          afterSavedAt: a.savedAt,
+          extra: collExtra
+        })
+      });
+      return;
+    }
+
+    if (!a.savedAt || a.savedAt == prevInitialStamp){
+      const code = (collKeys && collKeys.length > 1) ? 'DUP_DAY_COLLISION' : 'WRITE_NO_CHANGE';
+      fail('No se aplicó: no hubo cambio persistido.', {
+        toastMsg: 'No se aplicó',
+        diagResult: 'error',
+        causeCode: code,
+        techDetail: (code === 'DUP_DAY_COLLISION') ? 'Colisión por llaves distintas del mismo día.' : 'Se escribió pero la relectura no cambió.',
+        extra: collExtra,
+        forensic: mkForensic({
+          snapshotSig: snapSig,
+          beforeHash: b.hash,
+          beforeSavedAt: b.savedAt,
+          afterHash: a.hash,
+          afterSavedAt: a.savedAt,
+          extra: (collExtra || '')
+        })
+      });
       return;
     }
 
     // Confirmar trazabilidad/idempotencia persistida
     try{
-      const aDay = ensurePcDay(pcAfter, dayKey);
-      const aSig = (aDay && aDay.initialFromFinanzas && typeof aDay.initialFromFinanzas === 'object') ? String(aDay.initialFromFinanzas.sig || '') : '';
-      if (!aSig || aSig !== snapSig){
-        fail('No se pudo aplicar desde Finanzas.', { toastMsg:'No se pudo aplicar desde Finanzas', diagResult:'error', reasonKey:'META_MISMATCH' });
+      const metaAfter = pcGetDayInitialFromFinanzas(rawDayAfter);
+      const aSig = metaAfter ? String(metaAfter.sig || '') : '';
+      const aLegacy = metaAfter ? String(metaAfter.sigLegacy || '') : '';
+      const okSig = (aSig && (aSig === snapSig || (snapSigLegacy && aSig === snapSigLegacy))) || (aLegacy && (aLegacy === snapSig || (snapSigLegacy && aLegacy === snapSigLegacy)));
+      if (!okSig){
+        const code = (collKeys && collKeys.length > 1) ? 'DUP_DAY_COLLISION' : 'READBACK_MISMATCH';
+        fail('No se aplicó: relectura inconsistente.', {
+          toastMsg: 'No se aplicó',
+          diagResult: 'error',
+          causeCode: code,
+          techDetail: 'Se guardó, pero al re-leer la trazabilidad no coincide.',
+          extra: collExtra,
+          forensic: mkForensic({
+            snapshotSig: snapSig,
+            beforeHash: b.hash,
+            beforeSavedAt: b.savedAt,
+            afterHash: a.hash,
+            afterSavedAt: a.savedAt,
+            extra: collExtra
+          })
+        });
         return;
       }
     }catch(_){ }
+
+    const pcAfter = await getPettyCash(evId);
 
     // Éxito confirmado: pintar desde lectura persistida y limpiar draft
     try{ pcClearDraftInitial(evId, dayKey); }catch(_){ }
@@ -18641,21 +19355,42 @@ async function syncPettyInitialFromFinanzas(){
     evToSave.pcInitFromFinanzasLastSync = nowISO;
     evToSave.pcInitFromFinanzasLastSyncDisplay = String(stamp || '');
     evToSave.pcInitFromFinanzasLastSnapSig = String(snapSig || '');
+    evToSave.pcInitFromFinanzasLastSnapSigLegacy = String(snapSigLegacy || '');
     evToSave.pcInitFromFinanzasLastSnapHash = String(st.hash || '');
     evToSave.pcInitFromFinanzasLastSnapUpdatedAtISO = String(st.updatedAtISO || '');
     evToSave.pcInitFromFinanzasLastSnapUpdatedAtDisplay = String(st.updatedAtDisplay || '');
     await put('events', evToSave);
 
-    pcFinStatusSet('Aplicado desde Finanzas: ' + String(stamp || '—'), { sticky:true, evId, dayKey });
+    const okMsg = 'Aplicado desde Finanzas: ' + String(stamp || '—');
+    pcFinStatusSet(okMsg, { sticky:true, evId, dayKey });
     try{ pcDiagSetLastSyncDisplay(stamp || '—'); }catch(_){ }
     try{ toast('Aplicado desde Finanzas'); }catch(_){ }
-    try{ pcDiagMark(ACTION, 'ok', 'Aplicado desde Finanzas: ' + String(stamp || '—'), { reasonKey:'OK', eventId: evId, dayKey }); }catch(_){ }
+
+    try{
+      pcDiagMark(ACTION, 'ok', okMsg, {
+        reasonKey: 'OK',
+        causeCode: 'OK',
+        techDetail: 'Aplicado y confirmado por relectura (readback).',
+        eventId: evId,
+        dayKey: dayKey,
+        snapSig: snapSig,
+        forensic: mkForensic({
+          snapshotSig: snapSig,
+          beforeHash: b.hash,
+          beforeSavedAt: b.savedAt,
+          afterHash: a.hash,
+          afterSavedAt: a.savedAt,
+          extra: collExtra || ('expected=' + pcDiagTrunc(expectedHash, 18))
+        })
+      });
+    }catch(_){ }
 
   } finally {
     setBusy(false);
     await setButtonState();
   }
 }
+
 function bindCajaChicaEvents(){
   // Activar Caja Chica por evento (si está desactivada)
   const btnActivate = document.getElementById('pc-btn-activate');

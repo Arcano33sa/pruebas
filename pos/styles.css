@@ -567,6 +567,15 @@ small.muted{color:var(--muted)}
 .pc-diag-history{margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,215,0,0.18)}
 .pc-diag-history > summary{cursor:pointer;list-style:none;user-select:none}
 .pc-diag-history > summary::-webkit-details-marker{display:none}
+
+.pc-diag-forensics{margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,215,0,0.12)}
+.pc-diag-forensics > summary{cursor:pointer;list-style:none;user-select:none}
+.pc-diag-forensics > summary::-webkit-details-marker{display:none}
+.pc-forensic-grid{margin-top:8px;display:flex;flex-wrap:wrap;gap:8px 14px;font-size:12px;max-width:100%}
+.pc-forensic-grid > div{min-width:150px;max-width:100%;min-inline-size:0}
+.pc-forensic-grid span{word-break:break-word}
+#pc-forensic-extra{word-break:break-word;opacity:.9;font-size:11px}
+.pc-forensic-mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
 .pc-diag-log{margin-top:8px;display:flex;flex-direction:column;gap:6px;font-size:0.85rem}
 .pc-diag-log-item{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .pc-diag-log-item span{opacity:0.92}
