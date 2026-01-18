@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.13">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.13&r=2">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.13">
+<link rel="stylesheet" href="styles.css?v=4.20.13&r=2">
   <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.13" />
 </head>
 <body>
@@ -19,7 +19,7 @@
     <div class="a33-title">POS · Eventos</div>
     <div class="a33-right">
       <button id="btn-update" class="a33-btn-update" type="button" style="display:none" aria-label="Actualizar a la nueva versión">Actualizar</button>
-      <div class="a33-version">v4.20.13</div>
+      <div class="a33-version" id="a33-version-text">v...</div>
     </div>
   </header>
 <div id="offlineBar" class="offline">Trabajando sin conexión</div>
@@ -530,6 +530,7 @@
         <span class="pc-diag-title">Estado</span>
         <span class="pc-diag-meta">
           <span id="pos-build-id" class="muted" style="font-size:0.85rem">POS Build: —</span>
+          <span id="pos-sw-cache-id" class="muted" style="font-size:0.85rem; max-width:52vw; display:inline-block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">SW Cache: —</span>
           <span id="pc-diag-last-at" class="muted" style="font-size:0.85rem">—</span>
         </span>
       </div>
@@ -537,7 +538,18 @@
         <div><span class="muted">Activo:</span> <span id="pc-diag-active">—</span></div>
         <div><span class="muted">UI:</span> <span id="pc-diag-ui">—</span></div>
         <div><span class="muted">Último:</span> <span id="pc-diag-action">—</span> <span id="pc-diag-result" class="badge">—</span></div>
-        <div class="pc-diag-reason"><span class="muted">Motivo:</span> <span id="pc-diag-reason">—</span></div>
+        <div><span class="muted">Último Sync:</span> <span id="pc-diag-last-sync">—</span></div>
+        <div class="pc-diag-reason"><span class="muted">Motivo:</span> <span id="pc-diag-reason">OK</span></div>
+        <div class="pc-diag-detail-row" id="pc-diag-detail-row" style="display:none"><span class="muted">Detalle:</span> <span id="pc-diag-detail">—</span></div>
+</div>
+
+      <div id="pc-diag-flags" class="pc-diag-flags" aria-label="Flags de estado"></div>
+
+      <div id="pc-unlock-actions" class="pc-diag-actions" style="display:none">
+        <button id="pc-unlock-back-operativo" class="btn-warn btn-mini btn-pill" type="button" style="display:none">Volver al día operativo</button>
+        <button id="pc-unlock-go-resumen-reopen" class="btn-primary btn-mini btn-pill" type="button" style="display:none">Ir a Resumen / Reabrir día</button>
+        <button id="pc-unlock-activate" class="btn-primary btn-mini btn-pill" type="button" style="display:none">Activar Caja Chica</button>
+        <button id="pc-unlock-resync-event" class="btn-primary btn-mini btn-pill" type="button" style="display:none">Re-sincronizar evento</button>
       </div>
 
       <details id="pc-diag-history" class="pc-diag-history">
@@ -1471,6 +1483,29 @@
 <script src="/assets/js/a33-storage.js?v=4.20.13"></script>
   <script src="/assets/js/a33-presentations.js?v=4.20.13"></script>
 <script src="/assets/js/a33-auth.js?v=4.20.13"></script>
+<script src="/assets/js/a33-build.js?v=4.20.13"></script>
+<script>
+  (function(){
+    try{
+      const v = (window.A33_VERSION || '4.20.13').toString();
+      // POS: bump revision local (solo este modulo) para forzar limpieza de caches
+      try{ window.A33_ASSET_REV = '2'; }catch(_){ }
+      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r2').toString(); }catch(_){ }
+      try{ window.A33_BUILD_TAG = (v + '-r2').toString(); }catch(_){ }
+      const verEl = document.getElementById('a33-version-text');
+      if (verEl) verEl.textContent = 'v' + v;
+      const bEl = document.getElementById('pos-build-id');
+      if (bEl) bEl.textContent = 'POS Build: ' + v;
+      const cEl = document.getElementById('pos-sw-cache-id');
+      if (cEl){
+        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r2')).toString();
+        cEl.textContent = 'SW Cache: ' + cn;
+        cEl.title = cn;
+      }
+    }catch(_){ }
+  })();
+</script>
+
 <script>
   (function(){
     try{
@@ -1495,11 +1530,13 @@
     }
   })();
 </script>
-<script src="app.js?v=4.20.13"></script>
+<script src="app.js?v=4.20.13&r=2"></script>
 <script src="/assets/js/a33-input-ux.js?v=4.20.13"></script>
 <script>
   (function(){
-    const BUILD = '4.20.13';
+    const BUILD = (window.A33_VERSION || '4.20.13').toString();
+    const REV = (window.A33_ASSET_REV || '1').toString();
+    const SW_URL = './sw.js?v=' + encodeURIComponent(BUILD) + '&r=' + encodeURIComponent(REV);
     const btn = document.getElementById('btn-update');
     let refreshing = false;
 
@@ -1507,7 +1544,7 @@
 
     if(!('serviceWorker' in navigator)) return;
 
-    navigator.serviceWorker.register('./sw.js?v=' + encodeURIComponent(BUILD)).then((reg)=>{
+    navigator.serviceWorker.register(SW_URL).then((reg)=>{
       try{
         if (reg.waiting && navigator.serviceWorker.controller){ showUpdate(); }
       }catch(_){}

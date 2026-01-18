@@ -4,8 +4,9 @@
 */
 
 const SW_VERSION = '4.20.13';
+const SW_REV = '1';
 const MODULE = 'centro_mando';
-const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}`;
+const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}-r${SW_REV}`;
 
 const PRECACHE_URLS = [
   './',
@@ -24,7 +25,7 @@ self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
     await cache.addAll(PRECACHE_URLS.filter(Boolean));
-    try{ await self.skipWaiting(); }catch(_){ }
+    try{ self.skipWaiting(); }catch(_){ }
   })());
 });
 

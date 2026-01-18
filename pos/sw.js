@@ -3,15 +3,17 @@
 */
 
 const SW_VERSION = '4.20.13';
+const SW_REV = '2';
 const MODULE = 'pos';
-const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}`;
+const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}-r${SW_REV}`;
 
 const PRECACHE_URLS = [
   './',
   './index.html?v=4.20.13',
-  './styles.css?v=4.20.13',
-  './app.js?v=4.20.13',
-  './manifest.webmanifest?v=4.20.13',
+  './index.html?v=4.20.13&r=2',
+  './styles.css?v=4.20.13&r=2',
+  './app.js?v=4.20.13&r=2',
+  './manifest.webmanifest?v=4.20.13&r=2',
   './offline.html',
   './logo.png',
   './vendor/xlsx.full.min.js?v=0.18.5',
@@ -24,6 +26,13 @@ const PRECACHE_URLS = [
 
 function sameOrigin(url){
   try{ return url.origin === self.location.origin; }catch(_){ return false; }
+}
+
+function isCriticalAsset(url){
+  try{
+    const p = String(url.pathname || '');
+    return p.endsWith('/app.js') || p.endsWith('/styles.css') || p.endsWith('/manifest.webmanifest');
+  }catch(_){ return false; }
 }
 
 function shouldCache(url){
@@ -46,6 +55,7 @@ self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
     await cache.addAll(PRECACHE_URLS.filter(Boolean));
+    try{ self.skipWaiting(); }catch(_){ }
 
   })());
 });
@@ -86,11 +96,16 @@ async function handleNavigate(request){
 }
 
 async function handleAsset(request){
-  const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match(request);
-  if (cached) return cached;
-
   const url = new URL(request.url);
+  const cache = await caches.open(CACHE_NAME);
+
+  // Para assets criticos, preferimos red para evitar 'fantasmas' (fallback a cache si offline).
+  const critical = isCriticalAsset(url);
+  if (!critical){
+    const cached = await cache.match(request);
+    if (cached) return cached;
+  }
+
   try{
     const resp = await fetch(request);
     if (resp && resp.status === 200 && shouldCache(url)){
@@ -98,9 +113,11 @@ async function handleAsset(request){
     }
     return resp;
   }catch(_){
+    const cached = await cache.match(request);
     return cached || new Response('', { status: 504 });
   }
 }
+
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;

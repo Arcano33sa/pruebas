@@ -3,8 +3,9 @@
 */
 
 const SW_VERSION = '4.20.13';
+const SW_REV = '1';
 const MODULE = 'inventario';
-const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}`;
+const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}-r${SW_REV}`;
 
 const PRECACHE_URLS = [
   './',
@@ -24,6 +25,13 @@ function sameOrigin(url){
   try{ return url.origin === self.location.origin; }catch(_){ return false; }
 }
 
+function isCriticalAsset(url){
+  try{
+    const p = String(url.pathname || '');
+    return p.endsWith('.js') || p.endsWith('.css') || p.endsWith('.webmanifest');
+  }catch(_){ return false; }
+}
+
 function shouldCache(url){
   // Acotado: scope del módulo + /assets/ compartido
   try{
@@ -32,11 +40,20 @@ function shouldCache(url){
   }catch(_){ return false; }
 }
 
+
+self.addEventListener('message', (event) => {
+  try{
+    if (event && event.data && event.data.type === 'SKIP_WAITING'){
+      self.skipWaiting();
+    }
+  }catch(_){ }
+});
+
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
     await cache.addAll(PRECACHE_URLS.filter(Boolean));
-    try{ await self.skipWaiting(); }catch(_){ }
+    try{ self.skipWaiting(); }catch(_){ }
   })());
 });
 
@@ -76,11 +93,16 @@ async function handleNavigate(request){
 }
 
 async function handleAsset(request){
-  const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match(request);
-  if (cached) return cached;
-
   const url = new URL(request.url);
+  const cache = await caches.open(CACHE_NAME);
+
+  // Para assets criticos, preferimos red para evitar 'fantasmas' (fallback a cache si offline).
+  const critical = isCriticalAsset(url);
+  if (!critical){
+    const cached = await cache.match(request);
+    if (cached) return cached;
+  }
+
   try{
     const resp = await fetch(request);
     if (resp && resp.status === 200 && shouldCache(url)){
@@ -88,6 +110,7 @@ async function handleAsset(request){
     }
     return resp;
   }catch(_){
+    const cached = await cache.match(request);
     return cached || new Response('', { status: 504 });
   }
 }

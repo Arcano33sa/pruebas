@@ -552,6 +552,17 @@ small.muted{color:var(--muted)}
 .pc-diag-reason{flex:1 1 260px;min-width:220px}
 .pc-diag-reason span{word-break:break-word}
 
+/* Etapa 2: flags compactas (chips) en diagnóstico de Caja Chica */
+.pc-diag-detail-row{flex:1 1 260px;min-width:220px}
+.pc-diag-detail-row span{word-break:break-word}
+.pc-diag-flags{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;max-width:100%}
+
+.pc-diag-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;max-width:100%}
+.pc-chip{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;border:1px solid rgba(255,215,0,0.22);background:rgba(255,255,255,0.03);max-width:100%}
+.pc-chip b{font-weight:800}
+.pc-chip .muted{opacity:0.85}
+
+
 /* Etapa 3: Historial de Estado (Caja Chica) */
 .pc-diag-history{margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,215,0,0.18)}
 .pc-diag-history > summary{cursor:pointer;list-style:none;user-select:none}

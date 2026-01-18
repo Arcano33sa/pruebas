@@ -3,16 +3,19 @@ const DB_NAME = 'a33-pos';
 const DB_VER = 27; // Etapa 2D: índice sales.by_uid (anti-duplicados)
 let db;
 
-// --- Build / version (visible en UI para confirmar cache)
-const POS_BUILD = '4.20.13';
+// --- Build / version (fuente unica de verdad)
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.13';
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r2');
 try{ window.A33_POS_BUILD = POS_BUILD; }catch(_){ }
+try{ window.A33_POS_SW_CACHE = POS_SW_CACHE; }catch(_){ }
 try{
   const el = document.getElementById('pos-build-id');
   if (el) el.textContent = 'POS Build: ' + POS_BUILD;
 }catch(_){ }
-
-
-
+try{
+  const el = document.getElementById('pos-sw-cache-id');
+  if (el){ el.textContent = 'SW Cache: ' + POS_SW_CACHE; el.title = POS_SW_CACHE; }
+}catch(_){ }
 
 // --- Etapa 2D: anti-duplicados en ventas (uid estable + dedupe)
 const A33_PENDING_SALE_UID_KEY = 'a33_pos_pending_sale_uid_v1';
@@ -410,7 +413,10 @@ let __A33_PC_DIAG = {
   lastReason: null,
   lastAtISO: null,
   lastAtDisplay: null,
-  lastDetails: null
+  lastDetails: null,
+  blockReason: 'OK',
+  blockDetail: null,
+  blockFlags: null
 };
 
 function pcDiagFmtEvent(id, name){
@@ -438,6 +444,252 @@ function pcDiagResultClass(r){
   return '';
 }
 
+// --- Caja Chica: Catálogo de motivos + flags (Etapa 2)
+const A33_PC_BLOCK_REASONS = {
+  OK: 'OK',
+  MODO_HISTORICO: 'MODO_HISTORICO',
+  DIA_CERRADO: 'DIA_CERRADO',
+  EVENTO_CERRADO: 'EVENTO_CERRADO',
+  CAJA_CHICA_DESACTIVADA: 'CAJA_CHICA_DESACTIVADA',
+  FINANZAS_NO_CONFIGURADA: 'FINANZAS_NO_CONFIGURADA',
+  FINANZAS_PARSE_ERROR: 'FINANZAS_PARSE_ERROR',
+  TOGGLE_SYNC_OFF: 'TOGGLE_SYNC_OFF',
+  MISMATCH_EVENTO: 'MISMATCH_EVENTO',
+  OTRO: 'OTRO'
+};
+
+function pcYN(v){ return v ? 'SI' : 'NO'; }
+
+function pcFinSnapFlag(st){
+  try{
+    if (st && st.ok) return 'OK';
+    const code = st ? String(st.code || '') : '';
+    if (code === 'PARSE_ERROR') return 'ERROR';
+    if (code) return 'NO';
+    return 'NO';
+  }catch(_){
+    return 'ERROR';
+  }
+}
+
+function pcComputeCajaChicaBlockStateSync(ctx){
+  const o = ctx || {};
+  const ev = o.ev || null;
+  const evId = (o.evId != null) ? o.evId : (ev ? ev.id : null);
+  const hist = !!o.hist;
+  const dayClosed = !!o.dayClosed;
+  const eventClosed = !!o.eventClosed;
+  const cajaActiva = !!o.cajaActiva;
+  const toggleExists = !!o.toggleExists;
+  const toggleChecked = !!o.toggleChecked;
+  const finState = o.finState || null;
+  const eventMatch = (typeof o.eventMatch === 'boolean') ? o.eventMatch : true;
+
+  let manualBlocked = false;
+  let syncBlocked = false;
+  let hardLocked = false;
+
+  let manualReason = A33_PC_BLOCK_REASONS.OK;
+  let manualDetail = '';
+  let syncReason = A33_PC_BLOCK_REASONS.OK;
+  let syncDetail = '';
+
+  const hardBlock = (reason, detail)=>{
+    hardLocked = true;
+    manualBlocked = true;
+    syncBlocked = true;
+    manualReason = reason;
+    syncReason = reason;
+    manualDetail = detail || '';
+    syncDetail = detail || '';
+  };
+  if (!evId || !ev){
+    hardBlock(A33_PC_BLOCK_REASONS.OTRO, 'No hay evento activo.');
+  } else if (hist){
+    hardBlock(A33_PC_BLOCK_REASONS.MODO_HISTORICO, 'Vista histórica (solo lectura).');
+  } else if (!eventMatch){
+    hardBlock(A33_PC_BLOCK_REASONS.MISMATCH_EVENTO, 'Actualizando evento…');
+  } else if (eventClosed){
+    hardBlock(A33_PC_BLOCK_REASONS.EVENTO_CERRADO, 'Evento cerrado.');
+  } else if (dayClosed){
+    hardBlock(A33_PC_BLOCK_REASONS.DIA_CERRADO, 'Día cerrado.');
+  } else if (!cajaActiva){
+    hardBlock(A33_PC_BLOCK_REASONS.CAJA_CHICA_DESACTIVADA, 'Caja Chica desactivada en este evento.');
+  }
+
+  // Bloqueos SOLO de sincronización
+  if (!syncBlocked){
+    if (toggleExists && !toggleChecked){
+      syncBlocked = true;
+      syncReason = A33_PC_BLOCK_REASONS.TOGGLE_SYNC_OFF;
+      syncDetail = 'Switch apagado.';
+    } else {
+      try{
+        if (finState && !finState.ok){
+          const code = String(finState.code || '');
+          if (code === 'FIN_NOT_CONFIG' || code === 'FIN_NOT_READY'){
+            syncBlocked = true;
+            syncReason = A33_PC_BLOCK_REASONS.FINANZAS_NO_CONFIGURADA;
+            syncDetail = finState.msg ? String(finState.msg) : 'Caja Chica (Finanzas) no configurada.';
+          } else if (code === 'PARSE_ERROR'){
+            syncBlocked = true;
+            syncReason = A33_PC_BLOCK_REASONS.FINANZAS_PARSE_ERROR;
+            syncDetail = finState.msg ? String(finState.msg) : 'Datos inválidos en Finanzas.';
+          } else {
+            syncBlocked = true;
+            syncReason = A33_PC_BLOCK_REASONS.OTRO;
+            syncDetail = finState.msg ? String(finState.msg) : 'Finanzas no configurada.';
+          }
+        }
+      }catch(_){ }
+    }
+  }
+
+  // Motivo principal: primero bloqueos duros/manual, luego bloqueos de sync.
+  let reason = A33_PC_BLOCK_REASONS.OK;
+  let detail = '';
+  if (manualBlocked){
+    reason = manualReason;
+    detail = manualDetail;
+  } else if (syncBlocked){
+    reason = syncReason;
+    detail = syncDetail;
+  }
+
+  const flags = {
+    historico: pcYN(hist),
+    diaCerrado: pcYN(dayClosed),
+    cajaActiva: pcYN(cajaActiva),
+    finanzasSnapshot: pcFinSnapFlag(finState),
+    toggleSync: toggleExists ? (toggleChecked ? 'ON' : 'OFF') : null,
+    eventoMatch: eventMatch ? 'OK' : 'NO'
+  };
+
+  return {
+    evId,
+    hist,
+    dayClosed,
+    eventClosed,
+    cajaActiva,
+    toggleExists,
+    toggleChecked,
+    finState,
+    eventMatch,
+    manualBlocked,
+    syncBlocked,
+    hardLocked,
+    manualReason,
+    manualDetail,
+    syncReason,
+    syncDetail,
+    reason,
+    detail,
+    flags
+  };
+}
+
+function pcDiagRenderFlags(flags){
+  const wrap = document.getElementById('pc-diag-flags');
+  if (!wrap) return;
+  if (!flags || typeof flags !== 'object'){
+    wrap.innerHTML = '';
+    return;
+  }
+  const chips = [];
+  const chip = (label, value)=>{
+    if (value == null || String(value).trim() === '') return;
+    chips.push('<span class="pc-chip"><span class="muted">' + label + ':</span><b>' + String(value) + '</b></span>');
+  };
+  chip('Histórico', flags.historico);
+  chip('Día Cerrado', flags.diaCerrado);
+  chip('Caja Activa', flags.cajaActiva);
+  chip('Finanzas Snapshot', flags.finanzasSnapshot);
+  if (flags.toggleSync != null) chip('Toggle Sync', flags.toggleSync);
+  chip('Evento Match', flags.eventoMatch);
+  wrap.innerHTML = chips.join('');
+}
+
+function pcDiagSetBlockState(bs){
+  const b = bs || {};
+  const r = (b.reason != null && String(b.reason).trim()) ? String(b.reason).trim() : 'OK';
+  const d = (b.detail != null && String(b.detail).trim()) ? String(b.detail).trim() : '';
+  __A33_PC_DIAG.blockReason = r;
+  __A33_PC_DIAG.blockDetail = d ? d : null;
+  __A33_PC_DIAG.blockFlags = b.flags || null;
+  try{ pcDiagRender(); }catch(_){ }
+}
+
+
+function pcRenderUnlockActions(bs, evId, dayKey){
+  try{
+    const wrap = document.getElementById('pc-unlock-actions');
+    if (!wrap) return;
+    const bBack = document.getElementById('pc-unlock-back-operativo');
+    const bResumen = document.getElementById('pc-unlock-go-resumen-reopen');
+    const bAct = document.getElementById('pc-unlock-activate');
+    const bResync = document.getElementById('pc-unlock-resync-event');
+    const btns = [bBack,bResumen,bAct,bResync].filter(Boolean);
+    btns.forEach(b=>{ try{ b.style.display='none'; }catch(_){ } });
+
+    const b = bs || {};
+    const r = b.reason || null;
+    let show = false;
+
+    if (b && b.hardBlock){
+      if (r === A33_PC_BLOCK_REASONS.MODO_HISTORICO && bBack){ bBack.style.display='inline-flex'; show = true; }
+      else if (r === A33_PC_BLOCK_REASONS.DIA_CERRADO && bResumen){ bResumen.style.display='inline-flex'; show = true; }
+      else if (r === A33_PC_BLOCK_REASONS.CAJA_CHICA_DESACTIVADA && bAct){ bAct.style.display='inline-flex'; show = true; }
+      else if ((r === A33_PC_BLOCK_REASONS.MISMATCH_EVENTO || r === A33_PC_BLOCK_REASONS.EVENT_REFRESH_PENDING) && bResync){ bResync.style.display='inline-flex'; show = true; }
+    }
+
+    wrap.style.display = show ? 'flex' : 'none';
+    try{
+      wrap.dataset.evId = (evId != null) ? String(evId) : '';
+      wrap.dataset.dayKey = dayKey ? String(dayKey) : '';
+      wrap.dataset.reason = r ? String(r) : '';
+    }catch(_){ }
+  }catch(_){ }
+}
+
+
+function __pcSleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+
+async function pcUnlockGoResumenReopenDay(){
+  try{
+    const evId = await getMeta('currentEventId');
+    const dayKey = getSelectedPcDay();
+    setTab('resumen');
+    try{ if (typeof __A33_SUMMARY_MODE !== 'undefined' && __A33_SUMMARY_MODE === 'archive'){ exitSummaryArchiveModePOS(); } }catch(_){}
+    try{ if (evId) await setSelectedSummaryEventIdPOS(String(evId)); }catch(_){}
+    // Esperar a que el UI del Resumen exista
+    for (let i=0;i<30;i++){
+      const dateEl = document.getElementById('summary-close-date');
+      const evSel = document.getElementById('summary-close-event');
+      if (dateEl && evSel) break;
+      await __pcSleep(50);
+    }
+    const dateEl = document.getElementById('summary-close-date');
+    if (dateEl && dayKey) dateEl.value = dayKey;
+    try{ await renderSummaryDailyCloseCardPOS(); }catch(_){}
+    const card = document.getElementById('summary-daily-close-card');
+    if (card){
+      try{ card.scrollIntoView({ behavior:'smooth', block:'start' }); }catch(_){ try{ card.scrollIntoView(); }catch(__){} }
+    }
+    const btn = document.getElementById('btn-summary-reopen-day');
+    if (btn && btn.style.display !== 'none'){ try{ btn.focus(); }catch(_){} }
+  }catch(_){}
+}
+
+async function pcUnlockResyncEvent(){
+  try{
+    const evId = await getMeta('currentEventId');
+    if (!evId) return;
+    pcToastUpdatingEvent();
+    await pcForceAlignCajaChicaToActiveEvent(evId, { allowRestore:true });
+  }catch(_){}
+}
+
+
 function pcDiagRender(){
   const d = __A33_PC_DIAG || {};
   const activeEl = document.getElementById('pc-diag-active');
@@ -445,6 +697,8 @@ function pcDiagRender(){
   const actionEl = document.getElementById('pc-diag-action');
   const resEl = document.getElementById('pc-diag-result');
   const reasonEl = document.getElementById('pc-diag-reason');
+  const detailRow = document.getElementById('pc-diag-detail-row');
+  const detailEl = document.getElementById('pc-diag-detail');
   const atEl = document.getElementById('pc-diag-last-at');
 
   if (activeEl) activeEl.textContent = pcDiagFmtEvent(d.activeEventId, d.activeEventName);
@@ -458,7 +712,15 @@ function pcDiagRender(){
     if (cls) resEl.classList.add(cls);
   }
 
-  if (reasonEl) reasonEl.textContent = d.lastReason ? String(d.lastReason) : '—';
+  const r = (d.blockReason != null) ? d.blockReason : d.lastReason;
+  const reasonTxt = (r != null && String(r).trim()) ? String(r).trim() : 'OK';
+  if (reasonEl) reasonEl.textContent = reasonTxt;
+
+  const det = (d.blockDetail != null && String(d.blockDetail).trim()) ? String(d.blockDetail).trim() : '';
+  if (detailEl) detailEl.textContent = det ? det : '—';
+  if (detailRow) detailRow.style.display = det ? 'block' : 'none';
+
+  try{ pcDiagRenderFlags(d.blockFlags || null); }catch(_){ }
   if (atEl) atEl.textContent = d.lastAtDisplay ? String(d.lastAtDisplay) : '—';
 }
 
@@ -498,6 +760,13 @@ function pcDiagMark(action, result, reason, details){
 
   try{ pcDiagRender(); }catch(e){}
   try{ pcDiagRenderLog(); }catch(_){ }
+}
+
+function pcDiagSetLastSyncDisplay(text){
+  try{
+    const el = document.getElementById('pc-diag-last-sync');
+    if (el) el.textContent = (text && String(text).trim()) ? String(text).trim() : '—';
+  }catch(_){ }
 }
 
 
@@ -7951,11 +8220,13 @@ async function ensurePettyEnabledForEvent(eventId){
 
 
 // Etapa 2: validación dura antes de escribir Caja Chica (sin activar automáticamente)
+// Etapa 3: desbloqueo determinista + auto-alineación segura (sin borrar inputs)
 async function guardPettyWritePOS(eventId, opts){
   const o = opts || {};
   const silent = !!o.silent;
   const action = (o.action || '').toString().trim();
   const diag = !!o.diag;
+  const allowRestore = !!o.allowRestore;
 
   const toastErr = (t)=>{
     if (silent) return;
@@ -7993,78 +8264,92 @@ async function guardPettyWritePOS(eventId, opts){
     try{ pcDiagMark(action || 'Caja Chica', 'blocked', String(reason || 'Bloqueado') + idNote, { ...ids, ...(extra||{}) }); }catch(_){ }
   };
 
-  const evId = parseInt(String(eventId || ''), 10);
+  const selectorId = ()=>{
+    try{
+      const sel = document.getElementById('pc-event-select');
+      if (!sel) return null;
+      const raw = String(sel.value || '').trim();
+      if (!raw) return null;
+      const sid = parseInt(raw, 10);
+      return Number.isFinite(sid) ? sid : null;
+    }catch(_){ return null; }
+  };
+
+  const safeRestoreOk = (id)=>{
+    if (!allowRestore) return false;
+    try{
+      const sel = document.getElementById('pc-event-select');
+      if (!sel) return true;
+      const raw = String(sel.value || '').trim();
+      if (!raw) return true;
+      return String(raw) === String(id);
+    }catch(_){ return false; }
+  };
+
+  let evId = parseInt(String(eventId || ''), 10);
   if (!(Number.isFinite(evId) && evId > 0)){
     toastErr('Evento no válido.');
     if (diag){
-      try{ pcDiagMark(action || 'Caja Chica', 'blocked', 'Evento no válido.', { activeId: eventId || null }); }catch(_){ }
+      try{ pcDiagMark(action || 'Caja Chica', 'blocked', 'Evento no válido.', { activeId: eventId || null, reasonKey:'INVALID_EVENT' }); }catch(_){ }
     }
     return null;
+  }
+
+  // Si el UI ya apunta a otro evento (selector), alinear primero para evitar bloqueos fantasma.
+  const sid0 = selectorId();
+  if (sid0 && String(sid0) !== String(evId)){
+    if (allowRestore){
+      pcToastUpdatingEvent();
+      try{ await setMeta('currentEventId', sid0); }catch(_){ }
+      evId = sid0;
+      try{ await pcForceAlignCajaChicaToActiveEvent(evId, { allowRestore: safeRestoreOk(evId) }); }catch(_){ }
+    } else {
+      pcToastUpdatingEvent();
+      diagBlocked(evId, 'Selector y evento no coinciden', { reasonKey:'SELECTOR_MISMATCH', selectorId: sid0 });
+      return null;
+    }
   }
 
   // Fuente única de verdad: solo se permite escribir/sincronizar sobre el evento activo real.
-  const activeId = await getMeta('currentEventId');
-  if (!activeId || String(activeId) !== String(evId)){
-    pcToastUpdatingEvent();
-    try{
-      if (diag) pcDiagMark(action, 'blocked', 'Evento activo cambió. Alineando…', { reasonKey:'ACTIVE_EVENT_MISMATCH', passedEventId: evId, activeEventId: activeId || null });
-    }catch(_){ }
-    try{
-      if (activeId) await pcForceAlignCajaChicaToActiveEvent(activeId, { action, allowRestore:false });
-      else await pcForceAlignCajaChicaToActiveEvent(evId, { action, allowRestore:false });
-    }catch(_){ }
+  let activeId = await getMeta('currentEventId');
+  if (!activeId){
+    toastErr('No hay evento activo.');
+    if (diag){
+      try{ pcDiagMark(action || 'Caja Chica', 'blocked', 'No hay evento activo.', { reasonKey:'NO_ACTIVE_EVENT' }); }catch(_){ }
+    }
     return null;
   }
+  if (String(activeId) !== String(evId)){
+    pcToastUpdatingEvent();
+    try{ if (diag) pcDiagMark(action, 'running', 'Alineando al evento activo…', { reasonKey:'ACTIVE_EVENT_MISMATCH', passedEventId: evId, activeEventId: activeId }); }catch(_){ }
+    evId = parseInt(String(activeId), 10) || evId;
+    try{ await pcForceAlignCajaChicaToActiveEvent(evId, { allowRestore: safeRestoreOk(evId) }); }catch(_){ }
+    activeId = await getMeta('currentEventId');
+    if (!activeId || String(activeId) !== String(evId)){
+      diagBlocked(evId, 'Evento activo cambió. Reintenta.', { reasonKey:'ACTIVE_EVENT_MISMATCH', activeEventId: activeId || null });
+      return null;
+    }
+  }
 
-  // Transición de evento: si meta.currentEventId cambió pero Caja Chica aún no terminó de refrescar, bloquear.
-  // Requisito: si el usuario intenta guardar/sincronizar durante transición → toast "Actualizando evento…".
+  // Transición de evento: intentar auto-alinear una vez (sin perder inputs cuando aplica).
   if (pcIsEventRefreshPending()){
     pcToastUpdatingEvent();
     diagBlocked(evId, 'Actualizando evento…', { reasonKey:'EVENT_REFRESH_PENDING', target: __A33_PC_EVENT_REFRESH_TARGET, ageMs: pcRefreshPendingAgeMs() });
-    // Si se queda pegado (raro), forzar alineación sin perder inputs cuando aplica.
-    if (pcRefreshPendingAgeMs() > 4500){
-      let allowRestore = false;
-      try{
-        const sel = document.getElementById('pc-event-select');
-        allowRestore = !!(sel && String(sel.value||'').trim() && String(sel.value).trim() === String(evId));
-      }catch(_){ allowRestore = false; }
-      try{ await pcForceAlignCajaChicaToActiveEvent(evId, { allowRestore }); }catch(_){ }
-    }
-    return null;
+    try{ await pcForceAlignCajaChicaToActiveEvent(evId, { allowRestore: safeRestoreOk(evId) }); }catch(_){ }
+    if (pcIsEventRefreshPending()) return null;
   }
 
-  const recoverMismatch = async (reasonKey, msg, extra, allowRestore)=>{
-    // 1) Registrar motivo en Estado
-    diagBlocked(evId, msg || 'Desfase detectado', { ...(extra||{}), reasonKey });
-    // 2) Forzar alineación UI → evento activo
-    try{ await pcForceAlignCajaChicaToActiveEvent(evId, { allowRestore: !!allowRestore }); }catch(_){ }
-    // 3) Dejar listo para reintento (sin borrar inputs cuando es seguro restaurarlos)
-    if (diag){
-      try{ pcDiagMark(action || 'Caja Chica', 'ok', 'UI alineada al evento activo. Reintenta.', { reasonKey:'AUTO_ALIGNED', activeId: evId, ...(extra||{}) }); }catch(_){ }
-    }
-    return null;
-  };
-
-  // Evitar escrituras cruzadas si el evento cambió pero el UI aún no re-renderizó.
+  // Evitar escrituras cruzadas si el UI aún no re-renderizó al evento actual.
   const renderedId = getPcLastRenderEventId();
   if (renderedId && String(renderedId) !== String(evId)){
-    let t = 'Actualizando evento…';
-    if (action){
-      const a = action.toLowerCase();
-      if (a.includes('guardar') || a.includes('sincron')) t = 'Actualizando evento…';
-      else t = 'Actualizando evento…';
-    }
     pcToastUpdatingEvent();
-    // Solo restaurar inputs si el selector ya estaba apuntando al evento activo (mismatch "fantasma").
-    let allowRestore = false;
-    try{
-      const sel = document.getElementById('pc-event-select');
-      allowRestore = !!(sel && String(sel.value||'').trim() && String(sel.value).trim() === String(evId));
-    }catch(_){ allowRestore = false; }
-    return await recoverMismatch('RENDER_MISMATCH', t, { renderedId }, allowRestore);
+    diagBlocked(evId, 'Actualizando evento…', { reasonKey:'RENDER_MISMATCH', renderedId });
+    try{ await pcForceAlignCajaChicaToActiveEvent(evId, { allowRestore: safeRestoreOk(evId) }); }catch(_){ }
+    const r2 = getPcLastRenderEventId();
+    if (r2 && String(r2) !== String(evId)) return null;
   }
 
-  const ev = await getEventByIdSafe(evId);
+  let ev = await getEventByIdSafe(evId);
   if (!ev){
     toastErr('Evento no encontrado.');
     diagBlocked(evId, 'Evento no encontrado', { reasonKey:'EVENT_NOT_FOUND' });
@@ -8082,18 +8367,26 @@ async function guardPettyWritePOS(eventId, opts){
     return null;
   }
 
-  // Si el selector existe y apunta a otro evento, no arriesgar.
-  const sel = document.getElementById('pc-event-select');
-  if (sel){
-    const raw = String(sel.value || '').trim();
-    if (raw){
-      const sid = parseInt(raw, 10);
-      if (Number.isFinite(sid) && String(sid) !== String(evId)){
-        pcToastUpdatingEvent();
-        // No restaurar inputs: el usuario estaba viendo otro evento.
-        return await recoverMismatch('SELECTOR_MISMATCH', 'Selector y evento no coinciden', { selectorId: sid }, false);
+  // Verificación final: selector vs evento (si no coincide, alinear o bloquear).
+  const sid = selectorId();
+  if (sid && String(sid) !== String(evId)){
+    pcToastUpdatingEvent();
+    if (allowRestore){
+      try{ await setMeta('currentEventId', sid); }catch(_){ }
+      evId = sid;
+      try{ await pcForceAlignCajaChicaToActiveEvent(evId, { allowRestore: safeRestoreOk(evId) }); }catch(_){ }
+      const cur = await getMeta('currentEventId');
+      const sid2 = selectorId();
+      if (!cur || String(cur) !== String(evId) || (sid2 && String(sid2) !== String(evId))){
+        diagBlocked(evId, 'Selector y evento no coinciden', { reasonKey:'SELECTOR_MISMATCH', selectorId: sid });
+        return null;
       }
+      ev = await getEventByIdSafe(evId);
+      if (!ev || ev.closedAt || !eventPettyEnabled(ev)) return null;
+      return { evId, ev };
     }
+    diagBlocked(evId, 'Selector y evento no coinciden', { reasonKey:'SELECTOR_MISMATCH', selectorId: sid });
+    return null;
   }
 
   return { evId, ev };
@@ -16177,7 +16470,7 @@ async function onSaveEventFxRate(){
     return;
   }
 
-  const ctx = await guardPettyWritePOS(evId);
+  const ctx = await guardPettyWritePOS(evId, { action:'Guardar T/C', diag:true, allowRestore:true });
   if (!ctx) return;
   const ev = ctx.ev;
 
@@ -16212,7 +16505,7 @@ async function onClosePettyDay(){
     return;
   }
 
-  const ctx = await guardPettyWritePOS(evId);
+  const ctx = await guardPettyWritePOS(evId, { action:'Cerrar día', diag:true, allowRestore:true });
   if (!ctx) return;
   const dayKey = getSelectedPcDay();
   const dk = normalizeDateKeyForClosePOS(dayKey);
@@ -16301,7 +16594,7 @@ async function onReopenPettyDay(){
   }
   const evId = await getMeta('currentEventId');
   if (!evId) return;
-  const ctx = await guardPettyWritePOS(evId);
+  const ctx = await guardPettyWritePOS(evId, { action:'Reabrir día', diag:true, allowRestore:true });
   if (!ctx) return;
   const dayKey = getSelectedPcDay();
   const pc = await getPettyCash(evId);
@@ -16548,7 +16841,7 @@ async function onUseHistoryFinalAsInitial(){
     return;
   }
 
-  const ctx = await guardPettyWritePOS(evId);
+  const ctx = await guardPettyWritePOS(evId, { action:'Copiar cierre histórico', diag:true, allowRestore:true });
   if (!ctx) return;
 
   const from = pettyHistoryDayKey;
@@ -16631,22 +16924,60 @@ function setPrevCierreUI(pc, dayKey){
 // --- Caja Chica: Sync Finanzas → POS (helpers) — Etapa 3
 const A33_FIN_CC_STORAGE_KEY_POS = 'a33_finanzas_caja_chica_v1';
 
+function a33HashStringPOS(str){
+  // Hash simple (djb2 xor) sin dependencias, suficiente para idempotencia local.
+  const s = String(str || '');
+  let h = 5381;
+  for (let i = 0; i < s.length; i++){
+    h = ((h << 5) + h) ^ s.charCodeAt(i);
+  }
+  return (h >>> 0).toString(36);
+}
+
 function finPosGetCajaChicaSnapState(){
   const KEY = A33_FIN_CC_STORAGE_KEY_POS;
   let raw = '';
   try{ raw = (localStorage.getItem(KEY) || '').toString(); }catch(_){ raw = ''; }
   if (!raw.trim()) return { ok:false, code:'FIN_NOT_CONFIG', msg:'Caja Chica (Finanzas) no configurada.' };
 
+  const hash = a33HashStringPOS(raw);
+
   let snap = null;
   try{ snap = JSON.parse(raw); }catch(err){
-    return { ok:false, code:'PARSE_ERROR', msg:'Error: datos inválidos en Finanzas (parse).', err: String(err||'') };
+    return { ok:false, code:'PARSE_ERROR', msg:'Error: datos inválidos en Finanzas (parse).', err: String(err||''), hash };
   }
 
-  if (!snap || !snap.currencies || !snap.currencies.NIO || !snap.currencies.USD){
-    return { ok:false, code:'FIN_NOT_READY', msg:'Caja Chica (Finanzas) no configurada.' };
+  if (!snap || typeof snap !== 'object'){
+    return { ok:false, code:'PARSE_ERROR', msg:'Error: datos inválidos en Finanzas.', hash };
   }
 
-  return { ok:true, code:'OK', msg:'OK', snap };
+  const cur = snap.currencies || null;
+  if (!cur || typeof cur !== 'object' || !cur.NIO || !cur.USD){
+    return { ok:false, code:'FIN_NOT_READY', msg:'Caja Chica (Finanzas) no configurada.', hash };
+  }
+
+  const nioDen = cur.NIO ? cur.NIO.denoms : null;
+  const usdDen = cur.USD ? cur.USD.denoms : null;
+  if (!Array.isArray(nioDen) || !Array.isArray(usdDen)){
+    return { ok:false, code:'PARSE_ERROR', msg:'Error: datos inválidos en Finanzas (denoms).', hash };
+  }
+
+  // Meta de actualización (si existe)
+  const updISO = (typeof snap.updatedAtISO === 'string') ? snap.updatedAtISO : '';
+  const updDisp = (typeof snap.updatedAtDisplay === 'string') ? snap.updatedAtDisplay : '';
+  let updOK = false;
+  if (updISO){
+    try{ const d = new Date(updISO); updOK = !Number.isNaN(d.getTime()); }catch(_){ updOK = false; }
+  }
+  const updatedAtISO = updOK ? updISO : '';
+  let updatedAtDisplay = updDisp;
+  if (!updatedAtDisplay && updatedAtISO){
+    try{ updatedAtDisplay = fmtDDMMYYYYHHMM_POS(updatedAtISO); }catch(_){ updatedAtDisplay = ''; }
+  }
+
+  const sig = (updatedAtISO ? ('t:' + updatedAtISO) : 't:') + '|h:' + hash;
+
+  return { ok:true, code:'OK', msg:'OK', snap, raw, hash, updatedAtISO, updatedAtDisplay, sig };
 }
 
 function pcFinStatusClearStickyIfContextMismatch(evId, dayKey){
@@ -16693,28 +17024,83 @@ function pcFinStatusSet(msg, { html=false, sticky=false, evId=null, dayKey=null 
   else s.textContent = msg || '';
 }
 
-function updatePcFinSyncUI(ev, canInteract, readOnlyDay, dayKey){
+function updatePcFinSyncUI(ev, canInteract, readOnlyDay, dayKey, blockState){
   const t = document.getElementById('pc-init-from-fin-toggle');
   const b = document.getElementById('pc-init-from-fin-sync');
 
   const dKey = dayKey || (typeof getSelectedPcDay === 'function' ? getSelectedPcDay() : null);
   const evId = (ev && ev.id != null) ? ev.id : null;
 
-  // Si cambió el contexto, limpiar estado "sticky".
+  // Si cambió el contexto, limpiar estado \"sticky\".
   pcFinStatusClearStickyIfContextMismatch(evId, dKey);
 
   if (!t || !b) return;
 
-  const checked = !!(ev && ev.pcInitFromFinanzasEnabled);
+  const bs = (blockState && typeof blockState === 'object') ? blockState : null;
+
+  // Si nos pasan blockState, esa es la verdad única; si no, caemos a la lógica legacy.
+  const checked = bs ? !!bs.toggleChecked : !!(ev && ev.pcInitFromFinanzasEnabled);
   t.checked = checked;
 
-  const locked = (!canInteract) || !!readOnlyDay;
+  const locked = bs ? !!bs.hardLocked : ((!canInteract) || !!readOnlyDay);
   t.disabled = locked;
   b.disabled = locked || !checked;
 
   // No pisar el mensaje del último intento si aplica en este mismo contexto.
   if (pcFinStatusIsStickyForContext(evId, dKey)) return;
 
+  // --- Con blockState (Etapa 2)
+  if (bs){
+    if (!ev){
+      pcFinStatusSet('Activa un evento para sincronizar.');
+      return;
+    }
+
+    const reason = bs.syncBlocked ? bs.syncReason : (bs.manualBlocked ? bs.manualReason : bs.reason);
+    const detail = bs.syncBlocked ? bs.syncDetail : (bs.manualBlocked ? bs.manualDetail : bs.detail);
+
+    if (locked){
+      if (reason === A33_PC_BLOCK_REASONS.MODO_HISTORICO || reason === A33_PC_BLOCK_REASONS.DIA_CERRADO){
+        pcFinStatusSet('Día cerrado o histórico: no se sincroniza.');
+      } else if (reason === A33_PC_BLOCK_REASONS.EVENTO_CERRADO){
+        pcFinStatusSet('Evento cerrado: no se sincroniza.');
+      } else if (reason === A33_PC_BLOCK_REASONS.CAJA_CHICA_DESACTIVADA){
+        pcFinStatusSet('Caja Chica desactivada en este evento.');
+      } else if (reason === A33_PC_BLOCK_REASONS.MISMATCH_EVENTO){
+        pcFinStatusSet(detail || 'Actualizando evento…');
+      } else if (reason === A33_PC_BLOCK_REASONS.OTRO){
+        pcFinStatusSet(detail || 'Activa un evento para sincronizar.');
+      } else {
+        pcFinStatusSet(detail || 'No disponible.');
+      }
+      return;
+    }
+
+    if (!checked){
+      pcFinStatusSet('Switch apagado: actívalo para sincronizar.');
+      return;
+    }
+
+    if (bs.syncBlocked && reason === A33_PC_BLOCK_REASONS.FINANZAS_NO_CONFIGURADA){
+      pcFinStatusSet('Caja Chica (Finanzas) no configurada. <a class="a33-link" href="../finanzas/index.html#tab=cajachica">Ir a Finanzas</a>', { html:true });
+      return;
+    }
+    if (bs.syncBlocked && reason === A33_PC_BLOCK_REASONS.FINANZAS_PARSE_ERROR){
+      pcFinStatusSet('Error: datos inválidos en Finanzas (parse).');
+      return;
+    }
+    if (bs.syncBlocked && reason !== A33_PC_BLOCK_REASONS.OK){
+      pcFinStatusSet(detail || 'No disponible.');
+      return;
+    }
+
+    const last = ev.pcInitFromFinanzasLastSyncDisplay || (ev.pcInitFromFinanzasLastSync ? fmtDDMMYYYYHHMM_POS(ev.pcInitFromFinanzasLastSync) : '');
+    if (last) pcFinStatusSet('Sincronizado: ' + last);
+    else pcFinStatusSet('Listo para sincronizar.');
+    return;
+  }
+
+  // --- Legacy (si no hay blockState)
   if (!ev){
     pcFinStatusSet('Activa un evento para sincronizar.');
     return;
@@ -16757,6 +17143,29 @@ function updatePcFinSyncUI(ev, canInteract, readOnlyDay, dayKey){
   else pcFinStatusSet('Listo para sincronizar.');
 }
 
+function pcGetLastSyncDisplayForContext(ev, pc, dayKey){
+  const dKey = String(dayKey || '');
+  // Preferir marca por día (si existe)
+  try{
+    if (pc && pc.days && dKey && pc.days[dKey]){
+      const day = pc.days[dKey];
+      const meta = (day && day.initialFromFinanzas && typeof day.initialFromFinanzas === 'object') ? day.initialFromFinanzas : null;
+      if (meta){
+        const disp = (meta.appliedAtDisplay) ? String(meta.appliedAtDisplay) : (meta.appliedAtISO ? fmtDDMMYYYYHHMM_POS(meta.appliedAtISO) : '');
+        if (disp && disp.trim()) return disp.trim();
+      }
+    }
+  }catch(_){ }
+
+  // Caer a marca por evento
+  try{
+    const last = ev ? (ev.pcInitFromFinanzasLastSyncDisplay || (ev.pcInitFromFinanzasLastSync ? fmtDDMMYYYYHHMM_POS(ev.pcInitFromFinanzasLastSync) : '')) : '';
+    if (last && String(last).trim()) return String(last).trim();
+  }catch(_){ }
+  return '';
+}
+
+
 async function renderCajaChica(){
   const main = document.getElementById('pc-main');
   const note = document.getElementById('pc-no-event-note');
@@ -16794,7 +17203,24 @@ async function renderCajaChica(){
     renderPettyHistoryControls(null);
     setPettyCloseUIEmpty();
     setPettyReadOnly(false, false);
-    updatePcFinSyncUI(null, false, false, null);
+
+    // Etapa 2: blockState centralizado para diagnóstico visible
+    try{
+      let finState = null;
+      try{ finState = finPosGetCajaChicaSnapState(); }catch(_){ finState = { ok:false, code:'PARSE_ERROR', msg:'Error leyendo Finanzas.' }; }
+      const tog = document.getElementById('pc-init-from-fin-toggle');
+      const toggleExists = !!tog;
+      const toggleChecked = toggleExists ? !!tog.checked : false;
+      const bs = pcComputeCajaChicaBlockStateSync({
+        ev: null, evId: null, dayKey: (typeof getSelectedPcDay === 'function' ? getSelectedPcDay() : null),
+        hist: false, dayClosed: false, eventClosed: false, cajaActiva: false,
+        toggleExists, toggleChecked, finState, eventMatch: true
+      });
+      pcDiagSetBlockState(bs);
+      updatePcFinSyncUI(null, false, false, null, bs);
+    }catch(_){
+      updatePcFinSyncUI(null, false, false, null);
+    }
 
     const movDate = document.getElementById('pc-mov-date');
     if (movDate){
@@ -16802,6 +17228,7 @@ async function renderCajaChica(){
       movDate.disabled = true;
     }
     try{ pcClearEventRefreshPendingIfAligned(null); }catch(_){ }
+    try{ pcDiagSetLastSyncDisplay('—'); }catch(_){ }
     return;
   }
 
@@ -16820,7 +17247,26 @@ async function renderCajaChica(){
     renderPettyHistoryControls(null);
     setPettyCloseUIEmpty();
     setPettyReadOnly(false, false);
+    try{
+    let finState = null;
+    try{ finState = finPosGetCajaChicaSnapState(); }catch(_){ finState = { ok:false, code:'PARSE_ERROR', msg:'Error leyendo Finanzas.' }; }
+    const tog = document.getElementById('pc-init-from-fin-toggle');
+    const toggleExists = !!tog;
+    const toggleChecked = !!(ev && ev.pcInitFromFinanzasEnabled);
+    const pending = (typeof pcIsEventRefreshPending === 'function') ? pcIsEventRefreshPending() : false;
+    const pendingTarget = (typeof __A33_PC_EVENT_REFRESH_TARGET !== 'undefined') ? __A33_PC_EVENT_REFRESH_TARGET : null;
+    const eventMatch = (!pending) || (pendingTarget != null && String(pendingTarget) === String(evId));
+    const bs = pcComputeCajaChicaBlockStateSync({
+      ev, evId, dayKey: getSelectedPcDay(),
+      hist: false, dayClosed: false, eventClosed: !!(ev && ev.closedAt), cajaActiva: false,
+      toggleExists, toggleChecked, finState, eventMatch
+    });
+    pcDiagSetBlockState(bs);
+    pcRenderUnlockActions(bs, evId, getSelectedPcDay());
+    updatePcFinSyncUI(ev, false, false, getSelectedPcDay(), bs);
+  }catch(_){
     updatePcFinSyncUI(ev, false, false, getSelectedPcDay());
+  }
 
     const movDate = document.getElementById('pc-mov-date');
     if (movDate){
@@ -16829,6 +17275,7 @@ async function renderCajaChica(){
     }
     setPcLastRenderEventId(evId);
     try{ pcDiagUpdateContext(evId, (ev && ev.name) ? ev.name : null, evId, (ev && ev.name) ? ev.name : null); pcDiagRender(); }catch(_){ }
+    try{ pcDiagSetLastSyncDisplay(pcGetLastSyncDisplayForContext(ev, null, getSelectedPcDay()) || '—'); }catch(_){ }
     try{ pcClearEventRefreshPendingIfAligned(evId); }catch(_){ }
     return;
   }
@@ -16905,8 +17352,28 @@ async function renderCajaChica(){
   const check = await getPettyCloseCheck(evId, pc, dayKey, cashSalesNio, fx);
   renderPettyCloseUI(check, hist);
 
+  // Etapa 2: reglas de bloqueo centralizadas + flags (Estado)
+  let __pcFinState = null;
+  try{ __pcFinState = finPosGetCajaChicaSnapState(); }catch(_){ __pcFinState = { ok:false, code:'PARSE_ERROR', msg:'Error leyendo Finanzas.' }; }
+  const __pcToggleEl = document.getElementById('pc-init-from-fin-toggle');
+  const __pcToggleExists = !!__pcToggleEl;
+  const __pcToggleChecked = !!(ev && ev.pcInitFromFinanzasEnabled);
+  const __pcPending = (typeof pcIsEventRefreshPending === 'function') ? pcIsEventRefreshPending() : false;
+  const __pcPendingTarget = (typeof __A33_PC_EVENT_REFRESH_TARGET !== 'undefined') ? __A33_PC_EVENT_REFRESH_TARGET : null;
+  const __pcEventMatch = (!__pcPending) || (__pcPendingTarget != null && String(__pcPendingTarget) === String(evId));
+  const __pcBlockState = pcComputeCajaChicaBlockStateSync({
+    ev, evId, dayKey,
+    hist, dayClosed: isClosed, eventClosed, cajaActiva: true,
+    toggleExists: __pcToggleExists, toggleChecked: __pcToggleChecked,
+    finState: __pcFinState, eventMatch: __pcEventMatch
+  });
+  pcDiagSetBlockState(__pcBlockState);
+  pcRenderUnlockActions(__pcBlockState, evId, dayKey);
+
   setPettyReadOnly(readOnly, false);
-  updatePcFinSyncUI(ev, !eventClosed, readOnly, dayKey);
+  updatePcFinSyncUI(ev, !eventClosed, readOnly, dayKey, __pcBlockState);
+  try{ pcDiagSetLastSyncDisplay(pcGetLastSyncDisplayForContext(ev, pc, dayKey) || '—'); }catch(_){ }
+  try{ pcDiagSetLastSyncDisplay(pcGetLastSyncDisplayForContext(ev, pc, dayKey) || '—'); }catch(_){ }
 
   // Etapa 3: si hubo fallo/guardia y el render repintó, restaurar lo digitado (solo si es editable).
   if (!readOnly){
@@ -17342,7 +17809,7 @@ async function onCopyPettyInitialToFinal(){
     return;
   }
 
-  const ctx = await guardPettyWritePOS(evId);
+  const ctx = await guardPettyWritePOS(evId, { action:'Copiar Inicial → Final', diag:true, allowRestore:true });
   if (!ctx) return;
 
   const dayKey = getSelectedPcDay();
@@ -17428,7 +17895,7 @@ async function onSavePettyFinal(){
     return;
   }
 
-  const ctx = await guardPettyWritePOS(evId);
+  const ctx = await guardPettyWritePOS(evId, { action:'Guardar saldo final', diag:true, allowRestore:true });
   if (!ctx) return;
 
   const dayKey = getSelectedPcDay();
@@ -17598,7 +18065,7 @@ async function onRevertPettyMovement(originalId){
     return;
   }
 
-  const ctx = await guardPettyWritePOS(evId);
+  const ctx = await guardPettyWritePOS(evId, { action:'Revertir movimiento', diag:true, allowRestore:true });
   if (!ctx) return;
 
   const dayKey = getSelectedPcDay();
@@ -17709,7 +18176,7 @@ async function onAddPettyMovement(){
     return;
   }
 
-  const ctx = await guardPettyWritePOS(evId);
+  const ctx = await guardPettyWritePOS(evId, { action:'Agregar movimiento', diag:true, allowRestore:true });
   if (!ctx) return;
 
   const dayKey = getSelectedPcDay();
@@ -17845,7 +18312,7 @@ async function onUsePrevCierre(){
     return;
   }
 
-  const ctx = await guardPettyWritePOS(evId);
+  const ctx = await guardPettyWritePOS(evId, { action:'Usar cierre previo', diag:true, allowRestore:true });
   if (!ctx) return;
 
   const dayKey = getSelectedPcDay();
@@ -17920,7 +18387,15 @@ async function syncPettyInitialFromFinanzas(){
   const uiSnapBefore = pcCaptureInitialDenomsSnap();
 
   const setBusy = (busy)=>{
-    if (finBtn) finBtn.disabled = !!busy;
+    if (finBtn){
+      if (!!busy){
+        if (!finBtn.dataset.origText) finBtn.dataset.origText = (finBtn.textContent || 'Sincronizar');
+        finBtn.textContent = 'Sincronizando…';
+      } else {
+        if (finBtn.dataset.origText) finBtn.textContent = finBtn.dataset.origText;
+      }
+      finBtn.disabled = !!busy;
+    }
     if (!!busy && evId && dayKey){
       pcFinStatusSet('Sincronizando…', { sticky:true, evId, dayKey });
     }
@@ -18008,9 +18483,19 @@ async function syncPettyInitialFromFinanzas(){
     const st = finPosGetCajaChicaSnapState();
     if (!st.ok){
       if (st.code === 'FIN_NOT_CONFIG' || st.code === 'FIN_NOT_READY'){
-        fail('Caja Chica (Finanzas) no configurada. <a class="a33-link" href="../finanzas/index.html#tab=cajachica">Ir a Finanzas</a>', { toastMsg:'Caja Chica (Finanzas) no configurada', reasonKey: st.code, html:true });
+        fail('Caja Chica (Finanzas) no configurada. <a class="a33-link" href="../finanzas/index.html#tab=cajachica">Ir a Finanzas</a>', {
+          toastMsg:'Caja Chica (Finanzas) no configurada',
+          reasonKey: A33_PC_BLOCK_REASONS.FINANZAS_NO_CONFIGURADA,
+          html:true
+        });
       } else if (st.code === 'PARSE_ERROR'){
-        fail('Error: datos inválidos en Finanzas (parse).', { toastMsg:'Error de lectura: Caja Chica (Finanzas)', diagResult:'error', reasonKey:'PARSE_ERROR' });
+        const det = (st.err ? String(st.err) : '').trim();
+        const det2 = det ? (' Detalle: ' + det.slice(0, 80)) : '';
+        fail('Error: datos inválidos en Finanzas (parse).' + det2, {
+          toastMsg:'Error de lectura: Caja Chica (Finanzas)',
+          diagResult:'error',
+          reasonKey: A33_PC_BLOCK_REASONS.FINANZAS_PARSE_ERROR
+        });
       } else {
         fail(st.msg || 'Finanzas no configurada.', { toastMsg:'Finanzas no configurada', reasonKey:'FIN_BAD' });
       }
@@ -18027,9 +18512,26 @@ async function syncPettyInitialFromFinanzas(){
     // Evento alineado (fuente única) preflight
     const ctx = await guardPettyWritePOS(evId, { action: ACTION, diag: true, allowRestore: true });
     if (!ctx){
-      fail('No se aplicó: evento no alineado.', { toastMsg:'No se aplicó: evento no alineado', reasonKey:'GUARD_BLOCK' });
+      fail('No se aplicó: evento no alineado.', { toastMsg:'No se aplicó: evento no alineado', reasonKey: A33_PC_BLOCK_REASONS.EVENTO_DESFASE });
       return;
     }
+
+    // Idempotencia: no re-aplicar el mismo snapshot al mismo día
+    const snapSig = st.sig || ('h:' + String(st.hash || ''));
+    try{
+      const d0 = ensurePcDay(pc0, dayKey);
+      const meta0 = (d0 && d0.initialFromFinanzas && typeof d0.initialFromFinanzas === 'object') ? d0.initialFromFinanzas : null;
+      const prevSig = meta0 ? String(meta0.sig || '') : '';
+      if (prevSig && prevSig === snapSig){
+        const lastDisp = (meta0 && (meta0.appliedAtDisplay || (meta0.appliedAtISO ? fmtDDMMYYYYHHMM_POS(meta0.appliedAtISO) : ''))) || (ev ? (ev.pcInitFromFinanzasLastSyncDisplay || '') : '');
+        const msg = lastDisp ? ('Ya aplicado: ' + String(lastDisp)) : 'Ya aplicado.';
+        pcFinStatusSet(msg, { sticky:true, evId, dayKey });
+        try{ pcDiagMark(ACTION, 'ok', msg, { reasonKey:'ALREADY_APPLIED', snapSig, eventId: evId, dayKey }); }catch(_){ }
+        try{ pcDiagSetLastSyncDisplay(lastDisp || '—'); }catch(_){ }
+        showToast('Ya estaba aplicado (idempotente)', 'success', 2500);
+        return;
+      }
+    }catch(_){ }
 
     // Desde aquí, ya se permite escribir.
     setBusy(true);
@@ -18071,11 +18573,25 @@ async function syncPettyInitialFromFinanzas(){
         usd2[String(v)] = qty;
       });
 
+    const now = new Date();
+    const nowISO = now.toISOString();
+    let stamp = null;
+    try{ stamp = fmtDDMMYYYYHHMM_POS(now); }catch(e){ stamp = now.toLocaleString(); }
+
     day.initial = normalizePettySection({
       nio: nio2,
       usd: usd2,
-      savedAt: new Date().toISOString()
+      savedAt: nowISO
     });
+    // Meta de trazabilidad (no rompe data vieja)
+    day.initialFromFinanzas = {
+      sig: snapSig,
+      snapHash: String(st.hash || ''),
+      snapUpdatedAtISO: String(st.updatedAtISO || ''),
+      snapUpdatedAtDisplay: String(st.updatedAtDisplay || ''),
+      appliedAtISO: nowISO,
+      appliedAtDisplay: String(stamp || '')
+    };
 
     try{
       await savePettyCash(pc);
@@ -18092,6 +18608,16 @@ async function syncPettyInitialFromFinanzas(){
       fail('No se pudo aplicar desde Finanzas.', { toastMsg:'No se pudo aplicar desde Finanzas', diagResult:'error', reasonKey:'NO_WRITE' });
       return;
     }
+
+    // Confirmar trazabilidad/idempotencia persistida
+    try{
+      const aDay = ensurePcDay(pcAfter, dayKey);
+      const aSig = (aDay && aDay.initialFromFinanzas && typeof aDay.initialFromFinanzas === 'object') ? String(aDay.initialFromFinanzas.sig || '') : '';
+      if (!aSig || aSig !== snapSig){
+        fail('No se pudo aplicar desde Finanzas.', { toastMsg:'No se pudo aplicar desde Finanzas', diagResult:'error', reasonKey:'META_MISMATCH' });
+        return;
+      }
+    }catch(_){ }
 
     // Éxito confirmado: pintar desde lectura persistida y limpiar draft
     try{ pcClearDraftInitial(evId, dayKey); }catch(_){ }
@@ -18110,17 +18636,20 @@ async function syncPettyInitialFromFinanzas(){
     renderPettyCloseUI(check, false);
     await updateCopyInitialButtonState(pcAfter, dayKey, cashSalesNio, { eventId: evId });
 
-    // Guardar marca de última sincronización a nivel de evento
-    const now = new Date();
-    const stamp = fmtDDMMYYYYHHMM_POS(now);
+    // Guardar marca de última sincronización a nivel de evento (evidencia)
     const evToSave = ctx.ev || ev;
-    evToSave.pcInitFromFinanzasLastSync = now.toISOString();
-    evToSave.pcInitFromFinanzasLastSyncDisplay = stamp;
+    evToSave.pcInitFromFinanzasLastSync = nowISO;
+    evToSave.pcInitFromFinanzasLastSyncDisplay = String(stamp || '');
+    evToSave.pcInitFromFinanzasLastSnapSig = String(snapSig || '');
+    evToSave.pcInitFromFinanzasLastSnapHash = String(st.hash || '');
+    evToSave.pcInitFromFinanzasLastSnapUpdatedAtISO = String(st.updatedAtISO || '');
+    evToSave.pcInitFromFinanzasLastSnapUpdatedAtDisplay = String(st.updatedAtDisplay || '');
     await put('events', evToSave);
 
-    pcFinStatusSet('Aplicado desde Finanzas: ' + stamp, { sticky:true, evId, dayKey });
+    pcFinStatusSet('Aplicado desde Finanzas: ' + String(stamp || '—'), { sticky:true, evId, dayKey });
+    try{ pcDiagSetLastSyncDisplay(stamp || '—'); }catch(_){ }
     try{ toast('Aplicado desde Finanzas'); }catch(_){ }
-    try{ pcDiagMark(ACTION, 'ok', 'Aplicado desde Finanzas: ' + stamp, { reasonKey:'OK', eventId: evId, dayKey }); }catch(_){ }
+    try{ pcDiagMark(ACTION, 'ok', 'Aplicado desde Finanzas: ' + String(stamp || '—'), { reasonKey:'OK', eventId: evId, dayKey }); }catch(_){ }
 
   } finally {
     setBusy(false);
@@ -18325,6 +18854,40 @@ const btnAddMov = document.getElementById('pc-mov-add');
     btnGoResumen.addEventListener('click', (e)=>{
       e.preventDefault();
       setTab('resumen');
+    });
+  }
+
+  // Etapa 3: acciones de salida cuando Caja Chica está bloqueada
+  const uBack = document.getElementById('pc-unlock-back-operativo');
+  if (uBack){
+    uBack.addEventListener('click', (e)=>{
+      e.preventDefault();
+      try{ exitPettyHistoryMode(); }catch(_){ }
+    });
+  }
+
+  const uGoResumen = document.getElementById('pc-unlock-go-resumen-reopen');
+  if (uGoResumen){
+    uGoResumen.addEventListener('click', (e)=>{
+      e.preventDefault();
+      pcUnlockGoResumenReopenDay();
+    });
+  }
+
+  const uActivate = document.getElementById('pc-unlock-activate');
+  if (uActivate){
+    uActivate.addEventListener('click', (e)=>{
+      e.preventDefault();
+      const b = document.getElementById('pc-btn-activate');
+      if (b && !b.disabled){ b.click(); }
+    });
+  }
+
+  const uResync = document.getElementById('pc-unlock-resync-event');
+  if (uResync){
+    uResync.addEventListener('click', (e)=>{
+      e.preventDefault();
+      pcUnlockResyncEvent();
     });
   }
 
