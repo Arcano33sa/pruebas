@@ -532,7 +532,6 @@ function pcForensicNormalize(f){
     beforeSavedAt: pick('beforeSavedAt'),
     afterHash: pick('afterHash'),
     afterSavedAt: pick('afterSavedAt'),
-    expectedHash: pick('expectedHash'),
     extra: pick('extra')
   };
 }
@@ -564,42 +563,6 @@ function pcHashPettySection(section){
     return { hash: null, savedAt: null };
   }
 }
-
-function pcHashPettySectionContent(section){
-  try{
-    const s = normalizePettySection(section || null) || {};
-    const sortKeys = (obj)=> Object.keys(obj || {}).sort((a,b)=>{
-      const na = Number(a), nb = Number(b);
-      if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
-      return String(a).localeCompare(String(b));
-    });
-    const pack = (obj)=> sortKeys(obj).map(k=>`${k}:${Number(obj[k]||0)}`).join(',');
-    const str = `nio:${pack(s.nio)}|usd:${pack(s.usd)}`;
-    const hash = a33HashStringPOS(str);
-    return { hash: hash ? String(hash) : null };
-  }catch(_){
-    return { hash: null };
-  }
-}
-
-function pcComputeMonotonicISO(prevISO){
-  try{
-    const now0 = Date.now();
-    let prevMs = null;
-    if (prevISO){
-      const t = new Date(String(prevISO)).getTime();
-      if (!Number.isNaN(t)) prevMs = t;
-    }
-    let ms = now0;
-    if (prevMs != null && Number.isFinite(prevMs) && ms <= prevMs){
-      ms = prevMs + 1;
-    }
-    return new Date(ms).toISOString();
-  }catch(_){
-    return new Date().toISOString();
-  }
-}
-
 
 function pcHashPettyMovements(day){
   try{
@@ -758,8 +721,6 @@ function pcDiagRenderForensics(){
   const a = (o.afterHash || '—') + ' @ ' + pcForensicFmtSavedAt(o.afterSavedAt);
   set('pc-forensic-before', b, true);
   set('pc-forensic-after', a, true);
-
-  set('pc-forensic-expected', o.expectedHash || '—', true);
 
   const extra = document.getElementById('pc-forensic-extra');
   if (extra){
@@ -18297,7 +18258,6 @@ async function onSavePettyInitial(opts){
       beforeSavedAt: null,
       afterHash: '—',
       afterSavedAt: null,
-      expectedHash: '—',
       extra: ''
     };
     return pcForensicNormalize(Object.assign(base, patch || {}));
@@ -18375,31 +18335,7 @@ async function onSavePettyInitial(opts){
     usd[String(d)] = qty;
   });
 
-
-  // Detectar SIN CAMBIOS por contenido (ignorar savedAt)
-  const beforeContent = pcHashPettySectionContent(rawBeforeDay ? rawBeforeDay.initial : (dayBefore || {}).initial).hash;
-  const newContent = pcHashPettySectionContent({ nio, usd, savedAt: null }).hash;
-
-  if (beforeContent && newContent && beforeContent === newContent){
-    // Caso M2: mismos valores => no es error
-    try{ pcClearDraftInitial(evId, canonicalDayKey); }catch(_){ }
-    const pcSame = await getPettyCash(evId);
-    const cashSalesNioSame = await getCashSalesNioForDay(evId, dayKey);
-    updatePettySummaryUI(pcSame, dayKey, { cashSalesNio: cashSalesNioSame });
-    fillPettyInitialFromPc(pcSame, dayKey);
-    setPrevCierreUI(pcSame, dayKey);
-    try{ await updateCopyInitialButtonState(pcSame, dayKey, cashSalesNioSame, { eventId: evId }); }catch(_){ }
-    if (!silentOk){ showToast('Sin cambios', 'ok', 2600); }
-    diag('ok', 'Sin cambios.', {
-      causeCode:'OK',
-      techDetail:'Sin cambios: lo persistido ya coincide con lo digitado.',
-      forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, afterHash: bh.hash, afterSavedAt: prevInitialStamp, expectedHash: bh.hash, extra: 'no_change_content' })
-    });
-    return true;
-  }
-
-  // savedAt monotónico (anti mismo timestamp / anti fecha futura)
-  const nowISO = pcComputeMonotonicISO(prevInitialStamp);
+  const nowISO = new Date().toISOString();
   dayBefore.initial = normalizePettySection({ nio, usd, savedAt: nowISO });
   const expectedHash = pcHashPettySection(dayBefore.initial).hash;
 
@@ -18409,7 +18345,7 @@ async function onSavePettyInitial(opts){
     console.error('onSavePettyInitial save error', err);
     showPersistFailPOS('caja chica (saldo inicial)', err);
     const m = pcMapIdbErrorToTech(err);
-    diag('error', 'Error al guardar saldo inicial.', { causeCode:m.code, techDetail:m.detail, forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, expectedHash: expectedHash, extra: 'err: ' + String(err||'') }) });
+    diag('error', 'Error al guardar saldo inicial.', { causeCode:m.code, techDetail:m.detail, forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, extra: 'err: ' + String(err||'') }) });
     pcSetDraftInitial(evId, dayKey, uiSnap, 'SAVE_FAIL');
     return false;
   }
@@ -18426,35 +18362,16 @@ async function onSavePettyInitial(opts){
   if (!rawAfterDay){
     const code = (collisions && collisions.length > 1) ? 'DUP_DAY_COLLISION' : 'READBACK_MISMATCH';
     showToast('No se pudo confirmar el guardado ('+code+'). Tus valores se mantienen.', 'error', 5000);
-    diag('error', 'Guardado no confirmado (readback).', { causeCode: code, techDetail:'Se guardó, pero al re-leer no se encontró la llave canónica.', forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, afterHash: ah.hash, afterSavedAt: newStamp, expectedHash: expectedHash, extra: collExtra }) });
+    diag('error', 'Guardado no confirmado (readback).', { causeCode: code, techDetail:'Se guardó, pero al re-leer no se encontró la llave canónica.', forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, afterHash: ah.hash, afterSavedAt: newStamp, extra: collExtra }) });
     pcSetDraftInitial(evId, canonicalDayKey, uiSnap, 'POST_READ_MISMATCH');
     return false;
   }
 
-  const okByHash = !!(expectedHash && ah.hash && ah.hash === expectedHash);
-  if (!okByHash){
-    // WRITE_NO_CHANGE solo si realmente no cambió lo persistido
-    const noChange = !!(bh.hash && ah.hash && ah.hash === bh.hash);
-    if (noChange){
-      const code = (collisions && collisions.length > 1) ? 'DUP_DAY_COLLISION' : 'WRITE_NO_CHANGE';
-      showToast('No se pudo guardar el saldo inicial ('+code+')', 'error', 4500);
-      diag('error', 'No se pudo guardar el saldo inicial.', {
-        causeCode: code,
-        techDetail: (code==='DUP_DAY_COLLISION') ? 'Colisión de llaves por día.' : 'Se escribió pero no hubo cambio persistido.',
-        forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, afterHash: ah.hash, afterSavedAt: newStamp, expectedHash: expectedHash, extra: collExtra })
-      });
-      pcSetDraftInitial(evId, canonicalDayKey, uiSnap, 'NO_WRITE');
-      return false;
-    }
-
-    const code = (collisions && collisions.length > 1) ? 'DUP_DAY_COLLISION' : 'READBACK_MISMATCH';
-    showToast('No se pudo confirmar el guardado ('+code+'). Tus valores se mantienen.', 'error', 5000);
-    diag('error', 'Guardado no confirmado (hash mismatch).', {
-      causeCode: code,
-      techDetail:'Se guardó, pero el contenido re-leído no coincide con lo esperado.',
-      forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, afterHash: ah.hash, afterSavedAt: newStamp, expectedHash: expectedHash, extra: collExtra })
-    });
-    pcSetDraftInitial(evId, canonicalDayKey, uiSnap, 'POST_READ_MISMATCH');
+  if (!newStamp || newStamp == prevInitialStamp){
+    const code = (collisions && collisions.length > 1) ? 'DUP_DAY_COLLISION' : 'WRITE_NO_CHANGE';
+    showToast('No se pudo guardar el saldo inicial ('+code+')', 'error', 4500);
+    diag('error', 'No se pudo guardar el saldo inicial.', { causeCode: code, techDetail: (code==='DUP_DAY_COLLISION') ? 'Colisión de llaves por día.' : 'Se escribió pero no cambió lo re-leído.', forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, afterHash: ah.hash, afterSavedAt: newStamp, extra: collExtra + (collExtra ? ' | ' : '') + 'expectedHash: ' + expectedHash }) });
+    pcSetDraftInitial(evId, canonicalDayKey, uiSnap, 'NO_WRITE');
     return false;
   }
 
@@ -18465,8 +18382,7 @@ async function onSavePettyInitial(opts){
     if (mismatch){
       const code = (collisions && collisions.length > 1) ? 'DUP_DAY_COLLISION' : 'READBACK_MISMATCH';
       showToast('No se pudo confirmar el guardado ('+code+'). Tus valores se mantienen.', 'error', 5000);
-      diag('error', 'Guardado no confirmado (mismatch).', { causeCode: code, techDetail:'Se guardó, pero al re-leer no coincide con lo digitado.', forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, afterHash: ah.hash, afterSavedAt: newStamp, expectedHash: expectedHash, extra: (collExtra ? (collExtra + ' | ') : '') + 'mismatch: ' + String(mismatch) })
-      });
+      diag('error', 'Guardado no confirmado (mismatch).', { causeCode: code, techDetail:'Se guardó, pero al re-leer no coincide con lo digitado.', forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, afterHash: ah.hash, afterSavedAt: newStamp, extra: collExtra + (collExtra ? ' | ' : '') + 'mismatch: ' + String(mismatch) }) });
       pcSetDraftInitial(evId, canonicalDayKey, uiSnap, 'POST_READ_MISMATCH');
       return false;
     }
@@ -18498,8 +18414,7 @@ async function onSavePettyInitial(opts){
     showToast('Saldo inicial guardado', 'ok', 5000);
   }
 
-  diag('ok', 'Guardado.', { causeCode:'OK', techDetail:'Guardado y confirmado (readback).', forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, afterHash: ah.hash, afterSavedAt: newStamp, expectedHash: expectedHash, extra: (collExtra || '') })
-  });
+  diag('ok', 'Guardado.', { causeCode:'OK', techDetail:'Guardado y confirmado (readback).', forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, afterHash: ah.hash, afterSavedAt: newStamp, extra: (collExtra ? (collExtra + ' | ') : '') + 'expectedHash: ' + expectedHash }) });
 
   return true;
 
@@ -19216,7 +19131,6 @@ async function syncPettyInitialFromFinanzas(){
       beforeSavedAt: null,
       afterHash: '—',
       afterSavedAt: null,
-      expectedHash: '—',
       extra: ''
     };
     return pcForensicNormalize(Object.assign(base, patch || {}));
@@ -19464,8 +19378,8 @@ async function syncPettyInitialFromFinanzas(){
         usd2[String(v)] = qty;
       });
 
-    const nowISO = pcComputeMonotonicISO(prevInitialStamp);
-    const now = new Date(nowISO);
+    const now = new Date();
+    const nowISO = now.toISOString();
     let stamp = null;
     try{ stamp = fmtDDMMYYYYHHMM_POS(now); }catch(e){ stamp = now.toLocaleString(); }
 
@@ -19526,43 +19440,19 @@ async function syncPettyInitialFromFinanzas(){
           beforeSavedAt: b.savedAt,
           afterHash: a.hash,
           afterSavedAt: a.savedAt,
-          expectedHash: expectedHash,
           extra: collExtra
         })
       });
       return;
     }
 
-    const okByHash = !!(expectedHash && a.hash && a.hash === expectedHash);
-    if (!okByHash){
-      const noChange = !!(b.hash && a.hash && a.hash === b.hash);
-      if (noChange){
-        const code = (collKeys && collKeys.length > 1) ? 'DUP_DAY_COLLISION' : 'WRITE_NO_CHANGE';
-        fail('No se aplicó: no hubo cambio persistido.', {
-          toastMsg: 'No se aplicó',
-          diagResult: 'error',
-          causeCode: code,
-          techDetail: (code === 'DUP_DAY_COLLISION') ? 'Colisión por llaves distintas del mismo día.' : 'Se escribió pero no hubo cambio persistido.',
-          extra: collExtra,
-          forensic: mkForensic({
-            snapshotSig: snapSig,
-            beforeHash: b.hash,
-            beforeSavedAt: b.savedAt,
-            afterHash: a.hash,
-            afterSavedAt: a.savedAt,
-            expectedHash: expectedHash,
-            extra: (collExtra || '')
-          })
-        });
-        return;
-      }
-
-      const code = (collKeys && collKeys.length > 1) ? 'DUP_DAY_COLLISION' : 'READBACK_MISMATCH';
-      fail('No se aplicó: relectura inconsistente.', {
+    if (!a.savedAt || a.savedAt == prevInitialStamp){
+      const code = (collKeys && collKeys.length > 1) ? 'DUP_DAY_COLLISION' : 'WRITE_NO_CHANGE';
+      fail('No se aplicó: no hubo cambio persistido.', {
         toastMsg: 'No se aplicó',
         diagResult: 'error',
         causeCode: code,
-        techDetail: 'Se guardó, pero el contenido re-leído no coincide con lo esperado.',
+        techDetail: (code === 'DUP_DAY_COLLISION') ? 'Colisión por llaves distintas del mismo día.' : 'Se escribió pero la relectura no cambió.',
         extra: collExtra,
         forensic: mkForensic({
           snapshotSig: snapSig,
@@ -19570,8 +19460,7 @@ async function syncPettyInitialFromFinanzas(){
           beforeSavedAt: b.savedAt,
           afterHash: a.hash,
           afterSavedAt: a.savedAt,
-          expectedHash: expectedHash,
-          extra: collExtra
+          extra: (collExtra || '')
         })
       });
       return;
@@ -19653,8 +19542,7 @@ async function syncPettyInitialFromFinanzas(){
           beforeSavedAt: b.savedAt,
           afterHash: a.hash,
           afterSavedAt: a.savedAt,
-          expectedHash: expectedHash,
-          extra: collExtra || ''
+          extra: collExtra || ('expected=' + pcDiagTrunc(expectedHash, 18))
         })
       });
     }catch(_){ }
