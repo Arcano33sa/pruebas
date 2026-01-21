@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.13&r=2">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.20&r=2">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.13&r=2">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.13" />
+<link rel="stylesheet" href="styles.css?v=4.20.20&r=2">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.20" />
 </head>
 <body>
   <header class="a33-header" role="banner">
@@ -539,11 +539,38 @@
         <div><span class="muted">UI:</span> <span id="pc-diag-ui">—</span></div>
         <div><span class="muted">Último:</span> <span id="pc-diag-action">—</span> <span id="pc-diag-result" class="badge">—</span></div>
         <div><span class="muted">Último Sync:</span> <span id="pc-diag-last-sync">—</span></div>
-        <div class="pc-diag-reason"><span class="muted">Motivo técnico:</span> <span id="pc-diag-reason">OK</span></div>
+        <div><span class="muted">Saldo inicial:</span> <span id="pc-diag-sec-initial" class="badge">—</span></div>
+        <div><span class="muted">Arqueo final:</span> <span id="pc-diag-sec-final" class="badge">—</span></div>
+        <div><span class="muted">Agregar mov:</span> <span id="pc-diag-sec-movform" class="badge">—</span></div>
+        <div><span class="muted">Días (keys):</span> <span id="pc-legacy-total-days">—</span></div>
+        <div><span class="muted">Llaves legacy:</span> <span id="pc-legacy-keys-found">—</span></div>
+        <div><span class="muted">Colisiones:</span> <span id="pc-legacy-collisions-found">—</span></div>
+        <div class="pc-diag-reason"><span class="muted">Mov reason:</span> <span id="pc-diag-sec-movform-code">—</span></div>
+        <div class="pc-diag-reason"><span class="muted">Motivo (Reason Code):</span> <span id="pc-diag-reason">OK</span></div>
         <div class="pc-diag-detail-row" id="pc-diag-detail-row" style="display:none"><span class="muted">Detalle:</span> <span id="pc-diag-detail">—</span></div>
 </div>
 
       <div id="pc-diag-flags" class="pc-diag-flags" aria-label="Flags de estado"></div>
+
+      <div id="pc-guard-decision" class="pc-guard" aria-label="Guard Decision">
+        <div class="muted" style="margin:6px 0 4px 0; font-size:0.85rem">Guard Decision</div>
+        <table class="pc-guard-table">
+          <tbody>
+            <tr>
+              <th>Manual</th>
+              <td id="pc-guard-manual-ok" class="pc-guard-pill">—</td>
+              <td id="pc-guard-manual-reason" class="pc-guard-reason">—</td>
+              <td id="pc-guard-manual-action" class="pc-guard-action">—</td>
+            </tr>
+            <tr>
+              <th>Sync</th>
+              <td id="pc-guard-sync-ok" class="pc-guard-pill">—</td>
+              <td id="pc-guard-sync-reason" class="pc-guard-reason">—</td>
+              <td id="pc-guard-sync-action" class="pc-guard-action">—</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <details id="pc-diag-forensics" class="pc-diag-forensics">
         <summary class="muted">Detalle (forense)</summary>
@@ -552,18 +579,51 @@
           <div><span class="muted">dayKey:</span> <span id="pc-forensic-daykey">—</span></div>
           <div><span class="muted">normalizedDay:</span> <span id="pc-forensic-ymd">—</span></div>
           <div><span class="muted">snapshotSig:</span> <span id="pc-forensic-snapsig">—</span></div>
+          <div><span class="muted">writeKey:</span> <span id="pc-forensic-writekey">—</span></div>
+          <div><span class="muted">readKey:</span> <span id="pc-forensic-readkey">—</span></div>
           <div><span class="muted">before:</span> <span id="pc-forensic-before">—</span></div>
           <div><span class="muted">after:</span> <span id="pc-forensic-after">—</span></div>
+          <div><span class="muted">before (ess):</span> <span id="pc-forensic-before-ess">—</span></div>
+          <div><span class="muted">after (ess):</span> <span id="pc-forensic-after-ess">—</span></div>
+          <div><span class="muted">expected (ess):</span> <span id="pc-forensic-expected-ess">—</span></div>
           <div><span class="muted">expectedHash:</span> <span id="pc-forensic-expected">—</span></div>
         </div>
         <div id="pc-forensic-extra" class="muted" style="margin-top:6px"></div>
+      </details>
+
+      <details id="pc-legacy-inventory" class="pc-diag-forensics">
+        <summary class="muted">Legacy keys (inventario)</summary>
+        <div class="muted" style="margin-top:6px">Top 10 colisiones por día normalizado</div>
+        <div id="pc-legacy-collisions-top" class="pc-diag-log" style="margin-top:8px">—</div>
+      </details>
+
+      <details id="pc-consolidation-plan" class="pc-diag-forensics">
+        <summary class="muted">Consolidation Plan (preview)</summary>
+        <div class="muted" style="margin-top:6px">Colisiones detectadas: <span id="pc-plan-collisions-found">—</span></div>
+        <div id="pc-plan-collisions-top" class="pc-diag-log" style="margin-top:8px">—</div>
+        <div class="muted" style="margin-top:6px; font-size:0.82rem">Export: a33_pc_consolidation_plan_v1 (últimos 5)</div>
       </details>
 
       <div id="pc-unlock-actions" class="pc-diag-actions" style="display:none">
         <button id="pc-unlock-back-operativo" class="btn-warn btn-mini btn-pill" type="button" style="display:none">Volver al día operativo</button>
         <button id="pc-unlock-go-resumen-reopen" class="btn-primary btn-mini btn-pill" type="button" style="display:none">Ir a Resumen / Reabrir día</button>
         <button id="pc-unlock-activate" class="btn-primary btn-mini btn-pill" type="button" style="display:none">Activar Caja Chica</button>
-        <button id="pc-unlock-resync-event" class="btn-primary btn-mini btn-pill" type="button" style="display:none">Re-sincronizar evento</button>
+        <button id="pc-unlock-resync-event" class="btn-primary btn-mini btn-pill" type="button" style="display:none">Activar evento correcto</button>
+      </div>
+
+      <div class="pc-selfcheck">
+        <div class="pc-selfcheck-top">
+          <button id="pc-selfcheck-run" class="btn-outline btn-mini btn-pill" type="button">Self-check</button>
+          <span id="pc-selfcheck-meta" class="pc-selfcheck-meta muted"></span>
+        </div>
+        <table class="pc-selfcheck-table">
+          <thead>
+            <tr><th>Test</th><th>PASS/FAIL</th><th>Reason</th><th>Detalle corto</th></tr>
+          </thead>
+          <tbody id="pc-selfcheck-tbody">
+            <tr><td colspan="4" class="muted">— Sin ejecución —</td></tr>
+          </tbody>
+        </table>
       </div>
 
       <details id="pc-diag-history" class="pc-diag-history">
@@ -659,7 +719,7 @@
             <span class="slider"></span>
           </label>
           <button id="pc-init-from-fin-sync" class="btn-primary btn-pill btn-pill-mini" type="button" disabled>Sincronizar</button>
-          <span id="pc-init-from-fin-status" class="muted" style="font-size:0.85rem"></span>
+          <div id="pc-init-from-fin-status" class="pc-snap-status"></div>
         </div>
 
         <div class="actions end">
@@ -670,7 +730,7 @@
 
       <fieldset id="pc-mov-fieldset" class="pc-lock-fieldset">
       <div class="card petty-mov">
-        <h3>Movimientos de Caja Chica</h3>
+        <h3>Movimientos de Caja Chica <span id="pc-mov-form-state" class="badge">—</span></h3>
         <div class="row">
           <div class="col">
             <label for="pc-mov-date">Fecha</label>
@@ -873,6 +933,23 @@
       <div id="summary-close-return" class="info" style="display:none; margin-top:10px"></div>
       <div id="summary-close-note" class="muted" style="margin-top:8px; display:none;"></div>
       <div id="summary-close-blocker" class="warn" style="display:none; margin-top:10px"></div>
+
+      <!-- Etapa 5: Estado técnico de cierre (closureKey/lastClosureKey/lockRecord) -->
+      <details id="summary-close-tech" class="pc-diag-forensics">
+        <summary>
+          <span class="pc-diag-title">Estado técnico</span>
+          <span class="muted" style="font-size:11px; margin-left:6px;">(closureKey · lastClosureKey · lockRecord)</span>
+        </summary>
+        <div class="pc-forensic-grid">
+          <div><b>closureKey:</b> <span id="summary-tech-closurekey" class="pc-forensic-mono">—</span></div>
+          <div><b>lastClosureKey:</b> <span id="summary-tech-lastclosurekey" class="pc-forensic-mono">—</span></div>
+          <div><b>lockKey:</b> <span id="summary-tech-lockkey" class="pc-forensic-mono">—</span></div>
+          <div><b>lastVersion:</b> <span id="summary-tech-version" class="pc-forensic-mono">—</span></div>
+        </div>
+        <div class="muted" style="margin-top:6px; font-size:11px;">lockRecord:</div>
+        <pre id="summary-tech-lockrecord" class="pc-forensic-mono" style="white-space:pre-wrap; word-break:break-word; margin:6px 0 0 0; max-width:100%;"></pre>
+      </details>
+
     </div>
 
     <!-- Resumen · Cliente (filtro) -->
@@ -1494,14 +1571,14 @@
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
-<script src="/assets/js/a33-storage.js?v=4.20.13"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.13"></script>
-<script src="/assets/js/a33-auth.js?v=4.20.13"></script>
-<script src="/assets/js/a33-build.js?v=4.20.13"></script>
+<script src="/assets/js/a33-storage.js?v=4.20.20"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.20"></script>
+<script src="/assets/js/a33-auth.js?v=4.20.20"></script>
+<script src="/assets/js/a33-build.js?v=4.20.20"></script>
 <script>
   (function(){
-    try{
-      const v = (window.A33_VERSION || '4.20.13').toString();
+    try{      const v = '4.20.20';
+      try{ window.A33_VERSION = v; }catch(_){ }
       // POS: bump revision local (solo este modulo) para forzar limpieza de caches
       try{ window.A33_ASSET_REV = '2'; }catch(_){ }
       try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r2').toString(); }catch(_){ }
@@ -1544,11 +1621,11 @@
     }
   })();
 </script>
-<script src="app.js?v=4.20.13&r=2"></script>
-<script src="/assets/js/a33-input-ux.js?v=4.20.13"></script>
+<script src="app.js?v=4.20.20&r=2"></script>
+<script src="/assets/js/a33-input-ux.js?v=4.20.20"></script>
 <script>
   (function(){
-    const BUILD = (window.A33_VERSION || '4.20.13').toString();
+    const BUILD = (window.A33_VERSION || '4.20.20').toString();
     const REV = (window.A33_ASSET_REV || '1').toString();
     const SW_URL = './sw.js?v=' + encodeURIComponent(BUILD) + '&r=' + encodeURIComponent(REV);
     const btn = document.getElementById('btn-update');

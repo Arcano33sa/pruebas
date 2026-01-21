@@ -562,6 +562,18 @@ small.muted{color:var(--muted)}
 .pc-chip b{font-weight:800}
 .pc-chip .muted{opacity:0.85}
 
+/* Etapa 6: Snapshot Finanzas -> POS (solo diagnóstico) */
+.pc-snap-status{display:block;margin-top:6px;font-size:0.85rem;line-height:1.25;max-width:100%;}
+.pc-snap-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap;max-width:100%;}
+.pc-snap-reason{font-weight:600}
+.pc-snap-meta{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;max-width:100%;}
+.pc-dot{opacity:.6}
+.pc-sema{display:inline-flex;align-items:center;justify-content:center;padding:2px 10px;border-radius:999px;font-size:10px;letter-spacing:.10em;text-transform:uppercase;font-weight:800;border:1px solid rgba(255,255,255,0.12);}
+.pc-sema.ok{background:#0f1b0f;color:#b6f0b6;border-color:#214021;}
+.pc-sema.missing{background:#2a1b0f;color:#ffd7a1;border-color:#5a3d12;}
+.pc-sema.invalid{background:#2a0f0f;color:#ffb6b6;border-color:#5a1212;}
+
+
 
 /* Etapa 3: Historial de Estado (Caja Chica) */
 .pc-diag-history{margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,215,0,0.18)}
@@ -579,12 +591,25 @@ small.muted{color:var(--muted)}
 .pc-diag-log{margin-top:8px;display:flex;flex-direction:column;gap:6px;font-size:0.85rem}
 .pc-diag-log-item{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .pc-diag-log-item span{opacity:0.92}
+#pc-legacy-collisions-top .pc-diag-log-item span{word-break:break-word;white-space:normal;max-width:100%}
+
+/* Caja Chica: Consolidation Plan (READ-ONLY) */
+.pc-plan-item{display:block;padding:8px 10px;border:1px solid rgba(255,215,0,0.14);border-radius:14px;background:rgba(0,0,0,0.10)}
+.pc-plan-title{font-weight:700;margin-bottom:4px;opacity:0.96}
+.pc-plan-line{opacity:0.88;word-break:break-word;white-space:normal}
 
 .pc-diag .badge{font-size:10px;padding:2px 8px;letter-spacing:.10em;text-transform:uppercase}
 .pc-diag .pc-badge-ok{background:#0f1b0f;color:#b6f0b6;border:1px solid #214021}
 .pc-diag .pc-badge-warn{background:#2a1b0f;color:#ffd7a1;border:1px solid #5a3d12}
 .pc-diag .pc-badge-err{background:#2a0f0f;color:#ffb6b6;border:1px solid #5a1212}
 .pc-diag .pc-badge-run{background:#0f1720;color:#b7d6ff;border:1px solid #12325a}
+
+/* Badges reutilizables fuera del panel Estado (Etapa 8C) */
+.badge.pc-badge-ok{background:#0f1b0f;color:#b6f0b6;border:1px solid #214021}
+.badge.pc-badge-warn{background:#2a1b0f;color:#ffd7a1;border:1px solid #5a3d12}
+.badge.pc-badge-err{background:#2a0f0f;color:#ffb6b6;border:1px solid #5a1212}
+.badge.pc-badge-run{background:#0f1720;color:#b7d6ff;border:1px solid #12325a}
+
 /* Modal */
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50;padding:20px}
 .modal .panel{background:#151515;border:1px solid #2a2a2a;border-radius:14px;max-width:1000px;width:100%;max-height:85vh;overflow:auto;padding:16px}
@@ -1338,3 +1363,71 @@ small.muted{color:var(--muted)}
 .consolidated-row{display:flex; justify-content:space-between; gap:10px; font-size:13px}
 .consolidated-row b{font-weight:850; white-space:nowrap}
 .consolidated-row-mini{font-size:12px; opacity:.95}
+
+/* -----------------------------
+   Caja Chica · Guard Decision (Etapa 4)
+   Tabla interna (Manual vs Sync)
+----------------------------- */
+.pc-guard{ margin-top:8px; }
+.pc-guard-table{ width:100%; border-collapse:collapse; table-layout:fixed; }
+.pc-guard-table th{ text-align:left; font-size:12px; padding:6px 6px; width:64px; color:rgba(255,255,255,0.72); }
+.pc-guard-table td{ font-size:12px; padding:6px 6px; vertical-align:top; overflow-wrap:anywhere; word-break:break-word; }
+.pc-guard-table tr + tr td,
+.pc-guard-table tr + tr th{ border-top:1px solid rgba(255,255,255,0.08); }
+
+.pc-guard-pill{ white-space:nowrap; font-weight:850; border:1px solid rgba(255,255,255,0.15); border-radius:999px; padding:2px 8px; display:inline-block; }
+.pc-guard-pill.ok{ border-color: rgba(29,185,84,0.45); }
+.pc-guard-pill.blocked{ border-color: rgba(255,68,68,0.5); }
+
+.pc-guard-reason{ color: rgba(255,255,255,0.88); }
+.pc-guard-action{ color: rgba(255,255,255,0.68); }
+
+@media (max-width: 520px){
+  .pc-guard-table th{ width:56px; }
+  .pc-guard-table td{ padding:6px 4px; }
+}
+
+
+/* --- Caja Chica: Self-check (Etapa 9E) --- */
+.pc-selfcheck{
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+.pc-selfcheck-top{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+  margin-bottom: 8px;
+}
+.pc-selfcheck-meta{
+  font-size:0.82rem;
+}
+.pc-selfcheck-table{
+  width:100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 0.86rem;
+}
+.pc-selfcheck-table th,
+.pc-selfcheck-table td{
+  padding: 6px 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.pc-selfcheck-table th{
+  font-size: 0.82rem;
+  color: rgba(255,255,255,0.75);
+  font-weight: 700;
+}
+.pc-selfcheck-detail{
+  font-size: 0.82rem;
+  color: rgba(255,255,255,0.85);
+}
+.pc-pass{ font-weight: 800; }
+.pc-fail{ font-weight: 800; }
+.pc-selfcheck-table tr.pass td{ color: rgba(255,255,255,0.92); }
+.pc-selfcheck-table tr.fail td{ color: rgba(255,210,210,0.95); }
