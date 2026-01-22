@@ -117,9 +117,9 @@ async function getSaleByUidPOS(uid){
     }
   }
 }
-// --- Caja Chica: gatekeeper duro (Etapa 2)
+// --- Sección: gatekeeper duro (Etapa 2)
 let __A33_PC_LAST_RENDER_EVENT_ID = null;
-// Etapa 2 (Caja Chica): marca de transición cuando cambia el evento activo (meta.currentEventId)
+// Etapa 2 (Sección): marca de transición cuando cambia el evento activo (meta.currentEventId)
 // Evita guardados/sync mientras la UI aún no ha terminado de refrescar.
 let __A33_PC_EVENT_REFRESH_PENDING = false;
 let __A33_PC_EVENT_REFRESH_TARGET = null;
@@ -209,13 +209,13 @@ function pcRestoreInputsForRetry(snap){
 
 
 
-// --- Caja Chica: draft de saldo inicial (Etapa 3)
+// --- sección: draft de registro de apertura (Etapa 3)
 let __A33_PC_DRAFT_INITIAL = null; // { evId, dayKey, snap, reasonKey, atMs }
 const A33_PC_DRAFT_TTL_MS = 10 * 60 * 1000; // 10 min
 
 const A33_PC_DRAFT_STORAGE_KEY = 'a33_pc_draft_initial_v1';
 
-// --- Caja Chica: draft de arqueo final (Etapa 8B)
+// --- Sección: draft de registro de cierre (Etapa 8B)
 let __A33_PC_DRAFT_FINAL = null; // { evId, dayKey, snap, reasonKey, atMs }
 const A33_PC_DRAFT_FINAL_STORAGE_KEY = 'a33_pc_draft_final_v1';
 
@@ -247,7 +247,7 @@ function pcDraftFinalPersistClear(){
 
 
 
-// --- Caja Chica: draft de Formulario de Movimientos (Etapa 8C)
+// --- Sección: draft de Formulario de Movimientos (Etapa 8C)
 let __A33_PC_DRAFT_MOVFORM = null; // { evId, dayKey, snap, reasonKey, atMs }
 const A33_PC_DRAFT_MOVFORM_STORAGE_KEY = 'a33_pc_draft_movform_v1';
 
@@ -333,7 +333,7 @@ function pcUpdateDraftMovFormFromUI(reasonKey){
   }catch(_){ }
 }
 
-// --- Caja Chica: CONTRATO congelado (Etapa 1/9)
+// --- Sección: CONTRATO congelado (Etapa 1/9)
 // Nota: solo constantes; NO cambia lógica.
 const A33_PC_CONTRACT = Object.freeze({
   POS_DB: Object.freeze({
@@ -519,7 +519,7 @@ function pcUpdateDraftInitialFromUI(reasonKey){
 }
 
 
-// --- Caja Chica: draft de arqueo final (Etapa 8B)
+// --- Sección: draft de registro de cierre (Etapa 8B)
 function pcCaptureFinalDenomsSnap(){
   const snap = {};
   try{
@@ -637,7 +637,7 @@ function getPcLastRenderEventId(){
   return __A33_PC_LAST_RENDER_EVENT_ID;
 }
 
-// --- Caja Chica: Estado / diagnóstico visible (Etapa 1)
+// --- Sección: Estado / diagnóstico visible (Etapa 1)
 let __A33_PC_DIAG = {
   activeEventId: null,
   activeEventName: null,
@@ -698,7 +698,7 @@ function pcDiagResultClass(r){
 
 
 
-// --- Caja Chica: UI anti-borrado (Etapa 8A) — estado local por sección (Solo Saldo Inicial)
+// --- Sección: UI anti-borrado (Etapa 8A) — estado local por sección (Solo Registro de apertura)
 const A33_PC_SECTION_STATES = Object.freeze({
   DIRTY: 'DIRTY',
   SAVING: 'SAVING',
@@ -1020,7 +1020,7 @@ function pcFinalSyncUIStateOnRenderPOS(evId, dayKey, restoredDraft){
 }
 
 
-// --- Caja Chica: Catálogo de motivos + flags (Etapa 2)
+// --- Sección: Catálogo de motivos + flags (Etapa 2)
 const A33_PC_BLOCK_REASONS = {
   OK: 'OK',
   MODO_HISTORICO: 'MODO_HISTORICO',
@@ -1049,7 +1049,7 @@ function pcReasonFromBlockReason(br){
 }
 
 
-// --- Caja Chica: Reason Codes (contrato congelado) — Etapa 1/9
+// --- Sección: Reason Codes (contrato congelado) — Etapa 1/9
 // Nota: estos Reason Codes se muestran en UI (panel Estado) para diagnosticar sin consola.
 // Regla: en UI NO existe "Motivo: —". Si no hay bloqueo/fallo, el Reason Code es OK.
 const A33_PC_REASON_CODES = {
@@ -1361,7 +1361,7 @@ function pcWithTimeout(promise, ms, code, msg){
 }
 
 
-// --- Caja Chica: Self-check guiado (<=3s) — Etapa 9E/9
+// --- Sección: Self-check guiado (<=3s) — Etapa 9E/9
 const A33_PC_SELFCHK_META_KEY = 'pc_selfcheck_nonce';
 let __A33_PC_SELFCHK = { running:false, lastAtISO:null, ms:null, results:[] };
 
@@ -1646,7 +1646,7 @@ function pcComputeCajaChicaBlockStateSync(ctx){
   } else if (dayClosed){
     hardBlock(A33_PC_BLOCK_REASONS.DIA_CERRADO, 'Día cerrado.');
   } else if (!cajaActiva){
-    hardBlock(A33_PC_BLOCK_REASONS.CAJA_CHICA_DESACTIVADA, 'Caja Chica desactivada en este evento.');
+    hardBlock(A33_PC_BLOCK_REASONS.CAJA_CHICA_DESACTIVADA, 'Opción desactivada en este evento.');
   }
 
   // Bloqueos SOLO de sincronización
@@ -1662,7 +1662,7 @@ function pcComputeCajaChicaBlockStateSync(ctx){
           if (code === 'FIN_NOT_CONFIG' || code === 'FIN_NOT_READY'){
             syncBlocked = true;
             syncReason = A33_PC_BLOCK_REASONS.FINANZAS_NO_CONFIGURADA;
-            syncDetail = finState.msg ? String(finState.msg) : 'Caja Chica (Finanzas) no configurada.';
+            syncDetail = finState.msg ? String(finState.msg) : 'Finanzas no configurada.';
           } else if (code === 'PARSE_ERROR'){
             syncBlocked = true;
             syncReason = A33_PC_BLOCK_REASONS.FINANZAS_PARSE_ERROR;
@@ -1761,7 +1761,7 @@ function pcGuardDecisionSuggestedAction(lane, reason, bs){
     if (!r || r === A33_PC_BLOCK_REASONS.OK) return '—';
     if (r === A33_PC_BLOCK_REASONS.MODO_HISTORICO) return 'Volver al día operativo';
     if (r === A33_PC_BLOCK_REASONS.DIA_CERRADO) return 'Ir a Resumen / Reabrir día';
-    if (r === A33_PC_BLOCK_REASONS.CAJA_CHICA_DESACTIVADA) return 'Activar Caja Chica';
+    if (r === A33_PC_BLOCK_REASONS.CAJA_CHICA_DESACTIVADA) return 'Activar';
     if (r === A33_PC_BLOCK_REASONS.MISMATCH_EVENTO) return 'Activar evento correcto';
     if (lane === 'sync'){
       if (r === A33_PC_BLOCK_REASONS.TOGGLE_SYNC_OFF) return 'Encender switch';
@@ -2652,7 +2652,7 @@ async function deleteFinanzasEntriesForSalePOS(saleId) {
 
 
 // ------------------------------
-// POS → Finanzas: Caja Chica (movimientos manuales)
+// POS → Finanzas: sección (movimientos manuales)
 // ------------------------------
 async function ensureFinanzasPettyCashAccounts(preferredIncomeCode){
   try{
@@ -2732,7 +2732,7 @@ async function resolvePettyCashIncomeAccountCode(){
 }
 
 async function postPettyCashMovementToFinanzas(eventId, dayKey, mov){
-  // Etapa 2 (POS→Finanzas): Caja Chica ya NO postea movimientos individuales.
+  // Etapa 2 (POS→Finanzas): Sección ya NO postea movimientos individuales.
   // Se consolida dentro del cierre diario POS_DAILY_CLOSE (1 asiento por día/evento).
   // Mantener esta función como NO-OP evita romper UX y conserva auditoría interna en POS.
   return;
@@ -2874,11 +2874,11 @@ async function postPettyCashMovementToFinanzas(eventId, dayKey, mov){
     desc = `${desc} (USD ${round2(amountOrig)} @ ${round2(fxUsed)} = C$ ${amountNio.toFixed(2)})`;
   }
 
-  let memo = `[POS Caja Chica] ${kindTag} - ${desc || '—'} - ${eventName} - ${mvDate}`;
+  let memo = `[POS] ${kindTag} - ${desc || '—'} - ${eventName} - ${mvDate}`;
   if (isReversal){
     const motivo = String(mov.reversalMotivo || '').trim();
     const o = (mov.reversalOf != null) ? `#${mov.reversalOf}` : '—';
-    memo = `ANULACIÓN Caja Chica POS — Reverso de movimiento ${o} — Motivo: ${motivo || '—'}`;
+    memo = `ANULACIÓN POS — Reverso de movimiento ${o} — Motivo: ${motivo || '—'}`;
     // Mantener contexto del evento/fecha para auditoría
     memo += ` — ${eventName} — ${mvDate}`;
     if (mov.currency === 'USD' && fxUsed){
@@ -3099,7 +3099,7 @@ function del(name, key){
 
 
 async function setMeta(key, value){ 
-  // Caja Chica: cuando cambia el evento activo, marcar transición hasta que renderCajaChica quede alineado.
+  // Sección: cuando cambia el evento activo, marcar transición hasta que renderCajaChica quede alineado.
   try{
     if (key === 'currentEventId') pcMarkEventRefreshPending(value);
   }catch(_){ }
@@ -3748,7 +3748,7 @@ async function resetOperationalStateOnEventSwitchPOS(){
     if (btn) btn.setAttribute('aria-expanded', 'false');
   }catch(_){ }
 
-  // 7) Caja Chica: si estaba en histórico, volver a modo operativo (solo UI)
+  // 7) Sección: si estaba en histórico, volver a modo operativo (solo UI)
   try{
     if (typeof isPettyHistoryMode === 'function' && isPettyHistoryMode()) exitPettyHistoryMode();
   }catch(_){ }
@@ -5052,11 +5052,11 @@ async function ensureGroupsAvailableAtStartupPOS(){
   }
   return { eventsCount: 0, groupsCount: after.length, repaired };
 }
-// --- Caja Chica: helpers y denominaciones
+// --- sección: helpers y denominaciones
 const NIO_DENOMS = [1,5,10,20,50,100,200,500,1000];
 const USD_DENOMS = [1,5,10,20,50,100];
 
-// --- Caja Chica: limpieza automática de llaves de día (Etapa 2)
+// --- sección: limpieza automática de llaves de día (Etapa 2)
 let __A33_PC_PENDING_CLEANUP = null;
 const A33_PC_CLEANUP_AUDIT_KEY = 'a33_pc_cleanup_audit_v1';
 
@@ -5184,7 +5184,7 @@ function pcComputeCleanupReport(eventId, raw, coercedPc){
   return report;
 }
 
-// --- Caja Chica: Inventario READ-ONLY de llaves legacy (Etapa 9A/1)
+// --- Sección: Inventario READ-ONLY de llaves legacy (Etapa 9A/1)
 function pcIsValidYMDKeyStrict(k){
   try{
     if (typeof k !== 'string') return false;
@@ -6043,7 +6043,7 @@ function pcForensicSourcesRun(eventId, raw){
   }catch(_){ }
 }
 
-// --- Caja Chica: Consolidation Plan determinista (READ-ONLY) — Etapa 9B/2
+// --- Sección: Consolidation Plan determinista (READ-ONLY) — Etapa 9B/2
 function pcPlanHistoryLoad(){
   try{
     const raw = (localStorage.getItem(A33_PC_CONSOLIDATION_PLAN_KEY) || '').toString();
@@ -6971,10 +6971,10 @@ function pcEmitPendingCleanupDiag(eventId, eventName){
       const day = it.day;
       const keys = Number(it.keys || 0) || 0;
       if (it.hadDup){
-        pcDiagMark('Caja Chica · Limpieza', 'ok', `Se consolidaron ${keys} llaves duplicadas → ${day}`, { eventId, day, keys, rawKeys: it.rawKeys || [] });
+        pcDiagMark('Sección · Limpieza', 'ok', `Se consolidaron ${keys} llaves duplicadas → ${day}`, { eventId, day, keys, rawKeys: it.rawKeys || [] });
       } else if (it.hadNonCanonical){
         const from = (it.rawKeys && it.rawKeys[0]) ? it.rawKeys[0] : '';
-        pcDiagMark('Caja Chica · Limpieza', 'ok', `Se normalizó llave ${from ? ('"'+from+'" ') : ''}→ ${day}`, { eventId, day, keys: 1, rawKeys: it.rawKeys || [] });
+        pcDiagMark('Sección · Limpieza', 'ok', `Se normalizó llave ${from ? ('"'+from+'" ') : ''}→ ${day}`, { eventId, day, keys: 1, rawKeys: it.rawKeys || [] });
       }
     }
   }catch(_){ }
@@ -7078,7 +7078,7 @@ async function getPettyCash(eventId){
           const hasColl = collDays.length > 0;
           if (hasColl){
             try{
-              pcDiagMark('Caja Chica · Saneamiento', 'running', 'Colisión de llaves por día detectada. Reparando…', {
+              pcDiagMark('Sección · Saneamiento', 'running', 'Colisión de llaves por día detectada. Reparando…', {
                 causeCode: A33_PC_TECH_CAUSES.DUP_DAY_COLLISION,
                 techDetail: 'Colisión por llaves distintas del mismo día. Reparando…',
                 forensic: {
@@ -7097,7 +7097,7 @@ async function getPettyCash(eventId){
 
             if (hasColl){
               try{
-                pcDiagMark('Caja Chica · Saneamiento', 'ok', 'Reparación aplicada.', {
+                pcDiagMark('Sección · Saneamiento', 'ok', 'Reparación aplicada.', {
                   causeCode: A33_PC_TECH_CAUSES.OK,
                   techDetail: 'Reparación aplicada: SI',
                   forensic: {
@@ -7114,7 +7114,7 @@ async function getPettyCash(eventId){
             try{
               pcSetPendingCleanup({ eventId, atISO: new Date().toISOString(), items: [{ day: todayYMD(), keys: 0, hadDup: false, hadNonCanonical: false, rawKeys: [] }], error: String(err||'') });
               const code = (hasColl) ? A33_PC_TECH_CAUSES.DUP_DAY_COLLISION : A33_PC_TECH_CAUSES.IDB_ABORT;
-              pcDiagMark('Caja Chica · Limpieza', 'error', 'No se pudo persistir la limpieza automática. Se usará la vista normalizada en memoria.', {
+              pcDiagMark('Sección · Limpieza', 'error', 'No se pudo persistir la limpieza automática. Se usará la vista normalizada en memoria.', {
                 causeCode: code,
                 techDetail: hasColl ? 'Colisión por día detectada. No se pudo reparar (persistencia).' : 'No se pudo persistir la limpieza automática.',
                 forensic: {
@@ -7547,7 +7547,7 @@ function mergePettyDay(dayA, dayB){
   return a;
 }
 
-// --- Caja Chica: Persistencia única (pcLoad/pcSave) — Etapa 3/9
+// --- Sección: Persistencia única (pcLoad/pcSave) — Etapa 3/9
 // Objetivo: una capa única de I/O para pettyCash[eventId] con:
 // - llave exacta (eventId)
 // - write+readback del MISMO key
@@ -7818,7 +7818,7 @@ async function savePettyCash(pc, context){
   const res = await pcSave(pc.eventId, pc, ctx);
   if (!res || res.ok) return res;
 
-  const e = new Error(res.detail || 'No se pudo persistir Caja Chica');
+  const e = new Error(res.detail || 'No se pudo persistir Sección');
   try{ e.code = res.code || A33_PC_TECH_CAUSES.IDB_ABORT; }catch(_){ }
   try{ e.name = String(e.code || 'IDB_ERROR'); }catch(_){ }
   try{ e.forensic = res.forensic || null; }catch(_){ }
@@ -7896,7 +7896,7 @@ function hasAnyPettyFinal(pc){
 }
 
 
-// --- Caja Chica: Engine determinista (pure helpers) — Etapa 2/9
+// --- Sección: Engine determinista (pure helpers) — Etapa 2/9
 // Reglas:
 // - Sin dependencias nuevas.
 // - Sin efectos secundarios (sin DOM/IDB).
@@ -8309,7 +8309,7 @@ function computePettyCashSummary(pc, dayKey, opts){
   const firstDay = ensurePcDay(pc, firstKey);
   const initSec = firstDay.initial ? normalizePettySection(firstDay.initial) : normalizePettySection(null);
 
-  // Final: último día con arqueo final guardado
+  // Final: último día con registro de cierre guardado
   let lastFinalKey = null;
   for (let i = keys.length - 1; i >= 0; i--){
     const k = keys[i];
@@ -9326,7 +9326,7 @@ window.addEventListener('online', setOfflineBar);
 window.addEventListener('offline', setOfflineBar);
 
 // Enable/disable selling block depending on current event
-// + Candado por día/evento (Caja Chica o Resumen): si el día está cerrado, NO se puede vender (UI + guard en lógica)
+// + Candado por día/evento (Sección o Resumen): si el día está cerrado, NO se puede vender (UI + guard en lógica)
 let __A33_SELL_STATE = { enabled:false, dayKey: todayYMD(), dayClosed:false, pettyEnabled:false, eventId:null, closeVersion:null, closeSource:null };
 
 function getSaleDayKeyPOS(){
@@ -9555,7 +9555,7 @@ async function getDailyClosureByKeyPOS(key){
   }
 }
 
-// --- POS→Finanzas (Etapa 2): Caja Chica se consolida dentro del cierre diario (POS_DAILY_CLOSE)
+// --- POS→Finanzas (Etapa 2): Sección se consolida dentro del cierre diario (POS_DAILY_CLOSE)
 function pcIsRevertedOrHasReversalPOS(mov, allMovs){
   if (!mov) return true;
   if (mov.isReversal) return true;
@@ -9587,7 +9587,7 @@ async function buildPettyCashAccountingBlockForClosePOS(event, eventId, dayKey){
 
   // Seguridad: transferencias requieren cuentas destino (Banco/Caja general). Si hay pendientes, bloqueamos.
   if (pcHasPendingTransfersPOS(day)){
-    throw new Error('No se puede cerrar: Caja Chica tiene transferencias sin revertir. Esta etapa no define cuentas destino (Banco/Caja general) para importarlas en Finanzas. Revertí esas transferencias o esperá la siguiente etapa.');
+    throw new Error('No se puede cerrar: hay transferencias sin revertir. Esta etapa no define cuentas destino (Banco/Caja general) para importarlas en Finanzas. Revertí esas transferencias o esperá la siguiente etapa.');
   }
 
   const fxRaw = Number(event.fxRate || 0);
@@ -9596,7 +9596,7 @@ async function buildPettyCashAccountingBlockForClosePOS(event, eventId, dayKey){
   const eps = 0.005;
   const hasUsd = movs.some(m => m && String(m.currency || '').toUpperCase() === 'USD' && Math.abs(Number(m.amount || 0)) > eps);
   if (hasUsd && !(fxRate && fxRate > 0)){
-    throw new Error('No se puede cerrar: Caja Chica tiene movimientos en USD y falta definir el tipo de cambio (USD → C$) en el evento.');
+    throw new Error('No se puede cerrar: hay movimientos en USD y falta definir el tipo de cambio (USD → C$) en el evento.');
   }
 
   let inNio = 0, outNio = 0, inUsd = 0, outUsd = 0;
@@ -9709,15 +9709,15 @@ function validateDailyClosureBeforePersistPOS({ record, lockPatch }){
   if (!Number.isFinite(c2)) return { ok:false, msg:'Cierre inválido: costoCortesiasTotal inválido.' };
   if (!Number.isFinite(c3)) return { ok:false, msg:'Cierre inválido: costoTotalSalidaInventario inválido.' };
 
-  // Caja Chica (opcional)
+  // Sección (opcional)
   if (t.pettyCash != null){
     const pc = (t.pettyCash && typeof t.pettyCash === 'object') ? t.pettyCash : null;
-    if (!pc) return { ok:false, msg:'Cierre inválido: Caja Chica inválida.' };
+    if (!pc) return { ok:false, msg:'Cierre inválido: datos inválidos.' };
     const keys = ['ingresosNio','egresosNio','ingresosNioOriginal','egresosNioOriginal','ingresosUsd','egresosUsd'];
     for (const kk of keys){
       if (pc[kk] == null) continue;
       const n = Number(pc[kk]);
-      if (!Number.isFinite(n) || n < -0.00001) return { ok:false, msg:`Cierre inválido: Caja Chica ${kk} inválido.` };
+      if (!Number.isFinite(n) || n < -0.00001) return { ok:false, msg:`Cierre inválido: Sección ${kk} inválido.` };
     }
     if (pc.fxRateUsed != null){
       const fx = Number(pc.fxRateUsed);
@@ -9741,7 +9741,7 @@ async function closeDailyPOS({ event, dateKey, source }){
   const dk = normalizeDateKeyForClosePOS(dateKey);
   if (!dk) throw new Error('dateKey inválido para cierre. Usa formato YYYY-MM-DD.');
   // Nota: el cierre oficial se ejecuta desde Resumen.
-  // Si Caja Chica está activa, Resumen valida arqueo final + cuadratura antes de llamar a este método.
+  // Si Sección está activa, Resumen valida registro de cierre + cuadratura antes de llamar a este método.
 
   // Idempotencia: si el día ya está marcado como cerrado, devolvemos el último estado.
   const curLock = await getDayLockRecordPOS(eventId, dk);
@@ -9784,7 +9784,7 @@ async function closeDailyPOS({ event, dateKey, source }){
 
   const snapshot = await computeDailySnapshotFromSalesPOS(eventId, dk);
 
-  // Caja Chica: consolidación contable dentro del cierre (si está activa)
+  // sección: consolidación contable dentro del cierre (si está activa)
   const pcBlock = await buildPettyCashAccountingBlockForClosePOS(event, eventId, dk);
 
   const closureId = genClosureIdPOS();
@@ -9812,7 +9812,7 @@ async function closeDailyPOS({ event, dateKey, source }){
       costoTotalSalidaInventario: snapshot.costoTotalSalidaInventario,
       // (Opcional) auditoría: desglose por producto/presentación
       costBreakdown: snapshot.costBreakdown,
-      // Caja Chica (Etapa 2): se consolida aquí para que Finanzas reciba 1 asiento por día/evento
+      // Sección (Etapa 2): se consolida aquí para que Finanzas reciba 1 asiento por día/evento
       pettyCash: (pcBlock && pcBlock.enabled) ? pcBlock.totals : null
     },
     meta: {
@@ -9896,7 +9896,7 @@ async function reopenDailyPOS({ event, dateKey, source }){
   const eventId = Number(event.id);
   const dk = normalizeDateKeyForClosePOS(dateKey);
   if (!dk) throw new Error('dateKey inválido para reabrir. Usa formato YYYY-MM-DD.');
-  // Nota: reapertura unificada desde Resumen (Caja Chica ya no es la puerta de cierre).
+  // Nota: reapertura unificada desde Resumen (Sección ya no es la puerta de cierre).
 
   const curLock = await getDayLockRecordPOS(eventId, dk);
   if (curLock && !curLock.isClosed){
@@ -9974,14 +9974,14 @@ async function computeSellDayLockPOS(curEvent, dayKey){
   if (!curEvent) return { pettyEnabled:false, dayKey: dk, dayClosed:false, closedAt:null, created:false, closeVersion:null, closeSource:null };
 
   if (curEvent.closedAt){
-    // Evento cerrado: no crear ni modificar Caja Chica por rutas indirectas
+    // Evento cerrado: no crear ni modificar Sección por rutas indirectas
     return { pettyEnabled:eventPettyEnabled(curEvent), dayKey: dk, dayClosed:true, closedAt: curEvent.closedAt, created:false, closeVersion:null, closeSource:null };
   }
 
   const lock = await getDayLockRecordPOS(curEvent.id, dk);
   const isClosedLock = !!(lock && lock.isClosed);
 
-  // Caja Chica activa: el cierre oficial se controla por dayLocks.
+  // Sección activa: el cierre oficial se controla por dayLocks.
   // Compatibilidad legacy: si existe day.closedAt (cierres viejos), también cuenta como cerrado.
   if (eventPettyEnabled(curEvent)){
     const pc = await getPettyCash(curEvent.id);
@@ -10004,7 +10004,7 @@ async function computeSellDayLockPOS(curEvent, dayKey){
     };
   }
 
-  // Sin Caja Chica
+  // Sin Sección
   return {
     pettyEnabled:false,
     dayKey: dk,
@@ -10050,8 +10050,8 @@ async function updateSellEnabled(){
   const noActive = document.getElementById('no-active-note');
   if (noActive) noActive.style.display = eventOpen ? 'none' : 'block';
 
-  // Banner: cuando el evento está abierto y el día está cerrado (con o sin Caja Chica)
-  // El cierre/reapertura oficial es SOLO desde Resumen (unificado). No mandar al usuario a Caja Chica.
+  // Banner: cuando el evento está abierto y el día está cerrado (con o sin Sección)
+  // El cierre/reapertura oficial es SOLO desde Resumen (unificado). No mandar al usuario a Sección.
   const hint = 'Para vender aquí, reabrí el día en Resumen.';
   setSellDayClosedBannerPOS(!!(eventOpen && lockInfo.dayClosed), lockInfo.dayKey, hint);
 
@@ -10134,7 +10134,7 @@ async function ensureDefaults(){
   if (!events.length){
     for (const ev of DEFAULT_EVENTS) await put('events', {...ev, pettyEnabled:false, createdAt:new Date().toISOString()});
   } else {
-    // Asegurar campo “pettyEnabled” (Caja Chica por evento)
+    // Asegurar campo “pettyEnabled” (Sección por evento)
     for (const ev of events){
       if (typeof ev.pettyEnabled === 'undefined'){
         ev.pettyEnabled = false;
@@ -11847,7 +11847,7 @@ async function refreshEventUI(){
   } else { status.style.display='none'; }
   $('#btn-reopen-event').style.display = (cur && cur.closedAt) ? 'inline-block' : 'none';
 
-  // Toggle de Caja Chica por evento + refresco de Caja Chica si la pestaña está activa
+  // Toggle de sección por evento + refresco de sección si la pestaña está activa
   try{ await updatePettyToggleUI(cur); }catch(e){}
   try{ await renderCajaChica(); }catch(e){}
 
@@ -11922,7 +11922,7 @@ async function refreshEventUI(){
   try{ await initVasosPanelPOS(); }catch(e){}
 }
 
-// --- Caja Chica por evento (toggle + helpers)
+// --- Sección por evento (toggle + helpers)
 async function getEventByIdSafe(eventId){
   const evs = await getAll('events');
   return evs.find(e=>e.id===eventId) || null;
@@ -11952,7 +11952,7 @@ async function eventHasPettyActivity(eventId){
   return false;
 }
 
-// --- Caja Chica (Etapa 2): selector de evento + orden "más inteligente" (sin inventar)
+// --- Sección (Etapa 2): selector de evento + orden "más inteligente" (sin inventar)
 function pcToMs(v){
   if (!v) return 0;
   if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
@@ -11984,7 +11984,7 @@ async function buildPcEligibleEventsList(dayKey){
   const openEvents = (evs || []).filter(e => e && !e.closedAt);
   const items = [];
 
-  // Criterio confiable: actividad real en Caja Chica del día seleccionado (movs / inicial / final / closedAt)
+  // Criterio confiable: actividad real en Sección del día seleccionado (movs / inicial / final / closedAt)
   for (const ev of openEvents){
     const pettyEnabled = eventPettyEnabled(ev);
     let urgent = false;
@@ -12035,7 +12035,7 @@ async function renderPcEventSwitchUI(dayKey){
     o.value = it.id;
 
     let label = it.name;
-    if (!it.pettyEnabled) label += ' (Sin Caja Chica)';
+    if (!it.pettyEnabled) label += ' (No disponible)';
     else if (it.urgent) label += ' · con actividad';
 
     o.textContent = label;
@@ -12077,26 +12077,26 @@ async function ensurePettyEnabledForEvent(eventId){
     return false;
   }
   if (ev.closedAt){
-    showToast('Este evento está cerrado. No se puede activar Caja Chica.', 'error', 4500);
+    showToast('Este evento está cerrado. No se puede activar esta opción.', 'error', 4500);
     return false;
   }
   if (eventPettyEnabled(ev)) return true;
-  const ok = confirm('¿Deseas activar Caja Chica para este evento?\n\nSi la activas, el cierre del evento podrá exigir cierres diarios de Caja Chica cuando haya ventas en efectivo o movimientos.');
+  const ok = confirm('¿Deseas activar esta opción para este evento?\n\nSi la activas, el cierre del evento podrá exigir validaciones adicionales cuando haya ventas en efectivo o movimientos.');
   if (!ok) return false;
   ev.pettyEnabled = true;
   await put('events', ev);
   try{ await updatePettyToggleUI(ev); }catch(e){}
-  toast('Caja Chica activada para este evento.');
+  toast('Opción activada para este evento.');
   return true;
 }
 
 
-// Etapa 2: validación dura antes de escribir Caja Chica (sin activar automáticamente)
+// Etapa 2: validación dura antes de escribir sección (sin activar automáticamente)
 // Etapa 3: desbloqueo determinista + auto-alineación segura (sin borrar inputs)
 async function guardPettyWritePOS(eventId, opts){
   const o = opts || {};
   const silent = !!o.silent;
-  const action = (o.action || 'Caja Chica').toString().trim();
+  const action = (o.action || 'Sección').toString().trim();
   const diag = !!o.diag;
   const allowRestore = !!o.allowRestore;
   const lane = (o.lane || 'manual').toString().toLowerCase();
@@ -12274,24 +12274,24 @@ async function onTogglePettyForCurrentEvent(){
     return;
   }
   if (t.checked){
-    const ok = confirm('¿Confirmas que deseas ACTIVAR Caja Chica para este evento?');
+    const ok = confirm('¿Confirmas que deseas ACTIVAR sección para este evento?');
     if (!ok){ t.checked = false; await updatePettyToggleUI(ev); return; }
     ev.pettyEnabled = true;
     await put('events', ev);
-    toast('Caja Chica activada.');
+    toast('Opción activada.');
     await updatePettyToggleUI(ev);
     try{ await renderCajaChica(); }catch(e){}
   } else {
     const hasActivity = await eventHasPettyActivity(ev.id);
     if (hasActivity){
-      alert('No se puede desactivar Caja Chica porque este evento ya tiene registros guardados (movimientos o cierres).');
+      alert('No se puede desactivar esta opción porque este evento ya tiene registros guardados (movimientos o cierres).');
       t.checked = true;
       await updatePettyToggleUI(ev);
       return;
     }
     ev.pettyEnabled = false;
     await put('events', ev);
-    toast('Caja Chica desactivada.');
+    toast('Opción desactivada.');
     await updatePettyToggleUI(ev);
     try{ await renderCajaChica(); }catch(e){}
   }
@@ -13517,7 +13517,7 @@ async function sellCupsPOS(isCourtesy){
   ev.fractionBatches = batches;
   // Nota: persistencia de cups+venta se hace atómica (events+sales) más abajo
 
-  // Candado: si Caja Chica está activada y el día está cerrado, NO permitir ventas por vaso
+  // Candado: si sección está activada y el día está cerrado, NO permitir ventas por vaso
   if (!(await guardSellDayOpenOrToastPOS(ev, date))) return;
 
   const payment = document.getElementById('sale-payment')?.value || 'efectivo';
@@ -15813,7 +15813,7 @@ async function renderSummaryDailyCloseCardPOS(){
   if (targetEl){
     targetEl.style.display = 'block';
     targetEl.textContent = petty
-      ? `Vas a cerrar Caja Chica de: ${ev.name} · Día: ${dayKey}`
+      ? `Vas a cerrar el día de: ${ev.name} · Fecha: ${dayKey}`
       : `Vas a cerrar el día de: ${ev.name} · Fecha: ${dayKey}`;
   }
 
@@ -15825,7 +15825,7 @@ async function renderSummaryDailyCloseCardPOS(){
     delete returnEl.dataset.prevEventId;
   }
 
-  // Estado de cerrado (oficial: dayLocks). Compatibilidad legacy: day.closedAt (cierres viejos desde Caja Chica).
+  // Estado de cerrado (oficial: dayLocks). Compatibilidad legacy: day.closedAt (cierres viejos desde sección).
   let legacyClosedAt = null;
   if (petty){
     try{
@@ -15873,7 +15873,7 @@ async function renderSummaryDailyCloseCardPOS(){
     if (pre){
       let payload = null;
       if (lock && typeof lock === 'object') payload = lock;
-      else if (legacyClosedAt) payload = { legacyClosedAt: legacyClosedAt, note: 'Cierre legacy desde Caja Chica; candado dayLocks no existe.' };
+      else if (legacyClosedAt) payload = { legacyClosedAt: legacyClosedAt, note: 'Cierre legacy; candado dayLocks no existe.' };
       pre.textContent = payload ? JSON.stringify(payload, null, 2) : '—';
     }
   }catch(_){ }
@@ -15889,7 +15889,7 @@ async function renderSummaryDailyCloseCardPOS(){
     }
   }
 
-  // Cerrar/reabrir aquí (si Caja Chica está activa, se validará arqueo final antes de ejecutar el cierre).
+  // Cerrar/reabrir aquí (si Sección está activa, se validará registro de cierre antes de ejecutar el cierre).
   if (btnClose){
     btnClose.style.display = isClosed ? 'none' : '';
     btnClose.disabled = !!isClosed;
@@ -15907,7 +15907,7 @@ async function renderSummaryDailyCloseCardPOS(){
         : 'Día bloqueado para ventas/movimientos.';
     } else if (petty){
       noteEl.style.display = 'block';
-      noteEl.textContent = 'Caja Chica activa: para cerrar, primero guarda el arqueo final y cuadra contra el saldo teórico.';
+      noteEl.textContent = 'Hay validaciones adicionales: completa los datos requeridos antes de cerrar.';
     }
   }
 }
@@ -15937,7 +15937,7 @@ function showSummaryCloseBlockerPOS({ headline, diffNio, diffUsd, usdActive }){
   const el = document.getElementById('summary-close-blocker');
   if (!el) return;
 
-  const line1 = headline || 'No se puede cerrar: falta arqueo final o no cuadra.';
+  const line1 = headline || 'No se puede cerrar: hay validaciones pendientes.';
   const line2 = usdActive
     ? `Diferencia C$: ${fmtSignedPlain(diffNio)} | USD: ${fmtSignedPlain(diffUsd)}`
     : `Diferencia C$: ${fmtSignedPlain(diffNio)}`;
@@ -15953,23 +15953,8 @@ function showSummaryCloseBlockerPOS({ headline, diffNio, diffUsd, usdActive }){
   diff.style.marginTop = '6px';
   diff.textContent = line2;
 
-  const actions = document.createElement('div');
-  actions.className = 'actions end';
-  actions.style.marginTop = '8px';
-
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'btn-warn btn-pill';
-  btn.textContent = 'Ir a Caja Chica';
-  btn.addEventListener('click', (e)=>{
-    e.preventDefault();
-    setTab('caja');
-  });
-
-  actions.appendChild(btn);
   el.appendChild(msg);
   el.appendChild(diff);
-  el.appendChild(actions);
 }
 
 function hideSummaryReturnBannerPOS(){
@@ -15996,7 +15981,7 @@ async function showSummaryReturnBannerPOS({ currentEventId, prevEventId }){
   el.dataset.prevEventId = String(prevEventId || '');
 
   const msg = document.createElement('div');
-  msg.textContent = `Caja cerrada. ¿Volver a ${prevEv.name || 'evento previo'}?`;
+  msg.textContent = `Día cerrado. ¿Volver a ${prevEv.name || 'evento previo'}?`;
 
   const actions = document.createElement('div');
   actions.className = 'actions end';
@@ -16016,7 +16001,7 @@ hideSummaryReturnBannerPOS();
     try{ await renderDay(); }catch(_){ }
     try{ await renderSummaryDailyCloseCardPOS(); }catch(_){ }
     try{ await renderPcEventSwitchUI(getSelectedPcDay()); }catch(_){ }
-    try{ setTab('caja'); }catch(_){ }
+    try{ setTab('venta'); }catch(_){ }
   });
 
   actions.appendChild(btn);
@@ -16045,7 +16030,7 @@ async function onSummaryCloseDayPOS(){
 
   clearSummaryCloseBlockerPOS();
 
-  // Si Caja Chica está activa: exigir arqueo final y que cuadre con saldo teórico (por moneda).
+  // Si sección está activa: exigir registro de cierre y que cuadre con saldo teórico (por moneda).
   if (eventPettyEnabled(ev)){
     try{
       const pc = await getPettyCash(ev.id);
@@ -16064,18 +16049,18 @@ async function onSummaryCloseDayPOS(){
 
       if (!hasFinal || !nioOk || !usdOk){
         showSummaryCloseBlockerPOS({
-          headline: 'No se puede cerrar: falta arqueo final o no cuadra.',
+          headline: 'No se puede cerrar: hay validaciones pendientes.',
           diffNio,
           diffUsd,
           usdActive
         });
-        showToast('No se puede cerrar. Revisá Caja Chica (arqueo final / diferencias).', 'error', 5000);
+        showToast('No se puede cerrar. Revisá validaciones de cierre.', 'error', 5000);
         return;
       }
     }catch(err){
       console.error('summary close petty validation', err);
-      showSummaryCloseBlockerPOS({ headline: 'No se puede cerrar: no se pudo validar Caja Chica.', diffNio: 0, diffUsd: 0, usdActive: false });
-      showToast('No se pudo validar Caja Chica.', 'error', 5000);
+      showSummaryCloseBlockerPOS({ headline: 'No se puede cerrar: no se pudo validar el cierre.', diffNio: 0, diffUsd: 0, usdActive: false });
+      showToast('No se pudo validar sección.', 'error', 5000);
       return;
     }
   }
@@ -16084,8 +16069,8 @@ async function onSummaryCloseDayPOS(){
   {
     const isPc = eventPettyEnabled(ev);
     const msg = isPc
-      ? ('Vas a cerrar Caja Chica de:\n\n' + (ev.name||'—') + '\n\nDía: ' + dayKey + '\n\nEsto bloqueará ventas y movimientos para este día.\n\n¿Confirmas?')
-      : ('Vas a cerrar el día de:\n\n' + (ev.name||'—') + '\n\nFecha: ' + dayKey + '\n\nEsto bloqueará ventas y movimientos para este día.\n\n¿Confirmas?');
+      ? ('Vas a cerrar el día de:\n\n' + (ev.name||'—') + '\n\nDía: ' + dayKey + '\n\nEsto bloqueará ventas y operaciones para este día.\n\n¿Confirmas?')
+      : ('Vas a cerrar el día de:\n\n' + (ev.name||'—') + '\n\nFecha: ' + dayKey + '\n\nEsto bloqueará ventas y operaciones para este día.\n\n¿Confirmas?');
     if (!confirm(msg)) return;
   }
 
@@ -16132,7 +16117,7 @@ async function onSummaryReopenDayPOS(){
   try{
     await reopenDailyPOS({ event: ev, dateKey: dayKey, source: 'SUMMARY' });
 
-    // Compatibilidad legacy: si el día fue cerrado antes desde Caja Chica, limpiar el flag local.
+    // Compatibilidad legacy: si el día fue cerrado antes desde sección, limpiar el flag local.
     if (eventPettyEnabled(ev)){
       try{
         const pc = await getPettyCash(ev.id);
@@ -18584,8 +18569,8 @@ async function exportEventExcel(eventId){
   }
 
   resumenRows.push([]);
-  resumenRows.push(['Caja Chica - C$']);
-  resumenRows.push(['Saldo inicial C$', summary.nio.initial]);
+  resumenRows.push(['Efectivo - C$']);
+  resumenRows.push(['Registro de apertura C$', summary.nio.initial]);
   resumenRows.push(['Entradas C$', summary.nio.entradas]);
   resumenRows.push(['Salidas C$', summary.nio.salidas]);
   resumenRows.push(['Saldo teórico C$', summary.nio.teorico]);
@@ -18593,8 +18578,8 @@ async function exportEventExcel(eventId){
   resumenRows.push(['Diferencia C$', summary.nio.diferencia != null ? summary.nio.diferencia : '—']);
 
   resumenRows.push([]);
-  resumenRows.push(['Caja Chica - US$']);
-  resumenRows.push(['Saldo inicial US$', summary.usd.initial]);
+  resumenRows.push(['Efectivo - US$']);
+  resumenRows.push(['Registro de apertura US$', summary.usd.initial]);
   resumenRows.push(['Entradas US$', summary.usd.entradas]);
   resumenRows.push(['Salidas US$', summary.usd.salidas]);
   resumenRows.push(['Saldo teórico US$', summary.usd.teorico]);
@@ -18608,14 +18593,14 @@ async function exportEventExcel(eventId){
   // --- Hoja 2: CajaChica_Detalle ---
   const detRows = [];
 
-  detRows.push(['Caja Chica - Detalle por día']);
+  detRows.push(['Efectivo - Detalle por día']);
   detRows.push(['Evento', ev.name || '']);
   detRows.push(['ID', ev.id]);
   detRows.push(['Generado', new Date().toLocaleString()]);
   detRows.push([]);
 
   if (!dayKeys.length){
-    detRows.push(['Sin registros de Caja Chica para este evento.']);
+    detRows.push(['Sin registros de efectivo para este evento.']);
   } else {
     for (const dk of dayKeys){
       const day = ensurePcDay(pc, dk);
@@ -18626,8 +18611,8 @@ async function exportEventExcel(eventId){
       detRows.push(['Día', dk]);
       detRows.push([]);
 
-      // Saldo inicial C$
-      detRows.push(['Saldo inicial C$']);
+      // Registro de apertura C$
+      detRows.push(['Registro de apertura C$']);
       detRows.push(['Denominación','Cantidad','Subtotal C$']);
       for (const d of NIO_DENOMS){
         const qty = init.nio[String(d)] || 0;
@@ -18638,8 +18623,8 @@ async function exportEventExcel(eventId){
       detRows.push(['Total inicial C$', '', init.totalNio || 0]);
 
       detRows.push([]);
-      // Saldo inicial US$
-      detRows.push(['Saldo inicial US$']);
+      // Registro de apertura US$
+      detRows.push(['Registro de apertura US$']);
       detRows.push(['Denominación','Cantidad','Subtotal US$']);
       for (const d of USD_DENOMS){
         const qty = init.usd[String(d)] || 0;
@@ -18648,14 +18633,14 @@ async function exportEventExcel(eventId){
       }
       detRows.push(['', '', '']);
       detRows.push(['Total inicial US$', '', init.totalUsd || 0]);
-      detRows.push(['Fecha/hora saldo inicial', init.savedAt || '']);
+      detRows.push(['Fecha/hora registro de apertura', init.savedAt || '']);
 
       detRows.push([]);
       // Movimientos
-      detRows.push(['Movimientos']);
+      detRows.push(['Transacciones']);
       detRows.push(['Tipo','Moneda','Monto','Descripción']);
       if (!movs.length){
-        detRows.push(['(sin movimientos)','','','']);
+        detRows.push(['(sin transacciones)','','','']);
       } else {
         for (const m of movs){
           let tipoText;
@@ -18671,8 +18656,8 @@ async function exportEventExcel(eventId){
       }
 
       detRows.push([]);
-      // Arqueo final C$
-      detRows.push(['Arqueo final C$']);
+      // Registro de cierre C$
+      detRows.push(['Registro de cierre C$']);
       detRows.push(['Denominación','Cantidad','Subtotal C$']);
       for (const d of NIO_DENOMS){
         const qty = fin.nio[String(d)] || 0;
@@ -18683,8 +18668,8 @@ async function exportEventExcel(eventId){
       detRows.push(['Total final C$', '', fin.totalNio || 0]);
 
       detRows.push([]);
-      // Arqueo final US$
-      detRows.push(['Arqueo final US$']);
+      // Registro de cierre US$
+      detRows.push(['Registro de cierre US$']);
       detRows.push(['Denominación','Cantidad','Subtotal US$']);
       for (const d of USD_DENOMS){
         const qty = fin.usd[String(d)] || 0;
@@ -18693,7 +18678,7 @@ async function exportEventExcel(eventId){
       }
       detRows.push(['', '', '']);
       detRows.push(['Total final US$', '', fin.totalUsd || 0]);
-      detRows.push(['Fecha/hora arqueo final', fin.savedAt || '']);
+      detRows.push(['Fecha/hora registro de cierre', fin.savedAt || '']);
 
       detRows.push([]);
       // Resumen del día
@@ -18705,7 +18690,7 @@ async function exportEventExcel(eventId){
 
       detRows.push([]);
       // Ajustes (movimientos tipo Ajuste)
-      detRows.push(['Ajustes (Movimientos tipo Ajuste)']);
+      detRows.push(['Ajustes (Transacciones tipo Ajuste)']);
       detRows.push(['Moneda','Tipo','Monto','Descripción','Creado']);
       const adjMovs = (movs || []).filter(m => m && m.isAdjust);
       if (!adjMovs.length){
@@ -18725,7 +18710,7 @@ async function exportEventExcel(eventId){
   }
 
   const wsCaja = XLSX.utils.aoa_to_sheet(detRows);
-  XLSX.utils.book_append_sheet(wb, wsCaja, 'CajaChica_Detalle');
+  XLSX.utils.book_append_sheet(wb, wsCaja, 'Efectivo_Detalle');
 
   // --- Hoja: CajaChica_Ajustes (movimientos tipo Ajuste) ---
   const adjRows = [];
@@ -18750,7 +18735,7 @@ async function exportEventExcel(eventId){
     adjRows.push(['(sin ajustes)','', '', '', '', '', '']);
   }
   const wsAdj = XLSX.utils.aoa_to_sheet(adjRows);
-  XLSX.utils.book_append_sheet(wb, wsAdj, 'CajaChica_Ajustes');
+  XLSX.utils.book_append_sheet(wb, wsAdj, 'Efectivo_Ajustes');
 
 
   // --- Hoja 3 opcional: Ventas_Detalle ---
@@ -18808,11 +18793,11 @@ async function closeEvent(eventId){
   }
   const totalCashSales = Array.from(cashByDay.values()).reduce((a,b)=>round2(a+Number(b||0)), 0);
 
-  // Guard (candado) SOLO si Caja Chica está activada en este evento
+  // Guard (candado) SOLO si sección está activada en este evento
   if (eventPettyEnabled(ev)){
     try{
       const pc = await getPettyCash(eventId);
-      // Días a exigir cierre: días con actividad de Caja Chica o con ventas en efectivo
+      // Días a exigir cierre: días con actividad de sección o con ventas en efectivo
       const daySet = new Set();
       const pcKeys = listPcDayKeys(pc);
       for (const k of pcKeys){
@@ -18848,19 +18833,19 @@ async function closeEvent(eventId){
           alert(
             'No se puede cerrar el evento porque faltan cierres del día:\n\n' +
             lines + more +
-            '\n\nVe a Resumen y realiza el cierre del día (si Caja Chica está activa, primero asegúrate de tener arqueo final cuadrado).'
+            '\n\nVe a Resumen y realiza el cierre del día (si aplica, asegúrate de tener las validaciones completas).'
           );
           return;
         }
       }
     }catch(err){
-      console.error('closeEvent guard Caja Chica error', err);
+      console.error('closeEvent guard error', err);
     }
   } else {
-    // Si no se activó Caja Chica pero hubo ventas en efectivo, pedir confirmación
+    // Si no se activó Sección pero hubo ventas en efectivo, pedir confirmación
     if (totalCashSales > 0){
       const ok = confirm(
-        `Este evento tiene ventas en efectivo (C$${fmt(totalCashSales)}), pero Caja Chica está desactivada.\n\n¿Deseas cerrar el evento SIN Caja Chica?`
+        `Este evento tiene ventas en efectivo (C$${fmt(totalCashSales)}), pero esa opción está desactivada.\n\n¿Deseas cerrar el evento de todos modos?`
       );
       if (!ok) return;
     }
@@ -18996,7 +18981,7 @@ async function init(){
   await runStep('bindSummaryDailyClose', async()=>{ bindSummaryDailyClosePOS(); });
   await runStep('bindSummaryPeriodCloseArchive', async()=>{ bindSummaryPeriodCloseAndArchivePOS(); });
 
-  // Paso 5: barra offline y eventos de Caja Chica
+  // Paso 5: barra offline y eventos de sección
   try{
     setOfflineBar();
   }catch(err){
@@ -19047,7 +19032,7 @@ async function init(){
     try{ await renderSummaryDailyCloseCardPOS(); }catch(e){}
   });
 
-  // Toggle Caja Chica por evento
+  // Toggle Sección por evento
   const pcToggle = document.getElementById('pc-event-toggle');
   if (pcToggle){
     pcToggle.addEventListener('change', ()=>{
@@ -19307,7 +19292,7 @@ async function init(){
     }
     const d = $('#sale-date').value;
 
-    // Candado: si Caja Chica está activada y el día está cerrado, NO permitir cambios de ventas
+    // Candado: si sección está activada y el día está cerrado, NO permitir cambios de ventas
     try{
       const ev = await getEventByIdPOS(curId);
       if (!ev || ev.closedAt){ alert('No hay un evento activo válido.'); return; }
@@ -19371,7 +19356,7 @@ async function init(){
       return;
     }
 
-    // Candado: si Caja Chica está activada y el día está cerrado, NO permitir cambios de ventas
+    // Candado: si sección está activada y el día está cerrado, NO permitir cambios de ventas
     try{
       const ev = await getEventByIdPOS(saleToDelete.eventId);
       if (!ev || ev.closedAt){ alert('No hay un evento activo válido.'); return; }
@@ -19734,7 +19719,7 @@ async function addSale(){
   const event = events.find(e=>e.id===curId);
   if (!event || event.closedAt){ alert('Este evento está cerrado. Reábrelo o activa otro.'); return; }
 
-  // Candado: si Caja Chica está activada y el día está cerrado, NO permitir ventas
+  // Candado: si sección está activada y el día está cerrado, NO permitir ventas
   if (!(await guardSellDayOpenOrToastPOS(event, date))) return;
 
   const products = await getAll('products');
@@ -19943,10 +19928,10 @@ async function addExtraSale(extraId){
   // Etapa 1: confirmación si no hay cliente seleccionado
   if (!confirmProceedSaleWithoutCustomerPOS()) return;
 
-  // Candado: si el día está cerrado (Caja Chica o Resumen), NO permitir ventas
+  // Candado: si el día está cerrado (sección o Resumen), NO permitir ventas
   if (!(await guardSellDayOpenOrToastPOS(ev, date))) return;
 
-  // Candado: si Caja Chica está activada y el día está cerrado, NO permitir ventas
+  // Candado: si sección está activada y el día está cerrado, NO permitir ventas
   if (!(await guardSellDayOpenOrToastPOS(ev, date))) return;
 
   // Banco (obligatorio si es Transferencia)
@@ -20151,7 +20136,7 @@ function getSelectedPcDay(){
 
 
 
-// --- Caja Chica: validación de cierre definitivo + ventas en efectivo
+// --- sección: validación de cierre definitivo + ventas en efectivo
 async function getCashSalesNioForDay(eventId, dayKey){
   if (!eventId || !dayKey) return 0;
   const allSales = await getAll('sales');
@@ -20234,7 +20219,7 @@ async function getPettyCloseCheck(eventId, pc, dayKey, cashSalesNio, eventFxRate
   const diffUsd = (sum && sum.usd && sum.usd.diferencia != null) ? Number(sum.usd.diferencia) : null;
 
   const hasFinal = !!(day && day.finalCount && day.finalCount.savedAt);
-  if (!hasFinal) errors.push('Guarda el arqueo final antes de cerrar el día.');
+  if (!hasFinal) errors.push('Guarda el registro de cierre antes de cerrar el día.');
 
   const usdActive = hasUsdActivity(day, sum);
   if (usdActive && !(fxRate && fxRate > 0)){
@@ -20421,7 +20406,7 @@ async function onClosePettyDay(){
 
   const cashSales = await getCashSalesNioForDay(evId, dayKey);
   if (!Number.isFinite(Number(cashSales)) || Number(cashSales) < -0.00001){
-    alert('Caja Chica: ventas en efectivo inválidas.');
+    alert('Ventas en efectivo inválidas.');
     return;
   }
   const evs = await getAll('events');
@@ -20438,7 +20423,7 @@ async function onClosePettyDay(){
 
   const ok = confirm(`¿Cerrar el día ${dayKey}?
 
-Esto bloqueará edición de Caja Chica para este día.`);
+Esto bloqueará edición de sección para este día.`);
   if (!ok) return;
 
   const stamp = new Date().toISOString();
@@ -20468,7 +20453,7 @@ Esto bloqueará edición de Caja Chica para este día.`);
         }
       }
     }catch(e){
-      console.warn('Cierre diario snapshot (Caja Chica) falló', e);
+      console.warn('Cierre diario snapshot falló', e);
     }
     showToast('Día cerrado', 'ok', 5000);
   }catch(err){
@@ -20495,7 +20480,7 @@ async function onReopenPettyDay(){
 const day = ensurePcDay(pc, dayKey);
 
   if (await isPettyDayLockedPOS(evId, dayKey, pc)){
-    showToast('Este día está cerrado. No se puede modificar Caja Chica.', 'error', 5000);
+    showToast('Este día está cerrado. No se puede modificar.', 'error', 5000);
     return;
   }
 
@@ -20510,7 +20495,7 @@ const day = ensurePcDay(pc, dayKey);
   }
   const ok = confirm(`¿Reabrir el día ${dayKey}?
 
-Podrás editar Caja Chica y el cierre del día quedará removido.`);
+Podrás editar sección y el cierre del día quedará removido.`);
   if (!ok) return;
 
   const prevStamp = day.closedAt;
@@ -20544,7 +20529,7 @@ Podrás editar Caja Chica y el cierre del día quedará removido.`);
     lockCleared = true;
   }catch(err){
     console.error('onReopenPettyDay reopenDailyPOS', err);
-    showToast('Día reabierto en Caja Chica, pero no se pudo liberar el candado del POS: ' + humanizeError(err), 'error', 7000);
+    showToast('Día reabierto en sección, pero no se pudo liberar el candado del POS: ' + humanizeError(err), 'error', 7000);
   }
 
   try{ await updateSellEnabled(); }catch(e){}
@@ -20553,7 +20538,7 @@ Podrás editar Caja Chica y el cierre del día quedará removido.`);
   }
 }
 
-// --- Caja Chica: histórico (solo lectura)
+// --- sección: histórico (solo lectura)
 let pettyHistoryMode = false;
 let pettyHistoryDayKey = null;   // día que se está visualizando
 let pettyReturnDayKey = null;    // día objetivo (día operativo que estaba seleccionado antes)
@@ -20580,7 +20565,7 @@ function setPettyReadOnly(isReadOnly, allowReopen){
   const fsCount = document.getElementById('pc-count-fieldset');
   const fsMov = document.getElementById('pc-mov-fieldset');
   if (fsCount) fsCount.disabled = !!isReadOnly;
-  // IMPORTANTE (contabilidad): Caja Chica ya no se “borra”.
+  // IMPORTANTE (contabilidad): Sección ya no se “borra”.
   // Incluso en días cerrados/histórico, permitimos el botón “Revertir” por movimiento.
   // Por eso NO deshabilitamos el fieldset completo de movimientos; se bloquean inputs específicos abajo.
   if (fsMov) fsMov.disabled = false;
@@ -20604,7 +20589,7 @@ function setPettyReadOnly(isReadOnly, allowReopen){
     if (el) el.disabled = !!isReadOnly;
   });
 
-  // El tipo de cambio se edita dentro de Caja Chica: bloquear en histórico o día cerrado
+  // El tipo de cambio se edita dentro de Sección: bloquear en histórico o día cerrado
   const fx = document.getElementById('pc-event-fx-rate');
   const fxBtn = document.getElementById('pc-btn-save-event-fx');
   if (fx) fx.disabled = !!isReadOnly;
@@ -20715,7 +20700,7 @@ async function onSelectPettyHistoryDay(){
 
   const evId = await getMeta('currentEventId');
   if (!evId){
-    alert('Activa un evento antes de ver el histórico de Caja Chica.');
+    alert('Activa un evento antes de ver el histórico.');
     sel.value = '';
     return;
   }
@@ -20741,19 +20726,19 @@ async function onUseHistoryFinalAsInitial(){
 
   const from = pettyHistoryDayKey;
   const target = pettyReturnDayKey;
-  const ok = confirm(`¿Copiar el cierre del ${from} como saldo inicial del ${target}?\n\nEsto reemplazará el saldo inicial actual del ${target}.`);
+  const ok = confirm(`¿Copiar el cierre del ${from} como registro de apertura del ${target}?\n\nEsto reemplazará el registro de apertura actual del ${target}.`);
   if (!ok) return;
 
   const pc = await getPettyCash(evId);
   const src = ensurePcDay(pc, from);
   if (!src || !src.finalCount || !src.finalCount.savedAt){
-    alert('Ese día no tiene arqueo final guardado.');
+    alert('Ese día no tiene registro de cierre guardado.');
     return;
   }
 
   const dest = ensurePcDay(pc, target);
   if (await isPettyDayLockedPOS(evId, target, pc)){
-    alert('Este día está cerrado. Reabre el día para editar Caja Chica.');
+    alert('Este día está cerrado. Reabre el día para editar sección.');
     return;
   }
 
@@ -20768,7 +20753,7 @@ async function onUseHistoryFinalAsInitial(){
     await savePettyCash(pc);
   }catch(err){
     console.error('onUseHistoryFinalAsInitial save error', err);
-    showToast('No se pudo precargar el saldo inicial', 'error', 5000);
+    showToast('No se pudo precargar el registro de apertura', 'error', 5000);
     await renderCajaChica();
     return;
   }
@@ -20788,7 +20773,7 @@ async function onUseHistoryFinalAsInitial(){
   if (sel) sel.value = '';
 
   await renderCajaChica();
-  toast('Saldo inicial precargado desde un cierre histórico');
+  toast('Registro de apertura precargado desde un cierre histórico');
 }
 
 function setPrevCierreUI(pc, dayKey){
@@ -20809,14 +20794,14 @@ function setPrevCierreUI(pc, dayKey){
     btn.style.display = 'inline-block';
     note.textContent = `Disponible: cierre del ${prevKey}`;
   } else if (hasInit){
-    note.textContent = 'Saldo inicial guardado para este día.';
+    note.textContent = 'Registro de apertura guardado para este día.';
   } else {
     note.textContent = 'No hay un cierre anterior disponible.';
   }
 }
 
 
-// --- Caja Chica: Sync Finanzas → POS (helpers) — Etapa 3
+// --- sección: Sync Finanzas → POS (helpers) — Etapa 3
 const A33_FIN_CC_STORAGE_KEY_POS = A33_PC_CONTRACT.LS_KEYS.FIN_CC_SNAPSHOT;
 
 function a33HashStringPOS(str){
@@ -20831,13 +20816,13 @@ function a33HashStringPOS(str){
 
 function finPosGetCajaChicaSnapState(){
   const KEY = A33_FIN_CC_STORAGE_KEY_POS;
-  const linkUrl = '../finanzas/index.html#tab=cajachica';
+  const linkUrl = '../finanzas/index.html';
   const link = 'Snapshot faltante. <a class="a33-link" href="' + linkUrl + '">Ir a Finanzas</a>';
 
   let raw = '';
   try{ raw = (localStorage.getItem(KEY) || '').toString(); }catch(_){ raw = ''; }
   if (!raw.trim()){
-    return { ok:false, code:'FIN_NOT_CONFIG', msg:'No existe snapshot de Caja Chica desde Finanzas.', link, linkUrl };
+    return { ok:false, code:'FIN_NOT_CONFIG', msg:'No existe snapshot desde Finanzas.', link, linkUrl };
   }
 
   const hash = a33HashStringPOS(raw);
@@ -20931,7 +20916,7 @@ function pcFinSnapStatusToUI(finState){
     essHash: '',
     updatedAtISO: '',
     updatedAtDisplay: '',
-    linkUrl: '../finanzas/index.html#tab=cajachica'
+    linkUrl: '../finanzas/index.html'
   };
 
   if (!st){
@@ -21100,7 +21085,7 @@ function updatePcFinSyncUI(ev, canInteract, readOnlyDay, dayKey, blockState){
     const notes = [];
     if (locked) notes.push('Día cerrado/histórico');
     if (!checked) notes.push('Switch apagado');
-    else if (!locked) notes.push('Listo para aplicar al saldo inicial');
+    else if (!locked) notes.push('Listo para aplicar al registro de apertura');
     if (last) notes.push('Último Sync: ' + last);
     pcRenderFinSnapStatus(finState, { sticky:false, evId, dayKey: dKey, note: notes.join(' | ') });
   }catch(_){ }
@@ -21123,7 +21108,7 @@ function updatePcFinSyncUI(ev, canInteract, readOnlyDay, dayKey, blockState){
       } else if (reason === A33_PC_BLOCK_REASONS.EVENTO_CERRADO){
         pcFinStatusSet('Evento cerrado: no se sincroniza.');
       } else if (reason === A33_PC_BLOCK_REASONS.CAJA_CHICA_DESACTIVADA){
-        pcFinStatusSet('Caja Chica desactivada en este evento.');
+        pcFinStatusSet('Opción desactivada en este evento.');
       } else if (reason === A33_PC_BLOCK_REASONS.MISMATCH_EVENTO){
         pcFinStatusSet(detail || 'Actualizando evento…');
       } else if (reason === A33_PC_BLOCK_REASONS.OTRO){
@@ -21140,7 +21125,7 @@ function updatePcFinSyncUI(ev, canInteract, readOnlyDay, dayKey, blockState){
     }
 
     if (bs.syncBlocked && reason === A33_PC_BLOCK_REASONS.FINANZAS_NO_CONFIGURADA){
-      pcFinStatusSet('Caja Chica (Finanzas) no configurada. <a class="a33-link" href="../finanzas/index.html#tab=cajachica">Ir a Finanzas</a>', { html:true });
+      pcFinStatusSet('Finanzas no configurada. <a class="a33-link" href="../finanzas/index.html">Ir a Finanzas</a>', { html:true });
       return;
     }
     if (bs.syncBlocked && reason === A33_PC_BLOCK_REASONS.FINANZAS_PARSE_ERROR){
@@ -21170,7 +21155,7 @@ function updatePcFinSyncUI(ev, canInteract, readOnlyDay, dayKey, blockState){
   }
 
   if (!eventPettyEnabled(ev)){
-    pcFinStatusSet('Caja Chica desactivada en este evento.');
+    pcFinStatusSet('Opción desactivada en este evento.');
     return;
   }
 
@@ -21187,7 +21172,7 @@ function updatePcFinSyncUI(ev, canInteract, readOnlyDay, dayKey, blockState){
   const st = finPosGetCajaChicaSnapState();
   if (!st.ok){
     if (st.code === 'FIN_NOT_CONFIG' || st.code === 'FIN_NOT_READY'){
-      pcFinStatusSet('Caja Chica (Finanzas) no configurada. <a class="a33-link" href="../finanzas/index.html#tab=cajachica">Ir a Finanzas</a>', { html:true });
+      pcFinStatusSet('Finanzas no configurada. <a class="a33-link" href="../finanzas/index.html">Ir a Finanzas</a>', { html:true });
     } else if (st.code === 'PARSE_ERROR'){
       pcFinStatusSet('Error: datos inválidos en Finanzas (parse).');
     } else {
@@ -21300,12 +21285,12 @@ async function renderCajaChica(){
     return;
   }
 
-  // Caja Chica por evento: si está desactivada, no bloquear el evento ni exigir cierres.
+  // Sección por evento: si está desactivada, no bloquear el evento ni exigir cierres.
   const disabledBanner = document.getElementById('pc-disabled-banner');
   if (!eventPettyEnabled(ev)){
     if (disabledBanner) disabledBanner.style.display = 'block';
     note.style.display = 'none';
-    lbl.textContent = 'Evento activo: ' + ev.name + ' · Caja Chica desactivada';
+    lbl.textContent = 'Evento activo: ' + ev.name + ' · opción desactivada';
     main.classList.add('disabled');
     updatePettySummaryUI(null, null, null);
     resetPettyInitialInputs();
@@ -21354,7 +21339,7 @@ async function renderCajaChica(){
     setPcLastRenderEventId(evId);
     try{ pcDiagUpdateContext(evId, (ev && ev.name) ? ev.name : null, evId, (ev && ev.name) ? ev.name : null); pcDiagRender(); }catch(_){ }
     try{ pcDiagSetLastSyncDisplay(pcGetLastSyncDisplayForContext(ev, null, getSelectedPcDay()) || '—'); }catch(_){ }
-    // Evitar UI stale en diagnósticos cuando Caja Chica está desactivada.
+    // Evitar UI stale en diagnósticos cuando Sección está desactivada.
     try{ __A33_PC_LEGACY_INV_STATE = null; pcLegacyInventoryClearUI(); }catch(_){ }
     try{ __A33_PC_CONSOLIDATION_PLAN_STATE = null; pcConsolidationPlanClearUI(); }catch(_){ }
     try{ pcClearEventRefreshPendingIfAligned(evId); }catch(_){ }
@@ -21389,7 +21374,7 @@ async function renderCajaChica(){
   fillPettyInitialFromPc(pc, dayKey);
   fillPettyFinalFromPc(pc, dayKey);
 
-  // Candado del día: oficial por dayLocks. Compatibilidad legacy: day.closedAt (cierres viejos desde Caja Chica).
+  // Candado del día: oficial por dayLocks. Compatibilidad legacy: day.closedAt (cierres viejos desde Sección).
   let lock = null;
   try{ lock = await getDayLockRecordPOS(evId, dayKey); }catch(e){ lock = null; }
   const isClosed = !!((lock && lock.isClosed) || (day && day.closedAt));
@@ -21397,7 +21382,7 @@ async function renderCajaChica(){
   const readOnlyEvent = !!eventClosed;
   const readOnly = readOnlyDay || readOnlyEvent;
 
-  // Botón "Copiar Inicial → Arqueo final" también debe respetar el candado oficial.
+  // Botón "Copiar Inicial → Registro de cierre" también debe respetar el candado oficial.
   await updateCopyInitialButtonState(pc, dayKey, cashSalesNio, { isClosed });
 
   renderPettyMovements(pc, dayKey, readOnly);
@@ -21411,7 +21396,7 @@ async function renderCajaChica(){
   renderPettyHistoryControls(pc);
 
   // Cierre del día (candado)
-  // Tipo de cambio persistente por evento (fallback: último fxRate legado en Caja Chica)
+  // Tipo de cambio persistente por evento (fallback: último fxRate legado en Sección)
   let fx = Number(ev.fxRate || 0);
   if (!(Number.isFinite(fx) && fx > 0)) fx = null;
   if (!fx && pc && pc.days){
@@ -21477,7 +21462,7 @@ async function renderCajaChica(){
   }
   let restoredMovDraft = false;
   try{ restoredMovDraft = !!pcRestoreDraftMovFormIfMatch(evId, dayKey); }catch(_){ restoredMovDraft = false; }
-  // Etapa 8A: estado local por sección (Saldo inicial) + badge en panel Estado.
+  // Etapa 8A: estado local por sección (Registro de apertura) + badge en panel Estado.
   try{
     const dkCanon = (typeof normalizePcDayKey === 'function') ? (normalizePcDayKey(dayKey, null) || dayKey) : dayKey;
     pcInitialSyncUIStateOnRenderPOS(evId, dkCanon, restoredInitDraft);
@@ -21665,7 +21650,7 @@ async function updateCopyInitialButtonState(pc, dayKey, cashSalesNio, opts){
       isClosed = !!(lock && lock.isClosed);
     }catch(e){ }
   }
-  // Compat legacy: day.closedAt (cierres viejos desde Caja Chica)
+  // Compat legacy: day.closedAt (cierres viejos desde Sección)
   if (!isClosed) isClosed = !!(day && day.closedAt);
 
   const isRO = isPettyHistoryMode() || isClosed;
@@ -21694,7 +21679,7 @@ async function updateCopyInitialButtonState(pc, dayKey, cashSalesNio, opts){
   if (hasNetMov){
     btn.title = `Hay movimientos de caja en este día (neto C$ ${fmt(net.netNio)} / neto US$ ${fmt(net.netUsd)}). Copiar Inicial puede no permitir cerrar.`;
   } else {
-    btn.title = 'Copia el saldo inicial al arqueo final (ideal para días sin ventas).';
+    btn.title = 'Copia el registro de apertura al registro de cierre (ideal para días sin ventas).';
   }
 }
 
@@ -21764,7 +21749,7 @@ function recalcPettyFinalTotalsFromInputs(){
 
 async function onSavePettyInitial(opts){
   const o = opts || {};
-  const action = (o.action || 'Guardar saldo inicial').toString();
+  const action = (o.action || 'Guardar registro de apertura').toString();
   const skipDiag = !!o.skipDiag;
   const silentOk = !!o.silentOk;
 
@@ -21814,7 +21799,7 @@ async function onSavePettyInitial(opts){
 
   evId = (o.eventId != null) ? o.eventId : await pcWithTimeout(getMeta('currentEventId'), A33_PC_IDB_TIMEOUT_MS, A33_PC_TECH_CAUSES.IDB_TIMEOUT);
   if (!evId){
-    showToast('Debes activar un evento en Vender antes de guardar Caja Chica.', 'error', 4500);
+    showToast('Debes activar un evento en Vender antes de guardar.', 'error', 4500);
     diag('blocked', 'No hay evento activo.', { causeCode:'EVENT_MISMATCH', techDetail:'No hay evento activo.' });
     return false;
   }
@@ -21843,7 +21828,7 @@ async function onSavePettyInitial(opts){
   const essBefore = A33_PCEngine.computeEssentialHash(rawBeforeDay || dayBefore || {});
 
   if (await isPettyDayLockedPOS(evId, dayKey, pc)){
-    showToast('Este día está cerrado. No se puede modificar Caja Chica.', 'error', 4500);
+    showToast('Este día está cerrado. No se puede modificar.', 'error', 4500);
     diag('blocked', 'Día cerrado.', { causeCode: 'DAY_LOCKED', techDetail:'Día cerrado (candado).', forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, beforeEssentialHash: essBefore, expectedEssentialHash: essBefore }) });
     pcSetDraftInitial(evId, dayKey, uiSnap, 'DAY_LOCKED');
     try{ pcInitialSetUIStatePOS(evId, canonicalDayKey, A33_PC_SECTION_STATES.FAILED, { code:'DAY_LOCKED' }); }catch(_){ }
@@ -21913,9 +21898,9 @@ async function onSavePettyInitial(opts){
     await savePettyCash(pc);
   }catch(err){
     console.error('onSavePettyInitial save error', err);
-    showPersistFailPOS('caja chica (saldo inicial)', err);
+    showPersistFailPOS('sección (registro de apertura)', err);
     const m = pcMapIdbErrorToTech(err, { op:'pcSave', store:'pettyCash', key: String(evId) });
-    diag('error', 'Error al guardar saldo inicial.', { causeCode:m.code, techDetail:m.detail, forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, expectedHash: expectedHash, extra: 'err: ' + String(err||'') }) });
+    diag('error', 'Error al guardar registro de apertura.', { causeCode:m.code, techDetail:m.detail, forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, expectedHash: expectedHash, extra: 'err: ' + String(err||'') }) });
     pcSetDraftInitial(evId, dayKey, uiSnap, 'SAVE_FAIL');
     try{ pcInitialSetUIStatePOS(evId, canonicalDayKey, A33_PC_SECTION_STATES.FAILED, { code:'SAVE_FAIL' }); }catch(_){ }
     return false;
@@ -21946,8 +21931,8 @@ async function onSavePettyInitial(opts){
     const noChange = !!(bh.hash && ah.hash && ah.hash === bh.hash);
     if (noChange){
       const code = (collisions && collisions.length > 1) ? 'DUP_DAY_COLLISION' : 'WRITE_NO_CHANGE';
-      showToast('No se pudo guardar el saldo inicial ('+code+')', 'error', 4500);
-      diag('error', 'No se pudo guardar el saldo inicial.', {
+      showToast('No se pudo guardar el registro de apertura ('+code+')', 'error', 4500);
+      diag('error', 'No se pudo guardar el registro de apertura.', {
         causeCode: code,
         techDetail: (code==='DUP_DAY_COLLISION') ? 'Colisión de llaves por día.' : 'Se escribió pero no hubo cambio persistido.',
         forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, afterHash: ah.hash, afterSavedAt: newStamp, expectedHash: expectedHash, beforeEssentialHash: essBefore, afterEssentialHash: essAfter, expectedEssentialHash: essExpected, extra: collExtra })
@@ -22007,7 +21992,7 @@ async function onSavePettyInitial(opts){
   await updateCopyInitialButtonState(pcAfter, dayKey, cashSalesNio, { eventId: evId });
 
   if (!silentOk){
-    showToast('Saldo inicial guardado', 'ok', 5000);
+    showToast('Registro de apertura guardado', 'ok', 5000);
   }
 
   diag('ok', 'Guardado.', { causeCode:'OK', techDetail:'Guardado y confirmado (readback).', forensic: mkFor({ eventId: evId, beforeHash: bh.hash, beforeSavedAt: prevInitialStamp, afterHash: ah.hash, afterSavedAt: newStamp, expectedHash: expectedHash, beforeEssentialHash: essBefore, afterEssentialHash: essAfter, expectedEssentialHash: essExpected, extra: (collExtra || '') })
@@ -22074,7 +22059,7 @@ async function onCopyPettyInitialToFinal(){
   const day = ensurePcDay(pc, dayKey);
 
   if (await isPettyDayLockedPOS(evId, dayKey, pc)){
-    alert('Este día está cerrado. Reabre el día para editar Caja Chica.');
+    alert('Este día está cerrado. Reabre el día para editar sección.');
     return;
   }
 
@@ -22093,7 +22078,7 @@ async function onCopyPettyInitialToFinal(){
       `Hay movimientos de caja registrados en este día (neto C$ ${fmt(net.netNio)} / neto US$ ${fmt(net.netUsd)}).
 
 ` +
-      `Copiar Inicial al arqueo final puede dejar diferencia y no permitirá cerrar.
+      `Copiar Inicial al registro de cierre puede dejar diferencia y no permitirá cerrar.
 
 ` +
       `¿Deseas continuar?`
@@ -22101,9 +22086,9 @@ async function onCopyPettyInitialToFinal(){
     if (!ok) return;
   }
 
-  // Si ya existe arqueo final guardado, confirmar reemplazo
+  // Si ya existe registro de cierre guardado, confirmar reemplazo
   if (day.finalCount && day.finalCount.savedAt){
-    const ok = confirm('Este día ya tiene un arqueo final guardado. ¿Reemplazarlo con el saldo inicial?');
+    const ok = confirm('Este día ya tiene un registro de cierre guardado. ¿Reemplazarlo con el registro de apertura?');
     if (!ok) return;
   }
 
@@ -22119,7 +22104,7 @@ async function onCopyPettyInitialToFinal(){
     await savePettyCash(pc);
   }catch(err){
     console.error('onCopyPettyInitialToFinal save error', err);
-    showPersistFailPOS('caja chica (arqueo final)', err);
+    showPersistFailPOS('sección (registro de cierre)', err);
     await renderCajaChica();
     return;
   }
@@ -22137,7 +22122,7 @@ async function onCopyPettyInitialToFinal(){
   renderPettyCloseUI(check, false);
 
   await updateCopyInitialButtonState(pc, dayKey, cashSalesNio, { eventId: evId });
-  toast('Arqueo final copiado desde el saldo inicial');
+  toast('Registro de cierre copiado desde el registro de apertura');
 }
 
 
@@ -22179,7 +22164,7 @@ async function onSavePettyFinal(){
   evId = await getMeta('currentEventId');
   if (!evId){
     mark('blocked', A33_PC_TECH_CAUSES.EVENT_MISMATCH, 'No hay evento activo.');
-    alert('Debes activar un evento en la pestaña Vender antes de guardar el arqueo final.');
+    alert('Debes activar un evento en la pestaña Vender antes de guardar el registro de cierre.');
     return;
   }
 
@@ -22207,7 +22192,7 @@ async function onSavePettyFinal(){
 
   if (await isPettyDayLockedPOS(evId, canonicalDayKey, pc)){
     mark('blocked', A33_PC_TECH_CAUSES.DAY_LOCKED, 'Día cerrado.', '', { beforeHash: bh.hash, beforeSavedAt: prevFinalStamp, beforeEssentialHash: essBefore, expectedEssentialHash: essBefore });
-    showToast('Este día está cerrado. No se puede modificar Caja Chica.', 'error', 4500);
+    showToast('Este día está cerrado. No se puede modificar.', 'error', 4500);
     try{ if (uiSnap) pcSetDraftFinal(evId, canonicalDayKey, uiSnap, 'DAY_LOCKED'); }catch(_){ }
     try{ pcFinalSetUIStatePOS(evId, canonicalDayKey, A33_PC_SECTION_STATES.FAILED, { code:'DAY_LOCKED' }); }catch(_){ }
     return;
@@ -22280,7 +22265,7 @@ async function onSavePettyFinal(){
     await savePettyCash(pc);
   }catch(err){
     console.error('onSavePettyFinal save error', err);
-    showPersistFailPOS('caja chica (arqueo final)', err);
+    showPersistFailPOS('sección (registro de cierre)', err);
     const m = pcMapIdbErrorToTech(err, { op:'pcSave', store:'pettyCash', key: String(evId) });
     mark('error', m.code, m.detail, 'save_final:fail', { beforeHash: bh.hash, beforeSavedAt: prevFinalStamp, expectedHash, beforeEssentialHash: essBefore, expectedEssentialHash: essExpected });
     try{ if (uiSnap) pcSetDraftFinal(evId, canonicalDayKey, uiSnap, 'SAVE_FAIL'); }catch(_){ }
@@ -22312,7 +22297,7 @@ async function onSavePettyFinal(){
     const noChange = !!(bh.hash && ah.hash && ah.hash === bh.hash);
     const code = (collisions && collisions.length > 1) ? A33_PC_TECH_CAUSES.DUP_DAY_COLLISION : (noChange ? A33_PC_TECH_CAUSES.WRITE_NO_CHANGE : A33_PC_TECH_CAUSES.READBACK_MISMATCH);
     const detail = (code === A33_PC_TECH_CAUSES.WRITE_NO_CHANGE) ? 'WRITE_NO_CHANGE: se escribió, pero no hubo cambio persistido.' : 'Se guardó, pero al re-leer no coincide.';
-    showToast(`No se pudo guardar el arqueo final (${code})`, 'error', 4500);
+    showToast(`No se pudo guardar el registro de cierre (${code})`, 'error', 4500);
     mark('error', code, detail, collExtra, { beforeHash: bh.hash, beforeSavedAt: prevFinalStamp, afterHash: ah.hash, afterSavedAt: newStamp, expectedHash, beforeEssentialHash: essBefore, afterEssentialHash: essAfter, expectedEssentialHash: essExpected });
     const rk = (code === A33_PC_TECH_CAUSES.WRITE_NO_CHANGE) ? 'NO_WRITE' : 'POST_READ_MISMATCH';
     try{ if (uiSnap) pcSetDraftFinal(evId, canonicalDayKey, uiSnap, rk); }catch(_){ }
@@ -22339,7 +22324,7 @@ async function onSavePettyFinal(){
 
   await updateCopyInitialButtonState(pcAfter, canonicalDayKey, cashSalesNio, { eventId: evId });
   mark('ok', A33_PC_TECH_CAUSES.OK, 'Guardado y confirmado (readback).', collExtra || '', { beforeHash: bh.hash, beforeSavedAt: prevFinalStamp, afterHash: ah.hash, afterSavedAt: newStamp, expectedHash, beforeEssentialHash: essBefore, afterEssentialHash: essAfter, expectedEssentialHash: essExpected });
-  showToast('Arqueo final guardado', 'ok', 5000);
+  showToast('Registro de cierre guardado', 'ok', 5000);
   try{ pcFinalSetUIStatePOS(evId, canonicalDayKey, A33_PC_SECTION_STATES.SAVED, { code:'OK' }); }catch(_){ }
 }
 
@@ -22627,7 +22612,7 @@ async function onRevertPettyMovement(originalId){
 
   if (!evId){
     setState(A33_PC_SECTION_STATES.FAILED, 'NO_EVENT');
-    alert('Activa un evento antes de revertir movimientos de Caja Chica.');
+    alert('Activa un evento antes de revertir movimientos de sección.');
     return;
   }
 
@@ -22636,7 +22621,7 @@ async function onRevertPettyMovement(originalId){
     const pc0 = await getPettyCash(evId);
     if (await isPettyDayLockedPOS(evId, dkCanon, pc0)){
       setState(A33_PC_SECTION_STATES.FAILED, A33_PC_REASON_CODES.DAY_LOCKED);
-      showToast('Este día está cerrado. No se puede modificar Caja Chica.', 'error', 4500);
+      showToast('Este día está cerrado. No se puede modificar.', 'error', 4500);
       return;
     }
   }catch(_){ }
@@ -22744,7 +22729,7 @@ Motivo (opcional):`, '');
     const idb = (typeof pcMapIdbErrorToTech === 'function') ? pcMapIdbErrorToTech(err, { op:'pcSave', store:'pettyCash', key: (typeof evId !== 'undefined' ? String(evId) : '—') }) : { code:'IDB_FAIL', detail:String(err||'') };
     setState(A33_PC_SECTION_STATES.FAILED, idb.code || 'IDB_FAIL');
     console.error('onRevertPettyMovement save error', err);
-    showPersistFailPOS('caja chica (reverso)', err);
+    showPersistFailPOS('sección (reverso)', err);
     try{ await renderCajaChica(); }catch(_){ }
     return;
   }
@@ -22815,7 +22800,7 @@ async function onAddPettyMovement(){
     mark('blocked', A33_PC_TECH_CAUSES.EVENT_MISMATCH, 'No hay evento activo.');
     setFormState(A33_PC_SECTION_STATES.FAILED, 'NO_EVENT');
     setDraft('NO_EVENT');
-    alert('Debes activar un evento en la pestaña Vender antes de registrar movimientos de Caja Chica.');
+    alert('Debes activar un evento en la pestaña Vender antes de registrar movimientos de sección.');
     return;
   }
 
@@ -22873,7 +22858,7 @@ async function onAddPettyMovement(){
     transferKind = transferSel ? transferSel.value : 'to_bank';
     if (transferKind !== 'to_bank' && transferKind !== 'to_general' && transferKind !== 'from_general') transferKind = 'to_bank';
 
-    // Impacto en Caja Chica (entrada/salida)
+    // Impacto en sección (entrada/salida)
     type = (transferKind === 'from_general') ? 'entrada' : 'salida';
 
     if (!description){
@@ -22907,7 +22892,7 @@ async function onAddPettyMovement(){
     pcDiagMark(ACTION, 'blocked', 'Día cerrado.', { causeCode: A33_PC_TECH_CAUSES.DAY_LOCKED, techDetail:'Día cerrado (candado).', eventId: evId, dayKey, forensic: f });
     setFormState(A33_PC_SECTION_STATES.FAILED, A33_PC_REASON_CODES.DAY_LOCKED);
     setDraft(A33_PC_REASON_CODES.DAY_LOCKED);
-    showToast('Este día está cerrado. No se puede modificar Caja Chica.', 'error', 4500);
+    showToast('Este día está cerrado. No se puede modificar.', 'error', 4500);
     return;
   }
 
@@ -22939,7 +22924,7 @@ async function onAddPettyMovement(){
   try{
     await savePettyCash(pc);
   }catch(err){
-    const idb = pcMapIdbErrorToTech(err, { op: (typeof ACTION !== 'undefined' ? ACTION : 'Caja Chica'), store:'pettyCash', key: (typeof evId !== 'undefined' ? String(evId) : '') });
+    const idb = pcMapIdbErrorToTech(err, { op: (typeof ACTION !== 'undefined' ? ACTION : 'sección'), store:'pettyCash', key: (typeof evId !== 'undefined' ? String(evId) : '') });
     const extra = `IDB: ${idb.detail}`;
     pcDiagMark(ACTION, 'error', 'Error IndexedDB.', {
       causeCode: idb.code,
@@ -22951,14 +22936,14 @@ async function onAddPettyMovement(){
     console.error('onAddPettyMovement save error', err);
     setFormState(A33_PC_SECTION_STATES.FAILED, 'IDB_FAIL');
     setDraft('IDB_FAIL');
-    showPersistFailPOS('caja chica (movimiento)', err);
+    showPersistFailPOS('sección (movimiento)', err);
     await renderCajaChica();
     // Importante: NO limpiar el formulario.
     try{ pcRestoreDraftMovFormIfMatch(evId, dkCanon); }catch(_){ }
     return;
   }
 
-  // Integración mínima: POS Caja Chica → Finanzas (Diario)
+  // Integración mínima: POS Sección → Finanzas (Diario)
   try{
     await postPettyCashMovementToFinanzas(evId, dayKey, mov);
   }catch(e){
@@ -23046,18 +23031,18 @@ async function onUsePrevCierre(){
 
   const prevDay = ensurePcDay(pc, prevKey);
   if (!prevDay || !prevDay.finalCount){
-    alert('El día anterior no tiene arqueo final guardado.');
+    alert('El día anterior no tiene registro de cierre guardado.');
     return;
   }
 
   const curDay = ensurePcDay(pc, dayKey);
 
   if (await isPettyDayLockedPOS(evId, dayKey, pc)){
-    alert('Este día está cerrado. Reabre el día para editar Caja Chica.');
+    alert('Este día está cerrado. Reabre el día para editar sección.');
     return;
   }
 
-  // Copiar denominaciones del final del día anterior al saldo inicial del día actual
+  // Copiar denominaciones del final del día anterior al registro de apertura del día actual
   const fin = normalizePettySection(prevDay.finalCount);
   curDay.initial = normalizePettySection({
     nio: { ...fin.nio },
@@ -23069,14 +23054,14 @@ async function onUsePrevCierre(){
     await savePettyCash(pc);
   }catch(err){
     console.error('onUsePrevCierre save error', err);
-    showToast('No se pudo precargar el saldo inicial', 'error', 5000);
+    showToast('No se pudo precargar el registro de apertura', 'error', 5000);
     await renderCajaChica();
     return;
   }
   updatePettySummaryUI(pc, dayKey);
   fillPettyInitialFromPc(pc, dayKey);
   setPrevCierreUI(pc, dayKey);
-  toast('Saldo inicial precargado desde el cierre anterior');
+  toast('Registro de apertura precargado desde el cierre anterior');
 }
 
 function safeParseJsonPOS(raw){
@@ -23096,7 +23081,7 @@ function sumCountsByValue(denoms){
   return m;
 }
 
-// --- Caja Chica (POS): Sync Finanzas → POS (aplicar saldo inicial) — Etapa 7/9
+// --- sección (POS): Sync Finanzas → POS (aplicar registro de apertura) — Etapa 7/9
 function pcFinSnapshotToPettyInitialSection(st, prevSavedAt){
   const snap = (st && st.snap && typeof st.snap === 'object') ? st.snap : null;
   const nowISO = pcComputeMonotonicISO(prevSavedAt || null);
@@ -23178,9 +23163,9 @@ async function syncPettyInitialFromFinanzas(){
   // Cargar PC + preparar nuevo initial
   const pc = ctx.pc || (await getPettyCash(evId));
   if (!pc){
-    try{ pcFinStatusSet('No se pudo cargar Caja Chica.', { sticky:true, evId, dayKey }); }catch(_){ }
+    try{ pcFinStatusSet('No se pudo cargar sección.', { sticky:true, evId, dayKey }); }catch(_){ }
     try{ if (uiSnap) pcRestoreInputsForRetry(uiSnap); }catch(_){ }
-    try{ showToast('No se pudo cargar Caja Chica', 'error', 2600); }catch(_){ }
+    try{ showToast('No se pudo cargar sección', 'error', 2600); }catch(_){ }
     return;
   }
 
@@ -23201,7 +23186,7 @@ async function syncPettyInitialFromFinanzas(){
 
   if (prevSavedAt){
     if (prevContentHash !== nextContentHash){      const msg =
-        'Este día ya tiene saldo inicial guardado.' +
+        'Este día ya tiene registro de apertura guardado.' +
         '\n\n' +
         'Actual: ' + pcFmtNioUsd(prevInit.totalNio, prevInit.totalUsd) +
         '\n' +
@@ -23210,7 +23195,7 @@ async function syncPettyInitialFromFinanzas(){
         '¿Reemplazar por el de Finanzas?';
       const okReplace = (()=>{ try{ return !!window.confirm(msg); }catch(_){ return false; } })();
       if (!okReplace){
-        try{ pcFinStatusSet('No aplicado: ya existía saldo inicial (cancelado).', { sticky:true, evId, dayKey: canonicalDayKey }); }catch(_){ }
+        try{ pcFinStatusSet('No aplicado: ya existía registro de apertura (cancelado).', { sticky:true, evId, dayKey: canonicalDayKey }); }catch(_){ }
         try{ pcDiagMark(ACTION, 'blocked', 'SNAP_APPLY_SKIPPED: usuario canceló', {
           causeCode: A33_PC_TECH_CAUSES.SNAP_APPLY_SKIPPED,
           eventId: evId,
@@ -23328,7 +23313,7 @@ async function syncPettyInitialFromFinanzas(){
 
   try{ pcDiagSetLastSyncDisplay(meta.appliedAtDisplay); }catch(_){ }
 
-  try{ pcRenderFinSnapStatus(st, { sticky:true, evId, dayKey: canonicalDayKey, note:'Aplicado a saldo inicial (' + meta.appliedAtDisplay + ')' }); }catch(_){ }
+  try{ pcRenderFinSnapStatus(st, { sticky:true, evId, dayKey: canonicalDayKey, note:'Aplicado a registro de apertura (' + meta.appliedAtDisplay + ')' }); }catch(_){ }
   try{ pcDiagMark(ACTION, 'ok', 'Aplicado y confirmado (readback)', {
     causeCode: A33_PC_TECH_CAUSES.OK,
     eventId: evId,
@@ -23344,7 +23329,7 @@ async function syncPettyInitialFromFinanzas(){
 }
 
 function bindCajaChicaEvents(){
-  // Activar Caja Chica por evento (si está desactivada)
+  // Activar por evento (si está desactivada)
   const btnActivate = document.getElementById('pc-btn-activate');
   if (btnActivate){
     btnActivate.addEventListener('click', async (e)=>{
@@ -23394,7 +23379,7 @@ function bindCajaChicaEvents(){
     });
   }
 
-  // Manual: usar saldo inicial desde Finanzas (solo si el usuario lo habilita)
+  // Manual: usar registro de apertura desde Finanzas (solo si el usuario lo habilita)
   const finTog = document.getElementById('pc-init-from-fin-toggle');
   const finBtn = document.getElementById('pc-init-from-fin-sync');
   if (finTog){
@@ -23413,7 +23398,7 @@ function bindCajaChicaEvents(){
       }
       if (!eventPettyEnabled(ev)){
         finTog.checked = !!ev.pcInitFromFinanzasEnabled;
-        toast('Este evento no tiene Caja Chica activa.');
+        toast('Este evento no tiene sección activa.');
         return;
       }
       ev.pcInitFromFinanzasEnabled = !!finTog.checked;
@@ -23448,7 +23433,7 @@ function bindCajaChicaEvents(){
 
   
 
-  // Copiar Inicial → Arqueo final (solo para día sin ventas)
+  // Copiar Inicial → Registro de cierre (solo para día sin ventas)
   const btnCopyInitial = document.getElementById('pc-btn-copy-initial');
   if (btnCopyInitial){
     btnCopyInitial.addEventListener('click', (e)=>{
@@ -23465,7 +23450,7 @@ const btnAddMov = document.getElementById('pc-mov-add');
     });
   }
 
-  // Día operativo (Caja Chica por día)
+  // Día operativo (sección por día)
   const dayInput = document.getElementById('pc-day');
   if (dayInput){
     dayInput.dataset.manual = '0';
@@ -23476,7 +23461,7 @@ const btnAddMov = document.getElementById('pc-mov-add');
     });
   }
 
-  // Precargar saldo inicial desde el cierre anterior
+  // Precargar registro de apertura desde el cierre anterior
   const btnPrev = document.getElementById('pc-btn-use-prev');
   if (btnPrev){
     btnPrev.addEventListener('click', (e)=>{
@@ -23534,7 +23519,7 @@ const btnAddMov = document.getElementById('pc-mov-add');
     });
   }
 
-  // Etapa 2: selector de evento desde Caja Chica (solo eventos abiertos con Caja Chica activa)
+  // Etapa 2: selector de evento desde sección (solo eventos abiertos con sección activa)
   const pcSel = document.getElementById('pc-event-select');
   if (pcSel){
     pcSel.addEventListener('change', async ()=>{
@@ -23549,7 +23534,7 @@ const btnAddMov = document.getElementById('pc-mov-add');
       await refreshEventUI();
       try{ await renderDay(); }catch(_){ }
       try{ await renderSummaryDailyCloseCardPOS(); }catch(_){ }
-      // Importante: re-render completo de Caja Chica para sincronizar validaciones (Cerrar día) con el evento seleccionado
+      // Importante: re-render completo de sección para sincronizar validaciones (Cerrar día) con el evento seleccionado
       try{ await renderCajaChica(); }catch(_){ }
     });
   }
@@ -23562,7 +23547,7 @@ const btnAddMov = document.getElementById('pc-mov-add');
     });
   }
 
-  // Etapa 3: acciones de salida cuando Caja Chica está bloqueada
+  // Etapa 3: acciones de salida cuando sección está bloqueada
   const uBack = document.getElementById('pc-unlock-back-operativo');
   if (uBack){
     uBack.addEventListener('click', (e)=>{
@@ -23637,7 +23622,7 @@ async function findMissingCajaChicaCierres(selectedEvents, salesGrupo){
     const hasFinal = hasAnyPettyFinal(pc);
 
     // Aviso solo si hubo actividad (ventas o movimientos) o si el evento ya fue cerrado,
-    // y aún no existe arqueo final guardado.
+    // y aún no existe registro de cierre guardado.
     if ((hasSales || hasMov || isClosed) && !hasFinal){
       missing.push({
         id: ev.id,
@@ -23813,7 +23798,7 @@ async function computeCierreTotalGrupo(){
       const why = flags.length ? ` (${flags.join(', ')})` : '';
       return `<li>${(e.name || ('Evento #' + e.id))}${why}</li>`;
     }).join('');
-    html += `<div class="warn"><strong>⚠️ Aviso:</strong> faltan cierres diarios (arqueo final) de Caja Chica en ${missingCaja.length} evento(s) del grupo. Puedes continuar, pero el cierre total quedará sin esa confirmación.<ul>${items}</ul></div>`;
+    html += `<div class="warn"><strong>⚠️ Aviso:</strong> faltan cierres diarios pendientes en ${missingCaja.length} evento(s) del grupo. Puedes continuar, pero el cierre total quedará sin esa confirmación.<ul>${items}</ul></div>`;
   }
 
   html += `<div><strong>Ventas totales del grupo:</strong> C$ ${fmt(data.totalGrupo)}</div>`;
@@ -23870,7 +23855,7 @@ async function exportCierreTotalGrupoExcel(){
   const missingCaja = (data.pettyWarnings && Array.isArray(data.pettyWarnings.missingFinalEvents)) ? data.pettyWarnings.missingFinalEvents : [];
   if (missingCaja.length){
     const lines = missingCaja.map(e => `- ${(e.name || ('Evento #' + e.id))}`).join('\n');
-    const ok = confirm(`Aviso: faltan cierres diarios (arqueo final) de Caja Chica en ${missingCaja.length} evento(s) del grupo:\n\n${lines}\n\n¿Deseas exportar el Cierre Total de todas formas?`);
+    const ok = confirm(`Aviso: faltan cierres diarios pendientes en ${missingCaja.length} evento(s) del grupo:\n\n${lines}\n\n¿Deseas exportar el Cierre Total de todas formas?`);
     if (!ok) return;
   }
 
@@ -23962,7 +23947,7 @@ async function getCierreCajaChicaGrupoData(){
   }
   const groupVal = groupSelect.value || '';
   if (!groupVal){
-    alert('Selecciona un grupo en la lista "Grupos" para generar el cierre de Caja Chica.');
+    alert('Selecciona un grupo en la lista "Grupos" para generar el cierre de sección.');
     return null;
   }
 
@@ -23981,7 +23966,7 @@ async function getCierreCajaChicaGrupoData(){
     return null;
   }
 
-  // Obtener Caja Chica por evento
+  // Obtener sección por evento
   const pettyList = [];
   for (const ev of selectedEvents){
     const pc = await getPettyCash(ev.id);
@@ -24060,7 +24045,7 @@ async function computeCierreCajaChicaGrupo(){
   if (!resumenEl || !eventosEl) return;
 
   if (!data.eventos.length){
-    resumenEl.innerHTML = '<p class="muted">No hay datos de Caja Chica para este grupo.</p>';
+    resumenEl.innerHTML = '<p class="muted">No hay datos de Sección para este grupo.</p>';
     eventosEl.innerHTML = '';
     return;
   }
@@ -24071,7 +24056,7 @@ async function computeCierreCajaChicaGrupo(){
   html += '<hr>';
   html += '<h4>Córdobas (C$)</h4>';
   html += '<ul>';
-  html += `<li>Saldo inicial: C$ ${fmt(data.nio.initial)}</li>`;
+  html += `<li>Registro de apertura: C$ ${fmt(data.nio.initial)}</li>`;
   html += `<li>Entradas: C$ ${fmt(data.nio.entradas)}</li>`;
   html += `<li>Salidas: C$ ${fmt(data.nio.salidas)}</li>`;
   html += `<li>Saldo teórico: C$ ${fmt(data.nio.teorico)}</li>`;
@@ -24085,7 +24070,7 @@ async function computeCierreCajaChicaGrupo(){
 
   html += '<h4>Dólares (US$)</h4>';
   html += '<ul>';
-  html += `<li>Saldo inicial: US$ ${fmt(data.usd.initial)}</li>`;
+  html += `<li>Registro de apertura: US$ ${fmt(data.usd.initial)}</li>`;
   html += `<li>Entradas: US$ ${fmt(data.usd.entradas)}</li>`;
   html += `<li>Salidas: US$ ${fmt(data.usd.salidas)}</li>`;
   html += `<li>Saldo teórico: US$ ${fmt(data.usd.teorico)}</li>`;
@@ -24102,7 +24087,7 @@ async function computeCierreCajaChicaGrupo(){
   // Tabla por evento
   const rows = data.eventos.slice();
   if (!rows.length){
-    eventosEl.innerHTML = '<p class="muted">No hay eventos con Caja Chica registrada en este grupo.</p>';
+    eventosEl.innerHTML = '<p class="muted">No hay eventos con Sección registrada en este grupo.</p>';
     return;
   }
 
@@ -24147,7 +24132,7 @@ async function exportCierreCajaChicaGrupoExcel(){
   const resumenRows = [];
   resumenRows.push(['Grupo', data.groupLabel]);
   resumenRows.push([]);
-  resumenRows.push(['Moneda','Saldo inicial','Entradas','Salidas','Saldo teórico','Saldo final','Diferencia']);
+  resumenRows.push(['Moneda','Registro de apertura','Entradas','Salidas','Saldo teórico','Saldo final','Diferencia']);
   resumenRows.push(['Córdobas (C$)', data.nio.initial, data.nio.entradas, data.nio.salidas, data.nio.teorico, data.nio.final, data.nio.diferencia]);
   resumenRows.push(['Dólares (US$)', data.usd.initial, data.usd.entradas, data.usd.salidas, data.usd.teorico, data.usd.final, data.usd.diferencia]);
   sheets.push({ name: 'ResumenCajaChica', rows: resumenRows });
@@ -24222,8 +24207,8 @@ function posCalcFmt2(n){
   return (Math.round(x * 100) / 100).toFixed(2);
 }
 
-// REQUISITO CLAVE: source of truth = Caja Chica (solo lectura)
-// Devuelve el tipo de cambio actual usado por Caja Chica para el evento activo.
+// REQUISITO CLAVE: source of truth = sección (solo lectura)
+// Devuelve el tipo de cambio actual usado por sección para el evento activo.
 async function getFxRateFromCajaChica(){
   try{
     const ev = await getActiveEventPOS();
@@ -24497,20 +24482,20 @@ async function onOpenPosCalculatorTab(){
   if (ev && rate && rate > 0){
     rateEl.value = String(posCalcRound2(rate));
     rateEl.readOnly = true;
-    rateEl.title = 'Tomado de Caja Chica (solo lectura)';
-    metaEl.textContent = `Evento activo: ${ev.name} · Tipo de cambio desde Caja Chica`;
+    rateEl.title = 'Tomado de Sección (solo lectura)';
+    metaEl.textContent = `Evento activo: ${ev.name} · Tipo de cambio desde Sección`;
     statusEl.style.display = 'none';
     statusEl.textContent = '';
   } else {
     rateEl.readOnly = false;
-    rateEl.title = 'Temporal (no se guarda en Caja Chica)';
+    rateEl.title = 'Temporal (no se guarda en Sección)';
 
     if (ev){
       metaEl.textContent = `Evento activo: ${ev.name} · Sin tipo de cambio guardado`;
-      statusEl.textContent = 'Caja Chica aún no tiene tipo de cambio. Puedes usar un valor temporal aquí (no se guarda).';
+      statusEl.textContent = 'Sección aún no tiene tipo de cambio. Puedes usar un valor temporal aquí (no se guarda).';
     } else {
-      metaEl.textContent = 'Sin evento activo · No se puede leer Caja Chica';
-      statusEl.textContent = 'Activa un evento para leer el tipo de cambio de Caja Chica. Mientras tanto, puedes usar un valor temporal aquí (no se guarda).';
+      metaEl.textContent = 'Sin evento activo · No se puede leer Sección';
+      statusEl.textContent = 'Activa un evento para leer el tipo de cambio de Sección. Mientras tanto, puedes usar un valor temporal aquí (no se guarda).';
     }
 
     statusEl.style.display = 'block';

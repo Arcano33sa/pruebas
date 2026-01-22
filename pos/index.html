@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.23&r=2">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.24&r=1">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.23&r=2">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.23" />
+<link rel="stylesheet" href="styles.css?v=4.20.24&r=1">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.24" />
 </head>
 <body>
   <header class="a33-header" role="banner">
@@ -68,16 +68,6 @@
   <button id="btn-close-event" class="btn-warn btn-pill">Cerrar evento (Corte)</button>
   <button id="btn-reopen-event" class="btn-ok btn-pill">Reabrir evento</button>
 </div>
-	        <div class="row" style="grid-template-columns:1fr; align-items:center">
-	          <div class="petty-toggle-wrap">
-	            <span class="petty-toggle-title">Caja Chica</span>
-	            <label class="switch" title="Activar / desactivar Caja Chica para este evento">
-	              <input type="checkbox" id="pc-event-toggle">
-	              <span class="slider"></span>
-	            </label>
-	            <span id="pc-event-toggle-text" class="muted"></span>
-	          </div>
-	        </div>
         <div id="event-status" class="info" style="display:none"></div>
         <div id="no-active-note" class="disabled-note" style="display:none">Sin evento activo. Crea o selecciona uno para comenzar.</div>
       </div>
@@ -458,465 +448,12 @@
       <div id="cierre-total-resumen" class="summary"></div>
       <div id="cierre-total-presentaciones" class="table-wrapper"></div>
     </div>
-    <div id="cierre-caja-card" class="card inner">
-      <h3>Caja Chica · Cierre Total por grupo</h3>
-      <p class="muted">Usa este resumen para ver la caja chica consolidada de todos los días del mismo evento maestro.</p>
-      <div class="actions">
-  <button id="btn-cierre-caja-grupo" class="btn-ok btn-pill">Cierre Caja Chica del grupo</button>
-  <button id="btn-cierre-caja-excel" class="btn-primary btn-pill">Exportar Caja Chica (Excel)</button>
-</div>
-      <div id="cierre-caja-resumen" class="summary"></div>
-      <div id="cierre-caja-eventos" class="table-wrapper"></div>
-    </div>
   </section>
 
   
   <section id="tab-caja" class="tab card" style="display:none">
-    <h2>Caja Chica</h2>
-
-        <!-- Etapa 1: selector único para todos los eventos abiertos (con o sin Caja Chica) -->
-    <div class="row" id="pc-event-switch-row">
-      <div>
-        <label>Evento (Caja Chica)</label>
-        <select id="pc-event-select">
-          <option value="">— Selecciona evento —</option>
-        </select>
-        <small class="muted">Elige un evento abierto. Si aparece “(Sin Caja Chica)”, esta pantalla queda en solo lectura.</small>
-      </div>
-    </div>
-
-    <p><span id="pc-event-info" class="info-strong">Evento activo: —</span></p>
-    <p id="pc-no-event-note" class="disabled-note" style="display:none">Activa un evento en la pestaña Vender para usar Caja Chica.</p>
-
-    <div id="pc-disabled-banner" class="warn" style="display:none">
-      Caja Chica está <b>desactivada</b> para este evento.
-      <button id="pc-btn-activate" class="btn-ok btn-inline btn-pill" type="button">Activar Caja Chica</button>
-    </div>
-    <div class="row" id="pc-day-row">
-      <div>
-        <label>Día operativo</label>
-        <input id="pc-day" type="date">
-        <small class="muted">Caja Chica se guarda por día dentro del mismo evento (saldo inicial, movimientos y arqueo final).</small>
-      </div>
-      <div style="text-align:right">
-        <label>&nbsp;</label>
-        <button id="pc-btn-use-prev" class="btn-primary" type="button" style="display:none">Usar cierre anterior</button>
-        <div id="pc-prev-note" class="muted" style="margin-top:6px"></div>
-      </div>
-    </div>
-
-    <div class="row" id="pc-history-row">
-      <div>
-        <label>Histórico (cierres guardados · solo lectura)</label>
-        <select id="pc-history-select">
-          <option value="">— Ver un día cerrado —</option>
-        </select>
-        <small id="pc-history-hint" class="muted"></small>
-      </div>
-      <div style="text-align:right">
-        <label>&nbsp;</label>
-        <div class="pc-history-actions">
-          <button id="pc-history-back" class="btn-warn btn-pill" type="button" style="display:none">Volver al día operativo</button>
-          <button id="pc-history-use" class="btn-primary btn-pill" type="button" style="display:none">Usar este cierre como inicio</button>
-        </div>
-        <div id="pc-history-note" class="muted" style="margin-top:6px"></div>
-      </div>
-    </div>
-
-    <div id="pc-history-banner" class="warn" style="display:none"></div>
-
-    <div id="pc-diag" class="pc-diag" aria-label="Estado de Caja Chica" title="Diagnóstico del último intento (sin consola)">
-      <div class="pc-diag-line">
-        <span class="pc-diag-title">Estado</span>
-        <span class="pc-diag-meta">
-          <span id="pos-build-id" class="muted" style="font-size:0.85rem">POS Build: —</span>
-          <span id="pos-sw-cache-id" class="muted" style="font-size:0.85rem; max-width:52vw; display:inline-block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">SW Cache: —</span>
-          <span id="pc-diag-last-at" class="muted" style="font-size:0.85rem">—</span>
-        </span>
-      </div>
-      <div class="pc-diag-grid">
-        <div><span class="muted">Activo:</span> <span id="pc-diag-active">—</span></div>
-        <div><span class="muted">UI:</span> <span id="pc-diag-ui">—</span></div>
-        <div><span class="muted">Último:</span> <span id="pc-diag-action">—</span> <span id="pc-diag-result" class="badge">—</span></div>
-        <div><span class="muted">Último Sync:</span> <span id="pc-diag-last-sync">—</span></div>
-        <div><span class="muted">Saldo inicial:</span> <span id="pc-diag-sec-initial" class="badge">—</span></div>
-        <div><span class="muted">Arqueo final:</span> <span id="pc-diag-sec-final" class="badge">—</span></div>
-        <div><span class="muted">Agregar mov:</span> <span id="pc-diag-sec-movform" class="badge">—</span></div>
-        <div><span class="muted">keysDays:</span> <span id="pc-keys-days">—</span></div>
-        <div><span class="muted">keysLegacyDays:</span> <span id="pc-keys-legacydays">—</span></div>
-        <div><span class="muted">collisionsDaysOnly:</span> <span id="pc-collisions-days-only">—</span></div>
-        <div><span class="muted">collisionsIncludingLegacy:</span> <span id="pc-collisions-with-legacy">—</span></div>
-        <div class="pc-diag-reason"><span class="muted">Mov reason:</span> <span id="pc-diag-sec-movform-code">—</span></div>
-        <div class="pc-diag-reason"><span class="muted">Motivo (Reason Code):</span> <span id="pc-diag-reason">OK</span></div>
-        <div class="pc-diag-detail-row" id="pc-diag-detail-row" style="display:none"><span class="muted">Detalle:</span> <span id="pc-diag-detail">—</span></div>
-</div>
-
-      <div id="pc-diag-flags" class="pc-diag-flags" aria-label="Flags de estado"></div>
-
-      <div id="pc-guard-decision" class="pc-guard" aria-label="Guard Decision">
-        <div class="muted" style="margin:6px 0 4px 0; font-size:0.85rem">Guard Decision</div>
-        <table class="pc-guard-table">
-          <tbody>
-            <tr>
-              <th>Manual</th>
-              <td id="pc-guard-manual-ok" class="pc-guard-pill">—</td>
-              <td id="pc-guard-manual-reason" class="pc-guard-reason">—</td>
-              <td id="pc-guard-manual-action" class="pc-guard-action">—</td>
-            </tr>
-            <tr>
-              <th>Sync</th>
-              <td id="pc-guard-sync-ok" class="pc-guard-pill">—</td>
-              <td id="pc-guard-sync-reason" class="pc-guard-reason">—</td>
-              <td id="pc-guard-sync-action" class="pc-guard-action">—</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div id="pc-legacy-shadow-alert" class="warn" style="display:none; margin-top:8px; padding:8px 10px">
-        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-          <div><b>Sótano detectado:</b> <span id="pc-legacy-shadow-alert-msg">__legacyDays=—</span></div>
-          <button id="pc-legacy-quarantine-btn" class="btn-outline btn-mini btn-pill" style="display:none;">Cuarentenar legacy</button>
-          <span id="pc-legacy-quarantine-result" class="muted small"></span>
-        </div>
-      </div>
-
-      <details id="pc-diag-forensics" class="pc-diag-forensics">
-        <summary class="muted">Detalle (forense)</summary>
-        <div class="pc-forensic-grid">
-          <div><span class="muted">eventId:</span> <span id="pc-forensic-eventid">—</span></div>
-          <div><span class="muted">dayKey:</span> <span id="pc-forensic-daykey">—</span></div>
-          <div><span class="muted">normalizedDay:</span> <span id="pc-forensic-ymd">—</span></div>
-          <div><span class="muted">snapshotSig:</span> <span id="pc-forensic-snapsig">—</span></div>
-          <div><span class="muted">writeKey:</span> <span id="pc-forensic-writekey">—</span></div>
-          <div><span class="muted">readKey:</span> <span id="pc-forensic-readkey">—</span></div>
-          <div><span class="muted">before:</span> <span id="pc-forensic-before">—</span></div>
-          <div><span class="muted">after:</span> <span id="pc-forensic-after">—</span></div>
-          <div><span class="muted">before (ess):</span> <span id="pc-forensic-before-ess">—</span></div>
-          <div><span class="muted">after (ess):</span> <span id="pc-forensic-after-ess">—</span></div>
-          <div><span class="muted">expected (ess):</span> <span id="pc-forensic-expected-ess">—</span></div>
-          <div><span class="muted">expectedHash:</span> <span id="pc-forensic-expected">—</span></div>
-        </div>
-        <div id="pc-forensic-extra" class="muted" style="margin-top:6px"></div>
-      </details>
-
-      <details id="pc-forensic-sources" class="pc-diag-forensics">
-        <summary class="muted">Fuentes por Día (Forense)</summary>
-        <div class="muted" style="margin-top:6px">Día activo: <span id="pc-src-active-day" class="pc-forensic-mono">—</span></div>
-        <div class="pc-src-table-wrap" style="margin-top:8px">
-          <table class="pc-src-table" aria-label="Fuentes por Día">
-            <thead>
-              <tr>
-                <th>sourceType</th>
-                <th>sourceKey</th>
-                <th>initial</th>
-                <th>final</th>
-                <th>meta</th>
-              </tr>
-            </thead>
-            <tbody id="pc-src-tbody">
-              <tr><td colspan="5" class="muted">—</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="pc-winner" style="margin-top:8px">
-          <div class="muted" style="font-size:0.85rem; margin-bottom:4px">WINNER TRACE (read-only)</div>
-          <div class="pc-winner-line"><span class="muted">Initial:</span> <span id="pc-winner-initial" class="pc-forensic-mono">—</span> <span id="pc-winner-initial-reason" class="muted">—</span></div>
-          <div class="pc-winner-line"><span class="muted">Final:</span> <span id="pc-winner-final" class="pc-forensic-mono">—</span> <span id="pc-winner-final-reason" class="muted">—</span></div>
-          <div class="pc-winner-line"><span class="muted">Meta:</span> <span id="pc-winner-meta" class="pc-forensic-mono">—</span> <span id="pc-winner-meta-reason" class="muted">—</span></div>
-        </div>
-      </details>
-
-      <details id="pc-legacy-inventory" class="pc-diag-forensics">
-        <summary class="muted">Legacy keys (inventario)</summary>
-        <div class="muted" style="margin-top:6px">Top 10 colisiones por día normalizado</div>
-        <div id="pc-legacy-collisions-top" class="pc-diag-log" style="margin-top:8px">—</div>
-      </details>
-
-      <details id="pc-consolidation-plan" class="pc-diag-forensics">
-        <summary class="muted">Consolidation Plan (preview)</summary>
-        <div class="muted" style="margin-top:6px">Colisiones detectadas: <span id="pc-plan-collisions-found">—</span></div>
-        <div id="pc-plan-collisions-top" class="pc-diag-log" style="margin-top:8px">—</div>
-        <div class="muted" style="margin-top:6px; font-size:0.82rem">Export: a33_pc_consolidation_plan_v1 (últimos 5)</div>
-      </details>
-
-      <div id="pc-unlock-actions" class="pc-diag-actions" style="display:none">
-        <button id="pc-unlock-back-operativo" class="btn-warn btn-mini btn-pill" type="button" style="display:none">Volver al día operativo</button>
-        <button id="pc-unlock-go-resumen-reopen" class="btn-primary btn-mini btn-pill" type="button" style="display:none">Ir a Resumen / Reabrir día</button>
-        <button id="pc-unlock-activate" class="btn-primary btn-mini btn-pill" type="button" style="display:none">Activar Caja Chica</button>
-        <button id="pc-unlock-resync-event" class="btn-primary btn-mini btn-pill" type="button" style="display:none">Activar evento correcto</button>
-      </div>
-
-      <div class="pc-selfcheck">
-        <div class="pc-selfcheck-top">
-          <button id="pc-selfcheck-run" class="btn-outline btn-mini btn-pill" type="button">Self-check</button>
-          <span id="pc-selfcheck-meta" class="pc-selfcheck-meta muted"></span>
-        </div>
-        <table class="pc-selfcheck-table">
-          <thead>
-            <tr><th>Test</th><th>PASS/FAIL</th><th>Reason</th><th>Detalle corto</th></tr>
-          </thead>
-          <tbody id="pc-selfcheck-tbody">
-            <tr><td colspan="4" class="muted">— Sin ejecución —</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <details id="pc-diag-history" class="pc-diag-history">
-        <summary class="muted">Historial (últimos 10)</summary>
-        <div id="pc-diag-log" class="pc-diag-log">—</div>
-      </details>
-    </div>
-
-
-    <div id="pc-main" class="pc-main">
-      <div class="row petty-summary">
-        <div class="card">
-          <h3>Córdobas (C$)</h3>
-          <table class="pc-table">
-            <tbody>
-              <tr><th>Saldo inicial</th><td>C$ <span id="pc-nio-inicial">0.00</span></td></tr>
-              <tr><th>Entradas</th><td>C$ <span id="pc-nio-entradas">0.00</span></td></tr>
-              <tr><th>Salidas</th><td>C$ <span id="pc-nio-salidas">0.00</span></td></tr>
-              <tr><th>Ventas en efectivo</th><td>C$ <span id="pc-nio-ventas">0.00</span></td></tr>
-              <tr><th>Saldo teórico</th><td>C$ <span id="pc-nio-teorico">0.00</span></td></tr>
-              <tr><th>Saldo final contado</th><td>C$ <span id="pc-nio-final">—</span></td></tr>
-              <tr><th>Diferencia</th><td>C$ <span id="pc-nio-diferencia">—</span></td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="card">
-          <h3>Dólares (US$)</h3>
-          <table class="pc-table">
-            <tbody>
-              <tr><th>Saldo inicial</th><td>US$ <span id="pc-usd-inicial">0.00</span></td></tr>
-              <tr><th>Entradas</th><td>US$ <span id="pc-usd-entradas">0.00</span></td></tr>
-              <tr><th>Salidas</th><td>US$ <span id="pc-usd-salidas">0.00</span></td></tr>
-              <tr><th>Saldo teórico</th><td>US$ <span id="pc-usd-teorico">0.00</span></td></tr>
-              <tr><th>Saldo final contado</th><td>US$ <span id="pc-usd-final">—</span></td></tr>
-              <tr><th>Diferencia</th><td>US$ <span id="pc-usd-diferencia">—</span></td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Bloque editable: se deshabilita completo cuando el día está cerrado o en vista histórica -->
-      <fieldset id="pc-count-fieldset" class="pc-lock-fieldset">
-      <div class="card petty-inicial">
-        <h3>Saldo inicial</h3>
-        <div class="row">
-          <div class="petty-block">
-            <h4>Córdobas (C$)</h4>
-            <table class="pc-table" id="pc-table-nio">
-              <thead>
-                <tr><th>Denominación</th><th>Cantidad</th><th>Subtotal</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>C$ 1</td><td><input id="pc-nio-q-1" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-1">0.00</span></td></tr>
-                <tr><td>C$ 5</td><td><input id="pc-nio-q-5" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-5">0.00</span></td></tr>
-                <tr><td>C$ 10</td><td><input id="pc-nio-q-10" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-10">0.00</span></td></tr>
-                <tr><td>C$ 20</td><td><input id="pc-nio-q-20" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-20">0.00</span></td></tr>
-                <tr><td>C$ 50</td><td><input id="pc-nio-q-50" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-50">0.00</span></td></tr>
-                <tr><td>C$ 100</td><td><input id="pc-nio-q-100" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-100">0.00</span></td></tr>
-                <tr><td>C$ 200</td><td><input id="pc-nio-q-200" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-200">0.00</span></td></tr>
-                <tr><td>C$ 500</td><td><input id="pc-nio-q-500" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-500">0.00</span></td></tr>
-                <tr><td>C$ 1000</td><td><input id="pc-nio-q-1000" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-nio-sub-1000">0.00</span></td></tr>
-              </tbody>
-              <tfoot>
-                <tr><td colspan="2">Total inicial C$</td><td>C$ <span id="pc-nio-total">0.00</span></td></tr>
-              </tfoot>
-            </table>
-          </div>
-          <div class="petty-block">
-            <h4>Dólares (US$)</h4>
-            <table class="pc-table" id="pc-table-usd">
-              <thead>
-                <tr><th>Denominación</th><th>Cantidad</th><th>Subtotal</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>US$ 1</td><td><input id="pc-usd-q-1" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-1">0.00</span></td></tr>
-                <tr><td>US$ 5</td><td><input id="pc-usd-q-5" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-5">0.00</span></td></tr>
-                <tr><td>US$ 10</td><td><input id="pc-usd-q-10" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-10">0.00</span></td></tr>
-                <tr><td>US$ 20</td><td><input id="pc-usd-q-20" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-20">0.00</span></td></tr>
-                <tr><td>US$ 50</td><td><input id="pc-usd-q-50" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-50">0.00</span></td></tr>
-                <tr><td>US$ 100</td><td><input id="pc-usd-q-100" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-usd-sub-100">0.00</span></td></tr>
-              </tbody>
-              <tfoot>
-                <tr><td colspan="2">Total inicial US$</td><td>US$ <span id="pc-usd-total">0.00</span></td></tr>
-              </tfoot>
-            </table>
-          </div>
-        </div>
-
-        <div class="petty-sync-row">
-          <span class="muted" style="font-size:0.85rem">Usar saldo inicial desde Finanzas</span>
-          <label class="switch" title="Solo se aplica cuando tú lo activas y presionas Sincronizar">
-            <input type="checkbox" id="pc-init-from-fin-toggle">
-            <span class="slider"></span>
-          </label>
-          <button id="pc-init-from-fin-sync" class="btn-primary btn-pill btn-pill-mini" type="button" disabled>Sincronizar</button>
-          <div id="pc-init-from-fin-status" class="pc-snap-status"></div>
-        </div>
-
-        <div class="actions end">
-  <button id="pc-btn-save-initial" class="btn-ok btn-pill" type="button">Guardar saldo inicial</button>
-  <button id="pc-btn-clear-initial" class="btn-danger btn-pill" type="button">Limpiar</button>
-</div>
-      </div>
-
-      <fieldset id="pc-mov-fieldset" class="pc-lock-fieldset">
-      <div class="card petty-mov">
-        <h3>Movimientos de Caja Chica <span id="pc-mov-form-state" class="badge">—</span></h3>
-        <div class="row">
-          <div class="col">
-            <label for="pc-mov-date">Fecha</label>
-            <input id="pc-mov-date" type="date">
-          </div>
-          <div class="col">
-            <label for="pc-mov-type">Tipo</label>
-            <select id="pc-mov-type">
-              <option value="entrada">Ingreso</option>
-              <option value="salida">Egreso</option>
-              <option value="ajuste">Ajuste</option>
-                          <option value="transferencia">Transferencia</option>
-            </select>
-            <div id="pc-adjust-kind-wrap" style="display:none; margin-top:6px">
-              <label for="pc-mov-adjust-kind" class="muted" style="font-size:0.8rem">Modo ajuste</label>
-              <select id="pc-mov-adjust-kind">
-                <option value="faltante">Faltante</option>
-                <option value="sobrante">Sobrante</option>
-              </select>
-            </div>
-          
-            <div id="pc-transfer-kind-wrap" style="display:none; margin-top:6px">
-              <label for="pc-mov-transfer-kind" class="muted" style="font-size:0.8rem">Tipo de transferencia</label>
-              <select id="pc-mov-transfer-kind">
-                <option value="to_bank">A Banco</option>
-                <option value="to_general">A Caja general</option>
-                <option value="from_general">De Caja general</option>
-              </select>
-            </div>
-</div>
-          <div class="col">
-            <label for="pc-mov-currency">Moneda</label>
-            <select id="pc-mov-currency">
-              <option value="NIO">C$</option>
-              <option value="USD">US$</option>
-            </select>
-          </div>
-          <div class="col">
-            <label for="pc-mov-amount">Monto</label>
-            <input id="pc-mov-amount" class="a33-num" data-a33-default="0.00" type="number" inputmode="decimal" min="0" step="0.01" value="0.00">
-          </div>
-          <div class="col">
-            <label for="pc-mov-desc">Descripción</label>
-            <input id="pc-mov-desc" type="text" placeholder="Detalle del movimiento">
-          </div>
-          <div class="col">
-            <button id="pc-mov-add" class="btn-ok btn-pill">Agregar movimiento</button>
-          </div>
-        </div>
-
-        <div class="row" style="margin-top:8px">
-          <div class="col">
-            <label for="pc-event-fx-rate">Tipo de cambio (USD → C$)</label>
-            <input id="pc-event-fx-rate" type="number" inputmode="decimal" step="0.01" min="0" placeholder="C$ por 1 US$">
-            <small class="muted">Se guarda por evento y se precarga automáticamente. Solo se exige si hoy hubo USD en Caja Chica.</small>
-          </div>
-          <div class="col" style="min-width:160px">
-            <label>&nbsp;</label>
-            <button id="pc-btn-save-event-fx" class="btn-primary btn-pill" type="button">Guardar T/C</button>
-          </div>
-        </div>
-
-        <table class="pc-table" id="pc-mov-table">
-          <thead>
-            <tr>
-              <th>Fecha</th>
-              <th>Tipo</th>
-              <th>Moneda</th>
-              <th>Monto</th>
-              <th>Descripción</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="pc-mov-tbody">
-          </tbody>
-        </table>
-      </div>
-      </fieldset>
-    
-      <div class="card petty-final">
-        <h3>Arqueo final</h3>
-        
-
-        <div class="actions" style="margin-top:8px">
-  <button id="pc-btn-copy-initial" class="btn-primary btn-pill" type="button">Copiar Inicial</button>
-</div>
-        <small class="muted">Copia las cantidades del saldo inicial al arqueo final.</small>
-<div class="row">
-          <div class="petty-block">
-            <h4>Córdobas (C$)</h4>
-            <table class="pc-table" id="pc-table-fnio">
-              <thead>
-                <tr><th>Denominación</th><th>Cantidad</th><th>Subtotal</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>C$ 1</td><td><input id="pc-fnio-q-1" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-1">0.00</span></td></tr>
-                <tr><td>C$ 5</td><td><input id="pc-fnio-q-5" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-5">0.00</span></td></tr>
-                <tr><td>C$ 10</td><td><input id="pc-fnio-q-10" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-10">0.00</span></td></tr>
-                <tr><td>C$ 20</td><td><input id="pc-fnio-q-20" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-20">0.00</span></td></tr>
-                <tr><td>C$ 50</td><td><input id="pc-fnio-q-50" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-50">0.00</span></td></tr>
-                <tr><td>C$ 100</td><td><input id="pc-fnio-q-100" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-100">0.00</span></td></tr>
-                <tr><td>C$ 200</td><td><input id="pc-fnio-q-200" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-200">0.00</span></td></tr>
-                <tr><td>C$ 500</td><td><input id="pc-fnio-q-500" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-500">0.00</span></td></tr>
-                <tr><td>C$ 1000</td><td><input id="pc-fnio-q-1000" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>C$ <span id="pc-fnio-sub-1000">0.00</span></td></tr>
-              </tbody>
-              <tfoot>
-                <tr><td colspan="2">Total final C$</td><td>C$ <span id="pc-fnio-total">0.00</span></td></tr>
-              </tfoot>
-            </table>
-          </div>
-          <div class="petty-block">
-            <h4>Dólares (US$)</h4>
-            <table class="pc-table" id="pc-table-fusd">
-              <thead>
-                <tr><th>Denominación</th><th>Cantidad</th><th>Subtotal</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>US$ 1</td><td><input id="pc-fusd-q-1" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-1">0.00</span></td></tr>
-                <tr><td>US$ 5</td><td><input id="pc-fusd-q-5" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-5">0.00</span></td></tr>
-                <tr><td>US$ 10</td><td><input id="pc-fusd-q-10" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-10">0.00</span></td></tr>
-                <tr><td>US$ 20</td><td><input id="pc-fusd-q-20" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-20">0.00</span></td></tr>
-                <tr><td>US$ 50</td><td><input id="pc-fusd-q-50" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-50">0.00</span></td></tr>
-                <tr><td>US$ 100</td><td><input id="pc-fusd-q-100" class="a33-num" data-a33-default="0" inputmode="numeric" type="number" min="0" step="1" value="0"></td><td>US$ <span id="pc-fusd-sub-100">0.00</span></td></tr>
-              </tbody>
-              <tfoot>
-                <tr><td colspan="2">Total final US$</td><td>US$ <span id="pc-fusd-total">0.00</span></td></tr>
-              </tfoot>
-            </table>
-          </div>
-        </div>
-        <div class="actions end">
-  <button id="pc-btn-save-final" class="btn-ok btn-pill" type="button">Guardar arqueo final</button>
-  <button id="pc-btn-clear-final" class="btn-danger btn-pill" type="button">Limpiar</button>
-</div>
-      </div>
-
-      </fieldset>
-
-      <div class="card petty-close">
-        <h3>Cierre del día</h3>
-        <div class="warn" style="margin-top:8px">
-          El cierre del día se realiza desde <b>Resumen</b>.
-          <button id="pc-btn-go-resumen" class="btn-primary btn-inline btn-pill" type="button" style="margin-left:8px">Ir a Resumen</button>
-        </div>
-
-        <div id="pc-close-status" class="info" style="margin-top:8px"></div>
-        <div id="pc-close-blocker" class="warn" style="display:none; margin-top:8px"></div>
-        <small class="muted">Tip: guarda el arqueo final y dejá la diferencia en 0 para poder cerrar desde Resumen.</small>
-      </div>
-</div>
+    <h2>Sección no disponible</h2>
+    <p class="muted">Esta sección no está disponible en esta versión.</p>
   </section>
 
 <section id="tab-resumen" class="tab card" style="display:none">
@@ -945,7 +482,7 @@
       <div class="row" style="align-items:center; justify-content:space-between; gap:10px;">
         <div>
           <h3 style="margin:0;">Cierre diario</h3>
-          <small class="muted">Guarda un snapshot por <b>evento + día</b>. Si Caja Chica está activa, el cierre exige arqueo final cuadrado.</small>
+          <small class="muted">Guarda un snapshot por <b>evento + día</b>.</small>
         </div>
         <span id="summary-close-status" class="pill">—</span>
       </div>
@@ -1239,7 +776,7 @@
           </div>
           <div style="text-align:right">
             <label>&nbsp;</label>
-            <button id="fx-refresh" class="btn-pill" type="button">Actualizar desde Caja Chica</button>
+            <button id="fx-refresh" class="btn-pill" type="button">Actualizar desde evento</button>
           </div>
         </div>
 
@@ -1270,7 +807,7 @@
     </div>
 
     <div class="info" style="margin-top:10px">
-      <small><b>Regla:</b> si Caja Chica ya tiene tipo de cambio, aquí se usa en <b>solo lectura</b>. Si no existe, puedes usar uno <b>temporal</b> solo en esta pantalla (no se guarda).</small>
+      <small><b>Regla:</b> si ya existe un tipo de cambio guardado, aquí se usa en <b>solo lectura</b>. Si no existe, puedes usar uno <b>temporal</b> solo en esta pantalla (no se guarda).</small>
     </div>
   </section>
 
@@ -1599,33 +1136,32 @@
   <button data-tab="venta" class="active">Vender</button>
   <button data-tab="inventario">Inventario</button>
   <button data-tab="eventos">Eventos</button>
-  <button data-tab="caja">Caja Chica</button>
-  <button data-tab="resumen">Resumen</button>
+<button data-tab="resumen">Resumen</button>
   <button data-tab="productos">Productos</button>
   <button data-tab="calculadora">Calculadora</button>
   <button data-tab="checklist">Checklist</button>
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
-<script src="/assets/js/a33-storage.js?v=4.20.23"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.23"></script>
-<script src="/assets/js/a33-auth.js?v=4.20.23"></script>
-<script src="/assets/js/a33-build.js?v=4.20.23"></script>
+<script src="/assets/js/a33-storage.js?v=4.20.24"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.24"></script>
+<script src="/assets/js/a33-auth.js?v=4.20.24"></script>
+<script src="/assets/js/a33-build.js?v=4.20.24"></script>
 <script>
   (function(){
-    try{      const v = '4.20.23';
+    try{      const v = '4.20.24';
       try{ window.A33_VERSION = v; }catch(_){ }
       // POS: bump revision local (solo este modulo) para forzar limpieza de caches
-      try{ window.A33_ASSET_REV = '2'; }catch(_){ }
-      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r2').toString(); }catch(_){ }
-      try{ window.A33_BUILD_TAG = (v + '-r2').toString(); }catch(_){ }
+      try{ window.A33_ASSET_REV = '1'; }catch(_){ }
+      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r1').toString(); }catch(_){ }
+      try{ window.A33_BUILD_TAG = (v + '-r1').toString(); }catch(_){ }
       const verEl = document.getElementById('a33-version-text');
       if (verEl) verEl.textContent = 'v' + v;
       const bEl = document.getElementById('pos-build-id');
       if (bEl) bEl.textContent = 'POS Build: ' + v;
       const cEl = document.getElementById('pos-sw-cache-id');
       if (cEl){
-        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r2')).toString();
+        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r1')).toString();
         cEl.textContent = 'SW Cache: ' + cn;
         cEl.title = cn;
       }
@@ -1657,7 +1193,7 @@
     }
   })();
 </script>
-<script src="app.js?v=4.20.23&r=2"></script>
+<script src="app.js?v=4.20.24&r=1"></script>
 <script src="/assets/js/a33-input-ux.js?v=4.20.23"></script>
 <script>
   (function(){
