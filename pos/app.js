@@ -4,7 +4,7 @@ const DB_VER = 27; // Etapa 2D: índice sales.by_uid (anti-duplicados)
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.20';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.23';
 const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r2');
 try{ window.A33_POS_BUILD = POS_BUILD; }catch(_){ }
 try{ window.A33_POS_SW_CACHE = POS_SW_CACHE; }catch(_){ }
@@ -1365,6 +1365,10 @@ function pcWithTimeout(promise, ms, code, msg){
 const A33_PC_SELFCHK_META_KEY = 'pc_selfcheck_nonce';
 let __A33_PC_SELFCHK = { running:false, lastAtISO:null, ms:null, results:[] };
 
+// Etapa 10A: Forense profundo READ-ONLY
+// Nota: restringe *solo* comportamientos automáticos que escribirían a IDB durante diagnóstico.
+const A33_PC_FORENSIC_READONLY_MODE = true;
+
 function pcSelfCheckSetState(patch){
   const cur = (typeof __A33_PC_SELFCHK === 'object' && __A33_PC_SELFCHK) ? __A33_PC_SELFCHK : { running:false, lastAtISO:null, ms:null, results:[] };
   __A33_PC_SELFCHK = Object.assign({}, cur, (patch && typeof patch === 'object') ? patch : {});
@@ -1483,6 +1487,22 @@ async function pcRunSelfCheck(){
     return { pass:true, reason:'OK', detail: hasDays ? ('days=' + String(Object.keys(pc.days||{}).length)) : 'OK' };
   });
 
+  // 4.5) LEGACY_SHADOW (READ-ONLY)
+  await run('LEGACY_SHADOW', async ()=>{
+    const obj = (pc && pc.__legacyDays && typeof pc.__legacyDays === 'object') ? pc.__legacyDays : null;
+    const keys = obj ? Object.keys(obj) : [];
+    const n = keys.length;
+    if (!n) return { pass:true, reason:'OK', detail:'__legacyDays=0' };
+    let archived = 0;
+    let pending = 0;
+    for (const k of keys){
+      try{ if (pcLegacyIsArchived(obj[k])) archived++; else pending++; }catch(_){ pending++; }
+    }
+    const top = keys.sort((a,b)=>a.localeCompare(b)).slice(0,3);
+    const noComp = pending ? '' : ' (ARCHIVED: no compite)';
+    return { pass:false, reason:'LEGACY_SHADOW', detail:'__legacyDays=' + String(n) + ' (pending=' + String(pending) + ', archived=' + String(archived) + ')' + (top.length ? ('; top=' + top.join(', ')) : '') + noComp };
+  });
+
   // 5) LOCK_READ (eventId|today)
   await run('LOCK_READ', async ()=>{
     if (!evId) return { pass:false, reason:'META_MISSING', detail:'Sin eventId activo.' };
@@ -1505,13 +1525,8 @@ async function pcRunSelfCheck(){
 
   // 7) DRY_RUN_SAVE (meta dedicated key)
   await run('DRY_RUN_SAVE', async ()=>{
-    const nonce = 'sc-' + Date.now() + '-' + Math.random().toString(16).slice(2,8);
-    const payload = { nonce, atISO: new Date().toISOString() };
-    await pcWithTimeout(put('meta', { id: A33_PC_SELFCHK_META_KEY, value: payload }), T.dry, A33_PC_TECH_CAUSES.IDB_TIMEOUT, 'Self-check write timeout');
-    const back = await pcWithTimeout(getOne('meta', A33_PC_SELFCHK_META_KEY), T.dry, A33_PC_TECH_CAUSES.IDB_TIMEOUT, 'Self-check readback timeout');
-    const ok = !!(back && back.value && back.value.nonce === nonce);
-    if (!ok) return { pass:false, reason:'READBACK_MISMATCH', detail:'meta[' + A33_PC_SELFCHK_META_KEY + '] no coincide.' };
-    return { pass:true, reason:'OK', detail:'readback OK' };
+    // Etapa 10A: NO escribir en meta ni en stores (forense read-only)
+    return { pass:true, reason:'READ_ONLY', detail:'skip (meta write disabled)' };
   });
 
   // 8) CANON_IDEMP (no write)
@@ -5053,6 +5068,9 @@ const A33_PC_CLEANUP_AUDIT_V2_KEY = 'a33_pc_cleanup_audit_v2';
 const A33_PC_CLEANUP_AUDIT_V3_KEY = 'a33_pc_cleanup_audit_v3';
 let __A33_PC_LEGACY_INV_STATE = null;
 let __A33_PC_CONSOLIDATION_PLAN_STATE = null;
+// Etapa 10C: estado de cuarentena legacy (solo UI/diagnóstico)
+let __A33_PC_LEGACY_QUARANTINE_PREVIEW = null;
+let __A33_PC_LEGACY_QUARANTINE_LAST_RESULT = null;
 
 function pcCleanupAuditLoad(){
   try{
@@ -5182,56 +5200,377 @@ function pcIsValidYMDKeyStrict(k){
   }catch(_){ return false; }
 }
 
+
+
+// --- Etapa 10C: Legacy Quarantine (NO destructivo)
+function pcLegacyGetLegacyMeta(dayObj){
+  try{
+    if (!dayObj || typeof dayObj !== 'object') return null;
+    const lm = dayObj.legacyMeta;
+    return (lm && typeof lm === 'object') ? lm : null;
+  }catch(_){ return null; }
+}
+function pcLegacyIsArchived(dayObj){
+  const lm = pcLegacyGetLegacyMeta(dayObj);
+  return !!(lm && lm.archived);
+}
+function pcLegacyMergedTo(dayObj){
+  const lm = pcLegacyGetLegacyMeta(dayObj);
+  if (lm && (lm.mergedTo || lm.mergedInto)) return String(lm.mergedTo || lm.mergedInto);
+  if (dayObj && dayObj.mergedInto) return String(dayObj.mergedInto);
+  return '';
+}
+function pcLegacyArchivedAt(dayObj){
+  const lm = pcLegacyGetLegacyMeta(dayObj);
+  if (lm && (lm.archivedAtISO || lm.archivedAt || lm.archivedAtMs)) return String(lm.archivedAtISO || lm.archivedAt || lm.archivedAtMs);
+  return '';
+}
+
+function pcLegacyCountSectionMeaningful(sec){
+  try{
+    if (!sec || typeof sec !== 'object') return false;
+    const norm = A33_PCEngine.normalizeCountSection(sec);
+    const tn = Number(norm.totalNio||0)||0;
+    const tu = Number(norm.totalUsd||0)||0;
+    const hasSavedAt = !!(sec.savedAt || sec.savedAtISO || sec.savedAtMs);
+    return (tn !== 0) || (tu !== 0) || hasSavedAt;
+  }catch(_){ return false; }
+}
+function pcLegacyFinMetaMeaningful(day){
+  try{
+    const fin = (typeof pcGetDayInitialFromFinanzas === 'function') ? pcGetDayInitialFromFinanzas(day) : null;
+    if (!fin || typeof fin !== 'object') return false;
+    const sig = fin.snapshotSig || fin.sig || fin.hash || '';
+    const applied = fin.appliedAtISO || fin.appliedAt || fin.appliedAtMs || '';
+    return !!(String(sig||'').trim() || String(applied||'').trim());
+  }catch(_){ return false; }
+}
+function pcLegacyCanBeQuarantined(legacyDay, canonicalDay, normDay){
+  try{
+    if (!legacyDay || typeof legacyDay !== 'object') return false;
+    if (!canonicalDay || typeof canonicalDay !== 'object') return false;
+    const merged = (pcLegacyMergedTo(legacyDay) === String(normDay||'')) || (String(legacyDay.mergedInto||'') === String(normDay||''));
+
+    const lInit = pcLegacyCountSectionMeaningful(legacyDay.initial);
+    const lFinal = pcLegacyCountSectionMeaningful(legacyDay.finalCount);
+    const lMeta = pcLegacyFinMetaMeaningful(legacyDay);
+
+    const cInit = pcLegacyCountSectionMeaningful(canonicalDay.initial);
+    const cFinal = pcLegacyCountSectionMeaningful(canonicalDay.finalCount);
+    const cMeta = pcLegacyFinMetaMeaningful(canonicalDay);
+
+    if (lInit && !cInit) return false;
+    if (lFinal && !cFinal) return false;
+    if (lMeta && !cMeta) return false;
+
+    // Si el legacy está vacío, igual es seguro archivarlo si ya existe el día canonical.
+    if (!lInit && !lFinal && !lMeta) return true;
+
+    // Si hay contenido, preferimos que ya esté mergeado (flag) o que el canonical tenga datos.
+    return merged || (cInit || cFinal || cMeta);
+  }catch(_){ return false; }
+}
+
+function pcLegacyQuarantinePreview(raw){
+  const out = { total:0, archived:0, pending:0, candidates:[] };
+  try{
+    const legacyObj = (raw && typeof raw === 'object' && raw.__legacyDays && typeof raw.__legacyDays === 'object') ? raw.__legacyDays : null;
+    const daysObj = (raw && typeof raw === 'object' && raw.days && typeof raw.days === 'object') ? raw.days : null;
+    if (!legacyObj) return out;
+    const keys = Object.keys(legacyObj);
+    out.total = keys.length;
+    for (const rk of keys){
+      const rawKey = String(rk||'').trim();
+      const v = legacyObj[rk];
+      if (pcLegacyIsArchived(v)) { out.archived++; continue; }
+      out.pending++;
+      let norm = null;
+      try{ norm = normalizePcDayKey(rawKey, v); }catch(_){ norm = null; }
+      if (!norm) continue;
+      const nk = String(norm);
+      if (!pcIsValidYMDKeyStrict(nk)) continue;
+      if (!daysObj || !daysObj[nk]) continue;
+      if (pcLegacyCanBeQuarantined(v, daysObj[nk], nk)){
+        out.candidates.push({ legacyKey: rawKey, normalizedDay: nk });
+      }
+    }
+  }catch(_){ }
+  return out;
+}
+
+function pcLegacyQuarantineApply(raw, candidates){
+  const rep = { archived:0, skipped:0, touchedDays:[], sampleKeys:[] };
+  try{
+    const cands = Array.isArray(candidates) ? candidates : [];
+    if (!cands.length) return rep;
+    const legacyObj = (raw && typeof raw === 'object' && raw.__legacyDays && typeof raw.__legacyDays === 'object') ? raw.__legacyDays : null;
+    const daysObj = (raw && typeof raw === 'object' && raw.days && typeof raw.days === 'object') ? raw.days : null;
+    if (!legacyObj || !daysObj) return rep;
+    const nowISO = new Date().toISOString();
+    const touched = new Set();
+    const perDaySample = Object.create(null);
+
+    for (const c of cands){
+      const lk = String(c.legacyKey||'').trim();
+      const nk = String(c.normalizedDay||'').trim();
+      if (!lk || !nk) { rep.skipped++; continue; }
+      const v = legacyObj[lk];
+      if (!v || typeof v !== 'object') { rep.skipped++; continue; }
+      if (pcLegacyIsArchived(v)) { rep.skipped++; continue; }
+
+      const lm = pcLegacyGetLegacyMeta(v) || {};
+      lm.archived = true;
+      lm.mergedTo = nk;
+      lm.archivedAtISO = nowISO;
+      v.legacyMeta = lm;
+      legacyObj[lk] = v;
+
+      // meta.legacyQuarantine en el día canonical
+      const d = daysObj[nk];
+      if (d && typeof d === 'object'){
+        const meta = (d.meta && typeof d.meta === 'object') ? d.meta : {};
+        const q = (meta.legacyQuarantine && typeof meta.legacyQuarantine === 'object') ? meta.legacyQuarantine : {};
+        q.lastRunAt = nowISO;
+        // sampleKeys por día (máx 3)
+        const arr = Array.isArray(q.sampleKeys) ? q.sampleKeys.slice(0,3) : [];
+        if (!arr.includes(lk) && arr.length < 3) arr.push(lk);
+        q.sampleKeys = arr;
+        meta.legacyQuarantine = q;
+        d.meta = meta;
+        daysObj[nk] = d;
+      }
+
+      touched.add(nk);
+      (perDaySample[nk] || (perDaySample[nk] = [])).push(lk);
+      if (rep.sampleKeys.length < 3 && !rep.sampleKeys.includes(lk)) rep.sampleKeys.push(lk);
+      rep.archived++;
+    }
+
+    // Recalcular archivedCount por día tocado
+    for (const nk of Array.from(touched)){
+      let cnt = 0;
+      for (const k in legacyObj){
+        const v = legacyObj[k];
+        if (!v || typeof v !== 'object') continue;
+        if (!pcLegacyIsArchived(v)) continue;
+        const mto = pcLegacyMergedTo(v) || (pcLegacyGetLegacyMeta(v) && pcLegacyGetLegacyMeta(v).mergedTo) || '';
+        if (String(mto) === String(nk)) cnt++;
+      }
+      const d = daysObj[nk];
+      if (d && typeof d === 'object'){
+        const meta = (d.meta && typeof d.meta === 'object') ? d.meta : {};
+        const q = (meta.legacyQuarantine && typeof meta.legacyQuarantine === 'object') ? meta.legacyQuarantine : {};
+        q.archivedCount = cnt;
+        meta.legacyQuarantine = q;
+        d.meta = meta;
+        daysObj[nk] = d;
+      }
+    }
+
+    rep.touchedDays = Array.from(touched);
+  }catch(_){ }
+  return rep;
+}
+
+async function pcLegacyQuarantineRunUI(){
+  const btn = document.getElementById('pc-legacy-quarantine-btn');
+  const resEl = document.getElementById('pc-legacy-quarantine-result');
+  try{
+    if (btn) btn.disabled = true;
+    if (resEl) resEl.textContent = '...';
+
+    if (A33_PC_FORENSIC_READONLY_MODE){
+      if (resEl) resEl.textContent = 'Solo diagnóstico (read-only).';
+      return;
+    }
+
+    const eventId = await getMeta('currentEventId');
+    if (!eventId){
+      if (resEl) resEl.textContent = 'Sin evento activo.';
+      return;
+    }
+
+    const raw = await getPettyCashRawRecord(eventId);
+    const pv = pcLegacyQuarantinePreview(raw);
+    const candidates = (pv && pv.candidates) ? pv.candidates : [];
+
+    if (!candidates.length){
+      __A33_PC_LEGACY_QUARANTINE_LAST_RESULT = {
+        atISO: new Date().toISOString(),
+        archived: 0,
+        skipped: 0,
+        text: '0 pendientes'
+      };
+      if (resEl) resEl.textContent = '0 pendientes';
+      return;
+    }
+
+    // Clonar para evitar mutar raw directo
+    let clone = null;
+    try{ clone = JSON.parse(JSON.stringify(raw || {})); }catch(_){ clone = raw ? { ...raw } : {}; }
+
+    const rep = pcLegacyQuarantineApply(clone, candidates);
+    const archived = rep && typeof rep.archived === 'number' ? rep.archived : 0;
+    const skipped = rep && typeof rep.skipped === 'number' ? rep.skipped : 0;
+    const changed = !!(rep && rep.changed);
+
+    if (!changed || archived <= 0){
+      __A33_PC_LEGACY_QUARANTINE_LAST_RESULT = {
+        atISO: new Date().toISOString(),
+        archived: 0,
+        skipped: skipped,
+        text: '0 pendientes'
+      };
+      if (resEl) resEl.textContent = '0 pendientes';
+      return;
+    }
+
+    const updatedRecord = {
+      eventId: eventId,
+      version: (clone && clone.version) ? clone.version : 2,
+      days: (clone && clone.days && typeof clone.days === 'object') ? clone.days : {},
+      __legacyDays: (clone && clone.__legacyDays && typeof clone.__legacyDays === 'object') ? clone.__legacyDays : {},
+      __legacyIndex: (clone && clone.__legacyIndex && typeof clone.__legacyIndex === 'object') ? clone.__legacyIndex : undefined
+    };
+
+    const saveCtx = {
+      action: 'LEGACY_QUARANTINE',
+      forceWrite: true,
+      note: `archived=${archived} skipped=${skipped}`
+    };
+
+    const saveRes = await pcSave(eventId, updatedRecord, saveCtx);
+    const ok = !!(saveRes && saveRes.ok);
+
+    __A33_PC_LEGACY_QUARANTINE_LAST_RESULT = {
+      atISO: new Date().toISOString(),
+      archived: archived,
+      skipped: skipped,
+      code: saveRes && saveRes.code ? String(saveRes.code) : (ok ? 'OK' : 'ERR'),
+      text: `archived ${archived} / skipped ${skipped}`
+    };
+
+    if (resEl) resEl.textContent = __A33_PC_LEGACY_QUARANTINE_LAST_RESULT.text;
+
+    // Refrescar UI (sin tocar cierres/candados)
+    try{ await renderCajaChica(); }catch(_){ }
+  }catch(e){
+    if (resEl) resEl.textContent = 'Error en cuarentena.';
+  }finally{
+    try{ await pcLegacyInventoryRun(await getMeta('currentEventId')); }catch(_){ }
+    if (btn) btn.disabled = false;
+  }
+}
+
 function pcLegacyInventoryCompute(eventId, raw){
   const ev = eventId || null;
   const out = {
     timestampISO: new Date().toISOString(),
     eventId: ev,
+    // Campos legacy (mantener compatibilidad)
     totalDays: 0,
     legacyKeysFound: 0,
     collisionsFound: 0,
-    topCollisions: []
+    topCollisions: [],
+    // Etapa 10A: conteos separados
+    keysDays: 0,
+    keysLegacyDays: 0,
+    collisionsDaysOnly: 0,
+    collisionsIncludingLegacy: 0
   };
 
   try{
     // Preferir el raw real, porque conserva llaves originales (antes de coerce/merge).
-    const isDays = raw && typeof raw === 'object' && raw.days && typeof raw.days === 'object';
-    const daysObj = isDays ? raw.days : null;
+    const daysObj = (raw && typeof raw === 'object' && raw.days && typeof raw.days === 'object') ? raw.days : null;
+    const legacyDaysObj = (raw && typeof raw === 'object' && raw.__legacyDays && typeof raw.__legacyDays === 'object') ? raw.__legacyDays : null;
 
-    const normMap = Object.create(null);
+    const dayKeys = daysObj ? Object.keys(daysObj) : [];
+    const legacyKeys = legacyDaysObj ? Object.keys(legacyDaysObj) : [];
+
+    // Etapa 10C: contar legacy archivados vs pendientes
+    let legacyArchived = 0;
+    let legacyPending = 0;
+    if (legacyDaysObj){
+      for (const rk of legacyKeys){
+        const v = legacyDaysObj[rk];
+        if (pcLegacyIsArchived(v)) legacyArchived++;
+        else legacyPending++;
+      }
+    }
+    out.legacyArchivedCount = legacyArchived;
+    out.legacyPendingCount = legacyPending;
+
+    out.keysDays = dayKeys.length;
+    out.keysLegacyDays = legacyKeys.length;
+    out.totalDays = dayKeys.length;
+
+    // Mapas: days-only vs (days + __legacyDays)
+    const mapDaysOnly = Object.create(null);  // nk -> ["days:KEY", ...]
+    const mapAll = Object.create(null);      // nk -> ["days:KEY"|"__legacyDays:KEY", ...]
+
+    let legacyCount = 0;
+
     if (daysObj){
-      const keys = Object.keys(daysObj);
-      out.totalDays = keys.length;
-      for (const rk of keys){
-        const rawKey = String(rk || '');
-        const isCanon = pcIsValidYMDKeyStrict(rawKey);
-        if (!isCanon) out.legacyKeysFound++;
-        let norm = null;
-        try{ norm = normalizePcDayKey(rawKey, daysObj[rk]); }catch(_){ norm = null; }
-        if (norm){
-          const nk = String(norm);
-          const arr = normMap[nk] || (normMap[nk] = []);
-          arr.push(rawKey);
-        }
+      for (const rk of dayKeys){
+        const rawKey = String(rk || '').trim();
+        if (!pcIsValidYMDKeyStrict(rawKey)) legacyCount++;
+        let nk = null;
+        try{ nk = normalizePcDayKey(rawKey, daysObj[rk]); }catch(_){ nk = null; }
+        if (!nk) continue;
+        const norm = String(nk);
+        (mapDaysOnly[norm] || (mapDaysOnly[norm] = [])).push('days:' + rawKey);
+        (mapAll[norm] || (mapAll[norm] = [])).push('days:' + rawKey);
       }
     } else {
       // Esquema legado sin days: lo marcamos como 1 "day" legado (solo inventario, sin escribir).
       const hasLegacyShape = raw && typeof raw === 'object' && (('initial' in raw) || ('movements' in raw) || ('finalCount' in raw));
       if (hasLegacyShape){
         out.totalDays = 1;
-        out.legacyKeysFound = 1;
+        legacyCount = 1;
         let guessed = null;
         try{ guessed = guessPettyDayKey(raw); }catch(_){ guessed = null; }
-        const nk = guessed || todayYMD();
-        normMap[nk] = ['legacy'];
+        const norm = String(guessed || todayYMD());
+        (mapDaysOnly[norm] || (mapDaysOnly[norm] = [])).push('days:legacy');
+        (mapAll[norm] || (mapAll[norm] = [])).push('days:legacy');
       }
     }
 
+    if (legacyDaysObj){
+      for (const rk of legacyKeys){
+        const rawKey = String(rk || '').trim();
+        const lv = legacyDaysObj[rk];
+        if (pcLegacyIsArchived(lv)) continue;
+        let nk = null;
+        try{ nk = normalizePcDayKey(rawKey, legacyDaysObj[rk]); }catch(_){ nk = null; }
+        if (!nk) continue;
+        const norm = String(nk);
+        (mapAll[norm] || (mapAll[norm] = [])).push('__legacyDays:' + rawKey);
+      }
+    }
+
+    out.legacyKeysFound = legacyCount;
+
+    // Colisiones
+    const countCollisions = (mp)=>{
+      let c = 0;
+      for (const nk in mp){
+        const uniq = Array.from(new Set((mp[nk] || []).map(x=>String(x||'').trim()))).filter(Boolean);
+        if (uniq.length > 1) c++;
+      }
+      return c;
+    };
+
+    out.collisionsDaysOnly = countCollisions(mapDaysOnly);
+    out.collisionsIncludingLegacy = countCollisions(mapAll);
+    out.collisionsFound = out.collisionsIncludingLegacy;
+
+    // Top colisiones (incluyendo __legacyDays)
     const coll = [];
-    for (const nk in normMap){
-      const uniq = Array.from(new Set((normMap[nk] || []).map(x=>String(x||'').trim()))).filter(Boolean);
+    for (const nk in mapAll){
+      const uniq = Array.from(new Set((mapAll[nk] || []).map(x=>String(x||'').trim()))).filter(Boolean);
       if (uniq.length > 1){
-        coll.push({ normalizedDay: nk, originalKeys: uniq });
+        const sorted = uniq.slice().sort((a,b)=>String(a).localeCompare(String(b)));
+        coll.push({ normalizedDay: nk, originalKeys: sorted });
       }
     }
 
@@ -5242,7 +5581,6 @@ function pcLegacyInventoryCompute(eventId, raw){
       return String(a.normalizedDay||'').localeCompare(String(b.normalizedDay||''));
     });
 
-    out.collisionsFound = coll.length;
     out.topCollisions = coll.slice(0,10);
   }catch(_){ }
 
@@ -5282,33 +5620,85 @@ function pcLegacyInventoryAuditAppend(inv){
 
 function pcLegacyInventoryClearUI(){
   try{
-    const a = document.getElementById('pc-legacy-total-days');
-    const b = document.getElementById('pc-legacy-keys-found');
-    const c = document.getElementById('pc-legacy-collisions-found');
+    const a = document.getElementById('pc-keys-days');
+    const b = document.getElementById('pc-keys-legacydays');
+    const c1 = document.getElementById('pc-collisions-days-only');
+    const c2 = document.getElementById('pc-collisions-with-legacy');
     const box = document.getElementById('pc-legacy-collisions-top');
+    const alert = document.getElementById('pc-legacy-shadow-alert');
+    const alertMsg = document.getElementById('pc-legacy-shadow-alert-msg');
+    const qBtn = document.getElementById('pc-legacy-quarantine-btn');
+    const qRes = document.getElementById('pc-legacy-quarantine-result');
     if (a) a.textContent = '—';
     if (b) b.textContent = '—';
-    if (c) c.textContent = '—';
+    if (c1) c1.textContent = '—';
+    if (c2) c2.textContent = '—';
     if (box) box.textContent = '—';
+    if (alert) alert.style.display = 'none';
+    if (alertMsg) alertMsg.textContent = '__legacyDays=—';
+    if (qBtn) { qBtn.style.display = 'none'; qBtn.disabled = false; qBtn.textContent = 'Cuarentenar legacy'; }
+    if (qRes) qRes.textContent = '';
   }catch(_){ }
 }
 
 function pcLegacyInventoryRender(){
   const inv = __A33_PC_LEGACY_INV_STATE;
-  const a = document.getElementById('pc-legacy-total-days');
-  const b = document.getElementById('pc-legacy-keys-found');
-  const c = document.getElementById('pc-legacy-collisions-found');
+  const a = document.getElementById('pc-keys-days');
+  const b = document.getElementById('pc-keys-legacydays');
+  const c1 = document.getElementById('pc-collisions-days-only');
+  const c2 = document.getElementById('pc-collisions-with-legacy');
   const box = document.getElementById('pc-legacy-collisions-top');
-  if (!a && !b && !c && !box) return;
+  const alert = document.getElementById('pc-legacy-shadow-alert');
+  const alertMsg = document.getElementById('pc-legacy-shadow-alert-msg');
+  const qBtn = document.getElementById('pc-legacy-quarantine-btn');
+  const qRes = document.getElementById('pc-legacy-quarantine-result');
+  if (!a && !b && !c1 && !c2 && !box && !alert && !alertMsg) return;
 
   if (!inv){
     pcLegacyInventoryClearUI();
     return;
   }
 
-  if (a) a.textContent = String(Number(inv.totalDays||0)||0);
-  if (b) b.textContent = String(Number(inv.legacyKeysFound||0)||0);
-  if (c) c.textContent = String(Number(inv.collisionsFound||0)||0);
+  if (a) a.textContent = String(Number(inv.keysDays||0)||0);
+  if (b) b.textContent = String(Number(inv.keysLegacyDays||0)||0);
+  if (c1) c1.textContent = String(Number(inv.collisionsDaysOnly||0)||0);
+  if (c2) c2.textContent = String(Number(inv.collisionsIncludingLegacy||0)||0);
+
+  try{
+    const n = Number(inv.keysLegacyDays||0)||0;
+    const pending = Number(inv.legacyPendingCount||0)||0;
+    const archived = Number(inv.legacyArchivedCount||0)||0;
+    if (alert){
+      alert.style.display = (n > 0) ? 'block' : 'none';
+    }
+    if (alertMsg){
+      let msg = '__legacyDays=' + String(n);
+      if (n > 0) msg += ' (pending=' + String(pending) + ', archived=' + String(archived) + ')';
+      if (n > 0 && pending == 0) msg += ' — ARCHIVED (no compite)';
+      alertMsg.textContent = msg;
+    }
+
+    // Botón de cuarentena (Etapa 10C)
+    const pv = __A33_PC_LEGACY_QUARANTINE_PREVIEW;
+    const cand = (pv && Array.isArray(pv.candidates)) ? pv.candidates.length : 0;
+    if (qBtn){
+      if (n > 0){
+        qBtn.style.display = 'inline-flex';
+        qBtn.textContent = 'Cuarentenar legacy (' + String(cand) + ')';
+        qBtn.disabled = A33_PC_FORENSIC_READONLY_MODE;
+      }else{
+        qBtn.style.display = 'none';
+      }
+    }
+    if (qRes){
+      const last = __A33_PC_LEGACY_QUARANTINE_LAST_RESULT;
+      if (last && typeof last === 'object' && (last.text || last.archived != null)){
+        qRes.textContent = last.text || ('archived ' + String(Number(last.archived||0)||0) + ' / skipped ' + String(Number(last.skipped||0)||0));
+      }else{
+        qRes.textContent = '';
+      }
+    }
+  }catch(_){ }
 
   if (box){
     const rows = Array.isArray(inv.topCollisions) ? inv.topCollisions : [];
@@ -5333,8 +5723,323 @@ function pcLegacyInventoryRun(eventId, raw){
   try{
     const inv = pcLegacyInventoryCompute(eventId, raw);
     __A33_PC_LEGACY_INV_STATE = inv || null;
-    pcLegacyInventoryAuditAppend(inv);
+    try{ __A33_PC_LEGACY_QUARANTINE_PREVIEW = pcLegacyQuarantinePreview(raw||null); }catch(_){ __A33_PC_LEGACY_QUARANTINE_PREVIEW = null; }
+    if (!A33_PC_FORENSIC_READONLY_MODE) pcLegacyInventoryAuditAppend(inv);
     pcLegacyInventoryRender();
+  }catch(_){ }
+}
+
+// --- Etapa 10A: Fuentes por Día (Forense) + Winner Trace (READ-ONLY)
+let __A33_PC_FORENSIC_SOURCES_STATE = null;
+
+function pcForensicCountHashSection(sec){
+  try{
+    if (!sec || typeof sec !== 'object') return '';
+    const norm = A33_PCEngine.normalizeCountSection(sec);
+    const nio = (norm && norm.nio && typeof norm.nio === 'object') ? norm.nio : {};
+    const usd = (norm && norm.usd && typeof norm.usd === 'object') ? norm.usd : {};
+    const parts = [];
+    parts.push('N');
+    for (const d of NIO_DENOMS){
+      const k = String(d);
+      const q = Number(nio[k] || 0) || 0;
+      if (q) parts.push(k + '=' + String(q));
+    }
+    parts.push('|U');
+    for (const d of USD_DENOMS){
+      const k = String(d);
+      const q = Number(usd[k] || 0) || 0;
+      if (q) parts.push(k + '=' + String(q));
+    }
+    const h = a33HashStringPOS(parts.join(';'));
+    return (h || '').slice(0,8);
+  }catch(_){ return ''; }
+}
+
+function pcForensicParseTimeAny(v){
+  try{
+    if (v == null) return 0;
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    const s = String(v || '').trim();
+    if (!s) return 0;
+    const n = Number(s);
+    if (Number.isFinite(n)) return n;
+    const t = Date.parse(s);
+    return Number.isFinite(t) ? t : 0;
+  }catch(_){ return 0; }
+}
+
+function pcForensicCountInfo(sec){
+  try{
+    if (!sec || typeof sec !== 'object') return { savedAt:'', totalNio:0, totalUsd:0, hash:'', hasSavedAt:false };
+    const norm = A33_PCEngine.normalizeCountSection(sec);
+    const savedAt = (sec.savedAt != null) ? String(sec.savedAt) : '';
+    return {
+      savedAt,
+      totalNio: Number(norm.totalNio||0)||0,
+      totalUsd: Number(norm.totalUsd||0)||0,
+      hash: pcForensicCountHashSection(sec),
+      hasSavedAt: !!savedAt
+    };
+  }catch(_){ return { savedAt:'', totalNio:0, totalUsd:0, hash:'', hasSavedAt:false }; }
+}
+
+function pcForensicMetaInfo(day){
+  try{
+    const meta = (day && day.meta && typeof day.meta === 'object') ? day.meta : null;
+    const savedAt = meta && (meta.savedAt || meta.updatedAtISO || meta.updatedAt || meta.ts || meta.time)
+      ? String(meta.savedAt || meta.updatedAtISO || meta.updatedAt || meta.ts || meta.time)
+      : '';
+    const fin = (typeof pcGetDayInitialFromFinanzas === 'function') ? pcGetDayInitialFromFinanzas(day) : null;
+    const applied = fin && (fin.appliedAtISO || fin.appliedAt || fin.appliedAtMs) ? String(fin.appliedAtISO || fin.appliedAt || fin.appliedAtMs) : '';
+    const sig = fin && (fin.snapshotSig || fin.sig || fin.hash) ? String(fin.snapshotSig || fin.sig || fin.hash) : '';
+    const flags = [];
+    if (fin) flags.push('initialFromFinanzas');
+    if (applied) flags.push('applied');
+    if (sig) flags.push('sig');
+    return { savedAt, appliedAt: applied, sig, flags: flags.join(',') };
+  }catch(_){ return { savedAt:'', appliedAt:'', sig:'', flags:'' }; }
+}
+
+function pcForensicPickWinner(sources, kind){
+  const list = Array.isArray(sources) ? sources.slice() : [];
+  const getTs = (s)=>{
+    if (!s) return 0;
+    if (kind === 'meta'){
+      const m = s.meta || {};
+      return pcForensicParseTimeAny(m.appliedAt || m.savedAt);
+    }
+    const c = (kind === 'final') ? (s.final || {}) : (s.initial || {});
+    return pcForensicParseTimeAny(c.savedAt);
+  };
+  const keyOf = (s)=> (String(s.sourceType||'') + ':' + String(s.sourceKey||''));
+  list.sort((a,b)=>{
+    const ta = getTs(a), tb = getTs(b);
+    if (tb !== ta) return tb - ta;
+    return keyOf(a).localeCompare(keyOf(b));
+  });
+  const w = list[0] || null;
+  const wKey = w ? keyOf(w) : '';
+  const t1 = w ? getTs(w) : 0;
+  const t2 = (list[1]) ? getTs(list[1]) : 0;
+  let reason = '—';
+  if (!w) reason = 'sin fuentes';
+  else if (!t1 && !t2) reason = 'sin timestamps';
+  else if (t1 && !t2) reason = 'solo fuente con timestamp';
+  else if (t1 > t2) reason = (kind === 'meta') ? 'appliedAt más reciente' : 'savedAt más reciente';
+  else reason = 'empate → key lexicográfico';
+  return { winnerKey: wKey || '—', reason };
+}
+
+function pcForensicSourcesCompute(raw, activeDay){
+  const out = { activeDay: String(activeDay||'').trim() || '', sources: [], winners:{ initial:{winnerKey:'—',reason:'—'}, final:{winnerKey:'—',reason:'—'}, meta:{winnerKey:'—',reason:'—'} } };
+  try{
+    const day = out.activeDay;
+    if (!day) return out;
+    const daysObj = (raw && typeof raw === 'object' && raw.days && typeof raw.days === 'object') ? raw.days : null;
+    const legacyObj = (raw && typeof raw === 'object' && raw.__legacyDays && typeof raw.__legacyDays === 'object') ? raw.__legacyDays : null;
+    const pushOne = (sourceType, sourceKey, dayObj)=>{
+      let norm = null;
+      try{ norm = normalizePcDayKey(sourceKey, dayObj); }catch(_){ norm = null; }
+      if (String(norm||'') !== day) return;
+      const ini = pcForensicCountInfo(dayObj && dayObj.initial);
+      const fin = pcForensicCountInfo(dayObj && dayObj.finalCount);
+      const met = pcForensicMetaInfo(dayObj);
+      const archived = (sourceType === '__legacyDays') ? pcLegacyIsArchived(dayObj) : false;
+      const lm = (sourceType === '__legacyDays') ? pcLegacyGetLegacyMeta(dayObj) : null;
+      const mergedTo = (sourceType === '__legacyDays')
+        ? (lm && (lm.mergedTo || lm.mergedInto) ? String(lm.mergedTo || lm.mergedInto) : (dayObj && dayObj.mergedInto ? String(dayObj.mergedInto) : ''))
+        : '';
+      const archivedAt = (sourceType === '__legacyDays')
+        ? (lm && (lm.archivedAt || lm.archivedAtISO) ? String(lm.archivedAt || lm.archivedAtISO) : '')
+        : '';
+      out.sources.push({
+        sourceType,
+        sourceKey: String(sourceKey||''),
+        normalizedDay: day,
+        archived,
+        mergedTo,
+        archivedAt,
+        initial: ini,
+        final: fin,
+        meta: met
+      });
+    };
+    if (daysObj){
+      for (const k of Object.keys(daysObj)) pushOne('days', String(k), daysObj[k]);
+    }
+    if (legacyObj){
+      for (const k of Object.keys(legacyObj)) pushOne('__legacyDays', String(k), legacyObj[k]);
+    }
+    // Orden estable: days primero, luego __legacyDays, y por key
+    out.sources.sort((a,b)=>{
+      const ta = (a.sourceType === 'days') ? 0 : 1;
+      const tb = (b.sourceType === 'days') ? 0 : 1;
+      if (ta !== tb) return ta - tb;
+      return String(a.sourceKey||'').localeCompare(String(b.sourceKey||''));
+    });
+    // Regla dura: __legacyDays no compite. Winners = solo days.
+    const daysOnly = out.sources.filter(s=> s && s.sourceType === 'days');
+    const legacyAll = out.sources.filter(s=> s && s.sourceType === '__legacyDays');
+    const legacyPending = legacyAll.filter(s=> s && !s.archived);
+    const legacyArchived = legacyAll.filter(s=> s && !!s.archived);
+    const legacyHas = (kind, list)=>{
+      try{
+        if (!list || !list.length) return false;
+        if (kind === 'meta'){
+          return list.some(s=> s && s.meta && (s.meta.sig || s.meta.essHash || s.meta.appliedAt || s.meta.savedAt));
+        }
+        if (kind === 'final'){
+          return list.some(s=> s && s.final && (s.final.hasSavedAt || s.final.totalNio !== 0 || s.final.totalUsd !== 0));
+        }
+        return list.some(s=> s && s.initial && (s.initial.hasSavedAt || s.initial.totalNio !== 0 || s.initial.totalUsd !== 0));
+      }catch(_){ return (list && list.length > 0); }
+    };
+    const pickWinnerDaysOnly = (kind)=>{
+      const w = pcForensicPickWinner(daysOnly, kind);
+      if (daysOnly.length) return w;
+      if (legacyHas(kind, legacyPending)) return { winnerKey:'—', reason:'legacy: donor-only' };
+      if (legacyHas(kind, legacyArchived)) return { winnerKey:'—', reason:'legacy: archived (no compite)' };
+      if (legacyAll.length) return { winnerKey:'—', reason:'legacy: vacío' };
+      return { winnerKey:'—', reason:'—' };
+    };
+    out.winners.initial = pickWinnerDaysOnly('initial');
+    out.winners.final = pickWinnerDaysOnly('final');
+    out.winners.meta = pickWinnerDaysOnly('meta');
+  }catch(_){ }
+  return out;
+}
+
+function pcForensicSourcesClearUI(){
+  try{
+    const day = document.getElementById('pc-src-active-day');
+    const tbody = document.getElementById('pc-src-tbody');
+    const wi = document.getElementById('pc-winner-initial');
+    const wf = document.getElementById('pc-winner-final');
+    const wm = document.getElementById('pc-winner-meta');
+    const wri = document.getElementById('pc-winner-initial-reason');
+    const wrf = document.getElementById('pc-winner-final-reason');
+    const wrm = document.getElementById('pc-winner-meta-reason');
+    if (day) day.textContent = '—';
+    if (wi) wi.textContent = '—';
+    if (wf) wf.textContent = '—';
+    if (wm) wm.textContent = '—';
+    if (wri) wri.textContent = '—';
+    if (wrf) wrf.textContent = '—';
+    if (wrm) wrm.textContent = '—';
+    if (tbody) tbody.innerHTML = '<tr><td colspan="5" class="muted">—</td></tr>';
+  }catch(_){ }
+}
+
+function pcForensicSourcesRender(){
+  const st = __A33_PC_FORENSIC_SOURCES_STATE;
+  const day = document.getElementById('pc-src-active-day');
+  const tbody = document.getElementById('pc-src-tbody');
+  const wi = document.getElementById('pc-winner-initial');
+  const wf = document.getElementById('pc-winner-final');
+  const wm = document.getElementById('pc-winner-meta');
+  const wri = document.getElementById('pc-winner-initial-reason');
+  const wrf = document.getElementById('pc-winner-final-reason');
+  const wrm = document.getElementById('pc-winner-meta-reason');
+  if (!day && !tbody && !wi && !wf && !wm && !wri && !wrf && !wrm) return;
+
+  if (!st){
+    pcForensicSourcesClearUI();
+    return;
+  }
+
+  try{ if (day) day.textContent = st.activeDay || '—'; }catch(_){ }
+
+  try{
+    if (wi) wi.textContent = (st.winners && st.winners.initial) ? (st.winners.initial.winnerKey || '—') : '—';
+    if (wf) wf.textContent = (st.winners && st.winners.final) ? (st.winners.final.winnerKey || '—') : '—';
+    if (wm) wm.textContent = (st.winners && st.winners.meta) ? (st.winners.meta.winnerKey || '—') : '—';
+    if (wri) wri.textContent = (st.winners && st.winners.initial) ? (st.winners.initial.reason || '—') : '—';
+    if (wrf) wrf.textContent = (st.winners && st.winners.final) ? (st.winners.final.reason || '—') : '—';
+    if (wrm) wrm.textContent = (st.winners && st.winners.meta) ? (st.winners.meta.reason || '—') : '—';
+  }catch(_){ }
+
+  if (!tbody) return;
+  const rows = Array.isArray(st.sources) ? st.sources : [];
+  if (!rows.length){
+    tbody.innerHTML = '<tr><td colspan="5" class="muted">Sin fuentes que normalicen a este día.</td></tr>';
+    return;
+  }
+
+  const esc = (typeof escapeHtml === 'function') ? escapeHtml : (s)=>String(s||'');
+  const fmtMoney = (n)=>{
+    const v = Number(n||0);
+    if (!Number.isFinite(v)) return '0.00';
+    return String(Math.round(v*100)/100);
+  };
+  const fmtSaved = (v)=>{
+    const s = String(v||'').trim();
+    if (!s) return '—';
+    try{ return (typeof pcForensicFmtSavedAt === 'function') ? pcForensicFmtSavedAt(s) : s; }catch(_){ return s; }
+  };
+
+  tbody.innerHTML = '';
+  for (const r of rows){
+    const tr = document.createElement('tr');
+
+    const td0 = document.createElement('td');
+    const isArch = !!(r && r.archived);
+    if (isArch){
+      td0.innerHTML = esc(r.sourceType || '—') + '<span class="pc-src-sub"><b>ARCHIVED</b></span>';
+    } else {
+      td0.textContent = r.sourceType || '—';
+    }
+
+    const td1 = document.createElement('td');
+    let ex = '';
+    if (isArch){
+      const mt = String(r.mergedTo||'').trim();
+      const at = String(r.archivedAt||'').trim();
+      ex += '<span class="pc-src-sub"><b>ARCHIVED</b>' + (mt ? (' → ' + esc(mt)) : '') + '</span>';
+      if (at) ex += '<span class="pc-src-sub">archivedAt: ' + esc(fmtSaved(at)) + '</span>';
+    }
+    td1.innerHTML = '<b>' + esc(r.sourceKey) + '</b>' +
+      '<span class="pc-src-sub">norm: ' + esc(r.normalizedDay) + '</span>' + ex;
+
+    const ini = r.initial || {};
+    const td2 = document.createElement('td');
+    td2.innerHTML =
+      '<span class="pc-src-sub">savedAt: ' + esc(fmtSaved(ini.savedAt)) + '</span>' +
+      '<span class="pc-src-sub">C$: ' + esc(fmtMoney(ini.totalNio)) + ' | US$: ' + esc(fmtMoney(ini.totalUsd)) + '</span>' +
+      '<span class="pc-src-sub">ess: ' + esc(ini.hash || '—') + '</span>';
+
+    const fin = r.final || {};
+    const td3 = document.createElement('td');
+    td3.innerHTML =
+      '<span class="pc-src-sub">savedAt: ' + esc(fmtSaved(fin.savedAt)) + '</span>' +
+      '<span class="pc-src-sub">C$: ' + esc(fmtMoney(fin.totalNio)) + ' | US$: ' + esc(fmtMoney(fin.totalUsd)) + '</span>' +
+      '<span class="pc-src-sub">ess: ' + esc(fin.hash || '—') + '</span>';
+
+    const meta = r.meta || {};
+    const td4 = document.createElement('td');
+    const flags = String(meta.flags||'').trim();
+    const f1 = flags ? ('<span class="pc-src-sub">flags: ' + esc(flags) + '</span>') : '';
+    const f2 = meta.appliedAt ? ('<span class="pc-src-sub">appliedAt: ' + esc(fmtSaved(meta.appliedAt)) + '</span>') : '';
+    const f3 = meta.sig ? ('<span class="pc-src-sub">sig: ' + esc(pcClipTxt(meta.sig, 20)) + '</span>') : '';
+    td4.innerHTML =
+      '<span class="pc-src-sub">savedAt: ' + esc(fmtSaved(meta.savedAt)) + '</span>' +
+      f2 + f3 + f1;
+
+    tr.appendChild(td0);
+    tr.appendChild(td1);
+    tr.appendChild(td2);
+    tr.appendChild(td3);
+    tr.appendChild(td4);
+    tbody.appendChild(tr);
+  }
+}
+
+function pcForensicSourcesRun(eventId, raw){
+  try{
+    const day = (typeof getSelectedPcDay === 'function') ? getSelectedPcDay() : '';
+    const rep = pcForensicSourcesCompute(raw, day);
+    __A33_PC_FORENSIC_SOURCES_STATE = rep || null;
+    pcForensicSourcesRender();
   }catch(_){ }
 }
 
@@ -5461,7 +6166,7 @@ function pcConsolidationPlanCompute(eventId, raw){
     }
     const legacyObj = (raw && typeof raw === 'object' && raw.__legacyDays && typeof raw.__legacyDays === 'object') ? raw.__legacyDays : null;
     if (legacyObj){
-      for (const rk of Object.keys(legacyObj)) pushSource(rk, legacyObj[rk], 'legacy');
+      for (const rk of Object.keys(legacyObj)){ const v = legacyObj[rk]; if (pcLegacyIsArchived(v)) continue; pushSource(rk, v, 'legacy'); }
     }
 
     const norms = Object.keys(sourcesByNorm).sort((a,b)=> String(a).localeCompare(String(b)));
@@ -5472,19 +6177,27 @@ function pcConsolidationPlanCompute(eventId, raw){
 
       const sources = arr.filter(x => x && x.key != null);
 
-      const winInitial = pcPlanPickWinnerByTime(sources, (day)=>{
+      // Regla dura: __legacyDays no compite. Winners = solo days.
+      const daySources = sources.filter(s=> s && s.src === 'days');
+      const legacySources = sources.filter(s=> s && s.src === 'legacy');
+
+      const winInitialRaw = pcPlanPickWinnerByTime(daySources, (day)=>{
         const s = day && day.initial ? day.initial.savedAt : null;
         return s || 0;
       });
-      const winFinal = pcPlanPickWinnerByTime(sources, (day)=>{
+      const winFinalRaw = pcPlanPickWinnerByTime(daySources, (day)=>{
         const s = day && day.finalCount ? day.finalCount.savedAt : null;
         return s || 0;
       });
-      const winFinMeta = pcPlanPickWinnerByTime(sources, (day)=>{
+      const winFinMetaRaw = pcPlanPickWinnerByTime(daySources, (day)=>{
         const meta = pcGetDayInitialFromFinanzas(day || null);
         if (!meta) return 0;
         return meta.appliedAtISO || meta.appliedAt || meta.savedAt || meta.updatedAtISO || 0;
       });
+
+      const winInitial = winInitialRaw || (legacySources.length ? 'legacy: donor-only' : null);
+      const winFinal = winFinalRaw || (legacySources.length ? 'legacy: donor-only' : null);
+      const winFinMeta = winFinMetaRaw || (legacySources.length ? 'legacy: donor-only' : null);
 
       const mv = {};
       for (const s of sources){
@@ -5582,7 +6295,7 @@ function pcConsolidationPlanRun(eventId, raw){
   try{
     const plan = pcConsolidationPlanCompute(eventId, raw);
     __A33_PC_CONSOLIDATION_PLAN_STATE = plan || null;
-    pcPlanHistoryAppend(plan);
+    if (!A33_PC_FORENSIC_READONLY_MODE) pcPlanHistoryAppend(plan);
     pcConsolidationPlanRender();
   }catch(_){ }
 }
@@ -5927,17 +6640,17 @@ async function pcConsolidateInitialFinalMetaIfNeeded(eventId, raw){
     }
 
     const sourcesByNorm = Object.create(null);
-    const addSource = (srcKey, dayObj)=>{
+    const addSource = (srcKey, dayObj, srcType)=>{
       const k = String(srcKey || '').trim();
       if (!k) return;
       let norm = null;
       try{ norm = normalizePcDayKey(k, dayObj || null); }catch(_){ norm = null; }
       if (!norm) return;
       const arr = sourcesByNorm[norm] || (sourcesByNorm[norm] = []);
-      arr.push({ key: k, day: dayObj || null });
+      arr.push({ key: k, day: dayObj || null, src: srcType || 'days' });
     };
-    try{ for (const k of Object.keys(rawDays || {})) addSource(k, rawDays[k]); }catch(_){ }
-    try{ for (const k of Object.keys(legacyDays || {})) addSource(k, legacyDays[k]); }catch(_){ }
+    try{ for (const k of Object.keys(rawDays || {})) addSource(k, rawDays[k], 'days'); }catch(_){ }
+    try{ for (const k of Object.keys(legacyDays || {})){ const v = legacyDays[k]; if (pcLegacyIsArchived(v)) continue; addSource(k, v, '__legacyDays'); } }catch(_){ }
 
     const norms = Object.keys(sourcesByNorm).sort((a,b)=> String(a).localeCompare(String(b)));
 
@@ -6019,18 +6732,31 @@ async function pcConsolidateInitialFinalMetaIfNeeded(eventId, raw){
       const uniqKeys = Array.from(new Set(sources.map(s=>String(s && s.key != null ? s.key : '').trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
       if (uniqKeys.length <= 1) continue;
 
-      const winInitialKey = pickWinnerKeyByTime(sources, (day)=> (day && day.initial ? day.initial.savedAt : 0), (day)=> !!(day && day.initial));
-      const winFinalKey = pickWinnerKeyByTime(sources, (day)=> (day && day.finalCount ? day.finalCount.savedAt : 0), (day)=> !!(day && day.finalCount));
-	      const winMetaKey = pickWinnerKeyByTime(
-	        sources,
-	        (day)=> metaTimeValue(day, pcGetDayInitialFromFinanzas(day || null)),
-	        (day)=> !!pcGetDayInitialFromFinanzas(day || null)
-	      );
+      const daysSources = sources.filter(s=> s && s.src === 'days');
+      const legacySources = sources.filter(s=> s && s.src === '__legacyDays');
+
+      // Regla dura: __legacyDays es DONANTE-ONLY (no compite por winner).
+      const winInitialKey = pickWinnerKeyByTime(daysSources, (day)=> (day && day.initial ? day.initial.savedAt : 0), (day)=> !!(day && day.initial));
+      const winFinalKey = pickWinnerKeyByTime(daysSources, (day)=> (day && day.finalCount ? day.finalCount.savedAt : 0), (day)=> !!(day && day.finalCount));
+      const winMetaKey = pickWinnerKeyByTime(
+        daysSources,
+        (day)=> metaTimeValue(day, pcGetDayInitialFromFinanzas(day || null)),
+        (day)=> !!pcGetDayInitialFromFinanzas(day || null)
+      );
+
+      // Donantes legacy (solo se aplican si el destino está vacío/ausente)
+      const donorInitialKey = pickWinnerKeyByTime(legacySources, (day)=> (day && day.initial ? day.initial.savedAt : 0), (day)=> !!(day && day.initial));
+      const donorFinalKey = pickWinnerKeyByTime(legacySources, (day)=> (day && day.finalCount ? day.finalCount.savedAt : 0), (day)=> !!(day && day.finalCount));
+      const donorMetaKey = pickWinnerKeyByTime(
+        legacySources,
+        (day)=> metaTimeValue(day, pcGetDayInitialFromFinanzas(day || null)),
+        (day)=> !!pcGetDayInitialFromFinanzas(day || null)
+      );
 
       // Registrar conflictos por contenido distinto
       try{
         const set = new Set();
-        for (const s of sources){
+        for (const s of daysSources){
           const h = pcHashPettySectionContent(s && s.day ? s.day.initial : null).hash;
           if (h) set.add(String(h));
         }
@@ -6041,7 +6767,7 @@ async function pcConsolidateInitialFinalMetaIfNeeded(eventId, raw){
       }catch(_){ }
       try{
         const set = new Set();
-        for (const s of sources){
+        for (const s of daysSources){
           const h = pcHashPettySectionContent(s && s.day ? s.day.finalCount : null).hash;
           if (h) set.add(String(h));
         }
@@ -6052,7 +6778,7 @@ async function pcConsolidateInitialFinalMetaIfNeeded(eventId, raw){
       }catch(_){ }
       try{
         const set = new Set();
-        for (const s of sources){
+        for (const s of daysSources){
           const m = pcGetDayInitialFromFinanzas(s && s.day ? s.day : null);
           const sig = m ? stableStringify(m) : '';
           if (sig) set.add(sig);
@@ -6069,9 +6795,9 @@ async function pcConsolidateInitialFinalMetaIfNeeded(eventId, raw){
       if (!canonDay0){
         // Si no existe en days, crear base (preferir winners)
         let base = null;
-        const preferKey = winInitialKey || winFinalKey || winMetaKey || (uniqKeys[0] || null);
+        const preferKey = winInitialKey || winFinalKey || winMetaKey || ((daysSources[0] && daysSources[0].key) ? daysSources[0].key : null);
         if (preferKey){
-          const s0 = sources.find(x=>x && String(x.key) === String(preferKey));
+          const s0 = daysSources.find(x=>x && String(x.key) === String(preferKey));
           base = s0 ? s0.day : null;
         }
         canonDay0 = (base && typeof base === 'object') ? base : {};
@@ -6083,7 +6809,7 @@ async function pcConsolidateInitialFinalMetaIfNeeded(eventId, raw){
       let touchedThis = false;
 
       if (winInitialKey){
-        const s0 = sources.find(x=>x && String(x.key) === String(winInitialKey));
+        const s0 = daysSources.find(x=>x && String(x.key) === String(winInitialKey));
         const winInit = s0 && s0.day ? s0.day.initial : null;
         const winH = pcHashPettySection(winInit).hash;
         const curH = pcHashPettySection(canonDay.initial).hash;
@@ -6094,7 +6820,7 @@ async function pcConsolidateInitialFinalMetaIfNeeded(eventId, raw){
       }
 
       if (winFinalKey){
-        const s0 = sources.find(x=>x && String(x.key) === String(winFinalKey));
+        const s0 = daysSources.find(x=>x && String(x.key) === String(winFinalKey));
         const winFinal = s0 && s0.day ? s0.day.finalCount : null;
         const winH = pcHashPettySection(winFinal).hash;
         const curH = pcHashPettySection(canonDay.finalCount).hash;
@@ -6105,10 +6831,10 @@ async function pcConsolidateInitialFinalMetaIfNeeded(eventId, raw){
       }
 
       if (winMetaKey){
-        const s0 = sources.find(x=>x && String(x.key) === String(winMetaKey));
+        const s0 = daysSources.find(x=>x && String(x.key) === String(winMetaKey));
         const winnerMeta = s0 && s0.day ? pcGetDayInitialFromFinanzas(s0.day) : null;
         const otherMetas = [];
-        for (const s of sources){
+        for (const s of daysSources){
           if (!s || !s.day) continue;
           if (String(s.key) === String(winMetaKey)) continue;
           const m = pcGetDayInitialFromFinanzas(s.day);
@@ -6123,6 +6849,69 @@ async function pcConsolidateInitialFinalMetaIfNeeded(eventId, raw){
             canonDay.meta = isPlainObj(canonDay.meta) ? canonDay.meta : {};
             canonDay.meta.initialFromFinanzas = mergedMeta;
             try{ canonDay.initialFromFinanzas = mergedMeta; }catch(_){ }
+            touchedThis = true;
+          }
+        }
+      }
+
+      // Donación desde __legacyDays (solo si el destino está vacío/ausente)
+      const sectionIsEmpty = (sec)=>{
+        try{
+          const n = normalizePettySection(sec || null);
+          const sa = (n && n.savedAt != null && String(n.savedAt).trim()) ? true : false;
+          if (sa) return false;
+          const tn = Number(n.totalNio || 0);
+          const tu = Number(n.totalUsd || 0);
+          const zN = !Number.isFinite(tn) || Math.abs(tn) < 0.005;
+          const zU = !Number.isFinite(tu) || Math.abs(tu) < 0.005;
+          return zN && zU;
+        }catch(_){ return true; }
+      };
+      const finMetaIsEmpty = (day)=>{
+        try{
+          const m = pcGetDayInitialFromFinanzas(day || null);
+          if (!m || typeof m !== 'object') return true;
+          const sig = (m.snapshotSig || m.sig || m.snapshotSignature || '') ? String(m.snapshotSig || m.sig || m.snapshotSignature || '').trim() : '';
+          const ess = (m.essHash || m.ess || '') ? String(m.essHash || m.ess || '').trim() : '';
+          const ap = (m.appliedAtISO || m.appliedAt || '') ? String(m.appliedAtISO || m.appliedAt || '').trim() : '';
+          const sv = (m.savedAtISO || m.savedAt || '') ? String(m.savedAtISO || m.savedAt || '').trim() : '';
+          return !(sig || ess || ap || sv);
+        }catch(_){ return true; }
+      };
+
+      if (donorInitialKey && sectionIsEmpty(canonDay.initial)){
+        const s0 = legacySources.find(x=>x && String(x.key) === String(donorInitialKey));
+        const donorInit = s0 && s0.day ? s0.day.initial : null;
+        const donorH = pcHashPettySection(donorInit).hash;
+        const curH = pcHashPettySection(canonDay.initial).hash;
+        if (donorH && curH !== donorH){
+          canonDay.initial = normalizePettySection(donorInit || null);
+          touchedThis = true;
+        }
+      }
+
+      if (donorFinalKey && sectionIsEmpty(canonDay.finalCount)){
+        const s0 = legacySources.find(x=>x && String(x.key) === String(donorFinalKey));
+        const donorFinal = s0 && s0.day ? s0.day.finalCount : null;
+        const donorH = pcHashPettySection(donorFinal).hash;
+        const curH = pcHashPettySection(canonDay.finalCount).hash;
+        if (donorH && curH !== donorH){
+          canonDay.finalCount = normalizePettySection(donorFinal || null);
+          touchedThis = true;
+        }
+      }
+
+      if (donorMetaKey && finMetaIsEmpty(canonDay)){
+        const s0 = legacySources.find(x=>x && String(x.key) === String(donorMetaKey));
+        const donorMeta = s0 && s0.day ? pcGetDayInitialFromFinanzas(s0.day) : null;
+        if (donorMeta && typeof donorMeta === 'object'){
+          const curMeta = pcGetDayInitialFromFinanzas(canonDay) || null;
+          const curSig = curMeta ? stableStringify(curMeta) : '';
+          const nextSig = stableStringify(donorMeta);
+          if (nextSig && curSig !== nextSig){
+            canonDay.meta = isPlainObj(canonDay.meta) ? canonDay.meta : {};
+            canonDay.meta.initialFromFinanzas = donorMeta;
+            try{ canonDay.initialFromFinanzas = donorMeta; }catch(_){ }
             touchedThis = true;
           }
         }
@@ -6242,35 +7031,45 @@ async function getPettyCash(eventId){
         // Etapa 9B: Consolidation Plan determinista (READ-ONLY). NO escribe pettyCash.
         try{ pcConsolidationPlanRun(eventId, raw); }catch(_){ }
 
-        // Etapa 9C: Consolidar SOLO movimientos (idempotente). NO toca initial/final/meta; preserva legacy en __legacyDays/__legacyIndex.
-	      let pcOut = pc;
-	      let rawCurrent = raw;
-        try{
-          const cres = await pcConsolidateMovementsOnlyIfNeeded(eventId, raw);
-          if (cres && cres.applied){
-            const raw2 = await getPettyCashRawRecord(eventId);
-	          rawCurrent = raw2;
-            pcOut = coercePettyCashRecord(eventId, raw2);
-            try{ if (raw2 && raw2.__legacyDays && typeof raw2.__legacyDays === 'object') pcOut.__legacyDays = raw2.__legacyDays; }catch(_){ }
-            try{ if (raw2 && raw2.__legacyIndex && typeof raw2.__legacyIndex === 'object') pcOut.__legacyIndex = raw2.__legacyIndex; }catch(_){ }
-          }
-        }catch(_){ }
+        // Etapa 10A: Forense "sótano" (__legacyDays) visible + winner trace por día (READ-ONLY).
+        try{ pcForensicSourcesRun(eventId, raw); }catch(_){ }
 
-	      // Etapa 9D: Consolidar Initial/Final/Meta (conflictos) con reglas deterministas (idempotente). NO toca movimientos.
-	      try{
-	        const dres = await pcConsolidateInitialFinalMetaIfNeeded(eventId, rawCurrent);
-	        if (dres && dres.applied){
-	          const raw3 = await getPettyCashRawRecord(eventId);
-	          rawCurrent = raw3;
-	          pcOut = coercePettyCashRecord(eventId, raw3);
-	          try{ if (raw3 && raw3.__legacyDays && typeof raw3.__legacyDays === 'object') pcOut.__legacyDays = raw3.__legacyDays; }catch(_){ }
-	          try{ if (raw3 && raw3.__legacyIndex && typeof raw3.__legacyIndex === 'object') pcOut.__legacyIndex = raw3.__legacyIndex; }catch(_){ }
-	        }
-	      }catch(_){ }
+        // Etapa 9C/9D: Consolidaciones escriben a pettyCash. En Etapa 10A forense, queda 100% READ-ONLY.
+        let pcOut = pc;
+        let rawCurrent = raw;
+        if (!A33_PC_FORENSIC_READONLY_MODE){
+          // Etapa 9C: Consolidar SOLO movimientos (idempotente). NO toca initial/final/meta; preserva legacy en __legacyDays/__legacyIndex.
+          try{
+            const cres = await pcConsolidateMovementsOnlyIfNeeded(eventId, raw);
+            if (cres && cres.applied){
+              const raw2 = await getPettyCashRawRecord(eventId);
+              rawCurrent = raw2;
+              pcOut = coercePettyCashRecord(eventId, raw2);
+              try{ if (raw2 && raw2.__legacyDays && typeof raw2.__legacyDays === 'object') pcOut.__legacyDays = raw2.__legacyDays; }catch(_){ }
+              try{ if (raw2 && raw2.__legacyIndex && typeof raw2.__legacyIndex === 'object') pcOut.__legacyIndex = raw2.__legacyIndex; }catch(_){ }
+            }
+          }catch(_){ }
+
+          // Etapa 9D: Consolidar Initial/Final/Meta (conflictos) con reglas deterministas (idempotente). NO toca movimientos.
+          try{
+            const dres = await pcConsolidateInitialFinalMetaIfNeeded(eventId, rawCurrent);
+            if (dres && dres.applied){
+              const raw3 = await getPettyCashRawRecord(eventId);
+              rawCurrent = raw3;
+              pcOut = coercePettyCashRecord(eventId, raw3);
+              try{ if (raw3 && raw3.__legacyDays && typeof raw3.__legacyDays === 'object') pcOut.__legacyDays = raw3.__legacyDays; }catch(_){ }
+              try{ if (raw3 && raw3.__legacyIndex && typeof raw3.__legacyIndex === 'object') pcOut.__legacyIndex = raw3.__legacyIndex; }catch(_){ }
+            }
+          }catch(_){ }
+        } else {
+          // En read-only, solo exponer el sótano si existe (sin escribir nada).
+          try{ if (raw && raw.__legacyDays && typeof raw.__legacyDays === 'object') pcOut.__legacyDays = raw.__legacyDays; }catch(_){ }
+          try{ if (raw && raw.__legacyIndex && typeof raw.__legacyIndex === 'object') pcOut.__legacyIndex = raw.__legacyIndex; }catch(_){ }
+        }
 
         // Etapa 2: si hay llaves de día no canónicas o duplicadas, consolidar y persistir (idempotente).
         // Etapa 9A: DESACTIVADO (solo inventario). No reparar ni persistir saneamientos automáticos.
-        if (A33_PC_AUTO_KEY_REPAIR_ENABLED){
+        if (!A33_PC_FORENSIC_READONLY_MODE && A33_PC_AUTO_KEY_REPAIR_ENABLED){
           const rep = pcComputeCleanupReport(eventId, raw, pc);
           if (rep && rep.items && rep.items.length){
           // Etapa 4: si hay colisiones reales (>1 llave por normalizedDay), reportar DUP_DAY_COLLISION en Estado
@@ -6824,6 +7623,31 @@ async function pcSave(eventId, updatedRecord, context){
             }
           }catch(_){ }
         }
+
+        // Etapa 10C: permitir updates en __legacyDays (p.ej. cuarentena archived/meta)
+        try{
+          const srcLegacy = (updatedRecord && typeof updatedRecord === 'object' && updatedRecord.__legacyDays && typeof updatedRecord.__legacyDays === 'object') ? updatedRecord.__legacyDays : null;
+          if (srcLegacy){
+            if (!legacyDays) legacyDays = {};
+            for (const lk of Object.keys(srcLegacy)){
+              const v = srcLegacy[lk];
+              const prev = legacyDays[lk];
+              if (prev && typeof prev === 'object' && !Array.isArray(prev) && v && typeof v === 'object' && !Array.isArray(v)){
+                legacyDays[lk] = { ...prev, ...v };
+              }else{
+                legacyDays[lk] = v;
+              }
+            }
+            // Mantener markLegacy coherente
+            try{
+              for (const lk of Object.keys(legacyDays)){
+                const v = legacyDays[lk];
+                const norm = normalizePcDayKey(lk, v);
+                if (norm && lk !== norm) markLegacy(lk, v, norm);
+              }
+            }catch(_){ }
+          }
+        }catch(_){ }
 
         const exDays = (existing.days && typeof existing.days === 'object') ? existing.days : null;
         if (exDays){
@@ -22777,6 +23601,14 @@ const btnAddMov = document.getElementById('pc-mov-add');
     scBtn.addEventListener('click', (e)=>{
       e.preventDefault();
       pcRunSelfCheck();
+    });
+  }
+  // Etapa 10C: Legacy Quarantine (botón compacto)
+  const qBtn = document.getElementById('pc-legacy-quarantine-btn');
+  if (qBtn){
+    qBtn.addEventListener('click', (e)=>{
+      e.preventDefault();
+      pcLegacyQuarantineRunUI();
     });
   }
   try{ pcSelfCheckRender(); }catch(_){ }

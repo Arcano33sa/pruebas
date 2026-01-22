@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.20&r=2">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.23&r=2">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.20&r=2">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.20" />
+<link rel="stylesheet" href="styles.css?v=4.20.23&r=2">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.23" />
 </head>
 <body>
   <header class="a33-header" role="banner">
@@ -542,9 +542,10 @@
         <div><span class="muted">Saldo inicial:</span> <span id="pc-diag-sec-initial" class="badge">—</span></div>
         <div><span class="muted">Arqueo final:</span> <span id="pc-diag-sec-final" class="badge">—</span></div>
         <div><span class="muted">Agregar mov:</span> <span id="pc-diag-sec-movform" class="badge">—</span></div>
-        <div><span class="muted">Días (keys):</span> <span id="pc-legacy-total-days">—</span></div>
-        <div><span class="muted">Llaves legacy:</span> <span id="pc-legacy-keys-found">—</span></div>
-        <div><span class="muted">Colisiones:</span> <span id="pc-legacy-collisions-found">—</span></div>
+        <div><span class="muted">keysDays:</span> <span id="pc-keys-days">—</span></div>
+        <div><span class="muted">keysLegacyDays:</span> <span id="pc-keys-legacydays">—</span></div>
+        <div><span class="muted">collisionsDaysOnly:</span> <span id="pc-collisions-days-only">—</span></div>
+        <div><span class="muted">collisionsIncludingLegacy:</span> <span id="pc-collisions-with-legacy">—</span></div>
         <div class="pc-diag-reason"><span class="muted">Mov reason:</span> <span id="pc-diag-sec-movform-code">—</span></div>
         <div class="pc-diag-reason"><span class="muted">Motivo (Reason Code):</span> <span id="pc-diag-reason">OK</span></div>
         <div class="pc-diag-detail-row" id="pc-diag-detail-row" style="display:none"><span class="muted">Detalle:</span> <span id="pc-diag-detail">—</span></div>
@@ -572,6 +573,14 @@
         </table>
       </div>
 
+      <div id="pc-legacy-shadow-alert" class="warn" style="display:none; margin-top:8px; padding:8px 10px">
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+          <div><b>Sótano detectado:</b> <span id="pc-legacy-shadow-alert-msg">__legacyDays=—</span></div>
+          <button id="pc-legacy-quarantine-btn" class="btn-outline btn-mini btn-pill" style="display:none;">Cuarentenar legacy</button>
+          <span id="pc-legacy-quarantine-result" class="muted small"></span>
+        </div>
+      </div>
+
       <details id="pc-diag-forensics" class="pc-diag-forensics">
         <summary class="muted">Detalle (forense)</summary>
         <div class="pc-forensic-grid">
@@ -589,6 +598,33 @@
           <div><span class="muted">expectedHash:</span> <span id="pc-forensic-expected">—</span></div>
         </div>
         <div id="pc-forensic-extra" class="muted" style="margin-top:6px"></div>
+      </details>
+
+      <details id="pc-forensic-sources" class="pc-diag-forensics">
+        <summary class="muted">Fuentes por Día (Forense)</summary>
+        <div class="muted" style="margin-top:6px">Día activo: <span id="pc-src-active-day" class="pc-forensic-mono">—</span></div>
+        <div class="pc-src-table-wrap" style="margin-top:8px">
+          <table class="pc-src-table" aria-label="Fuentes por Día">
+            <thead>
+              <tr>
+                <th>sourceType</th>
+                <th>sourceKey</th>
+                <th>initial</th>
+                <th>final</th>
+                <th>meta</th>
+              </tr>
+            </thead>
+            <tbody id="pc-src-tbody">
+              <tr><td colspan="5" class="muted">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="pc-winner" style="margin-top:8px">
+          <div class="muted" style="font-size:0.85rem; margin-bottom:4px">WINNER TRACE (read-only)</div>
+          <div class="pc-winner-line"><span class="muted">Initial:</span> <span id="pc-winner-initial" class="pc-forensic-mono">—</span> <span id="pc-winner-initial-reason" class="muted">—</span></div>
+          <div class="pc-winner-line"><span class="muted">Final:</span> <span id="pc-winner-final" class="pc-forensic-mono">—</span> <span id="pc-winner-final-reason" class="muted">—</span></div>
+          <div class="pc-winner-line"><span class="muted">Meta:</span> <span id="pc-winner-meta" class="pc-forensic-mono">—</span> <span id="pc-winner-meta-reason" class="muted">—</span></div>
+        </div>
       </details>
 
       <details id="pc-legacy-inventory" class="pc-diag-forensics">
@@ -1571,13 +1607,13 @@
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
-<script src="/assets/js/a33-storage.js?v=4.20.20"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.20"></script>
-<script src="/assets/js/a33-auth.js?v=4.20.20"></script>
-<script src="/assets/js/a33-build.js?v=4.20.20"></script>
+<script src="/assets/js/a33-storage.js?v=4.20.23"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.23"></script>
+<script src="/assets/js/a33-auth.js?v=4.20.23"></script>
+<script src="/assets/js/a33-build.js?v=4.20.23"></script>
 <script>
   (function(){
-    try{      const v = '4.20.20';
+    try{      const v = '4.20.23';
       try{ window.A33_VERSION = v; }catch(_){ }
       // POS: bump revision local (solo este modulo) para forzar limpieza de caches
       try{ window.A33_ASSET_REV = '2'; }catch(_){ }
@@ -1621,11 +1657,11 @@
     }
   })();
 </script>
-<script src="app.js?v=4.20.20&r=2"></script>
-<script src="/assets/js/a33-input-ux.js?v=4.20.20"></script>
+<script src="app.js?v=4.20.23&r=2"></script>
+<script src="/assets/js/a33-input-ux.js?v=4.20.23"></script>
 <script>
   (function(){
-    const BUILD = (window.A33_VERSION || '4.20.20').toString();
+    const BUILD = (window.A33_VERSION || '4.20.23').toString();
     const REV = (window.A33_ASSET_REV || '1').toString();
     const SW_URL = './sw.js?v=' + encodeURIComponent(BUILD) + '&r=' + encodeURIComponent(REV);
     const btn = document.getElementById('btn-update');

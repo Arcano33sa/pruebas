@@ -593,6 +593,17 @@ small.muted{color:var(--muted)}
 .pc-diag-log-item span{opacity:0.92}
 #pc-legacy-collisions-top .pc-diag-log-item span{word-break:break-word;white-space:normal;max-width:100%}
 
+/* Etapa 10A: Fuentes por Día (Forense) */
+.pc-src-table-wrap{max-width:100%;}
+.pc-src-table{width:100%;border-collapse:collapse;font-size:12px;max-width:100%}
+.pc-src-table th,.pc-src-table td{border-bottom:1px solid rgba(255,215,0,0.10);padding:6px 8px;vertical-align:top;white-space:normal;word-break:break-word}
+.pc-src-table th{font-size:10px;letter-spacing:.10em;text-transform:uppercase;color:rgba(255,215,0,0.85)}
+.pc-src-table td{opacity:.95}
+.pc-src-sub{display:block;font-size:11px;opacity:.86;margin-top:2px}
+.pc-winner{display:flex;flex-direction:column;gap:4px;max-width:100%}
+.pc-winner-line{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}
+.pc-winner-line .muted{opacity:.75}
+
 /* Caja Chica: Consolidation Plan (READ-ONLY) */
 .pc-plan-item{display:block;padding:8px 10px;border:1px solid rgba(255,215,0,0.14);border-radius:14px;background:rgba(0,0,0,0.10)}
 .pc-plan-title{font-weight:700;margin-bottom:4px;opacity:0.96}
