@@ -4,10 +4,10 @@ const DB_VER = 29; // Etapa 11D: eliminar stores legacy del módulo removido (le
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.36';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.37';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r5');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r6');
 
 // --- Date helpers (POS)
 // Normaliza YYYY-MM-DD y da fallback robusto (consistente con Centro de Mando)
@@ -14118,10 +14118,39 @@ function posCalcTrimDec(s){
   return t.replace(/0+$/,'').replace(/\.$/,'') || '0';
 }
 
+
+const A33_POS_CALC_FX_LS_KEY = 'A33_POS_CALC_FX_RATE';
+
+function posCalcSafeLSGet(key){
+  try{
+    if (typeof window === 'undefined') return null;
+    if (!window.localStorage) return null;
+    return window.localStorage.getItem(String(key));
+  }catch(_){ return null; }
+}
+
+function posCalcSafeLSSet(key, value){
+  try{
+    if (typeof window === 'undefined') return false;
+    if (!window.localStorage) return false;
+    window.localStorage.setItem(String(key), String(value));
+    return true;
+  }catch(_){ return false; }
+}
+
+function posCalcParsePositiveNumber(raw){
+  const s0 = String(raw == null ? '' : raw).trim();
+  if (!s0) return null;
+  const s = s0.replace(/,/g, '.');
+  const n = Number(s);
+  return (Number.isFinite(n) && n > 0) ? n : null;
+}
+
 function posCalcReadNum(el){
   if (!el) return null;
-  const raw = String(el.value || '').trim();
-  if (!raw) return null;
+  const raw0 = String(el.value || '').trim();
+  if (!raw0) return null;
+  const raw = raw0.replace(/,/g, '.');
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
 }
@@ -14352,10 +14381,25 @@ function initPosCalculatorTabOnce(){
     });
   }
 
+
+
+  function fxPersistRate(){
+    try{
+      if (!els.fxRate) return;
+      const n = posCalcParsePositiveNumber(els.fxRate.value);
+      if (!n) return; // NO sobreescribir lo guardado con vacío/invalid
+      posCalcSafeLSSet(A33_POS_CALC_FX_LS_KEY, String(n));
+    }catch(_){ }
+  }
+
   // Bind conversor FX
   if (els.fxUsd) els.fxUsd.addEventListener('input', fxUpdateFromUSD);
   if (els.fxNio) els.fxNio.addEventListener('input', fxUpdateFromNIO);
-  if (els.fxRate) els.fxRate.addEventListener('input', ()=>{ fxShowStatus(''); fxRecompute(); });
+  if (els.fxRate){
+    els.fxRate.addEventListener('input', ()=>{ fxShowStatus(''); fxRecompute(); });
+    els.fxRate.addEventListener('change', fxPersistRate);
+    els.fxRate.addEventListener('blur', fxPersistRate);
+  }
 
   if (els.fxRefresh) els.fxRefresh.addEventListener('click', ()=>{ onOpenPosCalculatorTab().catch(err=>console.error(err)); });
   if (els.fxClear) els.fxClear.addEventListener('click', ()=>{
@@ -14385,18 +14429,26 @@ async function onOpenPosCalculatorTab(){
   const statusEl = document.getElementById('fx-status');
   if (!rateEl || !metaEl || !statusEl) return;
 
+  // Precargar tipo de cambio guardado si el input está vacío (típico tras recarga).
+  try{
+    const cur = String(rateEl.value || '').trim();
+    const saved = posCalcSafeLSGet(A33_POS_CALC_FX_LS_KEY);
+    const n = posCalcParsePositiveNumber(saved);
+    if (!cur && n) rateEl.value = String(n);
+  }catch(_){ }
+
   const ev = await getActiveEventPOS();
 
-  // Etapa 11D: módulo eliminado. El tipo de cambio aquí es manual y temporal (no se persiste).
+  // Tipo de cambio manual (se guarda localmente en este dispositivo).
   rateEl.readOnly = false;
-  rateEl.title = 'Tipo de cambio manual (no se guarda)';
+  rateEl.title = 'Tipo de cambio (se guarda en este dispositivo)';
 
   if (ev){
-    metaEl.textContent = `Evento activo: ${ev.name} · Tipo de cambio manual`;
-    statusEl.textContent = 'Puedes usar un valor temporal aquí (no se guarda).';
+    metaEl.textContent = `Evento activo: ${ev.name} · Tipo de cambio manual (guardado)`;
+    statusEl.textContent = 'Este tipo de cambio se guarda en este dispositivo.';
   } else {
-    metaEl.textContent = 'Sin evento activo · Tipo de cambio manual';
-    statusEl.textContent = 'Activa un evento si quieres asociar el cálculo a un evento. El tipo de cambio aquí es temporal (no se guarda).';
+    metaEl.textContent = 'Sin evento activo · Tipo de cambio manual (guardado)';
+    statusEl.textContent = 'Este tipo de cambio se guarda en este dispositivo.';
   }
   statusEl.style.display = 'block';
 
