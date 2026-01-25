@@ -3,7 +3,7 @@
 */
 
 const SW_VERSION = '4.20.13';
-const SW_REV = '1';
+const SW_REV = '2';
 const MODULE = 'inventario';
 const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}-r${SW_REV}`;
 

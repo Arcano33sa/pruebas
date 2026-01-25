@@ -1060,14 +1060,6 @@ function renderProductosTerminados(inv) {
 
 
 
-function checkAndAlert(inv) {
-  const lines = buildAlertLines(inv);
-  if (lines.length > 0) {
-    setStatus("Alerta de inventario activa. Revisá niveles.", "warn", { sticky: true });
-    alert("Alerta de inventario:\n\n" + lines.join("\n"));
-  }
-}
-
 
 
 function registerServiceWorker() {
@@ -1090,9 +1082,6 @@ document.addEventListener("DOMContentLoaded", () => {
   wireViewControls();
   attachListeners(inv);
   applyAllViews();
-
-  checkAndAlert(inv);
-
   // Si no hubo alertas, dejar señal corta de listo
   const statusEl = $("inv-status");
   if (statusEl && !statusEl.textContent) {

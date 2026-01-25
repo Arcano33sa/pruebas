@@ -492,6 +492,11 @@ tr:nth-child(even) td {
   gap: 0.55rem;
 }
 
+.inv-span-2 {
+  grid-column: 1 / -1;
+}
+
+
 .btn-pill {
   border-radius: 999px;
   padding: 0.48rem 0.8rem;
