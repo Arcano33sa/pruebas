@@ -4,10 +4,10 @@ const DB_VER = 29; // Etapa 11D: eliminar stores legacy del módulo removido (le
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.35';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.36';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r4');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r5');
 
 // --- Date helpers (POS)
 // Normaliza YYYY-MM-DD y da fallback robusto (consistente con Centro de Mando)
@@ -248,7 +248,22 @@ function notifyFinanzasBridge(msg, { force = false } = {}) {
 
 function openDB(opts) {
   const o = (opts && typeof opts === 'object') ? opts : {};
-  const timeoutMs = Number(o.timeoutMs || o.timeout || A33_PC_IDB_TIMEOUT_MS);
+
+  // Blindaje: estas constantes pueden no existir en builds hotfix.
+  // Usar typeof evita ReferenceError cuando NO están definidas.
+  const IDB_TIMEOUT_MS = (
+    (typeof A33_PC_IDB_TIMEOUT_MS === 'number') && Number.isFinite(A33_PC_IDB_TIMEOUT_MS) && A33_PC_IDB_TIMEOUT_MS > 0
+  ) ? A33_PC_IDB_TIMEOUT_MS : 12000;
+
+  const TECH_CAUSES = (
+    (typeof A33_PC_TECH_CAUSES === 'object') && A33_PC_TECH_CAUSES
+  ) ? A33_PC_TECH_CAUSES : {
+    IDB_TIMEOUT: 'IDB_TIMEOUT',
+    IDB_BLOCKED: 'IDB_BLOCKED',
+    IDB_ABORT: 'IDB_ABORT'
+  };
+
+  const timeoutMs = Number(o.timeoutMs || o.timeout || IDB_TIMEOUT_MS);
 
   // Reusar conexión abierta si existe
   if (db) return Promise.resolve(db);
@@ -256,6 +271,7 @@ function openDB(opts) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let timer = null;
+    let sawUpgradeNeeded = false;
 
     const mkErr = (code, msg, extra)=>{
       const e = new Error(msg || String(code || 'IDB_ERROR'));
@@ -267,6 +283,19 @@ function openDB(opts) {
         }
       }
       return e;
+    };
+
+    const logFail = (stage, err)=>{
+      try{
+        console.error('[POS][IDB] openDB fail', {
+          stage,
+          name: err && err.name,
+          message: err && err.message,
+          code: err && err.code,
+          blocked: !!(err && err.blocked),
+          upgradeNeeded: !!(err && err.upgradeNeeded)
+        });
+      }catch(_){ }
     };
 
     const finish = (ok, val)=>{
@@ -286,15 +315,28 @@ function openDB(opts) {
     const req = indexedDB.open(DB_NAME, DB_VER);
 
     timer = setTimeout(()=>{
-      finish(false, mkErr(A33_PC_TECH_CAUSES.IDB_TIMEOUT, 'IDB open timeout'));
-    }, (Number.isFinite(timeoutMs) && timeoutMs > 0) ? timeoutMs : A33_PC_IDB_TIMEOUT_MS);
+      const e = mkErr(TECH_CAUSES.IDB_TIMEOUT, 'IDB open timeout', {
+        phase: 'timeout',
+        blocked: false,
+        upgradeNeeded: sawUpgradeNeeded
+      });
+      logFail('timeout', e);
+      finish(false, e);
+    }, (Number.isFinite(timeoutMs) && timeoutMs > 0) ? timeoutMs : IDB_TIMEOUT_MS);
 
     // Etapa 6: si hay otra pestaña bloqueando un upgrade, NO colgar.
     req.onblocked = () => {
-      finish(false, mkErr(A33_PC_TECH_CAUSES.IDB_BLOCKED, 'IDB blocked (another tab)'));
+      const e = mkErr(TECH_CAUSES.IDB_BLOCKED, 'IDB blocked (another tab)', {
+        phase: 'blocked',
+        blocked: true,
+        upgradeNeeded: sawUpgradeNeeded
+      });
+      logFail('blocked', e);
+      finish(false, e);
     };
 
     req.onupgradeneeded = (e) => {
+      sawUpgradeNeeded = true;
       const d = e.target.result;
 
       // Etapa 11D: eliminar cualquier store legacy exclusivo del módulo removido (legacy cleanup)
@@ -393,7 +435,7 @@ function openDB(opts) {
           try{
             if (typeof pcDiagMark === 'function'){
               pcDiagMark('IDB', 'blocked', 'IndexedDB cambió de versión.', {
-                causeCode: A33_PC_TECH_CAUSES.IDB_BLOCKED,
+                causeCode: TECH_CAUSES.IDB_BLOCKED,
                 techDetail: 'Versionchange detectado: se cerró la conexión. Cerrá otras pestañas y reintentá.',
                 forensic: pcForensicNormalize({ extra: 'db.onversionchange' })
               });
@@ -407,8 +449,15 @@ function openDB(opts) {
     };
 
     req.onerror = () => {
-      const e = req.error || mkErr(A33_PC_TECH_CAUSES.IDB_ABORT, 'IDB open error');
-      try{ if (!e.code) e.code = A33_PC_TECH_CAUSES.IDB_ABORT; }catch(_){ }
+      const e = req.error || mkErr(TECH_CAUSES.IDB_ABORT, 'IDB open error', {
+        phase: 'error',
+        blocked: false,
+        upgradeNeeded: sawUpgradeNeeded
+      });
+      try{ if (!e.code) e.code = TECH_CAUSES.IDB_ABORT; }catch(_){ }
+      try{ if (!e.phase) e.phase = 'error'; }catch(_){ }
+      try{ if (typeof e.upgradeNeeded === 'undefined') e.upgradeNeeded = sawUpgradeNeeded; }catch(_){ }
+      logFail('error', e);
       finish(false, e);
     };
   });
@@ -12614,7 +12663,7 @@ async function init(){
     await openDB();
   }catch(err){
     alert('No se pudo abrir la base de datos del POS. Revisa permisos de almacenamiento del navegador.');
-    console.error('INIT openDB ERROR', err);
+    console.error('INIT openDB ERROR', { name: err && err.name, message: err && err.message, code: err && err.code, phase: err && err.phase, blocked: err && err.blocked, upgradeNeeded: err && err.upgradeNeeded, err });
     return;
   }
 
