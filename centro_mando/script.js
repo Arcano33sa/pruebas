@@ -439,12 +439,11 @@
     if (btnPos){
       btnPos.onclick = ()=>{ window.location.href = `../pos/index.html#venta`; };
     }
-
     if (btnCaja){
-      const enabled = !!ev?.pettyEnabled;
-      btnCaja.disabled = !enabled;
-      btnCaja.title = enabled ? '' : 'Caja Chica está desactivada en este evento';
-      btnCaja.onclick = ()=>{ if (enabled) window.location.href = `../pos/index.html#caja`; };
+      // Etapa 11B: ruta legacy hacia Caja Chica deshabilitada. Caer a POS (venta).
+      btnCaja.disabled = true;
+      btnCaja.title = 'Sección no disponible';
+      btnCaja.onclick = ()=>{ window.location.href = `../pos/index.html#venta`; };
     }
 
     // Detalle

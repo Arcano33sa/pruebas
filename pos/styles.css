@@ -29,7 +29,7 @@ header.brandbar{position:sticky;top:0;background:#121212;border-bottom:1px solid
 .a33-btn-update:focus-visible{outline:2px solid rgba(221,191,100,0.95);outline-offset:3px}
 
 /* Sección — meta derecha (Build + timestamp) */
-.pc-diag-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+
 
 .card{background:var(--panel);border:1px solid #2a2a2a;border-radius:14px;padding:14px;margin:12px 0}
 label{font-size:13px;color:var(--muted);display:block;margin:8px 0 6px}
@@ -527,12 +527,8 @@ small.muted{color:var(--muted)}
 .disabled-note{margin-top:8px;font-size:13px;color:#ffd7a1}
 
 /* Toggle (Sección por evento) */
-.petty-toggle-wrap{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.petty-toggle-title{font-weight:700;color:var(--text)}
 
-/* Sincronizar saldo inicial desde Finanzas (manual) */
-.petty-sync-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0 6px 0}
-.petty-sync-row .btn-pill{padding:8px 12px}
+
 .a33-link{color:var(--tab-gold);text-decoration:underline}
 .switch{position:relative;display:inline-block;width:52px;height:28px}
 .switch input{opacity:0;width:0;height:0}
@@ -544,82 +540,25 @@ small.muted{color:var(--muted)}
 
 
 /* Sección — Estado (diagnóstico visible) */
-.pc-diag{margin:10px 0 8px 0;padding:10px 12px;border-radius:14px;border:1px solid #2a2a2a;background:rgba(255,255,255,0.02);max-width:100%;}
-.pc-diag-line{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
-.pc-diag-title{font-weight:800;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--tab-gold)}
-.pc-diag-grid{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:6px;font-size:12px;max-width:100%}
-.pc-diag-grid > div{min-width:150px;max-width:100%;min-inline-size:0}
-.pc-diag-reason{flex:1 1 260px;min-width:220px}
-.pc-diag-reason span{word-break:break-word}
+
 
 /* Etapa 2: flags compactas (chips) en diagnóstico de Sección */
-.pc-diag-detail-row{flex:1 1 260px;min-width:220px}
-.pc-diag-detail-row span{word-break:break-word}
-.pc-diag-flags{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;max-width:100%}
 
-.pc-diag-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;max-width:100%}
-.pc-chip{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;border:1px solid rgba(255,215,0,0.22);background:rgba(255,255,255,0.03);max-width:100%}
-.pc-chip b{font-weight:800}
-.pc-chip .muted{opacity:0.85}
 
 /* Etapa 6: Snapshot Finanzas -> POS (solo diagnóstico) */
-.pc-snap-status{display:block;margin-top:6px;font-size:0.85rem;line-height:1.25;max-width:100%;}
-.pc-snap-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap;max-width:100%;}
-.pc-snap-reason{font-weight:600}
-.pc-snap-meta{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;max-width:100%;}
-.pc-dot{opacity:.6}
-.pc-sema{display:inline-flex;align-items:center;justify-content:center;padding:2px 10px;border-radius:999px;font-size:10px;letter-spacing:.10em;text-transform:uppercase;font-weight:800;border:1px solid rgba(255,255,255,0.12);}
-.pc-sema.ok{background:#0f1b0f;color:#b6f0b6;border-color:#214021;}
-.pc-sema.missing{background:#2a1b0f;color:#ffd7a1;border-color:#5a3d12;}
-.pc-sema.invalid{background:#2a0f0f;color:#ffb6b6;border-color:#5a1212;}
-
 
 
 /* Etapa 3: Historial de Estado (Sección) */
-.pc-diag-history{margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,215,0,0.18)}
-.pc-diag-history > summary{cursor:pointer;list-style:none;user-select:none}
-.pc-diag-history > summary::-webkit-details-marker{display:none}
 
-.pc-diag-forensics{margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,215,0,0.12)}
-.pc-diag-forensics > summary{cursor:pointer;list-style:none;user-select:none}
-.pc-diag-forensics > summary::-webkit-details-marker{display:none}
-.pc-forensic-grid{margin-top:8px;display:flex;flex-wrap:wrap;gap:8px 14px;font-size:12px;max-width:100%}
-.pc-forensic-grid > div{min-width:150px;max-width:100%;min-inline-size:0}
-.pc-forensic-grid span{word-break:break-word}
-#pc-forensic-extra{word-break:break-word;opacity:.9;font-size:11px}
-.pc-forensic-mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
-.pc-diag-log{margin-top:8px;display:flex;flex-direction:column;gap:6px;font-size:0.85rem}
-.pc-diag-log-item{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
-.pc-diag-log-item span{opacity:0.92}
-#pc-legacy-collisions-top .pc-diag-log-item span{word-break:break-word;white-space:normal;max-width:100%}
 
 /* Etapa 10A: Fuentes por Día (Forense) */
-.pc-src-table-wrap{max-width:100%;}
-.pc-src-table{width:100%;border-collapse:collapse;font-size:12px;max-width:100%}
-.pc-src-table th,.pc-src-table td{border-bottom:1px solid rgba(255,215,0,0.10);padding:6px 8px;vertical-align:top;white-space:normal;word-break:break-word}
-.pc-src-table th{font-size:10px;letter-spacing:.10em;text-transform:uppercase;color:rgba(255,215,0,0.85)}
-.pc-src-table td{opacity:.95}
-.pc-src-sub{display:block;font-size:11px;opacity:.86;margin-top:2px}
-.pc-winner{display:flex;flex-direction:column;gap:4px;max-width:100%}
-.pc-winner-line{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}
-.pc-winner-line .muted{opacity:.75}
+
 
 /* Sección: Consolidation Plan (READ-ONLY) */
-.pc-plan-item{display:block;padding:8px 10px;border:1px solid rgba(255,215,0,0.14);border-radius:14px;background:rgba(0,0,0,0.10)}
-.pc-plan-title{font-weight:700;margin-bottom:4px;opacity:0.96}
-.pc-plan-line{opacity:0.88;word-break:break-word;white-space:normal}
 
-.pc-diag .badge{font-size:10px;padding:2px 8px;letter-spacing:.10em;text-transform:uppercase}
-.pc-diag .pc-badge-ok{background:#0f1b0f;color:#b6f0b6;border:1px solid #214021}
-.pc-diag .pc-badge-warn{background:#2a1b0f;color:#ffd7a1;border:1px solid #5a3d12}
-.pc-diag .pc-badge-err{background:#2a0f0f;color:#ffb6b6;border:1px solid #5a1212}
-.pc-diag .pc-badge-run{background:#0f1720;color:#b7d6ff;border:1px solid #12325a}
 
 /* Badges reutilizables fuera del panel Estado (Etapa 8C) */
-.badge.pc-badge-ok{background:#0f1b0f;color:#b6f0b6;border:1px solid #214021}
-.badge.pc-badge-warn{background:#2a1b0f;color:#ffd7a1;border:1px solid #5a3d12}
-.badge.pc-badge-err{background:#2a0f0f;color:#ffb6b6;border:1px solid #5a1212}
-.badge.pc-badge-run{background:#0f1720;color:#b7d6ff;border:1px solid #12325a}
+
 
 /* Modal */
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50;padding:20px}
@@ -636,125 +575,19 @@ small.muted{color:var(--muted)}
   color:var(--text);
 }
 
-.pc-main.disabled{
-  opacity:.5;
-  pointer-events:none;
-}
 
 /* Fieldsets de bloqueo (día cerrado / histórico) */
-.pc-lock-fieldset{
-  border:0;
-  padding:0;
-  margin:0;
-  min-inline-size:0;
-}
+
 
 /* Indicador visual suave cuando el día está bloqueado */
-#pc-count-fieldset[disabled]{
-  position:relative;
-  opacity:.92;
-}
 
-#pc-count-fieldset[disabled]::after{
-  content:'CERRADO';
-  position:absolute;
-  top:10px;
-  right:10px;
-  font-size:10px;
-  letter-spacing:.14em;
-  text-transform:uppercase;
-  color:#cfcfcf;
-  background:rgba(0,0,0,.35);
-  border:1px solid #2a2a2a;
-  padding:4px 10px;
-  border-radius:999px;
-  pointer-events:none;
-}
-
-.petty-summary h3,
-.petty-inicial h3{
-  margin-top:0;
-}
-
-.petty-summary .card{
-  margin:8px 0;
-}
-
-.petty-block h4{
-  margin:0 0 6px 0;
-}
-
-.pc-table{
-  width:100%;
-  border-collapse:collapse;
-  font-size:13px;
-}
-
-.pc-table th,
-.pc-table td{
-  padding:4px 6px;
-  border-bottom:1px solid #2a2a2a;
-}
-
-.pc-table tfoot td{
-  font-weight:700;
-}
-
-.pc-table input[type="number"]{
-  width:80px;
-}
 
 /* Sección — Tabla de movimientos (evitar overflow horizontal en iPad) */
-#pc-mov-table{ table-layout:fixed; }
-#pc-mov-table th,
-#pc-mov-table td{ white-space:normal; }
-#pc-mov-table th:nth-child(1), #pc-mov-table td:nth-child(1){ width:110px; white-space:nowrap; }
-#pc-mov-table th:nth-child(2), #pc-mov-table td:nth-child(2){ width:140px; white-space:nowrap; }
-#pc-mov-table th:nth-child(3), #pc-mov-table td:nth-child(3){ width:70px; white-space:nowrap; }
-#pc-mov-table th:nth-child(4), #pc-mov-table td:nth-child(4){ width:110px; white-space:nowrap; }
-#pc-mov-table th:nth-child(6), #pc-mov-table td:nth-child(6){ width:120px; white-space:nowrap; text-align:right; }
-#pc-mov-table td:nth-child(5){ word-break:break-word; }
 
-.petty-mov h3{
-  margin-top:0;
-}
-
-.petty-mov .row{
-  margin-top:8px;
-  gap:8px;
-  align-items:flex-end;
-}
-
-.petty-mov .row label{
-  display:block;
-  font-size:12px;
-  margin-bottom:2px;
-}
-
-.petty-mov .row input[type="number"],
-.petty-mov .row input[type="date"],
-.petty-mov .row input[type="text"],
-.petty-mov .row select{
-  width:100%;
-}
 
 .btn-small{
   font-size:10px;
   padding:2px 6px;
-}
-.petty-final h3{
-  margin-top:0;
-}
-
-.pc-history-actions{
-  display:flex;
-  gap:8px;
-  justify-content:flex-end;
-  flex-wrap:wrap;
-}
-
-.pc-history-actions button{
-  width:auto;
 }
 
 
@@ -795,36 +628,9 @@ small.muted{color:var(--muted)}
 
 
 /* Sección - resaltar movimiento */
-.pc-row-highlight{
-  outline:2px solid rgba(255,215,0,.85);
-  background: rgba(255,215,0,.08);
-}
+
 
 /* Sección - Ajuste registrado */
-.pc-adj-records{
-  margin-top:10px;
-  border:1px solid #2a2a2a;
-  border-radius:14px;
-  padding:10px 12px;
-  background: rgba(255,255,255,0.02);
-}
-.pc-adj-records .title{
-  font-weight:800;
-  margin-bottom:6px;
-}
-.pc-adj-record{
-  display:flex;
-  align-items:flex-start;
-  justify-content:space-between;
-  gap:12px;
-  padding:6px 0;
-  border-top:1px dashed #2a2a2a;
-}
-.pc-adj-record:first-of-type{border-top:none;}
-.pc-adj-record .amt{
-  font-weight:800;
-  white-space:nowrap;
-}
 
 
 /* =========================
@@ -1379,66 +1185,16 @@ small.muted{color:var(--muted)}
    Sección · Guard Decision (Etapa 4)
    Tabla interna (Manual vs Sync)
 ----------------------------- */
-.pc-guard{ margin-top:8px; }
-.pc-guard-table{ width:100%; border-collapse:collapse; table-layout:fixed; }
-.pc-guard-table th{ text-align:left; font-size:12px; padding:6px 6px; width:64px; color:rgba(255,255,255,0.72); }
-.pc-guard-table td{ font-size:12px; padding:6px 6px; vertical-align:top; overflow-wrap:anywhere; word-break:break-word; }
-.pc-guard-table tr + tr td,
-.pc-guard-table tr + tr th{ border-top:1px solid rgba(255,255,255,0.08); }
-
-.pc-guard-pill{ white-space:nowrap; font-weight:850; border:1px solid rgba(255,255,255,0.15); border-radius:999px; padding:2px 8px; display:inline-block; }
-.pc-guard-pill.ok{ border-color: rgba(29,185,84,0.45); }
-.pc-guard-pill.blocked{ border-color: rgba(255,68,68,0.5); }
-
-.pc-guard-reason{ color: rgba(255,255,255,0.88); }
-.pc-guard-action{ color: rgba(255,255,255,0.68); }
-
-@media (max-width: 520px){
-  .pc-guard-table th{ width:56px; }
-  .pc-guard-table td{ padding:6px 4px; }
-}
 
 
 /* --- Sección: Self-check (Etapa 9E) --- */
-.pc-selfcheck{
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid rgba(255,255,255,0.08);
+
+
+/* Estado técnico (cierre diario) */
+.tech-details summary{ display:flex; align-items:center; gap:8px; cursor:pointer; }
+.tech-title{ font-weight:700; }
+.tech-grid{ display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:6px 10px; margin-top:8px; }
+.tech-mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:11px; }
+@media (max-width: 640px){
+  .tech-grid{ grid-template-columns: 1fr; }
 }
-.pc-selfcheck-top{
-  display:flex;
-  align-items:center;
-  gap:10px;
-  flex-wrap:wrap;
-  margin-bottom: 8px;
-}
-.pc-selfcheck-meta{
-  font-size:0.82rem;
-}
-.pc-selfcheck-table{
-  width:100%;
-  border-collapse: collapse;
-  table-layout: fixed;
-  font-size: 0.86rem;
-}
-.pc-selfcheck-table th,
-.pc-selfcheck-table td{
-  padding: 6px 6px;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
-  vertical-align: top;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-.pc-selfcheck-table th{
-  font-size: 0.82rem;
-  color: rgba(255,255,255,0.75);
-  font-weight: 700;
-}
-.pc-selfcheck-detail{
-  font-size: 0.82rem;
-  color: rgba(255,255,255,0.85);
-}
-.pc-pass{ font-weight: 800; }
-.pc-fail{ font-weight: 800; }
-.pc-selfcheck-table tr.pass td{ color: rgba(255,255,255,0.92); }
-.pc-selfcheck-table tr.fail td{ color: rgba(255,210,210,0.95); }

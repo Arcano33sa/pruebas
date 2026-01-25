@@ -1866,10 +1866,10 @@ function buildActionableAlerts(ev, dayKey, pc){
         alerts.push({
           key: 'petty-open',
           icon: '🔓',
-          title: 'Caja Chica activa y hoy NO está cerrado',
-          sub: `Hoy (${dayKey}): día abierto en Caja Chica`,
-          cta: 'Ir a Caja Chica',
-          tab: 'caja'
+          title: 'Registro del día abierto',
+          sub: `Hoy (${dayKey}): hay un día abierto`,
+          cta: 'Abrir Resumen',
+          tab: 'resumen'
         });
       }
     } else {
@@ -1885,8 +1885,8 @@ function buildActionableAlerts(ev, dayKey, pc){
           icon: '💱',
           title: 'Tipo de cambio vacío hoy',
           sub: `Hoy (${dayKey}): falta tipo de cambio`,
-          cta: 'Ir a Caja Chica',
-          tab: 'caja'
+          cta: 'Abrir Resumen',
+          tab: 'resumen'
         });
       }
     } else {
@@ -2098,7 +2098,9 @@ async function navigateToPOS(tab){
   try{
     await setMeta(state.db, 'currentEventId', Number(ev.id));
   }catch(_){ }
-  const t = safeStr(tab) || 'vender';
+  // Etapa 11B: bloquear deep-link/ruta legacy hacia Caja Chica (no existe como ruta en POS).
+  const t0 = safeStr(tab) || 'vender';
+  const t = (t0 === 'caja' || t0 === 'caja-chica' || t0 === 'cajachica' || t0 === 'petty' || t0 === 'pettycash') ? 'vender' : t0;
   window.location.href = `../pos/index.html?tab=${encodeURIComponent(t)}`;
 }
 
@@ -2367,8 +2369,8 @@ async function init(){
     el.addEventListener('click', ()=> navigateToPOS(tab));
   };
   bind('btnGoSell', 'vender');
-  bind('btnGoCaja', 'caja');
-  bind('btnGoResumen', 'resumen');
+  // Etapa 11B: btnGoCaja ya no navega a Caja Chica (ruta removida).
+bind('btnGoResumen', 'resumen');
   bind('btnGoChecklist', 'checklist');
   bind('btnOpenChecklist', 'checklist');
 
