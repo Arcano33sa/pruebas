@@ -4,10 +4,10 @@ const DB_VER = 29; // Etapa 11D: eliminar stores legacy del módulo removido (le
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.31';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.34';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r2');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r3');
 try{ window.A33_POS_BUILD = POS_BUILD; }catch(_){ }
 try{ window.A33_POS_SW_CACHE = POS_SW_CACHE; }catch(_){ }
 try{
@@ -4777,7 +4777,55 @@ document.addEventListener('click', async (e)=>{
 });
 
 // Tabs
+function bindTabbarOncePOS(){
+  const bar = document.querySelector('.tabbar');
+  if (!bar) return;
+  if (bar.dataset.bound === '1') return;
+  bar.dataset.bound = '1';
+
+  // Evitar doble-disparo touch -> click (iOS Safari/PWA)
+  let lastTouchTs = 0;
+
+  const onTap = (e)=>{
+    // Solo botones con data-tab dentro de la barra
+    const btn = e && e.target ? e.target.closest('button[data-tab]') : null;
+    if (!btn || !bar.contains(btn)) return;
+
+    // Ignorar clicks no primarios
+    if (e && e.type === 'click' && typeof e.button === 'number' && e.button !== 0) return;
+
+    const dest = String(btn.dataset.tab || '').trim();
+    if (!dest) return;
+
+    // Dedup: si viene de touchend, el click siguiente se ignora
+    if (e && e.type === 'touchend') lastTouchTs = Date.now();
+    if (e && e.type === 'click' && lastTouchTs && (Date.now() - lastTouchTs) < 650) return;
+
+    // Fallback seguro: si no existe el tab destino, no-op limpio
+    const target = document.getElementById('tab-' + dest);
+    if (!target) return;
+
+    try{ if (e && e.preventDefault) e.preventDefault(); }catch(_){ }
+    try{ setTab(dest); }catch(err){ console.error('TABNAV error', err); }
+  };
+
+  // Pointer Events cuando existan; fallback a touch/click
+  const hasPointer = (typeof window !== 'undefined' && 'PointerEvent' in window);
+  if (hasPointer) {
+    bar.addEventListener('pointerup', onTap);
+  } else {
+    bar.addEventListener('touchend', onTap, { passive:false });
+    bar.addEventListener('click', onTap);
+  }
+}
+
 function setTab(name){
+  // Canonical tab names (Etapa 12B): "venta" es la única verdad.
+  // Compatibilidad: si llega "vender" por URL/hash/estado viejo, mapear a "venta".
+  try{
+    if (name === 'vender') name = 'venta';
+  }catch(_){ }
+
 const tabs = $$('.tab');
   const target = document.getElementById('tab-'+name);
   if (!target) return;
@@ -4828,7 +4876,7 @@ const tabs = $$('.tab');
   if (name==='inventario') renderInventario();
   if (name==='calculadora') onOpenPosCalculatorTab().catch(err=>console.error(err));
   if (name==='checklist') renderChecklistTab().catch(err=>console.error(err));
-  if (name==='vender') initVasosPanelPOS().catch(err=>console.error(err));
+  if (name==='venta') initVasosPanelPOS().catch(err=>console.error(err));
 }
 
 // --- Vasos panel (colapsable persistente)
@@ -4920,13 +4968,16 @@ async function initVasosPanelPOS(){
 // --- Deep-link mínimo (Centro de Mando -> POS)
 function getTabFromUrlPOS(){
   try{
-    const allowed = new Set(['vender','inventario','eventos','resumen','productos','calculadora','checklist']);
+    const allowed = new Set(['venta','inventario','eventos','resumen','productos','calculadora','checklist']);
     // Querystring
     const qs = new URLSearchParams(window.location.search || '');
     const qTab = (qs.get('tab') || '').trim();
-    if (qTab && allowed.has(qTab)) return qTab;
+    if (qTab){
+      const qt = (qTab === 'vender') ? 'venta' : qTab;
+      if (allowed.has(qt)) return qt;
+    }
 
-    // Hash: #tab=vender o #vender
+    // Hash: #tab=venta o #venta (compat: #tab=vender / #vender)
     const h = (window.location.hash || '').replace(/^#/, '').trim();
     if (!h) return null;
     // Alias: CdM → Recordatorios (abre Checklist)
@@ -4934,9 +4985,11 @@ function getTabFromUrlPOS(){
     if (h.startsWith('checklist-reminders')) return 'checklist';
     if (h.startsWith('tab=')){
       const ht = h.slice(4).trim();
-      if (allowed.has(ht)) return ht;
+      const htab = (ht === 'vender') ? 'venta' : ht;
+      if (allowed.has(htab)) return htab;
     }
-    if (allowed.has(h)) return h;
+    const hh = (h === 'vender') ? 'venta' : h;
+    if (allowed.has(hh)) return hh;
   }catch(_){ }
   return null;
 }
@@ -12549,6 +12602,9 @@ async function init(){
 
   // Paso 2: defaults y migraciones
   await runStep('ensureDefaults', ensureDefaults);
+
+  // Paso 2.0: navegación por tabs (delegación, idempotente)
+  await runStep('bindTabbarOncePOS', async()=>{ bindTabbarOncePOS(); });
 
   // Paso 2.1: recuperación conservadora de grupos si events quedó vacío
   await runStep('recoverGroupsIfEventsEmpty', ensureGroupsAvailableAtStartupPOS);
