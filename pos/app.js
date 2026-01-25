@@ -4,10 +4,40 @@ const DB_VER = 29; // Etapa 11D: eliminar stores legacy del módulo removido (le
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.34';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.35';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r3');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r4');
+
+// --- Date helpers (POS)
+// Normaliza YYYY-MM-DD y da fallback robusto (consistente con Centro de Mando)
+function todayYMD(){
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const day = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+
+function safeYMD(v){
+  // Normaliza YYYY-MM-DD para llaves de stores (robusto para iPad / inputs raros)
+  const s = String(v || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // Si viene ISO completo, tomar los primeros 10 chars
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) return s.slice(0,10);
+  // Intento final: parse de Date
+  try{
+    const d = new Date(s);
+    if (isFinite(d)) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth()+1).padStart(2,'0');
+      const day = String(d.getDate()).padStart(2,'0');
+      return `${y}-${m}-${day}`;
+    }
+  }catch(_){ }
+  return todayYMD();
+}
+
 try{ window.A33_POS_BUILD = POS_BUILD; }catch(_){ }
 try{ window.A33_POS_SW_CACHE = POS_SW_CACHE; }catch(_){ }
 try{
