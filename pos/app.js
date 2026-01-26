@@ -4,10 +4,10 @@ const DB_VER = 29; // Etapa 11D: eliminar stores legacy del módulo removido (le
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.41';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.42';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r6');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r8');
 
 // --- Date helpers (POS)
 // Normaliza YYYY-MM-DD y da fallback robusto (consistente con Centro de Mando)

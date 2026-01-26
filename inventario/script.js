@@ -1988,7 +1988,7 @@ function installSmokeHooks(inv){
 function registerServiceWorker() {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker
-      .register("./sw.js?v=4.20.40")
+      .register("./sw.js?v=4.20.42")
       .catch((err) => console.error("SW error", err));
   }
 }

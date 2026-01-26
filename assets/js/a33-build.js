@@ -6,8 +6,8 @@
 (function(global){
   'use strict';
 
-  const VERSION = '4.20.41';
-  const REV = '7'; // subir cuando haya que forzar limpiar caches sin cambiar VERSION
+  const VERSION = '4.20.42';
+  const REV = '8'; // subir cuando haya que forzar limpiar caches sin cambiar VERSION
 
   function cacheName(module){
     return 'a33-v' + VERSION + '-' + String(module || 'app') + '-r' + REV;

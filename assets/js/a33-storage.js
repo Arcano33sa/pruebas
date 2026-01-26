@@ -169,6 +169,7 @@
   const INV_LIQUID_IDS = ['vino','vodka','jugo','sirope','agua'];
   const INV_BOTTLE_IDS = ['pulso','media','djeba','litro','galon'];
   const INV_FINISHED_IDS = ['pulso','media','djeba','litro','galon'];
+  const INV_CAPS_IDS = ['gallon','pulsoLitro','djebaMedia'];
 
   function stableItemId(prefix, key, src){
     try{
@@ -185,10 +186,12 @@
     const liquidsIn = isPlainObject(d.liquids) ? d.liquids : {};
     const bottlesIn = isPlainObject(d.bottles) ? d.bottles : {};
     const finishedIn = isPlainObject(d.finished) ? d.finished : {};
+    const capsIn = isPlainObject(d.caps) ? d.caps : {};
 
     const liquids = {};
     const bottles = {};
     const finished = {};
+    const caps = {};
 
     // Known IDs (defaults)
     for (const id of INV_LIQUID_IDS){
@@ -217,6 +220,15 @@
         itemId: stableItemId('fin:', id, src),
         sku: (src.sku != null && String(src.sku).trim()) ? String(src.sku).trim() : stableItemId('fin:', id, src),
         stock: coerceNumber(src.stock, 0, 'arcano33_inventario.finished.' + id + '.stock'),
+      };
+    }
+    // Tapas (Auto): entero (stock puede ir negativo), min >= 0
+    for (const id of INV_CAPS_IDS){
+      const src = isPlainObject(capsIn[id]) ? capsIn[id] : {};
+      caps[id] = {
+        ...src,
+        stock: coerceInt(src.stock, 0, 'arcano33_inventario.caps.' + id + '.stock'),
+        min: Math.max(0, coerceInt(src.min, 0, 'arcano33_inventario.caps.' + id + '.min')),
       };
     }
 
@@ -252,8 +264,17 @@
         stock: coerceNumber(src.stock, 0, 'arcano33_inventario.finished.' + k + '.stock'),
       };
     }
+    for (const k of Object.keys(capsIn)){
+      if (caps[k]) continue;
+      const src = isPlainObject(capsIn[k]) ? capsIn[k] : {};
+      caps[k] = {
+        ...src,
+        stock: coerceInt(src.stock, 0, 'arcano33_inventario.caps.' + k + '.stock'),
+        min: Math.max(0, coerceInt(src.min, 0, 'arcano33_inventario.caps.' + k + '.min')),
+      };
+    }
 
-    return { ...d, liquids, bottles, finished };
+    return { ...d, liquids, bottles, finished, caps };
   }
 
   function mergeInventario(cur, next){
@@ -276,6 +297,9 @@
     out.liquids = mergeSection(a.liquids, b.liquids);
     out.bottles = mergeSection(a.bottles, b.bottles);
     out.finished = mergeSection(a.finished, b.finished);
+    out.caps = mergeSection(a.caps, b.caps);
+    // Varios (manual): si next trae array, se respeta; si no, preservar el actual
+    if (Array.isArray(b.varios)) out.varios = b.varios.slice();
     return out;
   }
 

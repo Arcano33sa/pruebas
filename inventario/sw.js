@@ -2,23 +2,24 @@
    Objetivo: cachés acotadas por módulo (sin “guerra” entre SW).
 */
 
-const SW_VERSION = '4.20.40';
-const SW_REV = '1';
+const SW_VERSION = '4.20.42';
+const SW_REV = '8';
 const MODULE = 'inventario';
 const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}-r${SW_REV}`;
 
 const PRECACHE_URLS = [
   './',
-  './index.html?v=4.20.40',
-  './style.css?v=4.20.40',
-  './script.js?v=4.20.40',
-  './manifest.webmanifest?v=4.20.40',
+  './index.html?v=4.20.42',
+  './style.css?v=4.20.42',
+  './script.js?v=4.20.42',
+  './manifest.webmanifest?v=4.20.42',
   './offline.html',
   './images/logo.png',
-  '/assets/js/a33-input-ux.js?v=4.20.39',
-  '/assets/js/a33-storage.js?v=4.20.39',
-  '/assets/js/a33-auth.js?v=4.20.39',
-  '/assets/css/a33-header.css?v=4.20.39'
+  '/assets/js/a33-input-ux.js?v=4.20.42',
+  '/assets/js/a33-storage.js?v=4.20.42',
+  '/assets/js/a33-presentations.js?v=4.20.42',
+  '/assets/js/a33-auth.js?v=4.20.42',
+  '/assets/css/a33-header.css?v=4.20.42'
 ];
 
 function sameOrigin(url){
@@ -83,7 +84,7 @@ async function handleNavigate(request){
     const cache = await caches.open(CACHE_NAME);
     return (
       (await cache.match(request)) ||
-      (await cache.match('./index.html?v=4.20.40')) ||
+      (await cache.match('./index.html?v=4.20.42')) ||
       (await cache.match('./index.html')) ||
       (await cache.match('./offline.html')) ||
       (await cache.match('./')) ||
