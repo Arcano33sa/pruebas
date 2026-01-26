@@ -668,6 +668,12 @@
           djeba: { stock: 0 },
           litro: { stock: 0 },
           galon: { stock: 0 }
+        },
+        // Tapas (Auto) — Etapa 2/3
+        caps: {
+          gallon: { stock: 0, min: 0 },
+          pulsoLitro: { stock: 0, min: 0 },
+          djebaMedia: { stock: 0, min: 0 }
         }
       };
     }
@@ -688,6 +694,7 @@
         if (!data.liquids) data.liquids = {};
         if (!data.bottles) data.bottles = {};
         if (!data.finished) data.finished = {};
+        if (!data.caps || typeof data.caps !== 'object') data.caps = {};
         const d = invDefault();
         Object.keys(d.liquids).forEach((k) => {
           if (!data.liquids[k]) data.liquids[k] = { stock: 0, max: 0 };
@@ -701,6 +708,13 @@
         Object.keys(d.finished || {}).forEach((k) => {
           if (!data.finished[k]) data.finished[k] = { stock: 0 };
           data.finished[k].stock = invParseNumber(data.finished[k].stock || 0);
+        });
+
+        // Tapas (Auto): compatibilidad y números seguros
+        Object.keys(d.caps || {}).forEach((k) => {
+          if (!data.caps[k] || typeof data.caps[k] !== 'object') data.caps[k] = { stock: 0, min: 0 };
+          data.caps[k].stock = Math.trunc(invParseNumber(data.caps[k].stock || 0));
+          data.caps[k].min = Math.max(0, Math.trunc(invParseNumber(data.caps[k].min || 0)));
         });
         return data;
       } catch (e) {
@@ -799,6 +813,22 @@
       });
 
       // Restar botellas por presentación
+      // Tapas (Auto) — Etapa 3/3 (descuento automático al producir)
+      if (!inv.caps || typeof inv.caps !== 'object') {
+        inv.caps = {
+          gallon: { stock: 0, min: 0 },
+          pulsoLitro: { stock: 0, min: 0 },
+          djebaMedia: { stock: 0, min: 0 }
+        };
+      }
+      ["gallon", "pulsoLitro", "djebaMedia"].forEach((k) => {
+        if (!inv.caps[k] || typeof inv.caps[k] !== 'object') inv.caps[k] = { stock: 0, min: 0 };
+        // stock: entero (permitir negativo)
+        inv.caps[k].stock = Math.trunc(invParseNumber(inv.caps[k].stock));
+        // min: entero >= 0 (por compat UI)
+        inv.caps[k].min = Math.max(0, Math.trunc(invParseNumber(inv.caps[k].min)));
+      });
+
       const map = mapUnits || {};
       PRESENTACIONES.forEach((p) => {
         const uso = typeof map[p.id] === "number" ? map[p.id] : 0;
@@ -813,6 +843,22 @@
           inv.finished[p.id] = { stock: 0 };
         }
         inv.finished[p.id].stock = invParseNumber(inv.finished[p.id].stock) + uso;
+
+        // Descontar tapa por unidad producida según mapping fijo
+        if (uso > 0) {
+          let capId = null;
+          if (p.id === 'galon') capId = 'gallon';
+          else if (p.id === 'pulso' || p.id === 'litro') capId = 'pulsoLitro';
+          else if (p.id === 'djeba' || p.id === 'media') capId = 'djebaMedia';
+
+          if (capId) {
+            const before = Math.trunc(invParseNumber(inv.caps[capId] && inv.caps[capId].stock));
+            const after = Math.trunc(before - uso);
+            inv.caps[capId].stock = after;
+            // Log mínimo (no spam): una línea por presentación producida
+            console.info('[A33][CAPS] producir', p.nombre, 'qty', uso, '=>', capId, before, '→', after);
+          }
+        }
       });
 
       // Guardado conservador: bloquear si cambió entre lectura y escritura

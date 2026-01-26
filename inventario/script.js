@@ -24,6 +24,25 @@ const FINISHED = [
   { id: "galon", nombre: "Galón 3750 ml (lista)" },
 ];
 
+const CAPS_KEYS = [
+  'gallon',
+  'pulsoLitro',
+  'djebaMedia',
+];
+
+const CAPS = [
+  { id: 'gallon', nombre: 'Tapa Galón' },
+  { id: 'pulsoLitro', nombre: 'Tapa Pulso/Litro' },
+  { id: 'djebaMedia', nombre: 'Tapa Djeba/Media' },
+];
+
+function defaultCapsSection(){
+  const out = {};
+  CAPS_KEYS.forEach((k)=>{ out[k] = { stock: 0, min: 0 }; });
+  return out;
+}
+
+
 
 function $(id) {
   return document.getElementById(id);
@@ -34,6 +53,7 @@ function defaultInventario() {
     liquids: {},
     bottles: {},
     finished: {},
+    caps: defaultCapsSection(),
   };
   LIQUIDS.forEach((l) => {
     inv.liquids[l.id] = { stock: 0, max: 0 };
@@ -80,11 +100,17 @@ function deepClone(obj){
 
 function readInventarioShared(){
   if (window.A33Storage && typeof A33Storage.sharedRead === 'function'){
-    return A33Storage.sharedRead(STORAGE_KEY_INVENTARIO, defaultInventario(), 'local');
+    const r = A33Storage.sharedRead(STORAGE_KEY_INVENTARIO, defaultInventario(), 'local');
+    const data = (r && r.data && typeof r.data === 'object') ? r.data : defaultInventario();
+    const meta = (r && r.meta && typeof r.meta === 'object') ? r.meta : { rev: 0, updatedAt: null, writer: '' };
+    normalizeInventarioInPlace(data);
+    return { data, meta };
   }
   if (window.A33Storage && typeof A33Storage.sharedGet === 'function'){
     const data = A33Storage.sharedGet(STORAGE_KEY_INVENTARIO, defaultInventario(), 'local');
-    return { data, meta: { rev: 0, updatedAt: null, writer: '' } };
+    const out = (data && typeof data === 'object') ? data : defaultInventario();
+    normalizeInventarioInPlace(out);
+    return { data: out, meta: { rev: 0, updatedAt: null, writer: '' } };
   }
   return { data: null, meta: { rev: 0, updatedAt: null, writer: '' } };
 }
@@ -123,6 +149,7 @@ function writeInventarioMetaRaw(nextRev, writer){
 
 function trackInventarioBase(inv, meta){
   try{
+    normalizeInventarioInPlace(inv);
     INV_BASE_SNAPSHOT = deepClone(inv);
     INV_BASE_REV = (meta && Number.isFinite(+meta.rev)) ? Math.trunc(+meta.rev) : 0;
     INV_BASE_UPDATED_AT = (meta && meta.updatedAt) ? String(meta.updatedAt) : null;
@@ -162,6 +189,19 @@ function collectEdits(base, local){
     if (bStock !== lStock) edits.push({ section:'bottles', id, field:'stock', value:lStock });
   });
 
+
+  const baseC = (base && base.caps && typeof base.caps === 'object') ? base.caps : {};
+  const localC = (local && local.caps && typeof local.caps === 'object') ? local.caps : {};
+  const idsC = new Set([...Object.keys(baseC), ...Object.keys(localC)]);
+  idsC.forEach((id)=>{
+    const bStock = getField(base, 'caps', id, 'stock');
+    const lStock = getField(local, 'caps', id, 'stock');
+    if (bStock !== lStock) edits.push({ section:'caps', id, field:'stock', value:lStock });
+    const bMin = getField(base, 'caps', id, 'min');
+    const lMin = getField(local, 'caps', id, 'min');
+    if (bMin !== lMin) edits.push({ section:'caps', id, field:'min', value:lMin });
+  });
+
   return edits;
 }
 
@@ -171,6 +211,7 @@ function applyEditsToCurrent(cur, edits){
   if (!out.liquids || typeof out.liquids !== 'object') out.liquids = {};
   if (!out.bottles || typeof out.bottles !== 'object') out.bottles = {};
   if (!out.finished || typeof out.finished !== 'object') out.finished = {};
+  if (!out.caps || typeof out.caps !== 'object') out.caps = {};
 
   edits.forEach((e)=>{
     if (!e || !e.section || !e.id || !e.field) return;
@@ -185,6 +226,9 @@ function sharedCommitInventarioConservative(localInv){
   // Releer justo antes de guardar
   const r = readInventarioShared();
   const cur = (r && r.data && typeof r.data === 'object') ? r.data : defaultInventario();
+  normalizeInventarioInPlace(cur);
+  normalizeInventarioInPlace(localInv);
+
   const meta = (r && r.meta && typeof r.meta === 'object') ? r.meta : { rev:0, updatedAt:null, writer:'' };
   const curRev = Number.isFinite(+meta.rev) ? Math.trunc(+meta.rev) : 0;
 
@@ -266,6 +310,67 @@ function toNonNegativeInt(value){
   return n;
 }
 
+
+function toIntSafe(value, fallback){
+  const n = toFiniteNumber(value);
+  const fb = Number.isFinite(+fallback) ? Math.trunc(+fallback) : 0;
+  if (!Number.isFinite(n)) return fb;
+  return Math.trunc(n);
+}
+
+function normalizeCapsSectionInPlace(inv){
+  if (!inv || typeof inv !== 'object') return;
+  if (!inv.caps || typeof inv.caps !== 'object') inv.caps = defaultCapsSection();
+
+  CAPS_KEYS.forEach((k)=>{
+    if (!inv.caps[k] || typeof inv.caps[k] !== 'object') inv.caps[k] = { stock: 0, min: 0 };
+
+    // stock: entero (permitir negativos; no bloquear si llega negativo en el futuro)
+    const s = toFiniteNumber(inv.caps[k].stock);
+    inv.caps[k].stock = Number.isFinite(s) ? Math.trunc(s) : 0;
+
+    // min: entero >= 0
+    const mn = toFiniteNumber(inv.caps[k].min);
+    inv.caps[k].min = Number.isFinite(mn) ? Math.max(0, Math.trunc(mn)) : 0;
+  });
+}
+
+function normalizeInventarioInPlace(inv){
+  if (!inv || typeof inv !== 'object') return defaultInventario();
+
+  if (!inv.liquids || typeof inv.liquids !== 'object') inv.liquids = {};
+  if (!inv.bottles || typeof inv.bottles !== 'object') inv.bottles = {};
+  if (!inv.finished || typeof inv.finished !== 'object') inv.finished = {};
+
+  // Compat con data vieja: asegurar llaves conocidas y números seguros
+  LIQUIDS.forEach((l) => {
+    if (!inv.liquids[l.id] || typeof inv.liquids[l.id] !== 'object') inv.liquids[l.id] = { stock: 0, max: 0 };
+    const st = toFiniteNumber(inv.liquids[l.id].stock);
+    const mx = toFiniteNumber(inv.liquids[l.id].max);
+    inv.liquids[l.id].stock = Number.isFinite(st) ? Math.max(0, st) : 0;
+    inv.liquids[l.id].max = Number.isFinite(mx) ? Math.max(0, mx) : 0;
+  });
+
+  BOTTLES.forEach((b) => {
+    if (!inv.bottles[b.id] || typeof inv.bottles[b.id] !== 'object') inv.bottles[b.id] = { stock: 0 };
+    const st = toFiniteNumber(inv.bottles[b.id].stock);
+    // No forzar entero aquí (mantener comportamiento: valida al guardar)
+    inv.bottles[b.id].stock = Number.isFinite(st) ? st : 0;
+  });
+
+  FINISHED.forEach((p) => {
+    if (!inv.finished[p.id] || typeof inv.finished[p.id] !== 'object') inv.finished[p.id] = { stock: 0 };
+    const st = toFiniteNumber(inv.finished[p.id].stock);
+    inv.finished[p.id].stock = Number.isFinite(st) ? st : 0;
+  });
+
+  // Tapas (Auto)
+  normalizeCapsSectionInPlace(inv);
+
+  return inv;
+}
+
+
 function isValidDateKey(dateKey){
   if (typeof dateKey !== 'string') return false;
   const m = /^\d{4}-\d{2}-\d{2}$/.exec(dateKey);
@@ -299,6 +404,21 @@ function validateBeforeSave(inv){
   if (!inv.finished || typeof inv.finished !== 'object'){
     // finished puede existir por otros módulos; si no está, no bloqueamos: compat.
     inv.finished = inv.finished || {};
+  }
+
+  // Tapas (Auto): compat + validación
+  if (!inv.caps || typeof inv.caps !== 'object'){
+    inv.caps = defaultCapsSection();
+  }
+  normalizeCapsSectionInPlace(inv);
+
+  for (const id of Object.keys(inv.caps)){
+    const it = inv.caps[id];
+    if (!it || typeof it !== 'object') return { ok:false, message:`Inventario inválido: "caps.${id}" corrupto.` };
+    if (!Number.isFinite(it.stock)) return { ok:false, message:`Valor inválido en caps.${id}: stock debe ser número.` };
+    if (!Number.isInteger(it.stock)) return { ok:false, message:`Valor inválido en caps.${id}: stock debe ser entero.` };
+    if (!Number.isFinite(it.min) || it.min < 0) return { ok:false, message:`Valor inválido en caps.${id}: min debe ser entero >= 0.` };
+    if (!Number.isInteger(it.min)) return { ok:false, message:`Valor inválido en caps.${id}: min debe ser entero.` };
   }
 
   // Validar valores que este módulo edita
@@ -353,6 +473,7 @@ const INV_ROW_CACHE = {
   liquids: new Map(),
   bottles: new Map(),
   finished: new Map(),
+  caps: new Map(),
 };
 
 function debounce(fn, waitMs) {
@@ -626,6 +747,117 @@ function updateBottleRow(inv, id) {
   row.statusSpan.textContent = estado.label;
 }
 
+function calcularEstadoTapa(t) {
+  const stock = parseNumber(t.stock);
+  const minimo = parseNumber(t.min);
+  if (stock <= 0) {
+    return { label: "Sin stock", className: "status-critical" };
+  }
+  if (stock <= minimo) {
+    return { label: "Bajo", className: "status-warn" };
+  }
+  return { label: "OK", className: "status-ok" };
+}
+
+function ensureCapRow(tbody, def) {
+  const id = def.id;
+  let row = INV_ROW_CACHE.caps.get(id);
+  if (row && row.tr && row.tr.parentElement !== tbody) {
+    tbody.appendChild(row.tr);
+    return row;
+  }
+  if (row) return row;
+
+  const tr = document.createElement("tr");
+  tr.dataset.section = "caps";
+  tr.dataset.rowId = id;
+
+  const tdNombre = tdLabel(document.createElement("td"), "Tipo");
+  tdNombre.textContent = def.nombre;
+  tr.appendChild(tdNombre);
+
+  const tdStock = tdLabel(document.createElement("td"), "Stock (unid.)");
+  const inputStock = document.createElement("input");
+  inputStock.type = "number";
+  inputStock.step = "1";
+  // permitir negativos (no bloquear)
+  inputStock.dataset.id = id;
+  inputStock.dataset.kind = "cap-stock";
+  markA33Num(inputStock, { defaultValue: "0", mode: "numeric" });
+  tdStock.appendChild(inputStock);
+  tr.appendChild(tdStock);
+
+  const tdMin = tdLabel(document.createElement("td"), "Mínimo");
+  const inputMin = document.createElement("input");
+  inputMin.type = "number";
+  inputMin.step = "1";
+  inputMin.min = "0";
+  inputMin.dataset.id = id;
+  inputMin.dataset.kind = "cap-min";
+  markA33Num(inputMin, { defaultValue: "0", mode: "numeric" });
+  tdMin.appendChild(inputMin);
+  tr.appendChild(tdMin);
+
+  const tdEstado = tdLabel(document.createElement("td"), "Estado");
+  const statusSpan = document.createElement("span");
+  statusSpan.className = "status-chip status-neutral";
+  statusSpan.textContent = "—";
+  tdEstado.appendChild(statusSpan);
+  tr.appendChild(tdEstado);
+
+  const tdAcciones = tdLabel(document.createElement("td"), "Acciones");
+  tdAcciones.className = "td-actions";
+  const divAcc = document.createElement("div");
+  divAcc.className = "inv-actions";
+
+  const btnEntrada = document.createElement("button");
+  btnEntrada.type = "button";
+  btnEntrada.textContent = "+";
+  btnEntrada.title = "Entrada";
+  btnEntrada.setAttribute("aria-label", "Entrada");
+  btnEntrada.className = "btn-secondary btn-mini";
+  btnEntrada.dataset.action = "entrada";
+  btnEntrada.dataset.id = id;
+  btnEntrada.dataset.kind = "cap";
+
+  const btnSalida = document.createElement("button");
+  btnSalida.type = "button";
+  btnSalida.textContent = "−";
+  btnSalida.title = "Salida";
+  btnSalida.setAttribute("aria-label", "Salida");
+  btnSalida.className = "btn-danger btn-mini";
+  btnSalida.dataset.action = "salida";
+  btnSalida.dataset.id = id;
+  btnSalida.dataset.kind = "cap";
+
+  divAcc.appendChild(btnEntrada);
+  divAcc.appendChild(btnSalida);
+  tdAcciones.appendChild(divAcc);
+  tr.appendChild(tdAcciones);
+
+  tbody.appendChild(tr);
+
+  row = { tr, inputStock, inputMin, statusSpan };
+  INV_ROW_CACHE.caps.set(id, row);
+  return row;
+}
+
+function updateCapRow(inv, id) {
+  const row = INV_ROW_CACHE.caps.get(id);
+  if (!row) return;
+
+  const info = (inv && inv.caps && inv.caps[id]) ? inv.caps[id] : { stock: 0, min: 0 };
+  const stock = parseNumber(info.stock);
+  const minimo = parseNumber(info.min);
+
+  if (document.activeElement !== row.inputStock) row.inputStock.value = Number.isFinite(stock) ? stock : 0;
+  if (document.activeElement !== row.inputMin) row.inputMin.value = Number.isFinite(minimo) ? minimo : 0;
+
+  const estado = calcularEstadoTapa({ stock, min: minimo });
+  row.statusSpan.className = "status-chip " + estado.className;
+  row.statusSpan.textContent = estado.label;
+}
+
 function ensureFinishedRow(tbody, def) {
   const id = def.id;
   let row = INV_ROW_CACHE.finished.get(id);
@@ -685,13 +917,15 @@ function loadInventario() {
       const r = A33Storage.sharedRead(STORAGE_KEY_INVENTARIO, defaultInventario(), 'local');
       const data = (r && r.data && typeof r.data === 'object') ? r.data : defaultInventario();
       const meta = (r && r.meta && typeof r.meta === 'object') ? r.meta : { rev:0, updatedAt:null, writer:'' };
+      normalizeInventarioInPlace(data);
       trackInventarioBase(data, meta);
       return data;
     }
     if (window.A33Storage && typeof A33Storage.sharedGet === 'function'){
       const data = A33Storage.sharedGet(STORAGE_KEY_INVENTARIO, defaultInventario());
-      if (data && typeof data === 'object') return data;
-      return defaultInventario();
+      const out = (data && typeof data === 'object') ? data : defaultInventario();
+      normalizeInventarioInPlace(out);
+      return out;
     }
 
     // Fallback legacy
@@ -717,6 +951,8 @@ function loadInventario() {
       if (typeof data.finished[p.id].stock !== "number") data.finished[p.id].stock = parseNumber(data.finished[p.id].stock || 0);
     });
 
+    normalizeCapsSectionInPlace(data);
+
     return data;
   } catch (e) {
     console.error("Error leyendo inventario", e);
@@ -726,6 +962,9 @@ function loadInventario() {
 }
 
 function saveInventario(inv) {
+  // Normalizar (compat data vieja) antes de validar/persistir
+  normalizeInventarioInPlace(inv);
+
   // Validaciones duras antes de persistir
   const v = validateBeforeSave(inv);
   if (!v.ok){
@@ -745,6 +984,7 @@ function saveInventario(inv) {
         inv.liquids = r.data.liquids;
         inv.bottles = r.data.bottles;
         inv.finished = r.data.finished;
+        inv.caps = r.data.caps;
       }
       return true;
     }
@@ -833,11 +1073,22 @@ function renderBotellas(inv) {
   applyView("bottles");
 }
 
+function renderCaps(inv) {
+  const tbody = $("inv-caps-body");
+  if (!tbody) return;
+
+  CAPS.forEach((c) => {
+    ensureCapRow(tbody, c);
+    updateCapRow(inv, c.id);
+  });
+}
+
 
 
 function attachListeners(inv) {
   const liquidosBody = $("inv-liquidos-body");
   const botellasBody = $("inv-botellas-body");
+  const capsBody = $("inv-caps-body");
 
   const commitSave = (section, id) => {
     setStatus("Guardando…", "info", { sticky: true });
@@ -848,8 +1099,10 @@ function attachListeners(inv) {
       inv.liquids = fresh.liquids;
       inv.bottles = fresh.bottles;
       inv.finished = fresh.finished;
+      inv.caps = fresh.caps;
       renderLiquidos(inv);
       renderBotellas(inv);
+      renderCaps(inv);
       renderProductosTerminados(inv);
       applyAllViews();
       return false;
@@ -858,7 +1111,8 @@ function attachListeners(inv) {
     if (section === "liquids") updateLiquidoRow(inv, id);
     if (section === "bottles") updateBottleRow(inv, id);
     if (section === "finished") updateFinishedRow(inv, id);
-    applyView(section);
+    if (section === "caps") updateCapRow(inv, id);
+    if (INV_VIEW[section]) applyView(section);
     return true;
   };
 
@@ -934,6 +1188,48 @@ function attachListeners(inv) {
     botellasBody.addEventListener("click", handleAccion);
   }
 
+  if (capsBody) {
+    capsBody.addEventListener("change", (e) => {
+      const target = e.target;
+      if (!target.dataset || !target.dataset.kind) return;
+      const id = target.dataset.id;
+      const kind = target.dataset.kind;
+
+      normalizeCapsSectionInPlace(inv);
+      if (!inv.caps || !inv.caps[id]) {
+        safeAlert(`Inventario inválido: no existe el ítem "${id}".`);
+        updateCapRow(inv, id);
+        return;
+      }
+
+      if (kind === "cap-stock") {
+        const n = toFiniteNumber(target.value);
+        if (!Number.isFinite(n) || !Number.isInteger(n)) {
+          safeAlert("Cantidad inválida: debe ser un entero (puede ser negativo).");
+          updateCapRow(inv, id);
+          return;
+        }
+        inv.caps[id].stock = Math.trunc(n);
+        updateCapRow(inv, id);
+        scheduleSave("caps", id);
+      }
+
+      if (kind === "cap-min") {
+        const n = toNonNegativeInt(target.value);
+        if (!Number.isFinite(n)) {
+          safeAlert("Mínimo inválido: debe ser un entero >= 0.");
+          updateCapRow(inv, id);
+          return;
+        }
+        inv.caps[id].min = n;
+        updateCapRow(inv, id);
+        scheduleSave("caps", id);
+      }
+    });
+
+    capsBody.addEventListener("click", handleAccion);
+  }
+
   function handleAccion(e) {
     const target = e.target;
     if (!target.dataset || !target.dataset.action) return;
@@ -950,9 +1246,9 @@ function attachListeners(inv) {
     const valStr = window.prompt(msg);
     if (valStr == null) return;
 
-    const cantidad = (kind === "bottle") ? toNonNegativeInt(valStr) : toNonNegativeNumber(valStr);
+    const cantidad = (kind === "liquid") ? toNonNegativeNumber(valStr) : toNonNegativeInt(valStr);
     if (!Number.isFinite(cantidad) || cantidad <= 0) {
-      safeAlert("Cantidad inválida: debe ser un número real > 0 (y entero para botellas).");
+      safeAlert("Cantidad inválida: debe ser > 0 (y entero para botellas/tapas).");
       return;
     }
 
@@ -990,6 +1286,23 @@ function attachListeners(inv) {
       inv.bottles[id] = item;
       updateBottleRow(inv, id);
       commitSave("bottles", id);
+      return;
+    }
+
+    if (kind === "cap") {
+      normalizeCapsSectionInPlace(inv);
+      const item = (inv.caps && inv.caps[id]) ? inv.caps[id] : { stock: 0, min: 0 };
+      if (action === "entrada") {
+        item.stock = parseNumber(item.stock) + cantidad;
+      } else {
+        // permitido negativo
+        item.stock = parseNumber(item.stock) - cantidad;
+      }
+      item.stock = Math.trunc(item.stock);
+      if (!inv.caps || typeof inv.caps !== 'object') inv.caps = defaultCapsSection();
+      inv.caps[id] = item;
+      updateCapRow(inv, id);
+      commitSave("caps", id);
       return;
     }
   }
@@ -1062,10 +1375,46 @@ function renderProductosTerminados(inv) {
 
 
 
+function installSmokeHooks(inv){
+  try{
+    if (typeof window === 'undefined') return;
+    const api = {
+      get: ()=> deepClone(inv),
+      getCaps: ()=> deepClone((inv && inv.caps) ? inv.caps : null),
+      setCaps: (capId, stock, min)=>{
+        try{
+          normalizeCapsSectionInPlace(inv);
+          if (!inv.caps[capId]) inv.caps[capId] = { stock: 0, min: 0 };
+          if (stock != null) inv.caps[capId].stock = toIntSafe(stock, inv.caps[capId].stock);
+          if (min != null) inv.caps[capId].min = Math.max(0, toIntSafe(min, inv.caps[capId].min));
+          return saveInventario(inv);
+        }catch(_){ return false; }
+      },
+      reload: ()=>{
+        try{
+          const fresh = loadInventario();
+          inv.liquids = fresh.liquids;
+          inv.bottles = fresh.bottles;
+          inv.finished = fresh.finished;
+          inv.caps = fresh.caps;
+          return deepClone(inv);
+        }catch(_){ return deepClone(inv); }
+      }
+    };
+    try{
+      Object.defineProperty(window, '__A33_INV_SMOKE', { value: api, configurable: true });
+    }catch(_){
+      window.__A33_INV_SMOKE = api;
+    }
+  }catch(_){ }
+}
+
+
+
 function registerServiceWorker() {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker
-      .register("./sw.js?v=4.20.13")
+      .register("./sw.js?v=4.20.15")
       .catch((err) => console.error("SW error", err));
   }
 }
@@ -1074,9 +1423,11 @@ document.addEventListener("DOMContentLoaded", () => {
   setStatus("Cargando…", "info", { sticky: true });
 
   const inv = loadInventario();
+  installSmokeHooks(inv);
 
   renderLiquidos(inv);
   renderBotellas(inv);
+  renderCaps(inv);
   renderProductosTerminados(inv);
 
   wireViewControls();
