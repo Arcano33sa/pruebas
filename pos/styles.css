@@ -1198,3 +1198,14 @@ small.muted{color:var(--muted)}
 @media (max-width: 640px){
   .tech-grid{ grid-template-columns: 1fr; }
 }
+
+
+/* --- Efectivo v2 · Inicio por denominaciones (Etapa 3) --- */
+.cashv2-initial table{margin-top:6px}
+.cashv2-initial th, .cashv2-initial td{padding:7px 8px;font-size:13px}
+.cashv2-initial th.sub, .cashv2-initial td.sub{text-align:right}
+.cashv2-initial th.denom, .cashv2-initial td.denom{width:90px}
+.cashv2-initial .cashv2-denom-input{width:92px;max-width:100%;padding:7px 8px;font-size:14px}
+@media (max-width:420px){
+  .cashv2-initial .cashv2-denom-input{width:78px}
+}
