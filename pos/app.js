@@ -4,10 +4,10 @@ const DB_VER = 30; // Etapa 1 (Efectivo v2): nuevo store aislado + llaves canón
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.45';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.46';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r11');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r12');
 
 // --- Date helpers (POS)
 // Normaliza YYYY-MM-DD y da fallback robusto (consistente con Centro de Mando)
@@ -329,6 +329,249 @@ function cashV2SetInitialEnabled(enabled){
   if (btn) btn.disabled = !en;
 }
 
+// --- POS: Efectivo v2 — Movimientos (Entradas/Salidas/Ajuste) por moneda — Etapa 4
+function cashV2NormAmountInt(v){
+  let n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  n = Math.trunc(n);
+  if (n < 0) n = 0;
+  return n;
+}
+
+function cashV2NewMovementId(){
+  return 'M-' + Date.now().toString(36) + '-' + Math.random().toString(16).slice(2,10);
+}
+
+function cashV2MovementKindToUi(kind){
+  const k = String(kind || '').trim().toUpperCase();
+  if (k === 'IN') return { text:'Entrada', sign:+1 };
+  if (k === 'OUT') return { text:'Salida', sign:-1 };
+  if (k === 'ADJUST_IN') return { text:'Ajuste +', sign:+1 };
+  if (k === 'ADJUST_OUT') return { text:'Ajuste −', sign:-1 };
+  if (k === 'ADJUST') return { text:'Ajuste', sign:+1 };
+  return { text: (k || 'Mov'), sign: 0 };
+}
+
+function cashV2NetForCurrency(movements, currency){
+  const ccy = String(currency || '').trim().toUpperCase();
+  let net = 0;
+  const arr = Array.isArray(movements) ? movements : [];
+  for (const m of arr){
+    if (!m || typeof m !== 'object') continue;
+    if (String(m.currency || '').trim().toUpperCase() != ccy) continue;
+    const amt = cashV2NormAmountInt(m.amount);
+    const k = String(m.kind || '').trim().toUpperCase();
+    if (k === 'IN' || k === 'ADJUST_IN') net += amt;
+    else if (k === 'OUT' || k === 'ADJUST_OUT') net -= amt;
+    else if (k === 'ADJUST') net += amt; // fallback conservador
+  }
+  return net;
+}
+
+function cashV2FmtTime(ts){
+  try{
+    const d = new Date(Number(ts || 0) || 0);
+    if (!isFinite(d)) return '—';
+    return d.toLocaleTimeString('es-NI', { hour:'2-digit', minute:'2-digit' });
+  }catch(_){
+    try{
+      const d = new Date(Number(ts || 0) || 0);
+      return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+    }catch(__){
+      return '—';
+    }
+  }
+}
+
+function cashV2CoerceMovements(movements){
+  const arr = Array.isArray(movements) ? movements : [];
+  // Mantener solo movimientos mínimamente válidos
+  return arr.filter(m => m && typeof m === 'object' && m.kind && m.currency && m.amount != null);
+}
+
+function cashV2RenderMovementsUI(cashDay){
+  const card = document.getElementById('cashv2-movements-card');
+  if (!card) return;
+
+  const list = document.getElementById('cashv2-move-list');
+  const empty = document.getElementById('cashv2-move-empty');
+  const elNetNio = document.getElementById('cashv2-net-nio');
+  const elNetUsd = document.getElementById('cashv2-net-usd');
+
+  const movs = cashV2CoerceMovements(cashDay && cashDay.movements);
+  const netNio = cashV2NetForCurrency(movs, 'NIO');
+  const netUsd = cashV2NetForCurrency(movs, 'USD');
+
+  try{ if (elNetNio) elNetNio.textContent = cashV2FmtInt(netNio); }catch(_){ }
+  try{ if (elNetUsd) elNetUsd.textContent = cashV2FmtInt(netUsd); }catch(_){ }
+
+  if (!list) return;
+  if (!movs.length){
+    try{ if (empty) empty.style.display = 'block'; }catch(_){ }
+    list.innerHTML = '';
+    return;
+  }
+
+  try{ if (empty) empty.style.display = 'none'; }catch(_){ }
+
+  // Último primero
+  const sorted = movs.slice().sort((a,b)=> (Number(b.ts||0) - Number(a.ts||0)));
+
+  list.innerHTML = sorted.map(m => {
+    const ccy = String(m.currency || '').trim().toUpperCase();
+    const sym = (ccy === 'NIO') ? 'C$' : '$';
+    const amt = cashV2NormAmountInt(m.amount);
+    const ui = cashV2MovementKindToUi(m.kind);
+    const sign = ui.sign > 0 ? '+' : (ui.sign < 0 ? '−' : '');
+    const amountText = `${sign} ${sym} ${cashV2FmtInt(amt)}`.trim();
+    const note = (m.note == null ? '' : String(m.note)).trim();
+    const noteHtml = note ? `<div class="cashv2-move-note">${escapeHtml(note)}</div>` : '';
+
+    return `<div class="cashv2-move-row">  <div class="cashv2-move-left">    <div class="cashv2-move-top">      <span class="cashv2-mtag"><b>${escapeHtml(cashV2FmtTime(m.ts))}</b></span>      <span class="cashv2-mtag">${escapeHtml(ccy)}</span>      <span class="cashv2-mtag">${escapeHtml(ui.text)}</span>    </div>    ${noteHtml}  </div>  <div class="cashv2-move-amt">${escapeHtml(amountText)}</div></div>`;
+  }).join('');
+}
+
+function cashV2InitMovementsUIOnce(){
+  const modal = document.getElementById('cashv2-movement-modal');
+  if (!modal) return;
+  if (modal.dataset.ready === '1') return;
+
+  const btnAdd = document.getElementById('cashv2-btn-add-movement');
+  const btnCancel = document.getElementById('cashv2-move-cancel');
+  const btnCancel2 = document.getElementById('cashv2-move-cancel2');
+  const btnSave = document.getElementById('cashv2-move-save');
+
+  const selKind = document.getElementById('cashv2-move-kind');
+  const wrapAdj = document.getElementById('cashv2-move-adjust-wrap');
+  const selAdj = document.getElementById('cashv2-move-adjust-dir');
+  const selCcy = document.getElementById('cashv2-move-currency');
+  const inpAmt = document.getElementById('cashv2-move-amount');
+  const inpNote = document.getElementById('cashv2-move-note');
+  const elErr = document.getElementById('cashv2-move-modal-error');
+
+  function showErr(msg){
+    if (!elErr) return;
+    if (!msg){
+      elErr.style.display = 'none';
+      elErr.textContent = '';
+      return;
+    }
+    elErr.style.display = 'block';
+    elErr.textContent = String(msg);
+  }
+
+  function open(){
+    showErr('');
+    try{ if (inpAmt) inpAmt.value = ''; }catch(_){ }
+    try{ if (inpNote) inpNote.value = ''; }catch(_){ }
+    try{ if (selKind) selKind.value = 'IN'; }catch(_){ }
+    try{ if (selCcy) selCcy.value = 'NIO'; }catch(_){ }
+    try{ if (selAdj) selAdj.value = '+'; }catch(_){ }
+    try{ if (wrapAdj) wrapAdj.style.display = 'none'; }catch(_){ }
+
+    openModalPOS('cashv2-movement-modal');
+    try{ if (inpAmt) inpAmt.focus(); }catch(_){ }
+  }
+
+  function close(){
+    showErr('');
+    closeModalPOS('cashv2-movement-modal');
+  }
+
+  function currentCtx(){
+    const card = document.getElementById('cashv2-movements-card');
+    const eid = card ? String(card.dataset.eventId || '').trim() : '';
+    const dk = card ? String(card.dataset.dayKey || '').trim() : '';
+    return { eid, dk };
+  }
+
+  function refreshListWithRecord(rec){
+    try{ cashV2RenderMovementsUI(rec); }catch(_){ }
+  }
+
+  if (selKind){
+    selKind.addEventListener('change', ()=>{
+      const k = String(selKind.value || '').trim().toUpperCase();
+      const isAdj = (k === 'ADJUST');
+      try{ if (wrapAdj) wrapAdj.style.display = isAdj ? 'block' : 'none'; }catch(_){ }
+    });
+  }
+
+  if (btnAdd){
+    btnAdd.addEventListener('click', ()=>{
+      const {eid, dk} = currentCtx();
+      if (!eid || !dk) return;
+      open();
+    });
+  }
+
+  if (btnCancel) btnCancel.addEventListener('click', close);
+  if (btnCancel2) btnCancel2.addEventListener('click', close);
+
+  // Cerrar tocando el backdrop
+  modal.addEventListener('click', (e)=>{
+    if (e && e.target === modal) close();
+  });
+
+  if (btnSave){
+    btnSave.addEventListener('click', async ()=>{
+      const {eid, dk} = currentCtx();
+      if (!eid || !dk){ showErr('Falta evento o día.'); return; }
+
+      let kind = selKind ? String(selKind.value || '').trim().toUpperCase() : 'IN';
+      const ccy = selCcy ? String(selCcy.value || '').trim().toUpperCase() : 'NIO';
+      const note = inpNote ? String(inpNote.value || '').trim() : '';
+      let amt = cashV2NormAmountInt(inpAmt ? inpAmt.value : 0);
+
+      if (kind === 'ADJUST'){
+        const dir = selAdj ? String(selAdj.value || '+').trim() : '+';
+        kind = (dir === '-') ? 'ADJUST_OUT' : 'ADJUST_IN';
+      }
+
+      // Validación amount: entero > 0
+      if (!amt || amt <= 0){
+        showErr('Monto inválido. Debe ser entero > 0.');
+        return;
+      }
+
+      try{
+        // Cargar/asegurar
+        const rec = await cashV2Ensure(eid, dk);
+        const before = cashV2NetForCurrency(rec && rec.movements, ccy);
+
+        const movement = {
+          id: cashV2NewMovementId(),
+          ts: Date.now(),
+          kind,
+          currency: ccy,
+          amount: amt,
+          note: note ? note.slice(0, 80) : ''
+        };
+
+        const next = { ...rec };
+        const movs = Array.isArray(next.movements) ? next.movements.slice() : [];
+        movs.push(movement);
+        next.movements = movs;
+
+        const saved = await cashV2Save(next);
+        const after = cashV2NetForCurrency(saved && saved.movements, ccy);
+
+        console.log(`[A33][CASHv2] movement add: ${kind} ${ccy} ${amt} net ${before}=>${after}`);
+
+        close();
+        refreshListWithRecord(saved);
+      }catch(err){
+        console.error('[A33][CASHv2] movement add error', err);
+        const msg = (err && (err.message || err.name)) ? (err.message || err.name) : String(err);
+        showErr(msg);
+      }
+    });
+  }
+
+  modal.dataset.ready = '1';
+}
+
+
 
 async function renderEfectivoTab(){
   const tab = document.getElementById('tab-efectivo');
@@ -342,6 +585,8 @@ async function renderEfectivoTab(){
 
   // Etapa 3: UI Inicio (denominaciones)
   cashV2InitInitialUIOnce();
+  // Etapa 4: Movimientos
+  cashV2InitMovementsUIOnce();
 
   // Reset UI
   try{ if (elErr){ elErr.style.display = 'none'; elErr.textContent = ''; } }catch(_){ }
@@ -370,6 +615,12 @@ async function renderEfectivoTab(){
     }catch(_){ }
     try{ cashV2SetInitialEnabled(false); }catch(_){ }
     try{ cashV2ApplyInitialToDom(null); }catch(_){ }
+    // Etapa 4: sin evento => oculta Movimientos
+    try{
+      const mcard = document.getElementById('cashv2-movements-card');
+      if (mcard){ mcard.style.display = 'none'; mcard.dataset.eventId=''; mcard.dataset.dayKey=dayKey; }
+    }catch(_){ }
+    try{ cashV2RenderMovementsUI({movements:[]}); }catch(_){ }
     return;
   }
 
@@ -383,6 +634,12 @@ async function renderEfectivoTab(){
     }catch(_){ }
     try{ cashV2SetInitialEnabled(true); }catch(_){ }
     try{ cashV2ApplyInitialToDom((rec && rec.initial) ? rec.initial : null); }catch(_){ }
+    // Etapa 4: mostrar Movimientos
+    try{
+      const mcard = document.getElementById('cashv2-movements-card');
+      if (mcard){ mcard.style.display = 'block'; mcard.dataset.eventId = String(eventId); mcard.dataset.dayKey = dayKey; }
+    }catch(_){ }
+    try{ cashV2RenderMovementsUI(rec); }catch(_){ }
     const ui = cashV2StatusToUiPOS(rec && rec.status);
     if (statusTag){
       statusTag.textContent = ui.text;
@@ -393,6 +650,8 @@ async function renderEfectivoTab(){
     try{
       const card = document.getElementById('cashv2-initial-card');
       if (card){ card.style.display = 'none'; card.dataset.eventId=''; card.dataset.dayKey=dayKey; }
+      const mcard = document.getElementById('cashv2-movements-card');
+      if (mcard){ mcard.style.display = 'none'; mcard.dataset.eventId=''; mcard.dataset.dayKey=dayKey; }
     }catch(_){ }
     try{ cashV2SetInitialEnabled(false); }catch(_){ }
     console.error('Efectivo v2: no se pudo load/ensure', err);

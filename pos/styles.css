@@ -1209,3 +1209,14 @@ small.muted{color:var(--muted)}
 @media (max-width:420px){
   .cashv2-initial .cashv2-denom-input{width:78px}
 }
+
+
+/* --- Efectivo v2 · Movimientos (Etapa 4) --- */
+.cashv2-move-list{display:flex;flex-direction:column;gap:8px}
+.cashv2-move-row{display:flex;gap:10px;align-items:center;justify-content:space-between;background:#121212;border:1px solid #2a2a2a;border-radius:12px;padding:8px 10px}
+.cashv2-move-left{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.cashv2-move-top{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.cashv2-move-note{font-size:12px;color:#cfcfcf;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.cashv2-move-amt{font-weight:850;white-space:nowrap}
+.cashv2-mtag{display:inline-flex;align-items:center;gap:6px;border:1px solid #2a2a2a;background:#151515;border-radius:999px;padding:2px 8px;font-size:11px;line-height:1}
+.cashv2-mtag b{font-weight:850}
