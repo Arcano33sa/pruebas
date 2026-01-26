@@ -626,3 +626,73 @@ tr:nth-child(even) td {
     text-overflow: unset;
   }
 }
+
+/* ==============================
+   Inventario Varios (manual) — Etapa VARIOS2
+   ============================== */
+
+.inv-varios-table {
+  table-layout: fixed;
+}
+
+.varios-search {
+  width: 190px;
+  max-width: 52vw;
+  border-radius: 999px;
+}
+
+/* Column widths (desktop/tablet). En móvil se convierte a tarjetas. */
+.inv-varios-table th:nth-child(1),
+.inv-varios-table td:nth-child(1) {
+  width: 38%;
+  white-space: normal;
+}
+.inv-varios-table th:nth-child(2),
+.inv-varios-table td:nth-child(2) { width: 22%; }
+.inv-varios-table th:nth-child(3),
+.inv-varios-table td:nth-child(3) { width: 14%; }
+.inv-varios-table th:nth-child(4),
+.inv-varios-table td:nth-child(4) { width: 14%; }
+.inv-varios-table th:nth-child(5),
+.inv-varios-table td:nth-child(5) { width: 12%; }
+
+.varios-stock-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.varios-stock-wrap input[type="number"] {
+  max-width: 110px;
+}
+
+.varios-delta-btn {
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 12px;
+  line-height: 1;
+}
+
+.varios-delete-btn {
+  white-space: nowrap;
+}
+
+.varios-pending {
+  border-color: rgba(255, 213, 128, 0.55);
+  box-shadow: 0 0 0 2px rgba(255, 213, 128, 0.09);
+}
+
+@media (max-width: 920px) {
+  .inv-varios-table th:nth-child(2),
+  .inv-varios-table td:nth-child(2) { width: 26%; }
+  .inv-varios-table th:nth-child(5),
+  .inv-varios-table td:nth-child(5) { width: 14%; }
+}
+
+@media (max-width: 520px) {
+  .varios-search {
+    width: 100%;
+    flex: 1 1 180px;
+  }
+}

@@ -54,6 +54,7 @@ function defaultInventario() {
     bottles: {},
     finished: {},
     caps: defaultCapsSection(),
+    varios: [],
   };
   LIQUIDS.forEach((l) => {
     inv.liquids[l.id] = { stock: 0, max: 0 };
@@ -166,6 +167,29 @@ function getField(inv, section, id, field){
   }catch(_){ return undefined; }
 }
 
+function signatureVarios(list){
+  try{
+    if (!Array.isArray(list)) return '[]';
+    // Firma estable (asume líneas normalizadas)
+    return JSON.stringify(list.map((x)=>({
+      id: String((x && x.id) || ''),
+      producto: String((x && x.producto) || ''),
+      stock: Number.isFinite(+((x && x.stock))) ? Math.trunc(+x.stock) : 0,
+      minimo: Number.isFinite(+((x && x.minimo))) ? Math.trunc(+x.minimo) : 0,
+      createdAt: Number.isFinite(+((x && x.createdAt))) ? Math.trunc(+x.createdAt) : 0,
+    })));
+  }catch(_){ return '[]'; }
+}
+
+function getComparableForEdit(inv, e){
+  try{
+    if (e && e.section === 'varios' && e.op === 'replace'){
+      return signatureVarios((inv && inv.varios) ? inv.varios : []);
+    }
+    return getField(inv, e.section, e.id, e.field);
+  }catch(_){ return undefined; }
+}
+
 function collectEdits(base, local){
   const edits = [];
   const baseL = (base && base.liquids && typeof base.liquids === 'object') ? base.liquids : {};
@@ -202,6 +226,13 @@ function collectEdits(base, local){
     if (bMin !== lMin) edits.push({ section:'caps', id, field:'min', value:lMin });
   });
 
+  // Inventario Varios (lista): detectar add/edit/delete (reemplazo completo, conservador)
+  const baseV = (base && Array.isArray(base.varios)) ? base.varios : [];
+  const localV = (local && Array.isArray(local.varios)) ? local.varios : [];
+  if (signatureVarios(baseV) !== signatureVarios(localV)){
+    edits.push({ section:'varios', op:'replace', value: deepClone(localV) });
+  }
+
   return edits;
 }
 
@@ -212,9 +243,15 @@ function applyEditsToCurrent(cur, edits){
   if (!out.bottles || typeof out.bottles !== 'object') out.bottles = {};
   if (!out.finished || typeof out.finished !== 'object') out.finished = {};
   if (!out.caps || typeof out.caps !== 'object') out.caps = {};
+  if (!Array.isArray(out.varios)) out.varios = [];
 
   edits.forEach((e)=>{
-    if (!e || !e.section || !e.id || !e.field) return;
+    if (!e || !e.section) return;
+    if (e.section === 'varios' && e.op === 'replace'){
+      out.varios = deepClone(e.value);
+      return;
+    }
+    if (!e.id || !e.field) return;
     if (!out[e.section] || typeof out[e.section] !== 'object') out[e.section] = {};
     if (!out[e.section][e.id] || typeof out[e.section][e.id] !== 'object') out[e.section][e.id] = {};
     out[e.section][e.id][e.field] = e.value;
@@ -249,8 +286,8 @@ function sharedCommitInventarioConservative(localInv){
   // Conflicto: otro módulo/pestaña cambió lo MISMO desde nuestra lectura.
   if (curRev !== baseRev){
     for (const e of edits){
-      const baseVal = getField(base, e.section, e.id, e.field);
-      const curVal = getField(cur, e.section, e.id, e.field);
+      const baseVal = getComparableForEdit(base, e);
+      const curVal = getComparableForEdit(cur, e);
       if (baseVal !== curVal){
         return {
           ok:false,
@@ -335,6 +372,60 @@ function normalizeCapsSectionInPlace(inv){
   });
 }
 
+function normalizeVariosSectionInPlace(inv){
+  if (!inv || typeof inv !== 'object') return;
+  const raw = Array.isArray(inv.varios) ? inv.varios : [];
+  const out = [];
+  const used = new Set();
+  const now = Date.now();
+
+  for (let i = 0; i < raw.length; i++){
+    const it = raw[i];
+    if (!it || typeof it !== 'object') continue;
+
+    // createdAt: timestamp (ms) entero
+    const ca0 = toFiniteNumber(it.createdAt);
+    const createdAt = Number.isFinite(ca0) ? Math.trunc(ca0) : now;
+
+    // id: string estable
+    let id = (typeof it.id === 'string') ? it.id.trim() : '';
+    if (!id) id = `v_${createdAt}_${i}`;
+
+    // producto: string trim
+    const producto = String(it.producto ?? '').trim();
+
+    // stock: entero (NEGATIVOS permitidos)
+    const st0 = toFiniteNumber(it.stock);
+    const stock = Number.isFinite(st0) ? Math.trunc(st0) : 0;
+
+    // minimo: entero >= 0
+    const mn0 = toFiniteNumber(it.minimo);
+    const minimo = Number.isFinite(mn0) ? Math.max(0, Math.trunc(mn0)) : 0;
+
+    // Unicidad id
+    const baseId = id;
+    let n = 2;
+    while (used.has(id)){
+      id = `${baseId}_${n++}`;
+    }
+    used.add(id);
+
+    out.push({ id, producto, stock, minimo, createdAt });
+  }
+
+  // Orden estable (evita diffs por orden)
+  out.sort((a,b)=>{
+    const da = Number.isFinite(+a.createdAt) ? a.createdAt : 0;
+    const db = Number.isFinite(+b.createdAt) ? b.createdAt : 0;
+    if (da !== db) return da - db;
+    const ia = String(a.id || '');
+    const ib = String(b.id || '');
+    return ia < ib ? -1 : ia > ib ? 1 : 0;
+  });
+
+  inv.varios = out;
+}
+
 function normalizeInventarioInPlace(inv){
   if (!inv || typeof inv !== 'object') return defaultInventario();
 
@@ -366,6 +457,10 @@ function normalizeInventarioInPlace(inv){
 
   // Tapas (Auto)
   normalizeCapsSectionInPlace(inv);
+
+  // Inventario Varios (manual)
+  if (!Array.isArray(inv.varios)) inv.varios = [];
+  normalizeVariosSectionInPlace(inv);
 
   return inv;
 }
@@ -421,6 +516,24 @@ function validateBeforeSave(inv){
     if (!Number.isInteger(it.min)) return { ok:false, message:`Valor inválido en caps.${id}: min debe ser entero.` };
   }
 
+  // Inventario Varios (manual): compat + validación
+  if (!Array.isArray(inv.varios)) inv.varios = [];
+  normalizeVariosSectionInPlace(inv);
+  for (let i = 0; i < inv.varios.length; i++){
+    const it = inv.varios[i];
+    if (!it || typeof it !== 'object') return { ok:false, message:'Inventario inválido: línea de varios corrupta.' };
+    const id = String(it.id || '').trim();
+    if (!id) return { ok:false, message:'Inventario inválido: una línea de varios no tiene id.' };
+    // producto puede ir vacío (pendiente) — no bloquea guardado
+
+    if (!Number.isFinite(it.stock)) return { ok:false, message:`Inventario Varios: stock inválido en ${id}.` };
+    if (!Number.isInteger(it.stock)) return { ok:false, message:`Inventario Varios: stock debe ser entero en ${id}.` };
+    if (!Number.isFinite(it.minimo) || it.minimo < 0) return { ok:false, message:`Inventario Varios: mínimo inválido en ${id}.` };
+    if (!Number.isInteger(it.minimo)) return { ok:false, message:`Inventario Varios: mínimo debe ser entero en ${id}.` };
+    if (!Number.isFinite(it.createdAt)) return { ok:false, message:`Inventario Varios: createdAt inválido en ${id}.` };
+    if (!Number.isInteger(it.createdAt)) return { ok:false, message:`Inventario Varios: createdAt debe ser entero en ${id}.` };
+  }
+
   // Validar valores que este módulo edita
   for (const id of Object.keys(inv.liquids)){
     const it = inv.liquids[id];
@@ -474,6 +587,12 @@ const INV_ROW_CACHE = {
   bottles: new Map(),
   finished: new Map(),
   caps: new Map(),
+  varios: new Map(),
+};
+
+// UI state (no persistente)
+const INV_VARIOS_UI = {
+  search: "",
 };
 
 function debounce(fn, waitMs) {
@@ -910,6 +1029,250 @@ function updateFinishedRow(inv, id) {
 
 
 
+function calcularEstadoVariosLinea(it){
+  const stock = parseNumber(it && it.stock != null ? it.stock : 0);
+  const minimo = parseNumber(it && it.minimo != null ? it.minimo : 0);
+  if (stock <= 0) return { label: "Sin stock", className: "status-critical" };
+  if (stock <= minimo) return { label: "Bajo", className: "status-warn" };
+  return { label: "OK", className: "status-ok" };
+}
+
+function rankVariosLinea(it){
+  // 0 = rojo, 1 = amarillo, 2 = verde
+  const stock = parseNumber(it && it.stock != null ? it.stock : 0);
+  const minimo = parseNumber(it && it.minimo != null ? it.minimo : 0);
+  if (stock <= 0) return 0;
+  if (stock <= minimo) return 1;
+  return 2;
+}
+
+function productoKeyVarios(it){
+  const p = String((it && it.producto) ?? "").trim().toLowerCase();
+  // Vacíos al final dentro del grupo
+  return p ? p : "\uffff";
+}
+
+function sortVariosForUI(list){
+  try{
+    const arr = Array.isArray(list) ? list.slice() : [];
+    arr.sort((a, b) => {
+      const ra = rankVariosLinea(a);
+      const rb = rankVariosLinea(b);
+      if (ra !== rb) return ra - rb;
+      const pa = productoKeyVarios(a);
+      const pb = productoKeyVarios(b);
+      if (pa < pb) return -1;
+      if (pa > pb) return 1;
+      const ca = Number.isFinite(+((a && a.createdAt))) ? Math.trunc(+a.createdAt) : 0;
+      const cb = Number.isFinite(+((b && b.createdAt))) ? Math.trunc(+b.createdAt) : 0;
+      if (ca !== cb) return ca - cb;
+      const ia = String((a && a.id) || "");
+      const ib = String((b && b.id) || "");
+      if (ia < ib) return -1;
+      if (ia > ib) return 1;
+      return 0;
+    });
+    return arr;
+  }catch(_){
+    return Array.isArray(list) ? list : [];
+  }
+}
+
+function ensureVariosRow(tbody, it){
+  const id = String(it && it.id ? it.id : "");
+  let row = INV_ROW_CACHE.varios.get(id);
+  if (row && row.tr && row.tr.parentElement !== tbody) {
+    tbody.appendChild(row.tr);
+    return row;
+  }
+  if (row) return row;
+
+  const tr = document.createElement("tr");
+  tr.dataset.section = "varios";
+  tr.dataset.rowId = id;
+
+  const tdProd = tdLabel(document.createElement("td"), "Producto");
+  const inpProd = document.createElement("input");
+  inpProd.type = "text";
+  inpProd.placeholder = "Ej: Vasos";
+  inpProd.dataset.id = id;
+  inpProd.dataset.kind = "varios-producto";
+  inpProd.className = "varios-producto";
+  tdProd.appendChild(inpProd);
+  tr.appendChild(tdProd);
+
+  const tdStock = tdLabel(document.createElement("td"), "Stock");
+  const stockWrap = document.createElement("div");
+  stockWrap.className = "varios-stock-wrap";
+
+  const btnMinus = document.createElement("button");
+  btnMinus.type = "button";
+  btnMinus.className = "btn secondary btn-mini varios-delta-btn";
+  btnMinus.textContent = "−";
+  btnMinus.dataset.action = "varios-delta";
+  btnMinus.dataset.delta = "-1";
+  btnMinus.dataset.id = id;
+
+  const inpStock = document.createElement("input");
+  inpStock.type = "number";
+  inpStock.step = "1";
+  inpStock.dataset.id = id;
+  inpStock.dataset.kind = "varios-stock";
+  inpStock.className = "varios-stock";
+  markA33Num(inpStock, { defaultValue: "0", mode: "numeric" });
+
+  const btnPlus = document.createElement("button");
+  btnPlus.type = "button";
+  btnPlus.className = "btn secondary btn-mini varios-delta-btn";
+  btnPlus.textContent = "+";
+  btnPlus.dataset.action = "varios-delta";
+  btnPlus.dataset.delta = "1";
+  btnPlus.dataset.id = id;
+
+  stockWrap.appendChild(btnMinus);
+  stockWrap.appendChild(inpStock);
+  stockWrap.appendChild(btnPlus);
+  tdStock.appendChild(stockWrap);
+  tr.appendChild(tdStock);
+
+  const tdMin = tdLabel(document.createElement("td"), "Mínimo");
+  const inpMin = document.createElement("input");
+  inpMin.type = "number";
+  inpMin.step = "1";
+  inpMin.min = "0";
+  inpMin.dataset.id = id;
+  inpMin.dataset.kind = "varios-minimo";
+  inpMin.className = "varios-minimo";
+  markA33Num(inpMin, { defaultValue: "0", mode: "numeric" });
+  tdMin.appendChild(inpMin);
+  tr.appendChild(tdMin);
+
+  const tdEstado = tdLabel(document.createElement("td"), "Estado");
+  const statusSpan = document.createElement("span");
+  statusSpan.className = "status-chip status-neutral";
+  statusSpan.textContent = "—";
+  tdEstado.appendChild(statusSpan);
+  tr.appendChild(tdEstado);
+
+  const tdDel = tdLabel(document.createElement("td"), "Eliminar");
+  tdDel.className = "td-actions";
+  const btnDel = document.createElement("button");
+  btnDel.type = "button";
+  btnDel.className = "btn danger btn-mini varios-delete-btn";
+  btnDel.textContent = "Eliminar";
+  btnDel.dataset.action = "varios-delete";
+  btnDel.dataset.id = id;
+  tdDel.appendChild(btnDel);
+  tr.appendChild(tdDel);
+
+  tbody.appendChild(tr);
+
+  row = { tr, inpProd, inpStock, inpMin, statusSpan };
+  INV_ROW_CACHE.varios.set(id, row);
+  return row;
+}
+
+function updateVariosRow(inv, id){
+  const row = INV_ROW_CACHE.varios.get(String(id));
+  if (!row) return;
+  const list = Array.isArray(inv && inv.varios) ? inv.varios : [];
+  const it = list.find((x) => String(x && x.id) === String(id));
+  if (!it){
+    try{ row.tr.remove(); }catch(_){ }
+    INV_ROW_CACHE.varios.delete(String(id));
+    return;
+  }
+
+  row.inpProd.value = String(it.producto ?? "");
+  const prodTrim = String(it.producto ?? "").trim();
+  if (!prodTrim) row.inpProd.classList.add("varios-pending");
+  else row.inpProd.classList.remove("varios-pending");
+
+  row.inpStock.value = String(Number.isFinite(it.stock) ? it.stock : 0);
+  row.inpMin.value = String(Number.isFinite(it.minimo) ? it.minimo : 0);
+
+  const estado = calcularEstadoVariosLinea({ stock: it.stock, minimo: it.minimo });
+  row.statusSpan.className = "status-chip " + estado.className;
+  row.statusSpan.textContent = estado.label;
+}
+
+function renderVarios(inv, { focusId = null } = {}){
+  const tbody = $("inv-varios-body");
+  if (!tbody) return;
+
+  if (!inv || typeof inv !== "object") return;
+  if (!Array.isArray(inv.varios)) inv.varios = [];
+  normalizeVariosSectionInPlace(inv);
+
+  // Limpiar cache de filas que ya no existen
+  const idsAll = new Set(inv.varios.map((it) => String(it && it.id)));
+  Array.from(INV_ROW_CACHE.varios.keys()).forEach((k) => {
+    if (!idsAll.has(k)){
+      const row = INV_ROW_CACHE.varios.get(k);
+      try{ if (row && row.tr) row.tr.remove(); }catch(_){ }
+      INV_ROW_CACHE.varios.delete(k);
+    }
+  });
+
+  // Orden inteligente (rojo > amarillo > verde, luego alfabético)
+  const sortedAll = sortVariosForUI(inv.varios);
+
+  // Búsqueda (case-insensitive, trim). No cambia modelo, solo UI.
+  const q = String((INV_VARIOS_UI && INV_VARIOS_UI.search) ? INV_VARIOS_UI.search : "").trim().toLowerCase();
+  const focusStr = focusId ? String(focusId) : "";
+  const filtered = !q ? sortedAll : sortedAll.filter((it) => {
+    const prod = String((it && it.producto) || "").toLowerCase();
+    const match = prod.includes(q);
+    if (match) return true;
+    // Si estamos enfocando una línea nueva, mostrarla aunque no coincida.
+    return focusStr && String((it && it.id) || "") === focusStr;
+  });
+
+  // Asegurar DOM/inputs para todas las líneas (cache), pero solo dejar visibles las filtradas
+  inv.varios.forEach((it) => {
+    ensureVariosRow(tbody, it);
+    updateVariosRow(inv, String(it.id));
+  });
+
+  const showIds = new Set(filtered.map((it) => String(it && it.id)));
+  Array.from(INV_ROW_CACHE.varios.keys()).forEach((k) => {
+    const row = INV_ROW_CACHE.varios.get(k);
+    if (!row || !row.tr) return;
+    if (!showIds.has(k)){
+      try{ row.tr.remove(); }catch(_){ }
+    }
+  });
+
+  // Render visible en orden
+  let matched = 0;
+  filtered.forEach((it) => {
+    const row = ensureVariosRow(tbody, it);
+    updateVariosRow(inv, String(it.id));
+    matched += 1;
+    if (row && row.tr) tbody.appendChild(row.tr);
+  });
+
+  const emptyEl = $("inv-varios-empty");
+  if (emptyEl){
+    emptyEl.hidden = matched > 0;
+    if (!emptyEl.hidden){
+      if (inv.varios.length > 0 && q) emptyEl.textContent = "Sin coincidencias.";
+      else emptyEl.textContent = "Sin líneas. Agrega una para comenzar.";
+    }
+  }
+
+  if (focusId){
+    const row = INV_ROW_CACHE.varios.get(String(focusId));
+    if (row && row.inpProd){
+      setTimeout(() => {
+        try{ row.tr.scrollIntoView({ block: "nearest" }); }catch(_){ }
+        try{ row.inpProd.focus(); row.inpProd.select(); }catch(_){ }
+      }, 0);
+    }
+  }
+}
+
+
 function loadInventario() {
   try {
     // Contrato compartido (anti-pisadas + data vieja segura)
@@ -952,6 +1315,8 @@ function loadInventario() {
     });
 
     normalizeCapsSectionInPlace(data);
+    if (!Array.isArray(data.varios)) data.varios = [];
+    normalizeVariosSectionInPlace(data);
 
     return data;
   } catch (e) {
@@ -985,6 +1350,7 @@ function saveInventario(inv) {
         inv.bottles = r.data.bottles;
         inv.finished = r.data.finished;
         inv.caps = r.data.caps;
+        inv.varios = r.data.varios;
       }
       return true;
     }
@@ -1089,6 +1455,9 @@ function attachListeners(inv) {
   const liquidosBody = $("inv-liquidos-body");
   const botellasBody = $("inv-botellas-body");
   const capsBody = $("inv-caps-body");
+  const variosBody = $("inv-varios-body");
+  const variosAdd = $("inv-varios-add");
+  const variosSearch = $("inv-varios-search");
 
   const commitSave = (section, id) => {
     setStatus("Guardando…", "info", { sticky: true });
@@ -1100,9 +1469,11 @@ function attachListeners(inv) {
       inv.bottles = fresh.bottles;
       inv.finished = fresh.finished;
       inv.caps = fresh.caps;
+      inv.varios = fresh.varios;
       renderLiquidos(inv);
       renderBotellas(inv);
       renderCaps(inv);
+      renderVarios(inv);
       renderProductosTerminados(inv);
       applyAllViews();
       return false;
@@ -1112,11 +1483,32 @@ function attachListeners(inv) {
     if (section === "bottles") updateBottleRow(inv, id);
     if (section === "finished") updateFinishedRow(inv, id);
     if (section === "caps") updateCapRow(inv, id);
+    if (section === "varios") renderVarios(inv);
     if (INV_VIEW[section]) applyView(section);
     return true;
   };
 
   const scheduleSave = debounce((section, id) => commitSave(section, id), 220);
+
+  // Buscador (solo UI, no altera modelo)
+  if (variosSearch){
+    const applySearch = debounce(() => {
+      try{
+        INV_VARIOS_UI.search = String(variosSearch.value ?? "");
+      }catch(_){ INV_VARIOS_UI.search = ""; }
+      renderVarios(inv);
+    }, 60);
+    variosSearch.addEventListener("input", applySearch);
+    variosSearch.addEventListener("keydown", (e) => {
+      try{
+        if (e && e.key === "Escape"){
+          variosSearch.value = "";
+          INV_VARIOS_UI.search = "";
+          renderVarios(inv);
+        }
+      }catch(_){ }
+    });
+  }
 
   if (liquidosBody) {
     liquidosBody.addEventListener("change", (e) => {
@@ -1228,6 +1620,133 @@ function attachListeners(inv) {
     });
 
     capsBody.addEventListener("click", handleAccion);
+  }
+
+
+  // Inventario Varios: CRUD líneas + semáforo
+  const newVariosId = () => {
+    const r = Math.floor(Math.random() * 1e6);
+    return `v_${Date.now().toString(36)}_${r.toString(36)}`;
+  };
+
+  if (variosAdd){
+    variosAdd.addEventListener("click", () => {
+      try{
+        if (!Array.isArray(inv.varios)) inv.varios = [];
+        const id = newVariosId();
+        inv.varios.push({ id, producto: "", stock: 0, minimo: 0, createdAt: Date.now() });
+        normalizeVariosSectionInPlace(inv);
+        renderVarios(inv, { focusId: id });
+        commitSave("varios", id);
+      }catch(e){
+        console.error(e);
+        safeAlert("No se pudo agregar la línea.");
+      }
+    });
+  }
+
+  // Búsqueda (UI): filtra por producto, en vivo.
+  if (variosSearch){
+    const applySearch = debounce(() => {
+      try{
+        INV_VARIOS_UI.search = String(variosSearch.value ?? "");
+        renderVarios(inv);
+      }catch(_){ }
+    }, 60);
+    variosSearch.addEventListener("input", applySearch);
+    variosSearch.addEventListener("keydown", (e) => {
+      if (e && e.key === "Escape"){
+        try{
+          variosSearch.value = "";
+          INV_VARIOS_UI.search = "";
+          renderVarios(inv);
+          variosSearch.blur();
+        }catch(_){ }
+      }
+    });
+  }
+
+  if (variosBody){
+    variosBody.addEventListener("change", (e) => {
+      const target = e.target;
+      if (!target || !target.dataset || !target.dataset.kind) return;
+      const kind = target.dataset.kind;
+      const id = target.dataset.id;
+      if (!id) return;
+
+      if (!Array.isArray(inv.varios)) inv.varios = [];
+      const line = inv.varios.find((x) => String(x && x.id) === String(id));
+      if (!line){
+        safeAlert("Línea no encontrada. Se recargó la vista.");
+        renderVarios(inv);
+        return;
+      }
+
+      if (kind === "varios-producto"){
+        line.producto = String(target.value ?? "");
+        updateVariosRow(inv, id);
+        scheduleSave("varios", id);
+        return;
+      }
+
+      if (kind === "varios-stock"){
+        const n = toFiniteNumber(target.value);
+        if (!Number.isFinite(n) || !Number.isInteger(n)){
+          safeAlert("Stock inválido: debe ser un entero (puede ser negativo).");
+          updateVariosRow(inv, id);
+          return;
+        }
+        line.stock = Math.trunc(n);
+        updateVariosRow(inv, id);
+        scheduleSave("varios", id);
+        return;
+      }
+
+      if (kind === "varios-minimo"){
+        const n = toNonNegativeInt(target.value);
+        if (!Number.isFinite(n)){
+          safeAlert("Mínimo inválido: debe ser un entero >= 0." );
+          updateVariosRow(inv, id);
+          return;
+        }
+        line.minimo = n;
+        updateVariosRow(inv, id);
+        scheduleSave("varios", id);
+        return;
+      }
+    });
+
+    variosBody.addEventListener("click", (e) => {
+      const target = e.target;
+      if (!target || !target.dataset || !target.dataset.action) return;
+      const action = target.dataset.action;
+      const id = target.dataset.id;
+      if (!id) return;
+
+      if (!Array.isArray(inv.varios)) inv.varios = [];
+
+      if (action === "varios-delta"){
+        const delta = parseInt(target.dataset.delta || "0", 10);
+        if (!Number.isFinite(delta) || delta === 0) return;
+        const line = inv.varios.find((x) => String(x && x.id) === String(id));
+        if (!line) return;
+        const next = (Number.isFinite(line.stock) ? line.stock : 0) + delta;
+        line.stock = Math.trunc(next);
+        updateVariosRow(inv, id);
+        scheduleSave("varios", id);
+        return;
+      }
+
+      if (action === "varios-delete"){
+        const ok = window.confirm("¿Eliminar esta línea?");
+        if (!ok) return;
+        inv.varios = inv.varios.filter((x) => String(x && x.id) !== String(id));
+        normalizeVariosSectionInPlace(inv);
+        renderVarios(inv);
+        commitSave("varios", id);
+        return;
+      }
+    });
   }
 
   function handleAccion(e) {
@@ -1390,6 +1909,60 @@ function installSmokeHooks(inv){
           return saveInventario(inv);
         }catch(_){ return false; }
       },
+      getVarios: ()=> deepClone(Array.isArray(inv && inv.varios) ? inv.varios : []),
+      addVarios: (producto, stock, minimo)=>{
+        try{
+          if (!Array.isArray(inv.varios)) inv.varios = [];
+          const now = Date.now();
+          const id = `v_${now}_${Math.floor(Math.random() * 100000)}`;
+          inv.varios.push({
+            id,
+            producto: String(producto ?? '').trim(),
+            stock: toIntSafe(stock, 0),
+            minimo: Math.max(0, toIntSafe(minimo, 0)),
+            createdAt: now,
+          });
+          normalizeVariosSectionInPlace(inv);
+          return saveInventario(inv);
+        }catch(_){ return false; }
+      },
+      setVarios: (id, patch)=>{
+        try{
+          if (!Array.isArray(inv.varios)) inv.varios = [];
+          const pid = String(id || '').trim();
+          if (!pid) return false;
+          const it = inv.varios.find(x => x && typeof x === 'object' && String(x.id || '').trim() === pid);
+          if (!it) return false;
+          const p = (patch && typeof patch === 'object') ? patch : {};
+          if (p.producto != null) it.producto = String(p.producto ?? '').trim();
+          if (p.stock != null) it.stock = toIntSafe(p.stock, it.stock);
+          if (p.minimo != null) it.minimo = Math.max(0, toIntSafe(p.minimo, it.minimo));
+          normalizeVariosSectionInPlace(inv);
+          return saveInventario(inv);
+        }catch(_){ return false; }
+      },
+      delVarios: (id)=>{
+        try{
+          if (!Array.isArray(inv.varios)) inv.varios = [];
+          const pid = String(id || '').trim();
+          if (!pid) return false;
+          inv.varios = inv.varios.filter(x => !(x && typeof x === 'object' && String(x.id || '').trim() === pid));
+          normalizeVariosSectionInPlace(inv);
+          return saveInventario(inv);
+        }catch(_){ return false; }
+      },
+      smokeVarios: ()=>{
+        try{
+          const before = deepClone(Array.isArray(inv.varios) ? inv.varios : []);
+          // Insertar 1–2 líneas de prueba y persistir (solo si se llama explícitamente)
+          api.addVarios('Vaso (smoke)', 5, 0);
+          api.addVarios('Guantes (smoke)', -2, 0);
+          const afterSave = deepClone(Array.isArray(inv.varios) ? inv.varios : []);
+          const afterReload = api.reload();
+          const ok = signatureVarios(afterSave) === signatureVarios(afterReload.varios || []);
+          return { ok, before, afterSave, afterReload: deepClone(afterReload.varios || []) };
+        }catch(_){ return { ok:false }; }
+      },
       reload: ()=>{
         try{
           const fresh = loadInventario();
@@ -1397,6 +1970,7 @@ function installSmokeHooks(inv){
           inv.bottles = fresh.bottles;
           inv.finished = fresh.finished;
           inv.caps = fresh.caps;
+          inv.varios = fresh.varios;
           return deepClone(inv);
         }catch(_){ return deepClone(inv); }
       }
@@ -1414,7 +1988,7 @@ function installSmokeHooks(inv){
 function registerServiceWorker() {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker
-      .register("./sw.js?v=4.20.15")
+      .register("./sw.js?v=4.20.40")
       .catch((err) => console.error("SW error", err));
   }
 }
@@ -1428,6 +2002,7 @@ document.addEventListener("DOMContentLoaded", () => {
   renderLiquidos(inv);
   renderBotellas(inv);
   renderCaps(inv);
+  renderVarios(inv);
   renderProductosTerminados(inv);
 
   wireViewControls();
