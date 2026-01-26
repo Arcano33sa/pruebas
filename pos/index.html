@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.46&r=12">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.48&r=14">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.46&r=12">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.46" />
+<link rel="stylesheet" href="styles.css?v=4.20.48&r=14">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.48" />
 </head>
 <body>
   <header class="a33-header" role="banner">
@@ -471,7 +471,7 @@
       <div id="cashv2-no-event" class="warn" style="display:none; margin-top:10px"><small>Selecciona un evento para usar Efectivo.</small></div>
       <div id="cashv2-error" class="warn" style="display:none; margin-top:10px"></div>
 
-      <div class="info" style="margin-top:10px"><small>Inicio habilitado. Próximo: movimientos y cierre (sin diferencia).</small></div>
+      <div class="info" style="margin-top:10px"><small>Inicio y movimientos listos. Completa el cierre y revisa la diferencia.</small></div>
     </div>
   
 
@@ -526,9 +526,78 @@
       <div id="cashv2-move-list" class="cashv2-move-list" style="margin-top:10px"></div>
     </div>
 
+    <div id="cashv2-final-card" class="card inner cashv2-final" style="margin-top:10px; display:none">
+      <div class="row" style="align-items:baseline; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+        <div>
+          <h3 style="margin:0;">Cierre</h3>
+          <small class="muted">Conteo final por denominaciones + esperado + diferencia (por moneda).</small>
+        </div>
+        <div class="actions end" style="gap:8px; align-items:center; flex-wrap:wrap;">
+          <button id="cashv2-btn-save-final" class="btn-ok btn-pill" type="button">Guardar Final</button>
+          <small id="cashv2-final-save-status" class="muted"></small>
+        </div>
+      </div>
+
+      <div class="row" style="gap:12px; flex-wrap:wrap; margin-top:10px;">
+        <div style="flex:1; min-width:260px;">
+          <div class="muted" style="font-size:12px; margin-bottom:6px;">C$ (NIO)</div>
+          <table id="cashv2-table-final-nio">
+            <thead><tr><th class="denom">Denom</th><th>Cant</th><th class="sub">Sub</th></tr></thead>
+            <tbody></tbody>
+            <tfoot><tr><td colspan="2">Total</td><td id="cashv2-final-total-nio" class="sub">0</td></tr></tfoot>
+          </table>
+        </div>
+        <div style="flex:1; min-width:260px;">
+          <div class="muted" style="font-size:12px; margin-bottom:6px;">USD</div>
+          <table id="cashv2-table-final-usd">
+            <thead><tr><th class="denom">Denom</th><th>Cant</th><th class="sub">Sub</th></tr></thead>
+            <tbody></tbody>
+            <tfoot><tr><td colspan="2">Total</td><td id="cashv2-final-total-usd" class="sub">0</td></tr></tfoot>
+          </table>
+        </div>
+      </div>
+
+      <div class="row" style="gap:12px; flex-wrap:wrap; margin-top:12px;">
+        <div style="flex:1; min-width:260px;">
+          <div class="muted" style="font-size:12px; margin-bottom:6px;">Resumen C$ (NIO)</div>
+          <table class="cashv2-summary-table">
+            <tbody>
+              <tr><td>Inicial</td><td id="cashv2-sum-initial-nio" class="sub">0</td></tr>
+              <tr><td>Neto Movimientos</td><td id="cashv2-sum-net-nio" class="sub">0</td></tr>
+              <tr><td>Esperado</td><td id="cashv2-sum-expected-nio" class="sub">0</td></tr>
+              <tr><td>Final</td><td id="cashv2-sum-final-nio" class="sub">0</td></tr>
+              <tr><td><b>Diferencia</b></td><td class="sub"><span id="cashv2-sum-diff-nio" class="pill">0</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="flex:1; min-width:260px;">
+          <div class="muted" style="font-size:12px; margin-bottom:6px;">Resumen USD</div>
+          <table class="cashv2-summary-table">
+            <tbody>
+              <tr><td>Inicial</td><td id="cashv2-sum-initial-usd" class="sub">0</td></tr>
+              <tr><td>Neto Movimientos</td><td id="cashv2-sum-net-usd" class="sub">0</td></tr>
+              <tr><td>Esperado</td><td id="cashv2-sum-expected-usd" class="sub">0</td></tr>
+              <tr><td>Final</td><td id="cashv2-sum-final-usd" class="sub">0</td></tr>
+              <tr><td><b>Diferencia</b></td><td class="sub"><span id="cashv2-sum-diff-usd" class="pill">0</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="row" style="align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-top:12px;">
+        <div style="flex:1; min-width:240px;">
+          <div id="cashv2-close-blocker" class="warn" style="display:none"><small>No se puede cerrar: diferencia en C$ y/o USD</small></div>
+          <div id="cashv2-close-closed" class="info" style="display:none"><small><b>Cerrado.</b> <span id="cashv2-closed-at" class="muted"></span></small></div>
+        </div>
+        <div class="actions end" style="gap:8px; align-items:center; flex-wrap:wrap;">
+          <button id="cashv2-btn-close" class="btn-danger btn-pill" type="button" disabled>Cerrar</button>
+        </div>
+      </div>
+    </div>
+
 </section>
 
-<section id="tab-resumen" class="tab card" style="display:none">
+<section id="tab-resumen class="tab card" style="display:none">
     <h2>Resumen</h2>
     <div class="summary-controls">
       <div class="summary-controls-left">
@@ -1272,25 +1341,25 @@
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
-<script src="/assets/js/a33-storage.js?v=4.20.46"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.46"></script>
-<script src="/assets/js/a33-auth.js?v=4.20.46"></script>
-<script src="/assets/js/a33-build.js?v=4.20.46"></script>
+<script src="/assets/js/a33-storage.js?v=4.20.48"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.48"></script>
+<script src="/assets/js/a33-auth.js?v=4.20.48"></script>
+<script src="/assets/js/a33-build.js?v=4.20.48"></script>
 <script>
   (function(){
-    try{      const v = '4.20.46';
+    try{      const v = '4.20.48';
       try{ window.A33_VERSION = v; }catch(_){ }
       // POS: bump revision local (solo este modulo) para forzar limpieza de caches
-      try{ window.A33_ASSET_REV = '12'; }catch(_){ }
-      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r12').toString(); }catch(_){ }
-      try{ window.A33_BUILD_TAG = (v + '-r12').toString(); }catch(_){ }
+      try{ window.A33_ASSET_REV = '14'; }catch(_){ }
+      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r14').toString(); }catch(_){ }
+      try{ window.A33_BUILD_TAG = (v + '-r14').toString(); }catch(_){ }
       const verEl = document.getElementById('a33-version-text');
       if (verEl) verEl.textContent = 'v' + v;
       const bEl = document.getElementById('pos-build-id');
       if (bEl) bEl.textContent = 'POS Build: ' + v;
       const cEl = document.getElementById('pos-sw-cache-id');
       if (cEl){
-        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r12')).toString();
+        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r14')).toString();
         cEl.textContent = 'SW Cache: ' + cn;
         cEl.title = cn;
       }
@@ -1322,11 +1391,11 @@
     }
   })();
 </script>
-<script src="app.js?v=4.20.46&r=12"></script>
-<script src="/assets/js/a33-input-ux.js?v=4.20.46"></script>
+<script src="app.js?v=4.20.48&r=14"></script>
+<script src="/assets/js/a33-input-ux.js?v=4.20.48"></script>
 <script>
   (function(){
-    const BUILD = (window.A33_VERSION || '4.20.46').toString();
+    const BUILD = (window.A33_VERSION || '4.20.48').toString();
     const REV = (window.A33_ASSET_REV || '10').toString();
     const SW_URL = './sw.js?v=' + encodeURIComponent(BUILD) + '&r=' + encodeURIComponent(REV);
     const btn = document.getElementById('btn-update');

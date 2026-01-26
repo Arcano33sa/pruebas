@@ -4,10 +4,10 @@ const DB_VER = 30; // Etapa 1 (Efectivo v2): nuevo store aislado + llaves canón
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.46';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.48';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r12');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r14');
 
 // --- Date helpers (POS)
 // Normaliza YYYY-MM-DD y da fallback robusto (consistente con Centro de Mando)
@@ -145,6 +145,10 @@ const CASHV2_DENOMS = {
   USD: [1,5,10,20,50,100]
 };
 
+let CASHV2_LAST_REC = null;
+function cashV2SetLastRec(rec){ CASHV2_LAST_REC = rec || null; }
+function cashV2GetLastRec(){ return CASHV2_LAST_REC; }
+
 function cashV2DefaultInitial(){
   const mk = (arr)=>{ const o = {}; (arr||[]).forEach(d=>{ o[String(d)] = 0; }); return o; };
   return {
@@ -219,6 +223,7 @@ function cashV2InitInitialUIOnce(){
     const t = e && e.target;
     if (!t || t.getAttribute('data-cashv2-initial') !== '1') return;
     cashV2UpdateInitialTotals();
+    try{ cashV2UpdateCloseSummary(); }catch(_){ }
   });
 
   // Normalizar al salir del input
@@ -228,6 +233,7 @@ function cashV2InitInitialUIOnce(){
     const n = cashV2NormCount(t.value);
     t.value = String(n);
     cashV2UpdateInitialTotals();
+    try{ cashV2UpdateCloseSummary(); }catch(_){ }
   });
 
   const btn = document.getElementById('cashv2-btn-save-initial');
@@ -247,7 +253,10 @@ function cashV2InitInitialUIOnce(){
         const usd = (saved && saved.initial && saved.initial.USD && Number(saved.initial.USD.total)) || 0;
         console.log(`[A33][CASHv2] initial save ${eid} ${dk} totals NIO=${nio} USD=${usd}`);
 
+        cashV2SetLastRec(saved);
         cashV2ApplyInitialToDom(saved.initial);
+        try{ cashV2UpdateCloseSummary(saved); }catch(_){ }
+        try{ cashV2UpdateCloseEligibility(saved); }catch(_){ }
         const st = document.getElementById('cashv2-initial-save-status');
         if (st){
           st.textContent = 'Guardado';
@@ -405,6 +414,9 @@ function cashV2RenderMovementsUI(cashDay){
   try{ if (elNetNio) elNetNio.textContent = cashV2FmtInt(netNio); }catch(_){ }
   try{ if (elNetUsd) elNetUsd.textContent = cashV2FmtInt(netUsd); }catch(_){ }
 
+  try{ cashV2SetLastRec(cashDay); }catch(_){ }
+  try{ cashV2UpdateCloseSummary(cashDay); }catch(_){ }
+
   if (!list) return;
   if (!movs.length){
     try{ if (empty) empty.style.display = 'block'; }catch(_){ }
@@ -486,7 +498,10 @@ function cashV2InitMovementsUIOnce(){
   }
 
   function refreshListWithRecord(rec){
+    try{ cashV2SetLastRec(rec); }catch(_){ }
     try{ cashV2RenderMovementsUI(rec); }catch(_){ }
+    try{ cashV2UpdateCloseSummary(rec); }catch(_){ }
+    try{ cashV2UpdateCloseEligibility(rec); }catch(_){ }
   }
 
   if (selKind){
@@ -572,6 +587,401 @@ function cashV2InitMovementsUIOnce(){
 }
 
 
+// --- POS: Efectivo v2 — Cierre (Final + Esperado + Diferencia) — Etapa 5
+function cashV2CoerceFinal(final){
+  // Misma forma que Inicio: denomCounts + total por moneda
+  return cashV2CoerceInitial(final);
+}
+
+function cashV2InitFinalUIOnce(){
+  const card = document.getElementById('cashv2-final-card');
+  if (!card) return;
+  if (card.dataset.ready === '1') return;
+
+  function build(ccy, tableId){
+    const denoms = CASHV2_DENOMS[ccy] || [];
+    const tbody = document.querySelector(`#${tableId} tbody`);
+    if (!tbody) return;
+    tbody.innerHTML = denoms.map(d=>{
+      const k = String(d);
+      const sym = (ccy === 'NIO') ? 'C$' : '$';
+      return `\n<tr>\n  <td class=\"denom\"><b>${sym} ${k}</b></td>\n  <td>\n    <input type=\"number\" min=\"0\" step=\"1\" inputmode=\"numeric\" pattern=\"[0-9]*\"\n      class=\"cashv2-denom-input\"\n      data-cashv2-final=\"1\" data-ccy=\"${ccy}\" data-denom=\"${k}\"\n      id=\"cashv2-final-${ccy}-${k}\" value=\"0\"\n    >\n  </td>\n  <td class=\"sub\"><span id=\"cashv2-final-sub-${ccy}-${k}\">0</span></td>\n</tr>`;
+    }).join('');
+  }
+
+  build('NIO', 'cashv2-table-final-nio');
+  build('USD', 'cashv2-table-final-usd');
+
+  // Totales en vivo (sin logs por input)
+  card.addEventListener('input', (e)=>{
+    const t = e && e.target;
+    if (!t || t.getAttribute('data-cashv2-final') !== '1') return;
+    cashV2UpdateFinalTotals();
+  });
+
+  // Normalizar al salir del input
+  card.addEventListener('focusout', (e)=>{
+    const t = e && e.target;
+    if (!t || t.getAttribute('data-cashv2-final') !== '1') return;
+    const n = cashV2NormCount(t.value);
+    t.value = String(n);
+    cashV2UpdateFinalTotals();
+  });
+
+  const btn = document.getElementById('cashv2-btn-save-final');
+  if (btn){
+    btn.addEventListener('click', async ()=>{
+      const eid = String(card.dataset.eventId || '').trim();
+      const dk = String(card.dataset.dayKey || '').trim();
+      if (!eid || !dk) return;
+
+      const final = cashV2ReadFinalFromDom(true);
+      try{
+        const rec = await cashV2Ensure(eid, dk);
+        rec.final = final;
+        const saved = await cashV2Save(rec);
+
+        const nums = cashV2ComputeCloseNumbers(saved, { preferDom: false, finalOverride: final });
+        const fn = nums.NIO || { final:0, expected:0, diff:0 };
+        const fu = nums.USD || { final:0, expected:0, diff:0 };
+        console.log(`[A33][CASHv2] final save ${eid} ${dk} totals NIO=${fn.final} USD=${fu.final} expected NIO=${fn.expected} USD=${fu.expected} diff NIO=${fn.diff} USD=${fu.diff}`);
+
+        cashV2SetLastRec(saved);
+        cashV2ApplyFinalToDom(saved.final);
+        try{ cashV2UpdateCloseSummary(saved); }catch(_){ }
+        try{ cashV2UpdateCloseEligibility(saved); }catch(_){ }
+        const st = document.getElementById('cashv2-final-save-status');
+        if (st){
+          st.textContent = 'Guardado';
+          setTimeout(()=>{ try{ st.textContent = ''; }catch(_){ } }, 2200);
+        }
+      }catch(err){
+        console.error('[A33][CASHv2] final save error', err);
+        const st = document.getElementById('cashv2-final-save-status');
+        if (st){ st.textContent = 'Error'; setTimeout(()=>{ try{ st.textContent = ''; }catch(_){ } }, 2600); }
+      }
+    });
+  }
+
+  card.dataset.ready = '1';
+  cashV2UpdateFinalTotals();
+}
+
+function cashV2ReadFinalFromDom(updateUi){
+  const card = document.getElementById('cashv2-final-card');
+  const final = cashV2DefaultInitial();
+  if (!card) return final;
+
+  const inputs = card.querySelectorAll('input[data-cashv2-final="1"]');
+  inputs.forEach(inp=>{
+    const ccy = String(inp.dataset.ccy || '').trim();
+    const denom = String(inp.dataset.denom || '').trim();
+    if (!ccy || !denom || !final[ccy]) return;
+    final[ccy].denomCounts[denom] = cashV2NormCount(inp.value);
+  });
+
+  for (const ccy of ['NIO','USD']){
+    let total = 0;
+    for (const d of (CASHV2_DENOMS[ccy] || [])){
+      const k = String(d);
+      const cnt = cashV2NormCount(final[ccy].denomCounts[k]);
+      const sub = Number(d) * cnt;
+      total += sub;
+      if (updateUi){
+        const elSub = document.getElementById(`cashv2-final-sub-${ccy}-${k}`);
+        if (elSub) elSub.textContent = cashV2FmtInt(sub);
+      }
+    }
+    final[ccy].total = total;
+    if (updateUi){
+      const elTot = document.getElementById(ccy === 'NIO' ? 'cashv2-final-total-nio' : 'cashv2-final-total-usd');
+      if (elTot) elTot.textContent = cashV2FmtInt(total);
+    }
+  }
+
+  return final;
+}
+
+function cashV2UpdateFinalTotals(){
+  cashV2ReadFinalFromDom(true);
+  try{ cashV2UpdateCloseSummary(); }catch(_){ }
+}
+
+function cashV2ApplyFinalToDom(final){
+  const card = document.getElementById('cashv2-final-card');
+  if (!card) return;
+  const v = cashV2CoerceFinal(final);
+  for (const ccy of ['NIO','USD']){
+    for (const d of (CASHV2_DENOMS[ccy] || [])){
+      const k = String(d);
+      const inp = document.getElementById(`cashv2-final-${ccy}-${k}`);
+      if (inp) inp.value = String(cashV2NormCount(v[ccy].denomCounts[k]));
+    }
+  }
+  cashV2UpdateFinalTotals();
+}
+
+function cashV2SetFinalEnabled(enabled){
+  const card = document.getElementById('cashv2-final-card');
+  if (!card) return;
+  const en = !!enabled;
+  card.querySelectorAll('input[data-cashv2-final="1"]').forEach(inp=>{ inp.disabled = !en; });
+  const btn = document.getElementById('cashv2-btn-save-final');
+  if (btn) btn.disabled = !en;
+}
+
+function cashV2ComputeCloseNumbers(rec, opts){
+  const o = {
+    NIO: { initial:0, net:0, expected:0, final:0, diff:0 },
+    USD: { initial:0, net:0, expected:0, final:0, diff:0 }
+  };
+
+  const preferDom = !(opts && opts.preferDom === false);
+  const initialOverride = opts && opts.initialOverride ? opts.initialOverride : null;
+  const finalOverride = opts && opts.finalOverride ? opts.finalOverride : null;
+
+  // Inicial: DOM (si está) o record
+  let initObj = null;
+  try{
+    const ic = document.getElementById('cashv2-initial-card');
+    if (preferDom && ic) initObj = cashV2ReadInitialFromDom(false);
+  }catch(_){ initObj = null; }
+  if (!initObj) initObj = initialOverride ? cashV2CoerceInitial(initialOverride) : cashV2CoerceInitial(rec && rec.initial);
+
+  // Final: DOM (si está) o record
+  let finObj = null;
+  try{
+    const fc = document.getElementById('cashv2-final-card');
+    if (preferDom && fc) finObj = cashV2ReadFinalFromDom(false);
+  }catch(_){ finObj = null; }
+  if (!finObj) finObj = finalOverride ? cashV2CoerceFinal(finalOverride) : cashV2CoerceFinal(rec && rec.final);
+
+  const movs = cashV2CoerceMovements(rec && rec.movements);
+  const netNio = cashV2NetForCurrency(movs, 'NIO');
+  const netUsd = cashV2NetForCurrency(movs, 'USD');
+
+  const iN = (initObj && initObj.NIO && Number(initObj.NIO.total)) || 0;
+  const iU = (initObj && initObj.USD && Number(initObj.USD.total)) || 0;
+  const fN = (finObj && finObj.NIO && Number(finObj.NIO.total)) || 0;
+  const fU = (finObj && finObj.USD && Number(finObj.USD.total)) || 0;
+
+  const eN = iN + netNio;
+  const eU = iU + netUsd;
+
+  o.NIO.initial = iN;
+  o.NIO.net = netNio;
+  o.NIO.expected = eN;
+  o.NIO.final = fN;
+  o.NIO.diff = fN - eN;
+
+  o.USD.initial = iU;
+  o.USD.net = netUsd;
+  o.USD.expected = eU;
+  o.USD.final = fU;
+  o.USD.diff = fU - eU;
+
+  return o;
+}
+
+function cashV2SetDiffPill(el, diff){
+  if (!el) return;
+  const n = Number(diff || 0);
+  el.textContent = cashV2FmtInt(n);
+  el.classList.toggle('danger', n !== 0);
+}
+
+function cashV2ClearCloseSummary(){
+  const ids = [
+    'cashv2-sum-initial-nio','cashv2-sum-net-nio','cashv2-sum-expected-nio','cashv2-sum-final-nio',
+    'cashv2-sum-initial-usd','cashv2-sum-net-usd','cashv2-sum-expected-usd','cashv2-sum-final-usd'
+  ];
+  ids.forEach(id=>{ try{ const el = document.getElementById(id); if (el) el.textContent = '0'; }catch(_){ } });
+  try{ cashV2SetDiffPill(document.getElementById('cashv2-sum-diff-nio'), 0); }catch(_){ }
+  try{ cashV2SetDiffPill(document.getElementById('cashv2-sum-diff-usd'), 0); }catch(_){ }
+}
+
+function cashV2UpdateCloseSummary(rec){
+  const r = (rec != null) ? rec : cashV2GetLastRec();
+  if (!r){ cashV2ClearCloseSummary(); return; }
+
+  const nums = cashV2ComputeCloseNumbers(r, { preferDom: true });
+  try{ const el = document.getElementById('cashv2-sum-initial-nio'); if (el) el.textContent = cashV2FmtInt(nums.NIO.initial); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-net-nio'); if (el) el.textContent = cashV2FmtInt(nums.NIO.net); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-expected-nio'); if (el) el.textContent = cashV2FmtInt(nums.NIO.expected); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-final-nio'); if (el) el.textContent = cashV2FmtInt(nums.NIO.final); }catch(_){ }
+  try{ cashV2SetDiffPill(document.getElementById('cashv2-sum-diff-nio'), nums.NIO.diff); }catch(_){ }
+
+  try{ const el = document.getElementById('cashv2-sum-initial-usd'); if (el) el.textContent = cashV2FmtInt(nums.USD.initial); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-net-usd'); if (el) el.textContent = cashV2FmtInt(nums.USD.net); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-expected-usd'); if (el) el.textContent = cashV2FmtInt(nums.USD.expected); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-final-usd'); if (el) el.textContent = cashV2FmtInt(nums.USD.final); }catch(_){ }
+  try{ cashV2SetDiffPill(document.getElementById('cashv2-sum-diff-usd'), nums.USD.diff); }catch(_){ }
+}
+
+// --- POS: Efectivo v2 — CIERRE PROHIBIDO con diferencia (hard rule) — Etapa 6
+function cashV2IsClosed(rec){
+  const s = String((rec && rec.status) || '').trim().toUpperCase();
+  return s === 'CLOSED';
+}
+
+function cashV2SetMovementsEnabled(enabled){
+  const en = !!enabled;
+  const btnAdd = document.getElementById('cashv2-btn-add-movement');
+  if (btnAdd) btnAdd.disabled = !en;
+  const btnSave = document.getElementById('cashv2-move-save');
+  if (btnSave) btnSave.disabled = !en;
+}
+
+function cashV2SetCloseUiState(state){
+  const btn = document.getElementById('cashv2-btn-close');
+  if (!btn) return;
+  const blocker = document.getElementById('cashv2-close-blocker');
+  const closed = document.getElementById('cashv2-close-closed');
+  const closedAt = document.getElementById('cashv2-closed-at');
+
+  const hide = (el)=>{ try{ if (el) el.style.display = 'none'; }catch(_){ } };
+  const show = (el)=>{ try{ if (el) el.style.display = 'block'; }catch(_){ } };
+
+  if (state && state.closed){
+    btn.disabled = true;
+    btn.textContent = 'Cerrado';
+    hide(blocker);
+    show(closed);
+    try{
+      if (closedAt){
+        const ts = (state && state.closedAt) ? Number(state.closedAt) : 0;
+        closedAt.textContent = ts ? ('· ' + new Date(ts).toLocaleString('es-NI')) : '';
+      }
+    }catch(_){ if (closedAt) closedAt.textContent = ''; }
+    return;
+  }
+
+  btn.textContent = 'Cerrar';
+  btn.disabled = !(state && state.canClose);
+
+  hide(closed);
+  try{ if (closedAt) closedAt.textContent = ''; }catch(_){ }
+
+  if (blocker){
+    const reason = state && state.reason ? String(state.reason) : '';
+    if (reason){
+      const sm = blocker.querySelector('small');
+      if (sm) sm.textContent = reason;
+      else blocker.textContent = reason;
+      show(blocker);
+    }else{
+      hide(blocker);
+    }
+  }
+}
+
+function cashV2EvalCloseRule(rec){
+  const r = rec || null;
+  if (!r || typeof r !== 'object') return { canClose:false, reason:'' };
+  if (cashV2IsClosed(r)){
+    return { closed:true, canClose:false, closedAt: (r.meta && r.meta.closedAt) || null };
+  }
+
+  if (!r.initial) return { canClose:false, reason:'No se puede cerrar: falta Inicio guardado' };
+  if (!r.final) return { canClose:false, reason:'No se puede cerrar: falta Final guardado' };
+
+  // Hard rule: diff debe ser 0 en ambas monedas (usar record persistido)
+  const numsRec = cashV2ComputeCloseNumbers(r, { preferDom: false });
+  const dn = Number(numsRec && numsRec.NIO && numsRec.NIO.diff) || 0;
+  const du = Number(numsRec && numsRec.USD && numsRec.USD.diff) || 0;
+
+  // Si el usuario cambió inputs pero no guardó, bloquea cierre para evitar inconsistencias
+  let domChanged = false;
+  try{
+    const numsDom = cashV2ComputeCloseNumbers(r, { preferDom: true });
+    domChanged = (Number(numsDom.NIO.initial)||0)!==(Number(numsRec.NIO.initial)||0)       || (Number(numsDom.USD.initial)||0)!==(Number(numsRec.USD.initial)||0)       || (Number(numsDom.NIO.final)||0)!==(Number(numsRec.NIO.final)||0)       || (Number(numsDom.USD.final)||0)!==(Number(numsRec.USD.final)||0);
+  }catch(_){ domChanged = false; }
+
+  if (dn !== 0 || du !== 0){
+    return { canClose:false, reason:'No se puede cerrar: diferencia en C$ y/o USD' };
+  }
+  if (domChanged){
+    return { canClose:false, reason:'No se puede cerrar: guarda Inicio y/o Final' };
+  }
+  return { canClose:true };
+}
+
+function cashV2ApplyReadOnlyUi(isClosed){
+  const ro = !!isClosed;
+  try{ cashV2SetInitialEnabled(!ro); }catch(_){ }
+  try{ cashV2SetFinalEnabled(!ro); }catch(_){ }
+  try{ cashV2SetMovementsEnabled(!ro); }catch(_){ }
+}
+
+function cashV2UpdateCloseEligibility(rec){
+  const r = (rec != null) ? rec : cashV2GetLastRec();
+  const st = cashV2EvalCloseRule(r);
+  cashV2SetCloseUiState(st);
+}
+
+function cashV2InitCloseUIOnce(){
+  const btn = document.getElementById('cashv2-btn-close');
+  if (!btn) return;
+  if (btn.dataset.ready === '1') return;
+
+  btn.addEventListener('click', async ()=>{
+    const card = document.getElementById('cashv2-final-card');
+    const eid = card ? String(card.dataset.eventId || '').trim() : '';
+    const dk = card ? String(card.dataset.dayKey || '').trim() : '';
+    if (!eid || !dk) return;
+
+    try{
+      const rec = await cashV2Ensure(eid, dk);
+      // Re-evaluación dura (record)
+      const st = cashV2EvalCloseRule(rec);
+      if (st.closed){
+        cashV2SetLastRec(rec);
+        cashV2ApplyReadOnlyUi(true);
+        cashV2UpdateCloseEligibility(rec);
+        try{ toast('Ya está cerrado'); }catch(_){ }
+        return;
+      }
+      if (!st.canClose){
+        cashV2SetLastRec(rec);
+        cashV2UpdateCloseEligibility(rec);
+        try{ if (st.reason) toast(st.reason); }catch(_){ }
+        return;
+      }
+
+      rec.status = 'CLOSED';
+      rec.meta = (rec.meta && typeof rec.meta === 'object') ? rec.meta : {};
+      rec.meta.closedAt = Date.now();
+
+      const saved = await cashV2Save(rec);
+      cashV2SetLastRec(saved);
+
+      // UI: bloquear + refrescar indicadores
+      cashV2ApplyReadOnlyUi(true);
+      cashV2UpdateCloseEligibility(saved);
+      try{ cashV2UpdateCloseSummary(saved); }catch(_){ }
+
+      try{
+        const statusTag = document.getElementById('cashv2-status-tag');
+        const ui = cashV2StatusToUiPOS(saved && saved.status);
+        if (statusTag){
+          statusTag.textContent = ui.text;
+          statusTag.classList.toggle('open', ui.cls === 'open');
+          statusTag.classList.toggle('closed', ui.cls !== 'open');
+        }
+      }catch(_){ }
+
+      try{ toast('Cierre confirmado'); }catch(_){ }
+    }catch(err){
+      console.error('[A33][CASHv2] close error', err);
+      try{ toast('Error al cerrar'); }catch(_){ }
+    }
+  });
+
+  btn.dataset.ready = '1';
+}
+
+
+
 
 async function renderEfectivoTab(){
   const tab = document.getElementById('tab-efectivo');
@@ -587,6 +997,10 @@ async function renderEfectivoTab(){
   cashV2InitInitialUIOnce();
   // Etapa 4: Movimientos
   cashV2InitMovementsUIOnce();
+  // Etapa 5: Cierre (Final + esperado + diferencia)
+  cashV2InitFinalUIOnce();
+  // Etapa 6: Cierre duro (no cerrar con diferencia)
+  cashV2InitCloseUIOnce();
 
   // Reset UI
   try{ if (elErr){ elErr.style.display = 'none'; elErr.textContent = ''; } }catch(_){ }
@@ -621,6 +1035,16 @@ async function renderEfectivoTab(){
       if (mcard){ mcard.style.display = 'none'; mcard.dataset.eventId=''; mcard.dataset.dayKey=dayKey; }
     }catch(_){ }
     try{ cashV2RenderMovementsUI({movements:[]}); }catch(_){ }
+    // Etapa 5: sin evento => oculta Cierre
+    try{
+      const fcard = document.getElementById('cashv2-final-card');
+      if (fcard){ fcard.style.display = 'none'; fcard.dataset.eventId=''; fcard.dataset.dayKey=dayKey; }
+    }catch(_){ }
+    try{ cashV2SetFinalEnabled(false); }catch(_){ }
+    try{ cashV2ApplyFinalToDom(null); }catch(_){ }
+    try{ cashV2SetLastRec(null); }catch(_){ }
+    try{ cashV2ClearCloseSummary(); }catch(_){ }
+    try{ cashV2UpdateCloseEligibility(null); }catch(_){ }
     return;
   }
 
@@ -628,6 +1052,7 @@ async function renderEfectivoTab(){
 
   try{
     const rec = await cashV2Ensure(eventId, dayKey);
+    try{ cashV2SetLastRec(rec); }catch(_){ }
     try{
       const card = document.getElementById('cashv2-initial-card');
       if (card){ card.style.display = 'block'; card.dataset.eventId = String(eventId); card.dataset.dayKey = dayKey; }
@@ -640,6 +1065,16 @@ async function renderEfectivoTab(){
       if (mcard){ mcard.style.display = 'block'; mcard.dataset.eventId = String(eventId); mcard.dataset.dayKey = dayKey; }
     }catch(_){ }
     try{ cashV2RenderMovementsUI(rec); }catch(_){ }
+    // Etapa 5: mostrar Cierre
+    try{
+      const fcard = document.getElementById('cashv2-final-card');
+      if (fcard){ fcard.style.display = 'block'; fcard.dataset.eventId = String(eventId); fcard.dataset.dayKey = dayKey; }
+    }catch(_){ }
+    try{ cashV2SetFinalEnabled(true); }catch(_){ }
+    try{ cashV2ApplyFinalToDom((rec && rec.final) ? rec.final : null); }catch(_){ }
+    try{ cashV2UpdateCloseSummary(rec); }catch(_){ }
+    try{ cashV2UpdateCloseEligibility(rec); }catch(_){ }
+    try{ cashV2ApplyReadOnlyUi(cashV2IsClosed(rec)); }catch(_){ }
     const ui = cashV2StatusToUiPOS(rec && rec.status);
     if (statusTag){
       statusTag.textContent = ui.text;
@@ -652,8 +1087,12 @@ async function renderEfectivoTab(){
       if (card){ card.style.display = 'none'; card.dataset.eventId=''; card.dataset.dayKey=dayKey; }
       const mcard = document.getElementById('cashv2-movements-card');
       if (mcard){ mcard.style.display = 'none'; mcard.dataset.eventId=''; mcard.dataset.dayKey=dayKey; }
+      const fcard = document.getElementById('cashv2-final-card');
+      if (fcard){ fcard.style.display = 'none'; fcard.dataset.eventId=''; fcard.dataset.dayKey=dayKey; }
     }catch(_){ }
     try{ cashV2SetInitialEnabled(false); }catch(_){ }
+    try{ cashV2SetFinalEnabled(false); }catch(_){ }
+    try{ cashV2SetLastRec(null); }catch(_){ }
     console.error('Efectivo v2: no se pudo load/ensure', err);
     try{
       if (statusTag){

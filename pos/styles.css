@@ -1220,3 +1220,20 @@ small.muted{color:var(--muted)}
 .cashv2-move-amt{font-weight:850;white-space:nowrap}
 .cashv2-mtag{display:inline-flex;align-items:center;gap:6px;border:1px solid #2a2a2a;background:#151515;border-radius:999px;padding:2px 8px;font-size:11px;line-height:1}
 .cashv2-mtag b{font-weight:850}
+
+
+/* --- Efectivo v2 · Cierre (Etapa 5) --- */
+.cashv2-final table{margin-top:6px}
+.cashv2-final th, .cashv2-final td{padding:7px 8px;font-size:13px}
+.cashv2-final th.sub, .cashv2-final td.sub{text-align:right}
+.cashv2-final th.denom, .cashv2-final td.denom{width:90px}
+.cashv2-final .cashv2-denom-input{width:92px;max-width:100%;padding:7px 8px;font-size:14px}
+@media (max-width:420px){
+  .cashv2-final .cashv2-denom-input{width:78px}
+}
+
+.cashv2-summary-table{width:100%;border-collapse:collapse;background:#121212;border:1px solid #2a2a2a;border-radius:12px;overflow:hidden}
+.cashv2-summary-table td{padding:7px 10px;font-size:13px;border-top:1px solid #242424}
+.cashv2-summary-table tr:first-child td{border-top:none}
+.cashv2-summary-table td.sub{text-align:right;font-weight:850}
+.cashv2-summary-table .pill{margin-left:0}
