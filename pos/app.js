@@ -1,13 +1,13 @@
 // --- IndexedDB helpers POS
 const DB_NAME = 'a33-pos';
-const DB_VER = 29; // Etapa 11D: eliminar stores legacy del módulo removido (legacy cleanup)
+const DB_VER = 30; // Etapa 1 (Efectivo v2): nuevo store aislado + llaves canónicas
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.42';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.43';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r8');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r9');
 
 // --- Date helpers (POS)
 // Normaliza YYYY-MM-DD y da fallback robusto (consistente con Centro de Mando)
@@ -37,6 +37,97 @@ function safeYMD(v){
   }catch(_){ }
   return todayYMD();
 }
+
+// --- POS: Efectivo v2 (storage aislado, sin UI en Etapa 1)
+const CASH_V2_STORE = 'cashV2';
+
+function cashV2AssertEventId(eventId){
+  const eid = String(eventId == null ? '' : eventId).trim();
+  if (!eid) throw new Error('cashV2: eventId requerido');
+  return eid;
+}
+
+function cashV2AssertDayKeyCanon(dayKey){
+  const dk = String(dayKey == null ? '' : dayKey).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dk)){
+    throw new Error('cashV2: dayKey canónico requerido (YYYY-MM-DD)');
+  }
+  return dk;
+}
+
+function cashV2Key(eventId, dayKey){
+  const eid = cashV2AssertEventId(eventId);
+  const dk = cashV2AssertDayKeyCanon(dayKey);
+  return `cash:v2:${eid}:${dk}`;
+}
+
+async function cashV2Load(eventId, dayKey){
+  const key = cashV2Key(eventId, dayKey);
+  if (!db) await openDB();
+  const v = await getOne(CASH_V2_STORE, key);
+  return v || null;
+}
+
+async function cashV2Ensure(eventId, dayKey){
+  const eid = cashV2AssertEventId(eventId);
+  const dk = cashV2AssertDayKeyCanon(dayKey);
+  const key = cashV2Key(eid, dk);
+  if (!db) await openDB();
+
+  const existing = await getOne(CASH_V2_STORE, key);
+  if (existing) return existing;
+
+  const now = new Date().toISOString();
+  const cashDay = {
+    version: 2,
+    key,
+    eventId: eid,
+    dayKey: dk,
+    status: 'OPEN',
+    initial: null,
+    movements: [],
+    final: null,
+    meta: { createdAt: now, updatedAt: now }
+  };
+  await put(CASH_V2_STORE, cashDay);
+  return cashDay;
+}
+
+async function cashV2Save(cashDay){
+  if (!cashDay || typeof cashDay !== 'object') throw new Error('cashV2: cashDay inválido');
+  if (Number(cashDay.version) !== 2) throw new Error('cashV2: version=2 requerido');
+  const eid = cashV2AssertEventId(cashDay.eventId);
+  const dk = cashV2AssertDayKeyCanon(cashDay.dayKey);
+  const key = cashV2Key(eid, dk);
+  if (cashDay.key && String(cashDay.key) !== key) throw new Error('cashV2: key canónica requerida');
+  const now = new Date().toISOString();
+
+  const meta = (cashDay.meta && typeof cashDay.meta === 'object') ? cashDay.meta : {};
+  const createdAt = (typeof meta.createdAt === 'string' && meta.createdAt.trim()) ? meta.createdAt : now;
+  const updatedAt = now;
+
+  const toSave = {
+    ...cashDay,
+    version: 2,
+    key,
+    eventId: eid,
+    dayKey: dk,
+    status: String(cashDay.status || 'OPEN'),
+    initial: (cashDay.initial == null ? null : cashDay.initial),
+    movements: Array.isArray(cashDay.movements) ? cashDay.movements : [],
+    final: (cashDay.final == null ? null : cashDay.final),
+    meta: { ...meta, createdAt, updatedAt }
+  };
+
+  if (!db) await openDB();
+  await put(CASH_V2_STORE, toSave);
+  return toSave;
+}
+
+try{ window.cashV2Load = cashV2Load; }catch(_){ }
+try{ window.cashV2Ensure = cashV2Ensure; }catch(_){ }
+try{ window.cashV2Save = cashV2Save; }catch(_){ }
+try{ window.cashV2Key = cashV2Key; }catch(_){ }
 
 try{ window.A33_POS_BUILD = POS_BUILD; }catch(_){ }
 try{ window.A33_POS_SW_CACHE = POS_SW_CACHE; }catch(_){ }
@@ -386,6 +477,18 @@ function openDB(opts) {
       }
 
       // --- POS: cierres diarios (snapshot) + candado por (evento,día)
+
+      // --- POS: Efectivo v2 (storage aislado) — Etapa 1/9
+      if (!d.objectStoreNames.contains('cashV2')) {
+        const cv2 = d.createObjectStore('cashV2', { keyPath: 'key' });
+        try { cv2.createIndex('by_event', 'eventId', { unique: false }); } catch {}
+        try { cv2.createIndex('by_day', 'dayKey', { unique: false }); } catch {}
+        try { cv2.createIndex('by_event_day', ['eventId','dayKey'], { unique: true }); } catch {}
+      } else {
+        try { e.target.transaction.objectStore('cashV2').createIndex('by_event', 'eventId', { unique: false }); } catch {}
+        try { e.target.transaction.objectStore('cashV2').createIndex('by_day', 'dayKey', { unique: false }); } catch {}
+        try { e.target.transaction.objectStore('cashV2').createIndex('by_event_day', ['eventId','dayKey'], { unique: true }); } catch {}
+      }
       if (!d.objectStoreNames.contains('dayLocks')) {
         const l = d.createObjectStore('dayLocks', { keyPath: 'key' });
         try { l.createIndex('by_event', 'eventId', { unique: false }); } catch {}
