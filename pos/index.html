@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.43&r=9">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.44&r=10">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.43&r=9">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.43" />
+<link rel="stylesheet" href="styles.css?v=4.20.44&r=10">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.44" />
 </head>
 <body>
   <header class="a33-header" role="banner">
@@ -450,10 +450,29 @@
     </div>
   </section>
 
-  
-  <section id="tab-caja" class="tab card" style="display:none">
-    <h2>Sección no disponible</h2>
-    <p class="muted">Esta sección no está disponible en esta versión.</p>
+  <section id="tab-efectivo" class="tab card" style="display:none">
+    <div class="row" style="align-items:baseline; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+      <h2 style="margin:0">Efectivo</h2>
+      <small class="muted">Arqueo del día (por evento)</small>
+    </div>
+
+    <div class="card inner" style="margin-top:10px">
+      <div class="row" style="align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+        <div>
+          <label class="muted" style="display:block; font-size:12px; margin-bottom:4px;">Estado</label>
+          <span id="cashv2-status-tag" class="tag open">Abierto</span>
+        </div>
+        <div class="muted" style="font-size:12px;">
+          <div>Evento: <b id="cashv2-eventid">—</b></div>
+          <div>Día: <b id="cashv2-daykey">—</b></div>
+        </div>
+      </div>
+
+      <div id="cashv2-no-event" class="warn" style="display:none; margin-top:10px"><small>Selecciona un evento para usar Efectivo.</small></div>
+      <div id="cashv2-error" class="warn" style="display:none; margin-top:10px"></div>
+
+      <div class="info" style="margin-top:10px"><small>Solo lectura por ahora. Próximo: saldo inicial, movimientos y cierre sin diferencia.</small></div>
+    </div>
   </section>
 
 <section id="tab-resumen" class="tab card" style="display:none">
@@ -1136,6 +1155,7 @@
   <button data-tab="venta" class="active">Vender</button>
   <button data-tab="inventario">Inventario</button>
   <button data-tab="eventos">Eventos</button>
+<button data-tab="efectivo">Efectivo</button>
 <button data-tab="resumen">Resumen</button>
   <button data-tab="productos">Productos</button>
   <button data-tab="calculadora">Calculadora</button>
@@ -1143,25 +1163,25 @@
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
-<script src="/assets/js/a33-storage.js?v=4.20.43"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.43"></script>
-<script src="/assets/js/a33-auth.js?v=4.20.43"></script>
-<script src="/assets/js/a33-build.js?v=4.20.43"></script>
+<script src="/assets/js/a33-storage.js?v=4.20.44"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.44"></script>
+<script src="/assets/js/a33-auth.js?v=4.20.44"></script>
+<script src="/assets/js/a33-build.js?v=4.20.44"></script>
 <script>
   (function(){
-    try{      const v = '4.20.43';
+    try{      const v = '4.20.44';
       try{ window.A33_VERSION = v; }catch(_){ }
       // POS: bump revision local (solo este modulo) para forzar limpieza de caches
-      try{ window.A33_ASSET_REV = '9'; }catch(_){ }
-      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r9').toString(); }catch(_){ }
-      try{ window.A33_BUILD_TAG = (v + '-r9').toString(); }catch(_){ }
+      try{ window.A33_ASSET_REV = '10'; }catch(_){ }
+      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r10').toString(); }catch(_){ }
+      try{ window.A33_BUILD_TAG = (v + '-r10').toString(); }catch(_){ }
       const verEl = document.getElementById('a33-version-text');
       if (verEl) verEl.textContent = 'v' + v;
       const bEl = document.getElementById('pos-build-id');
       if (bEl) bEl.textContent = 'POS Build: ' + v;
       const cEl = document.getElementById('pos-sw-cache-id');
       if (cEl){
-        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r9')).toString();
+        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r10')).toString();
         cEl.textContent = 'SW Cache: ' + cn;
         cEl.title = cn;
       }
@@ -1193,12 +1213,12 @@
     }
   })();
 </script>
-<script src="app.js?v=4.20.43&r=9"></script>
-<script src="/assets/js/a33-input-ux.js?v=4.20.43"></script>
+<script src="app.js?v=4.20.44&r=10"></script>
+<script src="/assets/js/a33-input-ux.js?v=4.20.44"></script>
 <script>
   (function(){
-    const BUILD = (window.A33_VERSION || '4.20.43').toString();
-    const REV = (window.A33_ASSET_REV || '9').toString();
+    const BUILD = (window.A33_VERSION || '4.20.44').toString();
+    const REV = (window.A33_ASSET_REV || '10').toString();
     const SW_URL = './sw.js?v=' + encodeURIComponent(BUILD) + '&r=' + encodeURIComponent(REV);
     const btn = document.getElementById('btn-update');
     let refreshing = false;

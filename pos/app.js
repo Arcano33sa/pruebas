@@ -4,10 +4,10 @@ const DB_VER = 30; // Etapa 1 (Efectivo v2): nuevo store aislado + llaves canón
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.43';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.44';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r9');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r10');
 
 // --- Date helpers (POS)
 // Normaliza YYYY-MM-DD y da fallback robusto (consistente con Centro de Mando)
@@ -128,6 +128,78 @@ try{ window.cashV2Load = cashV2Load; }catch(_){ }
 try{ window.cashV2Ensure = cashV2Ensure; }catch(_){ }
 try{ window.cashV2Save = cashV2Save; }catch(_){ }
 try{ window.cashV2Key = cashV2Key; }catch(_){ }
+
+
+// --- POS: Efectivo v2 (UI mínima) — Etapa 2
+function cashV2StatusToUiPOS(status){
+  const s = String(status || 'OPEN').trim().toUpperCase();
+  if (s === 'OPEN') return { text:'Abierto', cls:'open' };
+  if (s === 'CLOSED') return { text:'Cerrado', cls:'closed' };
+  if (s === 'LOCKED') return { text:'Bloqueado', cls:'closed' };
+  return { text: s || 'Abierto', cls: (s === 'OPEN' ? 'open' : 'closed') };
+}
+
+async function renderEfectivoTab(){
+  const tab = document.getElementById('tab-efectivo');
+  if (!tab) return;
+
+  const statusTag = document.getElementById('cashv2-status-tag');
+  const elEventId = document.getElementById('cashv2-eventid');
+  const elDayKey = document.getElementById('cashv2-daykey');
+  const elNoEvent = document.getElementById('cashv2-no-event');
+  const elErr = document.getElementById('cashv2-error');
+
+  // Reset UI
+  try{ if (elErr){ elErr.style.display = 'none'; elErr.textContent = ''; } }catch(_){ }
+  try{ if (elNoEvent){ elNoEvent.style.display = 'none'; } }catch(_){ }
+
+  const dayKey = safeYMD(getSaleDayKeyPOS());
+  try{ if (elDayKey) elDayKey.textContent = dayKey; }catch(_){ }
+
+  let eventId = null;
+  try{ eventId = await getMeta('currentEventId'); }catch(_){ eventId = null; }
+
+  if (eventId == null || eventId === '' || String(eventId).trim() === ''){
+    try{ if (elEventId) elEventId.textContent = '—'; }catch(_){ }
+    try{
+      if (statusTag){
+        statusTag.textContent = 'Abierto';
+        statusTag.classList.add('open');
+        statusTag.classList.remove('closed');
+      }
+    }catch(_){ }
+    try{ if (elNoEvent){ elNoEvent.style.display = 'block'; } }catch(_){ }
+    return;
+  }
+
+  try{ if (elEventId) elEventId.textContent = String(eventId); }catch(_){ }
+
+  try{
+    const rec = await cashV2Ensure(eventId, dayKey);
+    const ui = cashV2StatusToUiPOS(rec && rec.status);
+    if (statusTag){
+      statusTag.textContent = ui.text;
+      statusTag.classList.toggle('open', ui.cls === 'open');
+      statusTag.classList.toggle('closed', ui.cls !== 'open');
+    }
+  }catch(err){
+    console.error('Efectivo v2: no se pudo load/ensure', err);
+    try{
+      if (statusTag){
+        statusTag.textContent = 'Error';
+        statusTag.classList.remove('open');
+        statusTag.classList.add('closed');
+      }
+    }catch(_){ }
+    try{
+      if (elErr){
+        const msg = (err && (err.message || err.name)) ? (err.message || err.name) : String(err);
+        elErr.innerHTML = `<small><b>No se pudo cargar Efectivo.</b> ${escapeHtml(msg)}</small>`;
+        elErr.style.display = 'block';
+      }
+    }catch(_){ }
+  }
+}
 
 try{ window.A33_POS_BUILD = POS_BUILD; }catch(_){ }
 try{ window.A33_POS_SW_CACHE = POS_SW_CACHE; }catch(_){ }
@@ -5056,6 +5128,7 @@ const tabs = $$('.tab');
   if (name==='productos') renderProductos();
   if (name==='eventos') renderEventos();
   if (name==='inventario') renderInventario();
+  if (name==='efectivo') renderEfectivoTab().catch(err=>console.error(err));
   if (name==='calculadora') onOpenPosCalculatorTab().catch(err=>console.error(err));
   if (name==='checklist') renderChecklistTab().catch(err=>console.error(err));
   if (name==='venta') initVasosPanelPOS().catch(err=>console.error(err));
@@ -5150,7 +5223,7 @@ async function initVasosPanelPOS(){
 // --- Deep-link mínimo (Centro de Mando -> POS)
 function getTabFromUrlPOS(){
   try{
-    const allowed = new Set(['venta','inventario','eventos','resumen','productos','calculadora','checklist']);
+    const allowed = new Set(['venta','inventario','eventos','efectivo','resumen','productos','calculadora','checklist']);
     // Querystring
     const qs = new URLSearchParams(window.location.search || '');
     const qTab = (qs.get('tab') || '').trim();
