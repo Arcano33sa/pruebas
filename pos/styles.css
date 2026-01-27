@@ -463,6 +463,12 @@ small.muted{color:var(--muted)}
 .sell-locked details.card,
 .sell-locked #cup-block{opacity:.55;filter:saturate(.88)}
 
+/* Efectivo v2: modo solo lectura (candado base) */
+.cashv2-readonly #cashv2-fx-card,
+.cashv2-readonly #cashv2-initial-card,
+.cashv2-readonly #cashv2-movements-card,
+.cashv2-readonly #cashv2-final-card
+
 .tag{display:inline-block;padding:3px 8px;border-radius:999px;background:#2a2a2a;color:#ddd;font-size:12px;margin-left:6px}
 .tag.closed{background:#3a2222;color:#ffb3b3}
 .tag.open{background:#223a22;color:#b3ffb3}
@@ -1239,5 +1245,3 @@ small.muted{color:var(--muted)}
 .cashv2-summary-table .pill{margin-left:0}
 
 
-/* --- Efectivo v2 · LEGACY VISOR (Etapa 9) --- */
-.cashv2-legacy-item{margin-bottom:8px;border-radius:16px}

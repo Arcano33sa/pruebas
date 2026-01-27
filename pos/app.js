@@ -4,10 +4,10 @@ const DB_VER = 30; // Etapa 1 (Efectivo v2): nuevo store aislado + llaves canón
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.58';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.64';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r24');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r30');
 
 // --- Date helpers (POS)
 // Normaliza YYYY-MM-DD y da fallback robusto (consistente con Centro de Mando)
@@ -55,6 +55,185 @@ function cashV2AssertDayKeyCanon(dayKey){
   return dk;
 }
 
+
+function cashV2DayKeyFromTsLocal(ts){
+  const n = Number(ts);
+  if (!Number.isFinite(n) || n <= 0) return todayYMD();
+  const d = new Date(n);
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const day = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+
+function cashV2NormStatus(v){
+  const s = String(v || 'OPEN').trim().toUpperCase();
+  return (s === 'CLOSED') ? 'CLOSED' : 'OPEN';
+}
+
+function cashV2DeriveOpenTs(rec){
+  try{
+    const n = Number(rec && rec.openTs);
+    if (Number.isFinite(n) && n > 0) return n;
+  }catch(_){ }
+  // Preferir dayKey para evitar ambigüedad (y mantener consistencia con la key)
+  try{
+    const dk = safeYMD(rec && rec.dayKey);
+    const t = new Date(dk + 'T00:00:00').getTime();
+    if (Number.isFinite(t) && t > 0) return t;
+  }catch(_){ }
+  try{
+    const ca = rec && rec.meta && rec.meta.createdAt ? Date.parse(rec.meta.createdAt) : NaN;
+    if (Number.isFinite(ca) && ca > 0) return ca;
+  }catch(_){ }
+  return Date.now();
+}
+
+function cashV2DeriveCloseTs(rec){
+  try{
+    const n = Number(rec && rec.closeTs);
+    if (Number.isFinite(n) && n > 0) return n;
+  }catch(_){ }
+  try{
+    const m = Number(rec && rec.meta && rec.meta.closedAt);
+    if (Number.isFinite(m) && m > 0) return m;
+  }catch(_){ }
+  try{
+    const ua = rec && rec.meta && rec.meta.updatedAt ? Date.parse(rec.meta.updatedAt) : NaN;
+    if (Number.isFinite(ua) && ua > 0) return ua;
+  }catch(_){ }
+  return Date.now();
+}
+
+async function cashV2ResolveOperationalDayKey(eventId, fallbackDayKey){
+  const eid = cashV2AssertEventId(eventId);
+  const fb = cashV2AssertDayKeyCanon(safeYMD(fallbackDayKey));
+  try{ if (!db) await openDB(); }catch(_){ }
+  let all = [];
+  try{ all = await getAll(CASH_V2_STORE); if (!Array.isArray(all)) all = []; }catch(_){ all = []; }
+  const open = (all || []).filter(r => r && String(r.eventId) === String(eid) && cashV2NormStatus(r.status) === 'OPEN');
+  if (!open.length) return fb;
+  open.sort((a,b)=> cashV2DeriveOpenTs(b) - cashV2DeriveOpenTs(a));
+  const dk = safeYMD(open[0].dayKey || fb);
+  return dk;
+}
+
+
+// --- POS: Efectivo v2 — Multi-día (Etapa 3/5)
+function getTodayDayKey(){
+  // “Hoy” = dayKey local (YYYY-MM-DD) basado en Date.now().
+  return todayYMD();
+}
+
+async function getLatestDayForEvent(eventId){
+  const eid = cashV2AssertEventId(eventId);
+  try{ if (!db) await openDB(); }catch(_){ }
+  let all = [];
+  try{ all = await getAll(CASH_V2_STORE); if (!Array.isArray(all)) all = []; }catch(_){ all = []; }
+  const items = [];
+  for (const r of (all || [])){
+    if (!r || typeof r !== 'object') continue;
+    if (String(r.eventId) !== String(eid)) continue;
+    const dk = safeYMD(r.dayKey || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dk)) continue;
+    items.push({ dk, rec: r });
+  }
+  items.sort((a,b)=>{
+    if (b.dk > a.dk) return 1;
+    if (b.dk < a.dk) return -1;
+    const at = cashV2DeriveOpenTs(a.rec);
+    const bt = cashV2DeriveOpenTs(b.rec);
+    return (bt - at);
+  });
+  return items.length ? items[0].rec : null;
+}
+
+async function cashV2OpenTodayFromPrevClosed(eventId, todayDayKey){
+  const eid = cashV2AssertEventId(eventId);
+  const todayKey = cashV2AssertDayKeyCanon(safeYMD(todayDayKey || getTodayDayKey()));
+  try{ if (!db) await openDB(); }catch(_){ }
+
+  // Idempotencia: si ya existe, no crear otro.
+  const existing = await cashV2Load(eid, todayKey);
+  if (existing) return existing;
+
+  const prev = await getLatestDayForEvent(eid);
+  if (!prev) throw new Error('No hay registro previo para copiar saldo.');
+  const prevDayKey = cashV2AssertDayKeyCanon(safeYMD(prev.dayKey || ''));
+  if (prevDayKey === todayKey) throw new Error('Ya existe registro para hoy.');
+  if (cashV2NormStatus(prev.status) !== 'CLOSED') throw new Error('Primero cierra el día anterior.');
+
+  if (!prev.final) throw new Error('El día anterior no tiene conteo final guardado.');
+
+  // Copia: initial se deriva del final contado anterior (denomCounts + total por moneda).
+  // Regla: si faltan claves en denomCounts, se completan con 0 (normalización defensiva).
+  // Regla: el total SIEMPRE se recalcula desde denomCounts (fuente de verdad), redondeado a 2 decimales.
+  const initial = cashV2DefaultInitial();
+  try{
+    for (const ccy of ['NIO','USD']){
+      const prevCounts = prev && prev.final && prev.final[ccy] && prev.final[ccy].denomCounts;
+      const normCounts = normalizeDenomCounts(ccy, prevCounts);
+      initial[ccy].denomCounts = normCounts;
+      initial[ccy].total = cashV2SumDenomTotal(ccy, normCounts);
+    }
+  }catch(_){ }
+
+  const nowIso = new Date().toISOString();
+  let openTs = Date.now();
+  try{
+    const dkFromTs = cashV2DayKeyFromTsLocal(openTs);
+    if (dkFromTs !== todayKey){
+      const t = new Date(todayKey + 'T00:00:00').getTime();
+      if (Number.isFinite(t) && t > 0) openTs = t;
+    }
+  }catch(_){ }
+
+  const rec = {
+    version: 2,
+    key: cashV2Key(eid, todayKey),
+    eventId: eid,
+    dayKey: todayKey,
+    openTs,
+    status: 'OPEN',
+    closeTs: null,
+    fx: null,
+    initial,
+    movements: [],
+    final: null,
+    meta: { createdAt: nowIso, updatedAt: nowIso, openedFromDayKey: prevDayKey }
+  };
+
+  await put(CASH_V2_STORE, rec);
+  return rec;
+}
+
+function cashV2InitMultiDayUIOnce(){
+  const btn = document.getElementById('cashv2-btn-open-from-yesterday');
+  if (!btn) return;
+  if (btn.dataset.ready === '1') return;
+
+  btn.addEventListener('click', async ()=>{
+    const eid = String(btn.dataset.eventId || '').trim();
+    const dk = String(btn.dataset.todayKey || '').trim() || getTodayDayKey();
+    if (!eid) return;
+    try{
+      btn.disabled = true;
+      await cashV2OpenTodayFromPrevClosed(eid, dk);
+      try{ toast('Día abierto (saldo copiado)'); }catch(_){ }
+    }catch(err){
+      console.error('[A33][CASHv2] open today from prev error', err);
+      const msg = (err && (err.message || err.name)) ? (err.message || err.name) : String(err);
+      try{ toast(msg); }catch(_){ }
+    }finally{
+      try{ btn.disabled = false; }catch(_){ }
+      try{ await renderEfectivoTab(); }catch(_){ }
+    }
+  });
+
+  btn.dataset.ready = '1';
+}
+
+
 function cashV2Key(eventId, dayKey){
   const eid = cashV2AssertEventId(eventId);
   const dk = cashV2AssertDayKeyCanon(dayKey);
@@ -74,21 +253,59 @@ async function cashV2Ensure(eventId, dayKey){
   const key = cashV2Key(eid, dk);
   if (!db) await openDB();
 
-  const existing = await getOne(CASH_V2_STORE, key);
-  if (existing) return existing;
+  let existing = await getOne(CASH_V2_STORE, key);
+  if (existing){
+    // Normalizar: 1 sola verdad (status/openTs/closeTs)
+    let changed = false;
+    try{
+      const ns = cashV2NormStatus(existing.status);
+      if (String(existing.status||'').trim().toUpperCase() != ns){ existing.status = ns; changed = true; }
+    }catch(_){ }
+    try{
+      const ot = cashV2DeriveOpenTs(existing);
+      if (!Number.isFinite(Number(existing.openTs)) || Number(existing.openTs) <= 0){ existing.openTs = ot; changed = true; }
+    }catch(_){ }
+    try{
+      if (cashV2NormStatus(existing.status) === 'CLOSED'){
+        const ct = cashV2DeriveCloseTs(existing);
+        if (!Number.isFinite(Number(existing.closeTs)) || Number(existing.closeTs) <= 0){ existing.closeTs = ct; changed = true; }
+        try{ existing.meta = (existing.meta && typeof existing.meta==='object') ? existing.meta : {}; existing.meta.closedAt = Number(existing.closeTs)||Number(existing.meta.closedAt)||Date.now(); }catch(__){ }
+      } else {
+        if (existing.closeTs != null){ existing.closeTs = null; changed = true; }
+        try{ if (existing.meta && existing.meta.closedAt != null){ delete existing.meta.closedAt; changed = true; } }catch(__){ }
+      }
+    }catch(_){ }
 
-  const now = new Date().toISOString();
+    if (changed){
+      try{ existing = await cashV2Save(existing); }catch(_){ }
+    }
+    return existing;
+  }
+
+  const nowIso = new Date().toISOString();
+  let openTs = Date.now();
+  // Defensa: si alguien pide un dk que no coincide con el día local de openTs, alinear openTs al dk.
+  try{
+    const derived = cashV2DayKeyFromTsLocal(openTs);
+    if (derived !== dk){
+      const t = new Date(dk + 'T00:00:00').getTime();
+      if (Number.isFinite(t) && t > 0) openTs = t;
+    }
+  }catch(_){ }
+
   const cashDay = {
     version: 2,
     key,
     eventId: eid,
     dayKey: dk,
+    openTs,
     status: 'OPEN',
+    closeTs: null,
     fx: null,
     initial: null,
     movements: [],
     final: null,
-    meta: { createdAt: now, updatedAt: now }
+    meta: { createdAt: nowIso, updatedAt: nowIso }
   };
   await put(CASH_V2_STORE, cashDay);
   return cashDay;
@@ -107,18 +324,45 @@ async function cashV2Save(cashDay){
   const createdAt = (typeof meta.createdAt === 'string' && meta.createdAt.trim()) ? meta.createdAt : now;
   const updatedAt = now;
 
+  const status = cashV2NormStatus(cashDay.status);
+
+  // openTs: persistido (y consistente con dayKey)
+  let openTs = cashV2DeriveOpenTs(cashDay);
+  try{
+    const derived = cashV2DayKeyFromTsLocal(openTs);
+    if (derived !== dk){
+      const t = new Date(dk + 'T00:00:00').getTime();
+      if (Number.isFinite(t) && t > 0) openTs = t;
+    }
+  }catch(_){ }
+
+  // closeTs: solo si CLOSED
+  let closeTs = null;
+  if (status === 'CLOSED'){
+    closeTs = cashV2DeriveCloseTs(cashDay);
+  }
+
+  const meta2 = { ...meta, createdAt, updatedAt };
+  if (status === 'CLOSED'){
+    meta2.closedAt = Number(closeTs) || Number(meta2.closedAt) || Date.now();
+  }else{
+    try{ if (meta2.closedAt != null) delete meta2.closedAt; }catch(_){ }
+  }
+
   const toSave = {
     ...cashDay,
     version: 2,
     key,
     eventId: eid,
     dayKey: dk,
-    status: String(cashDay.status || 'OPEN'),
+    openTs,
+    status,
+    closeTs,
     fx: cashV2CoerceFx(cashDay.fx),
     initial: (cashDay.initial == null ? null : cashDay.initial),
     movements: Array.isArray(cashDay.movements) ? cashDay.movements : [],
     final: (cashDay.final == null ? null : cashDay.final),
-    meta: { ...meta, createdAt, updatedAt }
+    meta: meta2
   };
 
   if (!db) await openDB();
@@ -174,6 +418,33 @@ function cashV2NormCount(v){
   return n;
 }
 
+// Helper pedido (Etapa 4/5): normaliza denomCounts, garantiza claves y sanea valores.
+function normalizeDenomCounts(currency, counts){
+  const ccy = String(currency || '').trim().toUpperCase();
+  const denoms = CASHV2_DENOMS[ccy] || [];
+  const src = (counts && typeof counts === 'object') ? counts : {};
+  const out = {};
+  for (const d of denoms){
+    const k = String(d);
+    const raw = (src[k] != null) ? src[k] : ((src[d] != null) ? src[d] : 0);
+    out[k] = cashV2NormCount(raw);
+  }
+  return out;
+}
+
+function cashV2SumDenomTotal(currency, denomCounts){
+  const ccy = String(currency || '').trim().toUpperCase();
+  const denoms = CASHV2_DENOMS[ccy] || [];
+  const dc = (denomCounts && typeof denomCounts === 'object') ? denomCounts : {};
+  let total = 0;
+  for (const d of denoms){
+    const k = String(d);
+    const cnt = cashV2NormCount((dc[k] != null) ? dc[k] : ((dc[d] != null) ? dc[d] : 0));
+    total += (Number(d) * cnt);
+  }
+  return cashV2Round2Money(total);
+}
+
 function cashV2FmtInt(n){
   const x = Number(n||0);
   try{ return x.toLocaleString('es-NI'); }catch(_){ return String(x); }
@@ -201,24 +472,14 @@ function cashV2CoerceInitial(initial){
       for (const ccy of ['NIO','USD']){
         const src = initial[ccy] && typeof initial[ccy] === 'object' ? initial[ccy] : null;
         const dc = src && src.denomCounts && typeof src.denomCounts === 'object' ? src.denomCounts : {};
-        const denoms = CASHV2_DENOMS[ccy] || [];
-        for (const d of denoms){
-          const k = String(d);
-          const raw = (dc[k] != null ? dc[k] : (dc[d] != null ? dc[d] : 0));
-          base[ccy].denomCounts[k] = cashV2NormCount(raw);
-        }
+        base[ccy].denomCounts = normalizeDenomCounts(ccy, dc);
       }
     }
   }catch(_){ }
 
-  // Totales siempre calculados (no editables)
+  // Totales siempre calculados (no editables) — 2 decimales.
   for (const ccy of ['NIO','USD']){
-    let total = 0;
-    for (const d of (CASHV2_DENOMS[ccy] || [])){
-      const k = String(d);
-      total += Number(d) * cashV2NormCount(base[ccy].denomCounts[k]);
-    }
-    base[ccy].total = total;
+    base[ccy].total = cashV2SumDenomTotal(ccy, base[ccy].denomCounts);
   }
   return base;
 }
@@ -490,7 +751,7 @@ function cashV2ReadInitialFromDom(updateUi){
         if (elSub) elSub.textContent = cashV2FmtInt(sub);
       }
     }
-    initial[ccy].total = total;
+    initial[ccy].total = cashV2Round2Money(total);
     if (updateUi){
       const elTot = document.getElementById(ccy === 'NIO' ? 'cashv2-total-nio' : 'cashv2-total-usd');
       if (elTot) elTot.textContent = cashV2FmtInt(total);
@@ -1024,7 +1285,7 @@ function cashV2ReadFinalFromDom(updateUi){
         if (elSub) elSub.textContent = cashV2FmtInt(sub);
       }
     }
-    final[ccy].total = total;
+    final[ccy].total = cashV2Round2Money(total);
     if (updateUi){
       const elTot = document.getElementById(ccy === 'NIO' ? 'cashv2-final-total-nio' : 'cashv2-final-total-usd');
       if (elTot) elTot.textContent = cashV2FmtInt(total);
@@ -1243,7 +1504,7 @@ function cashV2SetMovementsEnabled(enabled){
     if (el) el.disabled = !en;
   });
 
-  // Compat: modal legacy (si existe en DOM)
+  // Compat: modal (si existe en DOM)
   const btnSave = document.getElementById('cashv2-move-save');
   if (btnSave) btnSave.disabled = !en;
 }
@@ -1254,6 +1515,7 @@ function cashV2SetCloseUiState(state){
   const blocker = document.getElementById('cashv2-close-blocker');
   const closed = document.getElementById('cashv2-close-closed');
   const closedAt = document.getElementById('cashv2-closed-at');
+  const btnReopen = document.getElementById('cashv2-btn-admin-reopen');
 
   const hide = (el)=>{ try{ if (el) el.style.display = 'none'; }catch(_){ } };
   const show = (el)=>{ try{ if (el) el.style.display = 'block'; }catch(_){ } };
@@ -1263,6 +1525,7 @@ function cashV2SetCloseUiState(state){
     btn.textContent = 'Cerrado';
     hide(blocker);
     show(closed);
+    try{ if (btnReopen){ btnReopen.style.display = 'inline-flex'; btnReopen.disabled = false; } }catch(_){ }
     try{
       if (closedAt){
         const ts = (state && state.closedAt) ? Number(state.closedAt) : 0;
@@ -1272,7 +1535,9 @@ function cashV2SetCloseUiState(state){
     return;
   }
 
-  btn.textContent = 'Cerrar';
+  try{ if (btnReopen){ btnReopen.style.display = 'none'; btnReopen.disabled = true; } }catch(_){ }
+
+  btn.textContent = 'Cerrar día';
   btn.disabled = !(state && state.canClose);
 
   hide(closed);
@@ -1295,7 +1560,7 @@ function cashV2EvalCloseRule(rec){
   const r = rec || null;
   if (!r || typeof r !== 'object') return { canClose:false, reason:'' };
   if (cashV2IsClosed(r)){
-    return { closed:true, canClose:false, closedAt: (r.meta && r.meta.closedAt) || null };
+    return { closed:true, canClose:false, closedAt: (r.closeTs || (r.meta && r.meta.closedAt)) || null };
   }
 
   if (!r.initial) return { canClose:false, reason:'No se puede cerrar: falta Inicio guardado' };
@@ -1313,11 +1578,14 @@ function cashV2EvalCloseRule(rec){
     domChanged = (Number(numsDom.NIO.initial)||0)!==(Number(numsRec.NIO.initial)||0)       || (Number(numsDom.USD.initial)||0)!==(Number(numsRec.USD.initial)||0)       || (Number(numsDom.NIO.final)||0)!==(Number(numsRec.NIO.final)||0)       || (Number(numsDom.USD.final)||0)!==(Number(numsRec.USD.final)||0);
   }catch(_){ domChanged = false; }
 
-  if (dn !== 0 || du !== 0){
-    return { canClose:false, reason:'No se puede cerrar: diferencia en C$ o USD.' };
-  }
   if (domChanged){
     return { canClose:false, reason:'No se puede cerrar: guarda Inicio y/o Final' };
+  }
+  if (dn !== 0 || du !== 0){
+    const parts = [];
+    if (dn !== 0) parts.push(`Diferencia C$ = ${cashV2FmtMoney(dn)}`);
+    if (du !== 0) parts.push(`Diferencia USD = ${cashV2FmtMoney(du)}`);
+    return { canClose:false, reason:'No se puede cerrar: ' + parts.join(' | ') };
   }
   return { canClose:true };
 }
@@ -1389,8 +1657,9 @@ function cashV2InitCloseUIOnce(){
       }
 
       rec.status = 'CLOSED';
+      rec.closeTs = Date.now();
       rec.meta = (rec.meta && typeof rec.meta === 'object') ? rec.meta : {};
-      rec.meta.closedAt = Date.now();
+      rec.meta.closedAt = Number(rec.closeTs) || Date.now();
 
       const saved = await cashV2Save(rec);
       cashV2SetLastRec(saved);
@@ -1421,51 +1690,183 @@ function cashV2InitCloseUIOnce(){
 }
 
 
-// --- POS: Efectivo v2 — Visor LEGACY (solo lectura) — Etapa 9
-function cashV2InitLegacyUIOnce(){
-  const btnOpen = document.getElementById('cashv2-btn-open-legacy');
-  const modal = document.getElementById('cashv2-legacy-modal');
-  if (!btnOpen || !modal) return;
-  if (btnOpen.dataset.ready === '1') return;
+// --- POS: Efectivo v2 — Reapertura ADMIN con auditoría — Etapa 5/5
+function cashV2SetAdminReopenError(msg){
+  const el = document.getElementById('cashv2-admin-reopen-error');
+  if (!el) return;
+  try{ el.style.whiteSpace = 'pre-line'; }catch(_){ }
+  if (!msg){
+    try{ el.style.display = 'none'; el.textContent = ''; }catch(_){ }
+    return;
+  }
+  try{ el.style.display = 'block'; el.textContent = String(msg); }catch(_){ }
+}
 
-  const btnClose = document.getElementById('cashv2-legacy-close');
-  const btnClose2 = document.getElementById('cashv2-legacy-close2');
-  const btnBack = document.getElementById('cashv2-legacy-back');
+async function cashV2AdminReopenAtomic(eventId, dayKey, reason){
+  const eid = cashV2AssertEventId(eventId);
+  const dk = cashV2AssertDayKeyCanon(dayKey);
+  const why = String(reason || '').trim();
+  if (!why) throw new Error('Motivo obligatorio');
+  try{ if (!db) await openDB(); }catch(_){ }
+  const key = cashV2Key(eid, dk);
+  const nowTs = Date.now();
+  const nowIso = new Date(nowTs).toISOString();
 
-  const viewList = document.getElementById('cashv2-legacy-view-list');
-  const viewDetail = document.getElementById('cashv2-legacy-view-detail');
-  const detail = document.getElementById('cashv2-legacy-detail');
+  return await new Promise((resolve, reject)=>{
+    let done = false;
+    const fail = (err)=>{
+      if (done) return;
+      done = true;
+      try{ reject(err || new Error('No se pudo reabrir')); }catch(_){ }
+    };
+    let tx = null;
+    try{
+      tx = db.transaction([CASH_V2_STORE], 'readwrite');
+    }catch(err){
+      return fail(err);
+    }
+    const st = tx.objectStore(CASH_V2_STORE);
+    const rq = st.get(key);
 
-  const setView = (mode)=>{
-    try{ if (viewList) viewList.style.display = (mode === 'detail') ? 'none' : 'block'; }catch(_){ }
-    try{ if (viewDetail) viewDetail.style.display = (mode === 'detail') ? 'block' : 'none'; }catch(_){ }
-  };
+    rq.onerror = ()=>{
+      try{ tx.abort(); }catch(_){ }
+      fail(rq.error || new Error('No se pudo leer el registro'));
+    };
+
+    rq.onsuccess = ()=>{
+      const rec = rq.result;
+      if (!rec){
+        try{ tx.abort(); }catch(_){ }
+        return fail(new Error('Registro no encontrado'));
+      }
+      const s = cashV2NormStatus(rec.status);
+      if (s !== 'CLOSED'){
+        try{ tx.abort(); }catch(_){ }
+        return fail(new Error('Solo se puede reabrir si está CERRADO'));
+      }
+
+      const auditItem = { ts: nowTs, action: 'ADMIN_REOPEN', reason: why, dayKey: dk, eventId: eid };
+      const audit = Array.isArray(rec.audit) ? rec.audit.slice() : [];
+      audit.push(auditItem);
+      rec.audit = audit;
+
+      // Reabrir sin borrar data previa (initial/final/movements)
+      rec.status = 'OPEN';
+      try{
+        const m = (rec.meta && typeof rec.meta === 'object') ? rec.meta : {};
+        m.updatedAt = nowIso;
+        rec.meta = m;
+      }catch(_){ }
+
+      const putRq = st.put(rec);
+      putRq.onerror = ()=>{
+        try{ tx.abort(); }catch(_){ }
+        fail(putRq.error || new Error('No se pudo guardar el registro'));
+      };
+      putRq.onsuccess = ()=>{ };
+    };
+
+    tx.oncomplete = ()=>{
+      if (done) return;
+      done = true;
+      resolve(true);
+    };
+    tx.onerror = ()=>{
+      fail(tx.error || new Error('Error de transacción'));
+    };
+    tx.onabort = ()=>{
+      fail(tx.error || new Error('Transacción abortada'));
+    };
+  });
+}
+
+function cashV2InitAdminReopenUIOnce(){
+  const btn = document.getElementById('cashv2-btn-admin-reopen');
+  const modal = document.getElementById('cashv2-admin-reopen-modal');
+  if (!btn || !modal) return;
+  if (btn.dataset.ready === '1') return;
+
+  const btnCancel = document.getElementById('cashv2-admin-reopen-cancel');
+  const btnCancel2 = document.getElementById('cashv2-admin-reopen-cancel2');
+  const btnConfirm = document.getElementById('cashv2-admin-reopen-confirm');
+  const inReason = document.getElementById('cashv2-admin-reopen-reason');
+  const inPhrase = document.getElementById('cashv2-admin-reopen-phrase');
+  const lblEv = document.getElementById('cashv2-admin-reopen-ev');
+  const lblDay = document.getElementById('cashv2-admin-reopen-day');
 
   const close = ()=>{
-    try{ closeModalPOS('cashv2-legacy-modal'); }catch(_){ try{ modal.style.display='none'; }catch(__){} }
-    try{ if (detail) detail.innerHTML = ''; }catch(_){ }
-    setView('list');
+    try{ closeModalPOS('cashv2-admin-reopen-modal'); }catch(_){ try{ modal.style.display = 'none'; }catch(__){} }
   };
 
-  if (btnClose){
-    btnClose.addEventListener('click', (e)=>{ e.preventDefault(); close(); });
-  }
-  if (btnClose2){
-    btnClose2.addEventListener('click', (e)=>{ e.preventDefault(); close(); });
-  }
-  if (btnBack){
-    btnBack.addEventListener('click', (e)=>{ e.preventDefault(); setView('list'); });
-  }
+  const reset = ()=>{
+    try{ cashV2SetAdminReopenError(''); }catch(_){ }
+    try{ if (inReason) inReason.value = ''; }catch(_){ }
+    try{ if (inPhrase) inPhrase.value = ''; }catch(_){ }
+    try{ if (btnConfirm) btnConfirm.disabled = false; }catch(_){ }
+  };
 
-  btnOpen.addEventListener('click', async (e)=>{
+  if (btnCancel){ btnCancel.addEventListener('click', (e)=>{ e.preventDefault(); close(); }); }
+  if (btnCancel2){ btnCancel2.addEventListener('click', (e)=>{ e.preventDefault(); close(); }); }
+
+  btn.addEventListener('click', (e)=>{
     e.preventDefault();
-    try{ openModalPOS('cashv2-legacy-modal'); }catch(_){ try{ modal.style.display='flex'; }catch(__){} }
-    try{ setView('list'); }catch(_){ }
-    try{ await cashV2LegacyRefreshUI(); }catch(err){ console.warn('[A33][CASHv2][LEGACY] refresh error', err); }
+    try{
+      const fcard = document.getElementById('cashv2-final-card');
+      const eid = fcard ? String(fcard.dataset.eventId || '').trim() : '';
+      const dk = fcard ? String(fcard.dataset.dayKey || '').trim() : '';
+      if (!eid || !dk) return;
+      try{ const last = cashV2GetLastRec(); if (!cashV2IsClosed(last)) return; }catch(_){ return; }
+      modal.dataset.eventId = eid;
+      modal.dataset.dayKey = dk;
+      if (lblEv) lblEv.textContent = eid;
+      if (lblDay) lblDay.textContent = dk;
+      reset();
+      try{ openModalPOS('cashv2-admin-reopen-modal'); }catch(_){ try{ modal.style.display = 'flex'; }catch(__){} }
+      try{ if (inReason) inReason.focus(); }catch(_){ }
+    }catch(_){ }
   });
 
-  btnOpen.dataset.ready = '1';
+  if (btnConfirm){
+    btnConfirm.addEventListener('click', async (e)=>{
+      e.preventDefault();
+      try{ cashV2SetAdminReopenError(''); }catch(_){ }
+
+      const eid = String(modal.dataset.eventId || '').trim();
+      const dk = String(modal.dataset.dayKey || '').trim();
+      const reason = String(inReason ? inReason.value : '').trim();
+      const phrase = String(inPhrase ? inPhrase.value : '').trim();
+
+      if (!eid || !dk){
+        cashV2SetAdminReopenError('Contexto inválido (evento/día).');
+        return;
+      }
+      if (!reason){
+        cashV2SetAdminReopenError('Motivo obligatorio.');
+        return;
+      }
+      if (phrase.toUpperCase() != 'REABRIR'){
+        cashV2SetAdminReopenError('Confirmación inválida. Escribe REABRIR.');
+        return;
+      }
+
+      try{ btnConfirm.disabled = true; }catch(_){ }
+      try{
+        await cashV2AdminReopenAtomic(eid, dk, reason);
+        close();
+        try{ toast('Día reabierto (admin)'); }catch(_){ }
+        try{ await renderEfectivoTab(); }catch(_){ }
+      }catch(err){
+        console.error('[A33][CASHv2] admin reopen error', err);
+        const msg = (err && (err.message || err.name)) ? (err.message || err.name) : String(err);
+        cashV2SetAdminReopenError(msg);
+        try{ btnConfirm.disabled = false; }catch(_){ }
+      }
+    });
+  }
+
+  btn.dataset.ready = '1';
 }
+
 
 
 // --- POS: Efectivo v2 — Selector de evento (TODOS) + “Efectivo activo” por evento + Modo BLOQUEADO — Etapa 1/7
@@ -1594,362 +1995,6 @@ function cashV2InitEventSelectorUIOnce(){
   sel.dataset.ready = '1';
 }
 
-function cashV2LegacyIsCashLike(obj){
-  try{
-    if (!obj || typeof obj !== 'object') return false;
-    if ('initial' in obj || 'final' in obj || 'movements' in obj) return true;
-    if ('movement' in obj || 'entries' in obj || 'salidas' in obj || 'entradas' in obj) return true;
-    if ('pettyCash' in obj || 'cajaChica' in obj) return true;
-    if ('NIO' in obj || 'USD' in obj || 'nio' in obj || 'usd' in obj) return true;
-    return false;
-  }catch(_){ return false; }
-}
-
-function cashV2LegacyInferDayKey(key, obj){
-  const pick = (v)=>{
-    const s = String(v || '').trim();
-    const m = s.match(/(\d{4}-\d{2}-\d{2})/);
-    return m ? m[1] : '';
-  };
-  try{
-    const fromObj = pick(obj && (obj.dayKey || obj.day || obj.date || obj.ymd));
-    if (fromObj) return fromObj;
-  }catch(_){ }
-  try{
-    const fromKey = pick(key);
-    if (fromKey) return fromKey;
-  }catch(_){ }
-  try{
-    const ts = Number(obj && (obj.ts || obj.createdAt || obj.at || obj.time));
-    if (Number.isFinite(ts) && ts > 0){
-      const d = new Date(ts);
-      const y = d.getFullYear();
-      const m = String(d.getMonth()+1).padStart(2,'0');
-      const day = String(d.getDate()).padStart(2,'0');
-      return `${y}-${m}-${day}`;
-    }
-  }catch(_){ }
-  return '';
-}
-
-function cashV2LegacyInferEventId(key, obj){
-  try{
-    const v = (obj && (obj.eventId != null ? obj.eventId : (obj.event && obj.event.id))) || null;
-    const n = Number(v);
-    if (Number.isFinite(n) && n > 0) return Math.floor(n);
-  }catch(_){ }
-  try{
-    const s = String(key || '');
-    const m = s.match(/(?:event|evento)[^0-9]{0,6}(\d{1,9})/i);
-    if (m){
-      const n = Number(m[1]);
-      if (Number.isFinite(n) && n > 0) return Math.floor(n);
-    }
-  }catch(_){ }
-  return null;
-}
-
-function cashV2LegacyTotalFromCounts(counts){
-  try{
-    if (!counts || typeof counts !== 'object') return null;
-    let sum = 0;
-    for (const [k, v] of Object.entries(counts)){
-      const denom = Number(String(k).replace(/[^0-9.]/g,''));
-      const cnt = Number(v);
-      if (!Number.isFinite(denom) || !Number.isFinite(cnt)) continue;
-      sum += denom * cnt;
-    }
-    return Number.isFinite(sum) ? sum : null;
-  }catch(_){ return null; }
-}
-
-function cashV2LegacyExtractTotals(obj){
-  const out = { initial:{NIO:null, USD:null}, final:{NIO:null, USD:null}, netMov:{NIO:null, USD:null}, meta:{} };
-  try{
-    const pickTotal = (x)=>{
-      if (!x || typeof x !== 'object') return null;
-      const t = (x.total != null) ? Number(x.total) : null;
-      if (Number.isFinite(t)) return t;
-      const dc = x.denomCounts || x.counts || x.denoms || null;
-      const t2 = cashV2LegacyTotalFromCounts(dc);
-      if (Number.isFinite(t2)) return t2;
-      return null;
-    };
-
-    // initial
-    if (obj && obj.initial && typeof obj.initial === 'object'){
-      const ini = obj.initial;
-      out.initial.NIO = pickTotal(ini.NIO || ini.nio || ini.c$ || ini.cordobas || ini);
-      out.initial.USD = pickTotal(ini.USD || ini.usd || ini.dolares || ini);
-      if (out.initial.NIO == null && Number.isFinite(Number(ini.totalNio))) out.initial.NIO = Number(ini.totalNio);
-      if (out.initial.USD == null && Number.isFinite(Number(ini.totalUsd))) out.initial.USD = Number(ini.totalUsd);
-    }
-
-    // final
-    if (obj && obj.final && typeof obj.final === 'object'){
-      const fin = obj.final;
-      out.final.NIO = pickTotal(fin.NIO || fin.nio || fin.c$ || fin.cordobas || fin);
-      out.final.USD = pickTotal(fin.USD || fin.usd || fin.dolares || fin);
-      if (out.final.NIO == null && Number.isFinite(Number(fin.totalNio))) out.final.NIO = Number(fin.totalNio);
-      if (out.final.USD == null && Number.isFinite(Number(fin.totalUsd))) out.final.USD = Number(fin.totalUsd);
-    }
-
-    // movements
-    const mv = (obj && (obj.movements || obj.movement || obj.entries || obj.entradas || obj.salidas)) || null;
-    if (Array.isArray(mv)){
-      let nN = 0, nU = 0;
-      for (const m of mv){
-        if (!m || typeof m !== 'object') continue;
-        const cur = String(m.currency || m.curr || m.moneda || '').toUpperCase();
-        let amt = Number(m.amount != null ? m.amount : (m.monto != null ? m.monto : 0));
-        if (!Number.isFinite(amt)) amt = 0;
-        const kind = String(m.kind || m.type || m.tipo || '').toUpperCase();
-        if (kind === 'OUT' || kind === 'SALIDA') amt = -Math.abs(amt);
-        if (kind === 'IN' || kind === 'ENTRADA') amt = Math.abs(amt);
-        if (kind === 'ADJUST' || kind === 'AJUSTE'){
-          const dir = String(m.dir || m.sign || m.adjustDir || '').trim();
-          if (dir === '-' || dir === '−') amt = -Math.abs(amt);
-        }
-        if (cur === 'USD') nU += amt;
-        else nN += amt;
-      }
-      out.netMov.NIO = nN;
-      out.netMov.USD = nU;
-      out.meta.movCount = mv.length;
-    }
-  }catch(_){ }
-  return out;
-}
-
-function cashV2LegacyScanLocalStorage(){
-  const items = [];
-  try{
-    if (typeof localStorage === 'undefined' || !localStorage) return items;
-    const keys = [];
-    for (let i=0; i<localStorage.length; i++){
-      const k = localStorage.key(i);
-      if (k) keys.push(k);
-    }
-
-    const tokenRe = /(pc|petty|caja|chica|seccion|cash|efectivo)/i;
-
-    for (const k of keys){
-      let val = '';
-      try{ val = localStorage.getItem(k) || ''; }catch(_){ val = ''; }
-      const vs = String(val || '');
-      const looksJson = vs && (vs.trim().startsWith('{') || vs.trim().startsWith('['));
-      if (!looksJson) continue;
-
-      let parsed = null;
-      try{ parsed = JSON.parse(vs); }catch(_){ parsed = null; }
-
-      const addObj = (obj, idx)=>{
-        if (!obj || typeof obj !== 'object') return;
-        const ok = tokenRe.test(String(k || '')) || cashV2LegacyIsCashLike(obj);
-        if (!ok) return;
-        const dayKey = cashV2LegacyInferDayKey(k, obj);
-        const eventId = cashV2LegacyInferEventId(k, obj);
-        const totals = cashV2LegacyExtractTotals(obj);
-        items.push({
-          source: 'localStorage',
-          key: String(k),
-          idx: (idx == null ? null : Number(idx)),
-          dayKey: dayKey || '',
-          eventId: eventId,
-          totals,
-          obj
-        });
-      };
-
-      if (Array.isArray(parsed)){
-        // Si el legacy guardó una lista, intentamos leer elementos cash-like.
-        for (let i=0; i<parsed.length; i++) addObj(parsed[i], i);
-      } else {
-        addObj(parsed, null);
-      }
-    }
-  }catch(err){
-    console.warn('[A33][CASHv2][LEGACY] scan localStorage error', err);
-  }
-
-  // Orden: día desc (si existe), luego key
-  try{
-    items.sort((a,b)=>{
-      const da = a.dayKey || '';
-      const dbk = b.dayKey || '';
-      if (da && dbk && da !== dbk) return (da < dbk) ? 1 : -1;
-      if (!da && dbk) return 1;
-      if (da && !dbk) return -1;
-      return String(a.key).localeCompare(String(b.key));
-    });
-  }catch(_){ }
-  return items;
-}
-
-function cashV2LegacyFmtMoney(n){
-  const v = Number(n);
-  if (!Number.isFinite(v)) return '—';
-  // legacy: mostrar entero si parece entero
-  const isInt = Math.abs(v - Math.round(v)) < 1e-9;
-  return isInt ? String(Math.round(v)) : fmt(v);
-}
-
-function cashV2LegacyRenderList(items){
-  const empty = document.getElementById('cashv2-legacy-empty');
-  const list = document.getElementById('cashv2-legacy-list');
-  if (!list) return;
-
-  list.innerHTML = '';
-  const has = Array.isArray(items) && items.length > 0;
-  try{ if (empty) empty.style.display = has ? 'none' : 'block'; }catch(_){ }
-
-  if (!has) return;
-
-  const mkLine = (txt, muted)=>{
-    const d = document.createElement('div');
-    d.textContent = txt;
-    if (muted){ d.className = 'muted'; d.style.fontSize = '12px'; }
-    return d;
-  };
-
-  for (const it of items){
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'btn-outline cashv2-legacy-item';
-    btn.style.width = '100%';
-    btn.style.textAlign = 'left';
-    btn.style.padding = '10px 12px';
-
-    const day = it.dayKey ? it.dayKey : 'Sin fecha';
-    const ev = (it.eventId != null) ? ('Evento ' + it.eventId) : 'Evento ?';
-    const t = it.totals || {};
-    const iniN = t.initial ? t.initial.NIO : null;
-    const iniU = t.initial ? t.initial.USD : null;
-    const finN = t.final ? t.final.NIO : null;
-    const finU = t.final ? t.final.USD : null;
-    const mvCount = (t.meta && t.meta.movCount != null) ? t.meta.movCount : null;
-
-    const head = document.createElement('div');
-    head.style.display = 'flex';
-    head.style.justifyContent = 'space-between';
-    head.style.gap = '10px';
-    head.appendChild(mkLine(`${day} · ${ev}`, false));
-    const badge = document.createElement('span');
-    badge.className = 'tag small';
-    badge.textContent = 'LEGACY';
-    head.appendChild(badge);
-
-    btn.appendChild(head);
-
-    const sums = [];
-    if (iniN != null || iniU != null) sums.push(`Inicio: C$ ${cashV2LegacyFmtMoney(iniN)} | USD ${cashV2LegacyFmtMoney(iniU)}`);
-    if (finN != null || finU != null) sums.push(`Final: C$ ${cashV2LegacyFmtMoney(finN)} | USD ${cashV2LegacyFmtMoney(finU)}`);
-    if (mvCount != null) sums.push(`Movimientos: ${mvCount}`);
-    if (!sums.length) sums.push('Estructura legacy (detalle)');
-
-    btn.appendChild(mkLine(sums.join(' · '), true));
-    btn.appendChild(mkLine(`Fuente: ${it.source} · key: ${it.key}${it.idx!=null ? ('#'+it.idx) : ''}`, true));
-
-    btn.addEventListener('click', (e)=>{
-      e.preventDefault();
-      try{ cashV2LegacyOpenDetail(it); }catch(err){ console.warn('[A33][CASHv2][LEGACY] open detail error', err); }
-    });
-    list.appendChild(btn);
-  }
-}
-
-function cashV2LegacyOpenDetail(item){
-  const viewList = document.getElementById('cashv2-legacy-view-list');
-  const viewDetail = document.getElementById('cashv2-legacy-view-detail');
-  const detail = document.getElementById('cashv2-legacy-detail');
-  if (!detail) return;
-
-  try{ if (viewList) viewList.style.display = 'none'; }catch(_){ }
-  try{ if (viewDetail) viewDetail.style.display = 'block'; }catch(_){ }
-
-  detail.innerHTML = '';
-
-  const it = item || {};
-  const obj = it.obj || null;
-  const day = it.dayKey ? it.dayKey : 'Sin fecha';
-  const ev = (it.eventId != null) ? it.eventId : '—';
-
-  const h = document.createElement('div');
-  h.className = 'card inner';
-  h.style.marginTop = '10px';
-  h.innerHTML = `
-    <div class="row" style="align-items:baseline; justify-content:space-between; gap:10px; flex-wrap:wrap;">
-      <div>
-        <div><b>${escapeHtml(day)}</b> <span class="muted">· Evento ${escapeHtml(ev)}</span></div>
-        <small class="muted">LEGACY (solo lectura)</small>
-      </div>
-      <div class="muted" style="font-size:12px;">${escapeHtml(String(it.source||''))}</div>
-    </div>
-    <div class="muted" style="font-size:12px; margin-top:6px;">Key: ${escapeHtml(String(it.key||''))}${it.idx!=null ? ('#'+escapeHtml(String(it.idx))) : ''}</div>
-  `;
-  detail.appendChild(h);
-
-  const t = it.totals || cashV2LegacyExtractTotals(obj);
-  const hasTotals = (t && (t.initial || t.final || t.netMov));
-
-  const box = document.createElement('div');
-  box.className = 'card inner';
-  box.style.marginTop = '10px';
-
-  const lines = [];
-  const iniN = t && t.initial ? t.initial.NIO : null;
-  const iniU = t && t.initial ? t.initial.USD : null;
-  const netN = t && t.netMov ? t.netMov.NIO : null;
-  const netU = t && t.netMov ? t.netMov.USD : null;
-  const finN = t && t.final ? t.final.NIO : null;
-  const finU = t && t.final ? t.final.USD : null;
-
-  if (iniN != null || iniU != null) lines.push(`Inicial: C$ ${cashV2LegacyFmtMoney(iniN)} | USD ${cashV2LegacyFmtMoney(iniU)}`);
-  if (netN != null || netU != null) lines.push(`Neto Movimientos: C$ ${cashV2LegacyFmtMoney(netN)} | USD ${cashV2LegacyFmtMoney(netU)}`);
-  if (finN != null || finU != null) lines.push(`Final: C$ ${cashV2LegacyFmtMoney(finN)} | USD ${cashV2LegacyFmtMoney(finU)}`);
-
-  if (!lines.length) lines.push('Estructura desconocida (legacy).');
-
-  box.innerHTML = `
-    <div><b>Resumen</b></div>
-    <div class="muted" style="white-space:pre-line; margin-top:6px; font-size:13px;">${escapeHtml(lines.join('\n'))}</div>
-    <div class="info" style="margin-top:10px"><small>Esto no afecta Efectivo v2.</small></div>
-  `;
-  detail.appendChild(box);
-
-  // Preview JSON (limitado)
-  const pre = document.createElement('pre');
-  pre.className = 'mono';
-  pre.style.whiteSpace = 'pre-wrap';
-  pre.style.wordBreak = 'break-word';
-  pre.style.marginTop = '10px';
-  pre.style.fontSize = '12px';
-  pre.style.maxHeight = '40vh';
-  pre.style.overflow = 'auto';
-
-  let raw = '';
-  try{ raw = JSON.stringify(obj, null, 2) || ''; }catch(_){ raw = String(obj); }
-  if (raw.length > 6000) raw = raw.slice(0, 6000) + '\n…(truncado)';
-  pre.textContent = raw || '—';
-
-  const wrap = document.createElement('div');
-  wrap.className = 'card inner';
-  wrap.style.marginTop = '10px';
-  wrap.innerHTML = '<div><b>Detalle (raw)</b></div>';
-  wrap.appendChild(pre);
-  detail.appendChild(wrap);
-}
-
-async function cashV2LegacyRefreshUI(){
-  const items = cashV2LegacyScanLocalStorage();
-  cashV2LegacyRenderList(items);
-
-  // Log suave (sin escribir) para smoke test
-  try{ console.log(`[A33][CASHv2][LEGACY] encontrados: ${items.length}`); }catch(_){ }
-}
-
-
-
 
 async function renderEfectivoTab(){
   const tab = document.getElementById('tab-efectivo');
@@ -1958,12 +2003,16 @@ async function renderEfectivoTab(){
   const statusTag = document.getElementById('cashv2-status-tag');
   const elEventId = document.getElementById('cashv2-eventid');
   const elDayKey = document.getElementById('cashv2-daykey');
+  const elOpenAt = document.getElementById('cashv2-opened-at');
   const elNoEvent = document.getElementById('cashv2-no-event');
   const elBlocked = document.getElementById('cashv2-blocked-note');
   const elErr = document.getElementById('cashv2-error');
   const selEvent = document.getElementById('cashv2-event-select');
   const togEnabled = document.getElementById('cashv2-event-enabled');
   const togHint = document.getElementById('cashv2-event-enabled-hint');
+  const elMultiNote = document.getElementById('cashv2-multiday-note');
+  const elMultiActions = document.getElementById('cashv2-multiday-actions');
+  const btnOpenFromY = document.getElementById('cashv2-btn-open-from-yesterday');
 
   // Etapa 3: UI Inicio (denominaciones)
   cashV2InitInitialUIOnce();
@@ -1971,10 +2020,11 @@ async function renderEfectivoTab(){
   cashV2InitMovementsUIOnce();
   // Etapa 5: Cierre (Final + esperado + diferencia)
   cashV2InitFinalUIOnce();
+  cashV2InitMultiDayUIOnce();
   // Etapa 6: Cierre duro (no cerrar con diferencia)
   cashV2InitCloseUIOnce();
-  // Etapa 9: Visor LEGACY (solo lectura)
-  cashV2InitLegacyUIOnce();
+  // Etapa 5/5: Reabrir (Admin) + auditoría
+  cashV2InitAdminReopenUIOnce();
   // Etapa 1/7: selector + activador
   cashV2InitEventSelectorUIOnce();
 
@@ -1982,12 +2032,18 @@ async function renderEfectivoTab(){
   cashV2InitFxUIOnce();
 
   // Reset UI
+  try{ if (tab){ tab.classList.remove('cashv2-readonly'); tab.classList.remove('cashv2-closed'); } }catch(_){ }
   try{ if (elErr){ elErr.style.display = 'none'; elErr.textContent = ''; } }catch(_){ }
   try{ if (elNoEvent){ elNoEvent.style.display = 'none'; } }catch(_){ }
   try{ if (elBlocked){ elBlocked.style.display = 'none'; } }catch(_){ }
+  try{ if (elMultiNote){ elMultiNote.style.display = 'none'; const sm = elMultiNote.querySelector('small'); if (sm) sm.textContent = ''; } }catch(_){ }
+  try{ if (elMultiActions){ elMultiActions.style.display = 'none'; } }catch(_){ }
+  try{ if (btnOpenFromY){ btnOpenFromY.style.display = 'none'; btnOpenFromY.dataset.eventId = ''; btnOpenFromY.dataset.todayKey = ''; } }catch(_){ }
 
-  const dayKey = safeYMD(getSaleDayKeyPOS());
+  const todayKey = safeYMD(getTodayDayKey());
+  let dayKey = todayKey;
   try{ if (elDayKey) elDayKey.textContent = dayKey; }catch(_){ }
+  try{ if (elOpenAt) elOpenAt.textContent = '—'; }catch(_){ }
 
   let activeEventId = null;
   try{ activeEventId = await getMeta('currentEventId'); }catch(_){ activeEventId = null; }
@@ -2047,6 +2103,7 @@ async function renderEfectivoTab(){
       }
     }catch(_){ }
     try{ if (elNoEvent){ elNoEvent.style.display = 'block'; } }catch(_){ }
+    try{ if (elOpenAt) elOpenAt.textContent = '—'; }catch(_){ }
     
     // Etapa 3/7: sin evento => oculta Tipo de cambio
     try{
@@ -2085,6 +2142,13 @@ async function renderEfectivoTab(){
     try{ cashV2ApplyCashSalesToDom(null); }catch(_){ }
     return;
   }
+
+
+  // Día operativo = fecha de apertura (openTs). No cambia aunque el cierre ocurra después de medianoche.
+  try{
+    dayKey = await cashV2ResolveOperationalDayKey(eventId, dayKey);
+    if (elDayKey) elDayKey.textContent = dayKey;
+  }catch(_){ }
 
   // Estado ACTIVO/INACTIVO del evento (activo = evento global del POS)
   const isActiveEvent = (activeEventId != null && String(activeEventId).trim() === String(eventId));
@@ -2153,9 +2217,133 @@ async function renderEfectivoTab(){
 
     // Regla: si está BLOQUEADO (evento inactivo o flag OFF), solo lectura => no ensure (no writes)
     const editable = (!!isActiveEvent && !!flagOn);
-    const rec = (editable && !locked) ? await cashV2Ensure(eventId, dayKey) : await cashV2Load(eventId, dayKey);
+
+    // Multi-día: si el día operativo NO es hoy, el último día está ABIERTO => aviso.
+    try{
+      if (elMultiNote){
+        const sm = elMultiNote.querySelector('small');
+        if (dayKey !== todayKey){
+          elMultiNote.style.display = 'block';
+          if (sm) sm.textContent = 'Primero cierra el día anterior.';
+        }else{
+          elMultiNote.style.display = 'none';
+          if (sm) sm.textContent = '';
+        }
+      }
+      if (elMultiActions) elMultiActions.style.display = 'none';
+      if (btnOpenFromY){
+        btnOpenFromY.style.display = 'none';
+        btnOpenFromY.dataset.eventId = '';
+        btnOpenFromY.dataset.todayKey = '';
+      }
+    }catch(_){ }
+
+    let rec = null;
+    let needOpenFromPrev = false;
+    let prevDayKey = '';
+
+    // Caso: estamos en "hoy" y aún no existe registro v2 para hoy.
+    if (dayKey === todayKey){
+      try{ rec = await cashV2Load(eventId, dayKey); }catch(_){ rec = null; }
+      if (!rec){
+        let prev = null;
+        try{ prev = await getLatestDayForEvent(eventId); }catch(_){ prev = null; }
+        const pdk = prev ? safeYMD(prev.dayKey || '') : '';
+        if (prev && pdk && pdk !== todayKey){
+          if (cashV2NormStatus(prev.status) === 'CLOSED'){
+            needOpenFromPrev = true;
+            prevDayKey = pdk;
+          }else{
+            // Por seguridad (si un OPEN no fue detectado como operativo)
+            try{
+              if (elMultiNote){
+                const sm = elMultiNote.querySelector('small');
+                elMultiNote.style.display = 'block';
+                if (sm) sm.textContent = 'Primero cierra el día anterior.';
+              }
+            }catch(_){ }
+          }
+        }else{
+          // Sin registros previos: flujo normal (crear/ensure)
+          if (editable && !locked){
+            rec = await cashV2Ensure(eventId, dayKey);
+          }
+        }
+      }else{
+        if (editable && !locked){
+          rec = await cashV2Ensure(eventId, dayKey);
+        }
+      }
+    }else{
+      // Día operativo distinto de hoy: trabajamos sobre ese día (multi-día)
+      rec = (editable && !locked) ? await cashV2Ensure(eventId, dayKey) : await cashV2Load(eventId, dayKey);
+    }
+
+    if (needOpenFromPrev){
+      // UI: botón "Abrir hoy con saldo de ayer" (solo si el último está CERRADO y hoy no existe)
+      try{
+        if (elMultiNote){
+          const sm = elMultiNote.querySelector('small');
+          elMultiNote.style.display = 'block';
+          if (sm) sm.textContent = `Último día cerrado: ${prevDayKey}.`;
+        }
+        if (elMultiActions) elMultiActions.style.display = 'flex';
+        if (btnOpenFromY){
+          btnOpenFromY.style.display = 'inline-flex';
+          btnOpenFromY.dataset.eventId = String(eventId);
+          btnOpenFromY.dataset.todayKey = todayKey;
+          btnOpenFromY.disabled = !(editable && !locked);
+        }
+      }catch(_){ }
+
+      // FX visible pero deshabilitado (evita crear registro accidentalmente)
+      try{
+        const fx = document.getElementById('cashv2-fx-card');
+        if (fx){ fx.style.display = 'block'; fx.dataset.eventId = String(eventId); fx.dataset.dayKey = dayKey; fx.dataset.readonly = '1'; }
+      }catch(_){ }
+      try{ cashV2ApplyFxToDom(null, eventId); }catch(_){ }
+      try{ cashV2SetFxEnabled(false); }catch(_){ }
+
+      // Ocultar/inhabilitar el resto hasta abrir el día
+      try{
+        const card = document.getElementById('cashv2-initial-card');
+        if (card){ card.style.display = 'none'; card.dataset.eventId=''; card.dataset.dayKey=dayKey; }
+      }catch(_){ }
+      try{ cashV2SetInitialEnabled(false); }catch(_){ }
+      try{ cashV2ApplyInitialToDom(null); }catch(_){ }
+
+      try{
+        const mcard = document.getElementById('cashv2-movements-card');
+        if (mcard){ mcard.style.display = 'none'; mcard.dataset.eventId=''; mcard.dataset.dayKey=dayKey; }
+      }catch(_){ }
+      try{ cashV2RenderMovementsUI({movements:[]}); }catch(_){ }
+      try{ cashV2SetMovementsEnabled(false); }catch(_){ }
+
+      try{
+        const fcard = document.getElementById('cashv2-final-card');
+        if (fcard){ fcard.style.display = 'none'; fcard.dataset.eventId=''; fcard.dataset.dayKey=dayKey; fcard.dataset.blocked='1'; fcard.dataset.locked='0'; }
+      }catch(_){ }
+      try{ cashV2SetFinalEnabled(false); }catch(_){ }
+      try{ cashV2ApplyFinalToDom(null); }catch(_){ }
+      try{ cashV2ClearCloseSummary(); }catch(_){ }
+      try{ cashV2SetCloseUiState({ canClose:false, reason:'Aún no has abierto el día de hoy' }); }catch(_){ }
+      try{ cashV2SetLastRec(null); }catch(_){ }
+
+      // Estado
+      try{
+        if (statusTag){
+          statusTag.textContent = 'Sin abrir';
+          statusTag.classList.remove('open');
+          statusTag.classList.add('closed');
+        }
+      }catch(_){ }
+      try{ if (elOpenAt) elOpenAt.textContent = '—'; }catch(_){ }
+      return;
+    }
+
     try{ if (rec && typeof rec === 'object') rec.cashSalesC = cashSalesC; }catch(_){ }
     try{ cashV2SetLastRec(rec); }catch(_){ }
+
     // Etapa 3/7: mostrar Tipo de cambio
     try{
       const fx = document.getElementById('cashv2-fx-card');
@@ -2186,6 +2374,12 @@ async function renderEfectivoTab(){
     try{
       const ro = !!(blocked || locked || cashV2IsClosed(rec));
       cashV2ApplyReadOnlyUi(ro);
+      try{ if (tab){ tab.classList.toggle('cashv2-readonly', ro); tab.classList.toggle('cashv2-closed', cashV2IsClosed(rec)); } }catch(_){ }
+      try{ if (togEnabled && cashV2IsClosed(rec)) togEnabled.disabled = true; }catch(_){ }
+      try{
+        const ot = rec ? cashV2DeriveOpenTs(rec) : 0;
+        if (elOpenAt) elOpenAt.textContent = ot ? new Date(ot).toLocaleString('es-NI') : '—';
+      }catch(_){ try{ if (elOpenAt) elOpenAt.textContent = '—'; }catch(__){ } }
       try{ const fx = document.getElementById('cashv2-fx-card'); if (fx) fx.dataset.readonly = ro ? '1' : '0'; }catch(_){ }
       if (blocked && !cashV2IsClosed(rec)){
         cashV2SetCloseUiState({ canClose:false, reason:'Bloqueado: Efectivo OFF o evento inactivo' });
@@ -2313,10 +2507,9 @@ function clearPendingSaleUidPOS(){
   try{ localStorage.removeItem(A33_PENDING_SALE_AT_KEY); }catch(e){}
 }
 
-// --- Etapa 9: NO tocar legacy automáticamente.
-// Antes se limpiaban llaves legacy del módulo removido; ahora se conservan para el visor LEGACY (solo lectura).
-function cleanupLegacyLocalStoragePOS(){
-  return; // Anti-sótano: no borrar / no escribir legacy.
+// --- Nota: no tocar llaves históricas del módulo removido.
+function cleanupHistoricalLocalStoragePOS(){
+  return; // Anti-sótano: no borrar / no escribir histórico.
 }
 
 
@@ -15004,8 +15197,8 @@ async function init(){
     return;
   }
 
-  // Etapa 9: NO borrar legacy automáticamente (se conserva para visor LEGACY read-only)
-  try{ cleanupLegacyLocalStoragePOS(); }catch(_){ }
+  // Nota: no borrar llaves históricas automáticamente
+  try{ cleanupHistoricalLocalStoragePOS(); }catch(_){ }
 
   // Helper para que cada paso falle de forma aislada sin tumbar todo el POS
   const runStep = async (name, fn) => {

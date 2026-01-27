@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.58&r=24">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.64&r=30">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.58&r=24">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.58" />
+<link rel="stylesheet" href="styles.css?v=4.20.64&r=30">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.64" />
 </head>
 <body>
   <header class="a33-header" role="banner">
@@ -464,7 +464,8 @@
         </div>
         <div class="muted" style="font-size:12px;">
           <div>Evento: <b id="cashv2-eventid">—</b></div>
-          <div>Día: <b id="cashv2-daykey">—</b></div>
+          <div>Día operativo: <b id="cashv2-daykey">—</b></div>
+        <div>Apertura: <b id="cashv2-opened-at">—</b></div>
           <div id="cashv2-cashsales-line" style="margin-top:6px;">Ventas en efectivo (C$): <b id="cashv2-cashsales">C$ 0.00</b></div>
         </div>
       </div>
@@ -490,11 +491,12 @@
       <div id="cashv2-blocked-note" class="info" style="display:none; margin-top:10px"><small>Efectivo está desactivado o el evento está inactivo. Esto no afecta otros módulos.</small></div>
       <div id="cashv2-error" class="warn" style="display:none; margin-top:10px"></div>
 
-      <div class="info" style="margin-top:10px"><small>Inicio y movimientos listos. Completa el cierre y revisa la diferencia.</small></div>
-
-      <div class="row" style="justify-content:flex-end; margin-top:8px;">
-        <button id="cashv2-btn-open-legacy" class="btn-link" type="button">Ver registros antiguos (LEGACY)</button>
-      </div>
+      
+        <div id="cashv2-multiday-note" class="info" style="display:none; margin-top:10px"><small></small></div>
+        <div id="cashv2-multiday-actions" class="row" style="justify-content:flex-end; gap:8px; margin-top:8px; display:none">
+          <button id="cashv2-btn-open-from-yesterday" class="btn-primary btn-pill" type="button">Abrir hoy con saldo de ayer</button>
+        </div>
+        <div class="info" style="margin-top:10px"><small>Inicio y movimientos listos. Completa el cierre y revisa la diferencia.</small></div>
     </div>
   
 
@@ -681,7 +683,8 @@
           <div id="cashv2-close-closed" class="info" style="display:none"><small><b>Cerrado.</b> <span id="cashv2-closed-at" class="muted"></span></small></div>
         </div>
         <div class="actions end" style="gap:8px; align-items:center; flex-wrap:wrap;">
-          <button id="cashv2-btn-close" class="btn-danger btn-pill" type="button" disabled>Cerrar</button>
+          <button id="cashv2-btn-admin-reopen" class="btn-warn btn-pill" type="button" style="display:none">Reabrir (Admin)</button>
+          <button id="cashv2-btn-close" class="btn-danger btn-pill" type="button" disabled>Cerrar día</button>
         </div>
       </div>
     </div>
@@ -1381,25 +1384,35 @@
 </div>
 
 
-<!-- Modal LEGACY VISOR (Efectivo v2) — SOLO LECTURA -->
-<div id="cashv2-legacy-modal" class="modal">
+
+
+<!-- Modal Reabrir día (Admin) — Efectivo v2 -->
+<div id="cashv2-admin-reopen-modal" class="modal">
   <div class="panel panel-compact">
-    <button id="cashv2-legacy-close" class="close btn-warn btn-pill btn-pill-mini" type="button">Cerrar</button>
-    <h3>LEGACY (solo lectura)</h3>
+    <button id="cashv2-admin-reopen-cancel" class="close btn-warn btn-pill btn-pill-mini" type="button">Cancelar</button>
+    <h3>Reabrir día (Admin)</h3>
 
-    <div class="info" style="margin-top:8px"><small>Esto no afecta Efectivo v2.</small></div>
+    <div class="warn" style="margin-top:8px"><small>Esto reabre un día cerrado. Se registra auditoría (timestamp + motivo).</small></div>
 
-    <div id="cashv2-legacy-view-list" style="margin-top:10px">
-      <div id="cashv2-legacy-empty" class="muted" style="display:none"><small>No hay registros legacy.</small></div>
-      <div id="cashv2-legacy-list" style="margin-top:10px"></div>
+    <div class="info" style="margin-top:8px"><small>Evento: <b id="cashv2-admin-reopen-ev">—</b> · Día: <b id="cashv2-admin-reopen-day">—</b></small></div>
+
+    <div class="row" style="grid-template-columns:1fr; gap:10px; margin-top:10px">
+      <div>
+        <label>Motivo <span class="muted">(obligatorio)</span></label>
+        <input id="cashv2-admin-reopen-reason" type="text" maxlength="180" placeholder="Ej: corregir conteo, ajuste de caja…">
+      </div>
+      <div>
+        <label>Confirmación</label>
+        <input id="cashv2-admin-reopen-phrase" type="text" maxlength="16" placeholder="Escribe REABRIR" autocapitalize="characters">
+        <small class="muted">Regla: escribe <b>REABRIR</b> para confirmar.</small>
+      </div>
     </div>
 
-    <div id="cashv2-legacy-view-detail" style="display:none; margin-top:10px">
-      <div class="row" style="align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
-        <button id="cashv2-legacy-back" class="btn-link" type="button">← Volver</button>
-        <button id="cashv2-legacy-close2" class="btn-outline btn-pill btn-pill-mini" type="button">Cerrar</button>
-      </div>
-      <div id="cashv2-legacy-detail"></div>
+    <div id="cashv2-admin-reopen-error" class="warn" style="display:none; margin-top:10px"></div>
+
+    <div class="actions end" style="gap:8px; margin-top:12px">
+      <button id="cashv2-admin-reopen-confirm" class="btn-danger btn-pill" type="button">Confirmar</button>
+      <button id="cashv2-admin-reopen-cancel2" class="btn-outline btn-pill" type="button">Cancelar</button>
     </div>
   </div>
 </div>
@@ -1497,25 +1510,25 @@
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
-<script src="/assets/js/a33-storage.js?v=4.20.58"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.58"></script>
-<script src="/assets/js/a33-auth.js?v=4.20.58"></script>
-<script src="/assets/js/a33-build.js?v=4.20.58"></script>
+<script src="/assets/js/a33-storage.js?v=4.20.64"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.64"></script>
+<script src="/assets/js/a33-auth.js?v=4.20.64"></script>
+<script src="/assets/js/a33-build.js?v=4.20.64"></script>
 <script>
   (function(){
-    try{      const v = '4.20.58';
+    try{      const v = '4.20.64';
       try{ window.A33_VERSION = v; }catch(_){ }
       // POS: bump revision local (solo este modulo) para forzar limpieza de caches
-      try{ window.A33_ASSET_REV = '24'; }catch(_){ }
-      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r24').toString(); }catch(_){ }
-      try{ window.A33_BUILD_TAG = (v + '-r24').toString(); }catch(_){ }
+      try{ window.A33_ASSET_REV = '28'; }catch(_){ }
+      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r30').toString(); }catch(_){ }
+      try{ window.A33_BUILD_TAG = (v + '-r30').toString(); }catch(_){ }
       const verEl = document.getElementById('a33-version-text');
       if (verEl) verEl.textContent = 'v' + v;
       const bEl = document.getElementById('pos-build-id');
       if (bEl) bEl.textContent = 'POS Build: ' + v;
       const cEl = document.getElementById('pos-sw-cache-id');
       if (cEl){
-        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r24')).toString();
+        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r30')).toString();
         cEl.textContent = 'SW Cache: ' + cn;
         cEl.title = cn;
       }
@@ -1547,11 +1560,11 @@
     }
   })();
 </script>
-<script src="app.js?v=4.20.58&r=24"></script>
-<script src="/assets/js/a33-input-ux.js?v=4.20.58"></script>
+<script src="app.js?v=4.20.64&r=30"></script>
+<script src="/assets/js/a33-input-ux.js?v=4.20.64"></script>
 <script>
   (function(){
-    const BUILD = (window.A33_VERSION || '4.20.58').toString();
+    const BUILD = (window.A33_VERSION || '4.20.64').toString();
     const REV = (window.A33_ASSET_REV || '10').toString();
     const SW_URL = './sw.js?v=' + encodeURIComponent(BUILD) + '&r=' + encodeURIComponent(REV);
     const btn = document.getElementById('btn-update');
