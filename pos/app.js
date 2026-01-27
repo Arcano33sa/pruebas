@@ -4,10 +4,10 @@ const DB_VER = 30; // Etapa 1 (Efectivo v2): nuevo store aislado + llaves canón
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.56';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.58';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r22');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r24');
 
 // --- Date helpers (POS)
 // Normaliza YYYY-MM-DD y da fallback robusto (consistente con Centro de Mando)
@@ -368,6 +368,12 @@ function cashV2InitFxUIOnce(){
 
       try{ cashV2SetLastRec(saved); }catch(_){ }
       cashV2FxSetCached(eid, n);
+
+      // write-through: also save FX where Calculadora reads its rate (single source of truth)
+      try{
+        const fx2 = String(fixed || '').trim();
+        posCalcSafeLSSet(A33_POS_CALC_FX_LS_KEY, fx2);
+      }catch(_){ }
 
       try{ if (st) st.textContent = `Guardado: ${fixed}`; }catch(_){ }
       try{ toast('Tipo de cambio guardado'); }catch(_){ }
@@ -1297,8 +1303,8 @@ function cashV2EvalCloseRule(rec){
 
   // Hard rule: diff debe ser 0 en ambas monedas (usar record persistido)
   const numsRec = cashV2ComputeCloseNumbers(r, { preferDom: false });
-  const dn = Number(numsRec && numsRec.NIO && numsRec.NIO.diff) || 0;
-  const du = Number(numsRec && numsRec.USD && numsRec.USD.diff) || 0;
+  const dn = cashV2Round2Money(Number(numsRec && numsRec.NIO && numsRec.NIO.diff) || 0);
+  const du = cashV2Round2Money(Number(numsRec && numsRec.USD && numsRec.USD.diff) || 0);
 
   // Si el usuario cambió inputs pero no guardó, bloquea cierre para evitar inconsistencias
   let domChanged = false;
@@ -1308,7 +1314,7 @@ function cashV2EvalCloseRule(rec){
   }catch(_){ domChanged = false; }
 
   if (dn !== 0 || du !== 0){
-    return { canClose:false, reason:'No se puede cerrar: diferencia en C$ y/o USD' };
+    return { canClose:false, reason:'No se puede cerrar: diferencia en C$ o USD.' };
   }
   if (domChanged){
     return { canClose:false, reason:'No se puede cerrar: guarda Inicio y/o Final' };
@@ -1326,7 +1332,19 @@ function cashV2ApplyReadOnlyUi(isClosed){
 
 function cashV2UpdateCloseEligibility(rec){
   const r = (rec != null) ? rec : cashV2GetLastRec();
-  const st = cashV2EvalCloseRule(r);
+  let st = cashV2EvalCloseRule(r);
+
+  // Regla dura: si evento/día está BLOQUEADO, nunca permitir cierre.
+  try{
+    const fcard = document.getElementById('cashv2-final-card');
+    const blocked = !!(fcard && fcard.dataset && fcard.dataset.blocked === '1');
+    const locked = !!(fcard && fcard.dataset && fcard.dataset.locked === '1');
+    if (st && !st.closed){
+      if (blocked) st = { canClose:false, reason:'Bloqueado: Efectivo OFF o evento inactivo' };
+      else if (locked) st = { canClose:false, reason:'Día bloqueado (cierre del sistema)' };
+    }
+  }catch(_){ }
+
   cashV2SetCloseUiState(st);
 }
 
@@ -1340,6 +1358,17 @@ function cashV2InitCloseUIOnce(){
     const eid = card ? String(card.dataset.eventId || '').trim() : '';
     const dk = card ? String(card.dataset.dayKey || '').trim() : '';
     if (!eid || !dk) return;
+
+    // Guard extra: si está BLOQUEADO (evento inactivo/flag OFF) o LOCK del sistema, no cerrar.
+    try{
+      const blocked = !!(card && card.dataset && card.dataset.blocked === '1');
+      const locked = !!(card && card.dataset && card.dataset.locked === '1');
+      if (blocked || locked){
+        try{ cashV2UpdateCloseEligibility(cashV2GetLastRec()); }catch(_){ }
+        try{ toast(blocked ? 'Evento bloqueado: no permite cerrar' : 'Día bloqueado: no permite cerrar'); }catch(_){ }
+        return;
+      }
+    }catch(_){ }
 
     try{
       const rec = await cashV2Ensure(eid, dk);
@@ -2046,7 +2075,7 @@ async function renderEfectivoTab(){
     // Etapa 5: sin evento => oculta Cierre
     try{
       const fcard = document.getElementById('cashv2-final-card');
-      if (fcard){ fcard.style.display = 'none'; fcard.dataset.eventId=''; fcard.dataset.dayKey=dayKey; }
+      if (fcard){ fcard.style.display = 'none'; fcard.dataset.eventId=''; fcard.dataset.dayKey=dayKey; fcard.dataset.blocked='1'; fcard.dataset.locked='0'; }
     }catch(_){ }
     try{ cashV2SetFinalEnabled(false); }catch(_){ }
     try{ cashV2ApplyFinalToDom(null); }catch(_){ }
@@ -2105,6 +2134,22 @@ async function renderEfectivoTab(){
         console.log(`[A33][CASHv2] lock detected ${eventId} ${dayKey}`);
       }
     }
+
+    // Propagar estado a UI (para que el cierre sea hard-stop incluso si alguien dispara el handler).
+    try{
+      const fcard = document.getElementById('cashv2-final-card');
+      if (fcard){
+        fcard.dataset.blocked = blocked ? '1' : '0';
+        fcard.dataset.locked = locked ? '1' : '0';
+      }
+    }catch(_){ }
+    try{
+      const b = document.getElementById('cashv2-btn-close');
+      if (b){
+        b.dataset.blocked = blocked ? '1' : '0';
+        b.dataset.locked = locked ? '1' : '0';
+      }
+    }catch(_){ }
 
     // Regla: si está BLOQUEADO (evento inactivo o flag OFF), solo lectura => no ensure (no writes)
     const editable = (!!isActiveEvent && !!flagOn);
@@ -2167,7 +2212,7 @@ async function renderEfectivoTab(){
       const mcard = document.getElementById('cashv2-movements-card');
       if (mcard){ mcard.style.display = 'none'; mcard.dataset.eventId=''; mcard.dataset.dayKey=dayKey; }
       const fcard = document.getElementById('cashv2-final-card');
-      if (fcard){ fcard.style.display = 'none'; fcard.dataset.eventId=''; fcard.dataset.dayKey=dayKey; }
+      if (fcard){ fcard.style.display = 'none'; fcard.dataset.eventId=''; fcard.dataset.dayKey=dayKey; fcard.dataset.blocked='1'; fcard.dataset.locked='0'; }
     }catch(_){ }
     try{ cashV2SetInitialEnabled(false); }catch(_){ }
     try{ cashV2SetFinalEnabled(false); }catch(_){ }
@@ -16681,7 +16726,9 @@ function initPosCalculatorTabOnce(){
       if (!els.fxRate) return;
       const n = posCalcParsePositiveNumber(els.fxRate.value);
       if (!n) return; // NO sobreescribir lo guardado con vacío/invalid
-      posCalcSafeLSSet(A33_POS_CALC_FX_LS_KEY, String(n));
+      const fixed = posCalcFmt2(n);
+      try{ els.fxRate.value = fixed; }catch(_){ }
+      posCalcSafeLSSet(A33_POS_CALC_FX_LS_KEY, fixed);
     }catch(_){ }
   }
 
@@ -16722,12 +16769,13 @@ async function onOpenPosCalculatorTab(){
   const statusEl = document.getElementById('fx-status');
   if (!rateEl || !metaEl || !statusEl) return;
 
-  // Precargar tipo de cambio guardado si el input está vacío (típico tras recarga).
+  // Precargar (y normalizar) tipo de cambio guardado: siempre 2 decimales.
   try{
-    const cur = String(rateEl.value || '').trim();
     const saved = posCalcSafeLSGet(A33_POS_CALC_FX_LS_KEY);
-    const n = posCalcParsePositiveNumber(saved);
-    if (!cur && n) rateEl.value = String(n);
+    const nSaved = posCalcParsePositiveNumber(saved);
+    const curN = posCalcParsePositiveNumber(rateEl.value);
+    if (nSaved) rateEl.value = posCalcFmt2(nSaved);
+    else if (curN) rateEl.value = posCalcFmt2(curN);
   }catch(_){ }
 
   const ev = await getActiveEventPOS();
