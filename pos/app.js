@@ -1,13 +1,13 @@
 // --- IndexedDB helpers POS
 const DB_NAME = 'a33-pos';
-const DB_VER = 30; // Etapa 1 (Efectivo v2): nuevo store aislado + llaves canónicas
+const DB_VER = 31; // Etapa 1/5 (Efectivo v2 Histórico): nuevos stores aislados + llaves canónicas + versionado
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.65';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.66';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r31');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r32');
 
 // --- Date helpers (POS)
 // Normaliza YYYY-MM-DD y da fallback robusto (consistente con Centro de Mando)
@@ -374,6 +374,219 @@ try{ window.cashV2Load = cashV2Load; }catch(_){ }
 try{ window.cashV2Ensure = cashV2Ensure; }catch(_){ }
 try{ window.cashV2Save = cashV2Save; }catch(_){ }
 try{ window.cashV2Key = cashV2Key; }catch(_){ }
+
+
+// --- POS: Efectivo v2 — Histórico (storage aislado + llaves canónicas + versionado) — Etapa 1/5
+const CASH_V2_HIST_STORE = 'cashv2hist';
+const CASH_V2_SNAP_STORE = 'cashv2snap';
+
+function getCashV2HistDayKey(recordV2){
+  // dayKey operativo del día: basado en fecha local de apertura (openTs).
+  const ot = cashV2DeriveOpenTs(recordV2 || {});
+  const dk = safeYMD(cashV2DayKeyFromTsLocal(ot));
+  return cashV2AssertDayKeyCanon(dk);
+}
+
+function histDayKey(eventId, dayKey){
+  const eid = cashV2AssertEventId(eventId);
+  const dk = cashV2AssertDayKeyCanon(safeYMD(dayKey));
+  return `cashv2hist:${eid}:${dk}`;
+}
+
+function snapKey(eventId, dayKey, v){
+  const eid = cashV2AssertEventId(eventId);
+  const dk = cashV2AssertDayKeyCanon(safeYMD(dayKey));
+  const vv = Number(v);
+  const vn = (Number.isFinite(vv) && vv > 0) ? Math.trunc(vv) : 1;
+  return `cashv2snap:${eid}:${dk}:v${vn}`;
+}
+
+async function loadHistDay(eventId, dayKey){
+  const key = histDayKey(eventId, dayKey);
+  if (!db) await openDB();
+  try{
+    const v = await getOne(CASH_V2_HIST_STORE, key);
+    return v || null;
+  }catch(_){
+    return null;
+  }
+}
+
+async function saveHistDay(eventId, dayKey, histDay){
+  if (!histDay || typeof histDay !== 'object') throw new Error('cashV2Hist: histDay inválido');
+  const eid = cashV2AssertEventId(eventId);
+  const dk = cashV2AssertDayKeyCanon(safeYMD(dayKey));
+  const key = histDayKey(eid, dk);
+  if (!db) await openDB();
+
+  let existing = null;
+  try{ existing = await getOne(CASH_V2_HIST_STORE, key); }catch(_){ existing = null; }
+
+  const now = Date.now();
+  const createdTs = Number(existing && existing.createdTs) || Number(histDay.createdTs) || now;
+
+  const merged = {
+    ...(existing && typeof existing === 'object' ? existing : {}),
+    ...(histDay && typeof histDay === 'object' ? histDay : {}),
+    key,
+    eventId: eid,
+    dayKey: dk,
+    createdTs,
+    updatedTs: now,
+    status: cashV2NormStatus((histDay.status != null) ? histDay.status : (existing && existing.status)),
+    openTs: (histDay.openTs != null) ? (Number(histDay.openTs) || null) : (existing && existing.openTs != null ? Number(existing.openTs) : null),
+    closeTs: (histDay.closeTs != null) ? (Number(histDay.closeTs) || null) : (existing && existing.closeTs != null ? Number(existing.closeTs) : null)
+  };
+
+  // Idempotencia: no perder versions si no viene en el payload.
+  if (!('versions' in histDay)){
+    merged.versions = (existing && Array.isArray(existing.versions)) ? existing.versions : [];
+  } else {
+    merged.versions = Array.isArray(histDay.versions) ? histDay.versions : [];
+  }
+
+  await put(CASH_V2_HIST_STORE, merged);
+  return merged;
+}
+
+async function listHistDaysForEvent(eventId){
+  const eid = cashV2AssertEventId(eventId);
+  if (!db) await openDB();
+
+  // Fast path: index by_event
+  const arr = await new Promise((resolve)=>{
+    try{
+      const tr = db.transaction([CASH_V2_HIST_STORE], 'readonly');
+      const st = tr.objectStore(CASH_V2_HIST_STORE);
+      let idx = null;
+      try{ idx = st.index('by_event'); }catch(_){ idx = null; }
+      if (!idx){ resolve(null); return; }
+      const req = idx.getAll(IDBKeyRange.only(eid));
+      req.onsuccess = ()=> resolve(req.result || []);
+      req.onerror = ()=> resolve(null);
+    }catch(_){ resolve(null); }
+  });
+  let out = Array.isArray(arr) ? arr : null;
+
+  if (!out){
+    try{
+      const all = await getAll(CASH_V2_HIST_STORE);
+      out = (Array.isArray(all) ? all : []).filter(r => r && String(r.eventId) === String(eid));
+    }catch(_){
+      out = [];
+    }
+  }
+
+  out.sort((a,b)=>{
+    const ad = safeYMD(a && a.dayKey);
+    const bd = safeYMD(b && b.dayKey);
+    if (bd > ad) return 1;
+    if (bd < ad) return -1;
+    return Number(b && b.updatedTs) - Number(a && a.updatedTs);
+  });
+  return out;
+}
+
+async function listHistEvents(){
+  if (!db) await openDB();
+  let all = [];
+  try{ all = await getAll(CASH_V2_HIST_STORE); if (!Array.isArray(all)) all = []; }catch(_){ all = []; }
+  const seen = new Set();
+  const out = [];
+  for (const r of (all || [])){
+    const eid = String(r && r.eventId || '').trim();
+    if (!eid) continue;
+    if (seen.has(eid)) continue;
+    seen.add(eid);
+    out.push(eid);
+  }
+  return out;
+}
+
+async function saveSnapshot(snapshot){
+  if (!snapshot || typeof snapshot !== 'object') throw new Error('cashV2Snap: snapshot inválido');
+  const eid = cashV2AssertEventId(snapshot.eventId);
+  const dk = cashV2AssertDayKeyCanon(safeYMD(snapshot.dayKey));
+  const vv = Number(snapshot.v);
+  const vn = (Number.isFinite(vv) && vv > 0) ? Math.trunc(vv) : 1;
+  const key = snapKey(eid, dk, vn);
+  const ts = Number(snapshot.ts);
+  const ts2 = (Number.isFinite(ts) && ts > 0) ? ts : Date.now();
+  const toSave = {
+    ...snapshot,
+    key,
+    eventId: eid,
+    dayKey: dk,
+    v: vn,
+    ts: ts2,
+    statusAtSnap: 'CLOSED'
+  };
+  if (!db) await openDB();
+  await put(CASH_V2_SNAP_STORE, toSave);
+  return toSave;
+}
+
+async function loadSnapshot(eventId, dayKey, v){
+  const key = snapKey(eventId, dayKey, v);
+  if (!db) await openDB();
+  try{
+    const r = await getOne(CASH_V2_SNAP_STORE, key);
+    return r || null;
+  }catch(_){
+    return null;
+  }
+}
+
+async function listSnapshots(eventId, dayKey){
+  const eid = cashV2AssertEventId(eventId);
+  const dk = cashV2AssertDayKeyCanon(safeYMD(dayKey));
+  if (!db) await openDB();
+
+  // Fast path: index by_event_day
+  const arr = await new Promise((resolve)=>{
+    try{
+      const tr = db.transaction([CASH_V2_SNAP_STORE], 'readonly');
+      const st = tr.objectStore(CASH_V2_SNAP_STORE);
+      let idx = null;
+      try{ idx = st.index('by_event_day'); }catch(_){ idx = null; }
+      if (!idx){ resolve(null); return; }
+      const req = idx.getAll(IDBKeyRange.only([eid, dk]));
+      req.onsuccess = ()=> resolve(req.result || []);
+      req.onerror = ()=> resolve(null);
+    }catch(_){ resolve(null); }
+  });
+
+  let rows = Array.isArray(arr) ? arr : null;
+  if (!rows){
+    try{
+      const all = await getAll(CASH_V2_SNAP_STORE);
+      rows = (Array.isArray(all) ? all : []).filter(r => r && String(r.eventId) === String(eid) && safeYMD(r.dayKey) === dk);
+    }catch(_){
+      rows = [];
+    }
+  }
+
+  const vs = [];
+  for (const r of (rows || [])){
+    const n = Number(r && r.v);
+    if (!Number.isFinite(n)) continue;
+    vs.push(Math.trunc(n));
+  }
+  vs.sort((a,b)=>a-b);
+  // Dedup
+  return Array.from(new Set(vs));
+}
+
+try{ window.getCashV2HistDayKey = getCashV2HistDayKey; }catch(_){ }
+try{ window.histDayKey = histDayKey; }catch(_){ }
+try{ window.snapKey = snapKey; }catch(_){ }
+try{ window.loadHistDay = loadHistDay; }catch(_){ }
+try{ window.saveHistDay = saveHistDay; }catch(_){ }
+try{ window.listHistDaysForEvent = listHistDaysForEvent; }catch(_){ }
+try{ window.listHistEvents = listHistEvents; }catch(_){ }
+try{ window.saveSnapshot = saveSnapshot; }catch(_){ }
+try{ window.loadSnapshot = loadSnapshot; }catch(_){ }
+try{ window.listSnapshots = listSnapshots; }catch(_){ }
 
 
 // --- POS: Efectivo v2 (UI mínima) — Etapa 2
@@ -2738,6 +2951,32 @@ function openDB(opts) {
         try { e.target.transaction.objectStore('cashV2').createIndex('by_event', 'eventId', { unique: false }); } catch {}
         try { e.target.transaction.objectStore('cashV2').createIndex('by_day', 'dayKey', { unique: false }); } catch {}
         try { e.target.transaction.objectStore('cashV2').createIndex('by_event_day', ['eventId','dayKey'], { unique: true }); } catch {}
+      }
+
+      // --- POS: Efectivo v2 Histórico (header por día) — Etapa 1/5
+      if (!d.objectStoreNames.contains('cashv2hist')) {
+        const h = d.createObjectStore('cashv2hist', { keyPath: 'key' });
+        try { h.createIndex('by_event', 'eventId', { unique: false }); } catch {}
+        try { h.createIndex('by_day', 'dayKey', { unique: false }); } catch {}
+        try { h.createIndex('by_event_day', ['eventId','dayKey'], { unique: true }); } catch {}
+      } else {
+        try { e.target.transaction.objectStore('cashv2hist').createIndex('by_event', 'eventId', { unique: false }); } catch {}
+        try { e.target.transaction.objectStore('cashv2hist').createIndex('by_day', 'dayKey', { unique: false }); } catch {}
+        try { e.target.transaction.objectStore('cashv2hist').createIndex('by_event_day', ['eventId','dayKey'], { unique: true }); } catch {}
+      }
+
+      // --- POS: Efectivo v2 Histórico (snapshots por versión) — Etapa 1/5
+      if (!d.objectStoreNames.contains('cashv2snap')) {
+        const s = d.createObjectStore('cashv2snap', { keyPath: 'key' });
+        try { s.createIndex('by_event', 'eventId', { unique: false }); } catch {}
+        try { s.createIndex('by_day', 'dayKey', { unique: false }); } catch {}
+        try { s.createIndex('by_event_day', ['eventId','dayKey'], { unique: false }); } catch {}
+        try { s.createIndex('by_event_day_v', ['eventId','dayKey','v'], { unique: true }); } catch {}
+      } else {
+        try { e.target.transaction.objectStore('cashv2snap').createIndex('by_event', 'eventId', { unique: false }); } catch {}
+        try { e.target.transaction.objectStore('cashv2snap').createIndex('by_day', 'dayKey', { unique: false }); } catch {}
+        try { e.target.transaction.objectStore('cashv2snap').createIndex('by_event_day', ['eventId','dayKey'], { unique: false }); } catch {}
+        try { e.target.transaction.objectStore('cashv2snap').createIndex('by_event_day_v', ['eventId','dayKey','v'], { unique: true }); } catch {}
       }
       if (!d.objectStoreNames.contains('dayLocks')) {
         const l = d.createObjectStore('dayLocks', { keyPath: 'key' });
