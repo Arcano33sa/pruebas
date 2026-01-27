@@ -1237,3 +1237,7 @@ small.muted{color:var(--muted)}
 .cashv2-summary-table tr:first-child td{border-top:none}
 .cashv2-summary-table td.sub{text-align:right;font-weight:850}
 .cashv2-summary-table .pill{margin-left:0}
+
+
+/* --- Efectivo v2 · LEGACY VISOR (Etapa 9) --- */
+.cashv2-legacy-item{margin-bottom:8px;border-radius:16px}

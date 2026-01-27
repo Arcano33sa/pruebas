@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.48&r=14">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.51&r=17">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.48&r=14">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.48" />
+<link rel="stylesheet" href="styles.css?v=4.20.51&r=17">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.51" />
 </head>
 <body>
   <header class="a33-header" role="banner">
@@ -472,6 +472,10 @@
       <div id="cashv2-error" class="warn" style="display:none; margin-top:10px"></div>
 
       <div class="info" style="margin-top:10px"><small>Inicio y movimientos listos. Completa el cierre y revisa la diferencia.</small></div>
+
+      <div class="row" style="justify-content:flex-end; margin-top:8px;">
+        <button id="cashv2-btn-open-legacy" class="btn-link" type="button">Ver registros antiguos (LEGACY)</button>
+      </div>
     </div>
   
 
@@ -597,7 +601,7 @@
 
 </section>
 
-<section id="tab-resumen class="tab card" style="display:none">
+<section id="tab-resumen" class="tab card" style="display:none">
     <h2>Resumen</h2>
     <div class="summary-controls">
       <div class="summary-controls-left">
@@ -647,6 +651,47 @@
       <div id="summary-close-return" class="info" style="display:none; margin-top:10px"></div>
       <div id="summary-close-note" class="muted" style="margin-top:8px; display:none;"></div>
       <div id="summary-close-blocker" class="warn" style="display:none; margin-top:10px"></div>
+
+      <!-- Etapa 8: Snapshot Efectivo v2 (solo lectura) -->
+      <div id="summary-cashv2-card" class="card inner" style="margin-top:10px; display:none">
+        <div class="row" style="align-items:baseline; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+          <div>
+            <div style="font-weight:700;">Efectivo</div>
+            <small class="muted">Snapshot v2 (evento + día) · solo lectura</small>
+          </div>
+          <span id="summary-cashv2-status-tag" class="tag small">—</span>
+        </div>
+
+        <div id="summary-cashv2-warn" class="warn" style="display:none; margin-top:8px"><small>Efectivo no está cerrado</small></div>
+
+        <div class="row" style="gap:12px; flex-wrap:wrap; margin-top:10px;">
+          <div style="flex:1; min-width:240px;">
+            <div class="muted" style="font-size:12px; margin-bottom:6px;">C$ (NIO)</div>
+            <table class="cashv2-summary-table">
+              <tbody>
+                <tr><td>Inicial</td><td id="summary-cashv2-initial-nio" class="sub">0</td></tr>
+                <tr><td>Neto Movimientos</td><td id="summary-cashv2-net-nio" class="sub">0</td></tr>
+                <tr><td>Esperado</td><td id="summary-cashv2-expected-nio" class="sub">0</td></tr>
+                <tr><td>Final</td><td id="summary-cashv2-final-nio" class="sub">0</td></tr>
+                <tr><td><b>Diferencia</b></td><td class="sub"><span id="summary-cashv2-diff-nio" class="pill">0</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div style="flex:1; min-width:240px;">
+            <div class="muted" style="font-size:12px; margin-bottom:6px;">USD</div>
+            <table class="cashv2-summary-table">
+              <tbody>
+                <tr><td>Inicial</td><td id="summary-cashv2-initial-usd" class="sub">0</td></tr>
+                <tr><td>Neto Movimientos</td><td id="summary-cashv2-net-usd" class="sub">0</td></tr>
+                <tr><td>Esperado</td><td id="summary-cashv2-expected-usd" class="sub">0</td></tr>
+                <tr><td>Final</td><td id="summary-cashv2-final-usd" class="sub">0</td></tr>
+                <tr><td><b>Diferencia</b></td><td class="sub"><span id="summary-cashv2-diff-usd" class="pill">0</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
 
       <!-- Etapa 5: Estado técnico de cierre (closureKey/lastClosureKey/lockRecord) -->
       <details id="summary-close-tech" class="tech-details">
@@ -1247,6 +1292,30 @@
     </div>
   </div>
 </div>
+
+
+<!-- Modal LEGACY VISOR (Efectivo v2) — SOLO LECTURA -->
+<div id="cashv2-legacy-modal" class="modal">
+  <div class="panel panel-compact">
+    <button id="cashv2-legacy-close" class="close btn-warn btn-pill btn-pill-mini" type="button">Cerrar</button>
+    <h3>LEGACY (solo lectura)</h3>
+
+    <div class="info" style="margin-top:8px"><small>Esto no afecta Efectivo v2.</small></div>
+
+    <div id="cashv2-legacy-view-list" style="margin-top:10px">
+      <div id="cashv2-legacy-empty" class="muted" style="display:none"><small>No hay registros legacy.</small></div>
+      <div id="cashv2-legacy-list" style="margin-top:10px"></div>
+    </div>
+
+    <div id="cashv2-legacy-view-detail" style="display:none; margin-top:10px">
+      <div class="row" style="align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+        <button id="cashv2-legacy-back" class="btn-link" type="button">← Volver</button>
+        <button id="cashv2-legacy-close2" class="btn-outline btn-pill btn-pill-mini" type="button">Cerrar</button>
+      </div>
+      <div id="cashv2-legacy-detail"></div>
+    </div>
+  </div>
+</div>
 <!-- Modal Seleccionar Cliente (Clientes v2) -->
 <div id="customer-picker-modal" class="modal">
   <div class="panel panel-compact">
@@ -1341,25 +1410,25 @@
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
-<script src="/assets/js/a33-storage.js?v=4.20.48"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.48"></script>
-<script src="/assets/js/a33-auth.js?v=4.20.48"></script>
-<script src="/assets/js/a33-build.js?v=4.20.48"></script>
+<script src="/assets/js/a33-storage.js?v=4.20.51"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.51"></script>
+<script src="/assets/js/a33-auth.js?v=4.20.51"></script>
+<script src="/assets/js/a33-build.js?v=4.20.51"></script>
 <script>
   (function(){
-    try{      const v = '4.20.48';
+    try{      const v = '4.20.51';
       try{ window.A33_VERSION = v; }catch(_){ }
       // POS: bump revision local (solo este modulo) para forzar limpieza de caches
-      try{ window.A33_ASSET_REV = '14'; }catch(_){ }
-      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r14').toString(); }catch(_){ }
-      try{ window.A33_BUILD_TAG = (v + '-r14').toString(); }catch(_){ }
+      try{ window.A33_ASSET_REV = '17'; }catch(_){ }
+      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r17').toString(); }catch(_){ }
+      try{ window.A33_BUILD_TAG = (v + '-r17').toString(); }catch(_){ }
       const verEl = document.getElementById('a33-version-text');
       if (verEl) verEl.textContent = 'v' + v;
       const bEl = document.getElementById('pos-build-id');
       if (bEl) bEl.textContent = 'POS Build: ' + v;
       const cEl = document.getElementById('pos-sw-cache-id');
       if (cEl){
-        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r14')).toString();
+        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r17')).toString();
         cEl.textContent = 'SW Cache: ' + cn;
         cEl.title = cn;
       }
@@ -1391,11 +1460,11 @@
     }
   })();
 </script>
-<script src="app.js?v=4.20.48&r=14"></script>
-<script src="/assets/js/a33-input-ux.js?v=4.20.48"></script>
+<script src="app.js?v=4.20.51&r=17"></script>
+<script src="/assets/js/a33-input-ux.js?v=4.20.51"></script>
 <script>
   (function(){
-    const BUILD = (window.A33_VERSION || '4.20.48').toString();
+    const BUILD = (window.A33_VERSION || '4.20.51').toString();
     const REV = (window.A33_ASSET_REV || '10').toString();
     const SW_URL = './sw.js?v=' + encodeURIComponent(BUILD) + '&r=' + encodeURIComponent(REV);
     const btn = document.getElementById('btn-update');

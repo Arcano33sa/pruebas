@@ -4,10 +4,10 @@ const DB_VER = 30; // Etapa 1 (Efectivo v2): nuevo store aislado + llaves canón
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.48';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.51';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r14');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r17');
 
 // --- Date helpers (POS)
 // Normaliza YYYY-MM-DD y da fallback robusto (consistente con Centro de Mando)
@@ -135,7 +135,7 @@ function cashV2StatusToUiPOS(status){
   const s = String(status || 'OPEN').trim().toUpperCase();
   if (s === 'OPEN') return { text:'Abierto', cls:'open' };
   if (s === 'CLOSED') return { text:'Cerrado', cls:'closed' };
-  if (s === 'LOCKED') return { text:'Bloqueado', cls:'closed' };
+  if (s === 'LOCKED') return { text:'BLOQUEADO', cls:'closed' };
   return { text: s || 'Abierto', cls: (s === 'OPEN' ? 'open' : 'closed') };
 }
 
@@ -824,6 +824,40 @@ function cashV2IsClosed(rec){
   return s === 'CLOSED';
 }
 
+
+
+// --- POS: Efectivo v2 — Respeto de BLOQUEOS (dayLocks / cierres) — Etapa 7 (READ-ONLY)
+const __CASHV2_LOCK_LOG_ONCE = new Set();
+
+async function isDayLocked(eventId, dayKey){
+  const eid = Number(eventId);
+  const dk = safeYMD(dayKey);
+
+  // Asegurar DB para lecturas (sin writes)
+  try{ if (!db) await openDB(); }catch(_){ }
+
+  // Fast path: estado ya calculado por el POS (venta)
+  try{
+    const st = (typeof window !== 'undefined' && window.__A33_SELL_STATE) ? window.__A33_SELL_STATE : (typeof __A33_SELL_STATE !== 'undefined' ? __A33_SELL_STATE : null);
+    if (st && Number(st.eventId) === eid && String(st.dayKey || '') === dk && !!st.dayClosed) return true;
+  }catch(_){ }
+
+  // Evento cerrado (candado global de evento)
+  try{
+    const evs = await getAll('events');
+    const ev = (Array.isArray(evs) ? evs : []).find(e => e && Number(e.id) === eid);
+    if (ev && ev.closedAt) return true;
+  }catch(_){ }
+
+  // Candado por día/evento (dayLocks)
+  try{
+    const lock = await getDayLockRecordPOS(eid, dk);
+    if (lock && lock.isClosed) return true;
+  }catch(_){ }
+
+  return false;
+}
+
 function cashV2SetMovementsEnabled(enabled){
   const en = !!enabled;
   const btnAdd = document.getElementById('cashv2-btn-add-movement');
@@ -981,6 +1015,407 @@ function cashV2InitCloseUIOnce(){
 }
 
 
+// --- POS: Efectivo v2 — Visor LEGACY (solo lectura) — Etapa 9
+function cashV2InitLegacyUIOnce(){
+  const btnOpen = document.getElementById('cashv2-btn-open-legacy');
+  const modal = document.getElementById('cashv2-legacy-modal');
+  if (!btnOpen || !modal) return;
+  if (btnOpen.dataset.ready === '1') return;
+
+  const btnClose = document.getElementById('cashv2-legacy-close');
+  const btnClose2 = document.getElementById('cashv2-legacy-close2');
+  const btnBack = document.getElementById('cashv2-legacy-back');
+
+  const viewList = document.getElementById('cashv2-legacy-view-list');
+  const viewDetail = document.getElementById('cashv2-legacy-view-detail');
+  const detail = document.getElementById('cashv2-legacy-detail');
+
+  const setView = (mode)=>{
+    try{ if (viewList) viewList.style.display = (mode === 'detail') ? 'none' : 'block'; }catch(_){ }
+    try{ if (viewDetail) viewDetail.style.display = (mode === 'detail') ? 'block' : 'none'; }catch(_){ }
+  };
+
+  const close = ()=>{
+    try{ closeModalPOS('cashv2-legacy-modal'); }catch(_){ try{ modal.style.display='none'; }catch(__){} }
+    try{ if (detail) detail.innerHTML = ''; }catch(_){ }
+    setView('list');
+  };
+
+  if (btnClose){
+    btnClose.addEventListener('click', (e)=>{ e.preventDefault(); close(); });
+  }
+  if (btnClose2){
+    btnClose2.addEventListener('click', (e)=>{ e.preventDefault(); close(); });
+  }
+  if (btnBack){
+    btnBack.addEventListener('click', (e)=>{ e.preventDefault(); setView('list'); });
+  }
+
+  btnOpen.addEventListener('click', async (e)=>{
+    e.preventDefault();
+    try{ openModalPOS('cashv2-legacy-modal'); }catch(_){ try{ modal.style.display='flex'; }catch(__){} }
+    try{ setView('list'); }catch(_){ }
+    try{ await cashV2LegacyRefreshUI(); }catch(err){ console.warn('[A33][CASHv2][LEGACY] refresh error', err); }
+  });
+
+  btnOpen.dataset.ready = '1';
+}
+
+function cashV2LegacyIsCashLike(obj){
+  try{
+    if (!obj || typeof obj !== 'object') return false;
+    if ('initial' in obj || 'final' in obj || 'movements' in obj) return true;
+    if ('movement' in obj || 'entries' in obj || 'salidas' in obj || 'entradas' in obj) return true;
+    if ('pettyCash' in obj || 'cajaChica' in obj) return true;
+    if ('NIO' in obj || 'USD' in obj || 'nio' in obj || 'usd' in obj) return true;
+    return false;
+  }catch(_){ return false; }
+}
+
+function cashV2LegacyInferDayKey(key, obj){
+  const pick = (v)=>{
+    const s = String(v || '').trim();
+    const m = s.match(/(\d{4}-\d{2}-\d{2})/);
+    return m ? m[1] : '';
+  };
+  try{
+    const fromObj = pick(obj && (obj.dayKey || obj.day || obj.date || obj.ymd));
+    if (fromObj) return fromObj;
+  }catch(_){ }
+  try{
+    const fromKey = pick(key);
+    if (fromKey) return fromKey;
+  }catch(_){ }
+  try{
+    const ts = Number(obj && (obj.ts || obj.createdAt || obj.at || obj.time));
+    if (Number.isFinite(ts) && ts > 0){
+      const d = new Date(ts);
+      const y = d.getFullYear();
+      const m = String(d.getMonth()+1).padStart(2,'0');
+      const day = String(d.getDate()).padStart(2,'0');
+      return `${y}-${m}-${day}`;
+    }
+  }catch(_){ }
+  return '';
+}
+
+function cashV2LegacyInferEventId(key, obj){
+  try{
+    const v = (obj && (obj.eventId != null ? obj.eventId : (obj.event && obj.event.id))) || null;
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  }catch(_){ }
+  try{
+    const s = String(key || '');
+    const m = s.match(/(?:event|evento)[^0-9]{0,6}(\d{1,9})/i);
+    if (m){
+      const n = Number(m[1]);
+      if (Number.isFinite(n) && n > 0) return Math.floor(n);
+    }
+  }catch(_){ }
+  return null;
+}
+
+function cashV2LegacyTotalFromCounts(counts){
+  try{
+    if (!counts || typeof counts !== 'object') return null;
+    let sum = 0;
+    for (const [k, v] of Object.entries(counts)){
+      const denom = Number(String(k).replace(/[^0-9.]/g,''));
+      const cnt = Number(v);
+      if (!Number.isFinite(denom) || !Number.isFinite(cnt)) continue;
+      sum += denom * cnt;
+    }
+    return Number.isFinite(sum) ? sum : null;
+  }catch(_){ return null; }
+}
+
+function cashV2LegacyExtractTotals(obj){
+  const out = { initial:{NIO:null, USD:null}, final:{NIO:null, USD:null}, netMov:{NIO:null, USD:null}, meta:{} };
+  try{
+    const pickTotal = (x)=>{
+      if (!x || typeof x !== 'object') return null;
+      const t = (x.total != null) ? Number(x.total) : null;
+      if (Number.isFinite(t)) return t;
+      const dc = x.denomCounts || x.counts || x.denoms || null;
+      const t2 = cashV2LegacyTotalFromCounts(dc);
+      if (Number.isFinite(t2)) return t2;
+      return null;
+    };
+
+    // initial
+    if (obj && obj.initial && typeof obj.initial === 'object'){
+      const ini = obj.initial;
+      out.initial.NIO = pickTotal(ini.NIO || ini.nio || ini.c$ || ini.cordobas || ini);
+      out.initial.USD = pickTotal(ini.USD || ini.usd || ini.dolares || ini);
+      if (out.initial.NIO == null && Number.isFinite(Number(ini.totalNio))) out.initial.NIO = Number(ini.totalNio);
+      if (out.initial.USD == null && Number.isFinite(Number(ini.totalUsd))) out.initial.USD = Number(ini.totalUsd);
+    }
+
+    // final
+    if (obj && obj.final && typeof obj.final === 'object'){
+      const fin = obj.final;
+      out.final.NIO = pickTotal(fin.NIO || fin.nio || fin.c$ || fin.cordobas || fin);
+      out.final.USD = pickTotal(fin.USD || fin.usd || fin.dolares || fin);
+      if (out.final.NIO == null && Number.isFinite(Number(fin.totalNio))) out.final.NIO = Number(fin.totalNio);
+      if (out.final.USD == null && Number.isFinite(Number(fin.totalUsd))) out.final.USD = Number(fin.totalUsd);
+    }
+
+    // movements
+    const mv = (obj && (obj.movements || obj.movement || obj.entries || obj.entradas || obj.salidas)) || null;
+    if (Array.isArray(mv)){
+      let nN = 0, nU = 0;
+      for (const m of mv){
+        if (!m || typeof m !== 'object') continue;
+        const cur = String(m.currency || m.curr || m.moneda || '').toUpperCase();
+        let amt = Number(m.amount != null ? m.amount : (m.monto != null ? m.monto : 0));
+        if (!Number.isFinite(amt)) amt = 0;
+        const kind = String(m.kind || m.type || m.tipo || '').toUpperCase();
+        if (kind === 'OUT' || kind === 'SALIDA') amt = -Math.abs(amt);
+        if (kind === 'IN' || kind === 'ENTRADA') amt = Math.abs(amt);
+        if (kind === 'ADJUST' || kind === 'AJUSTE'){
+          const dir = String(m.dir || m.sign || m.adjustDir || '').trim();
+          if (dir === '-' || dir === '−') amt = -Math.abs(amt);
+        }
+        if (cur === 'USD') nU += amt;
+        else nN += amt;
+      }
+      out.netMov.NIO = nN;
+      out.netMov.USD = nU;
+      out.meta.movCount = mv.length;
+    }
+  }catch(_){ }
+  return out;
+}
+
+function cashV2LegacyScanLocalStorage(){
+  const items = [];
+  try{
+    if (typeof localStorage === 'undefined' || !localStorage) return items;
+    const keys = [];
+    for (let i=0; i<localStorage.length; i++){
+      const k = localStorage.key(i);
+      if (k) keys.push(k);
+    }
+
+    const tokenRe = /(pc|petty|caja|chica|seccion|cash|efectivo)/i;
+
+    for (const k of keys){
+      let val = '';
+      try{ val = localStorage.getItem(k) || ''; }catch(_){ val = ''; }
+      const vs = String(val || '');
+      const looksJson = vs && (vs.trim().startsWith('{') || vs.trim().startsWith('['));
+      if (!looksJson) continue;
+
+      let parsed = null;
+      try{ parsed = JSON.parse(vs); }catch(_){ parsed = null; }
+
+      const addObj = (obj, idx)=>{
+        if (!obj || typeof obj !== 'object') return;
+        const ok = tokenRe.test(String(k || '')) || cashV2LegacyIsCashLike(obj);
+        if (!ok) return;
+        const dayKey = cashV2LegacyInferDayKey(k, obj);
+        const eventId = cashV2LegacyInferEventId(k, obj);
+        const totals = cashV2LegacyExtractTotals(obj);
+        items.push({
+          source: 'localStorage',
+          key: String(k),
+          idx: (idx == null ? null : Number(idx)),
+          dayKey: dayKey || '',
+          eventId: eventId,
+          totals,
+          obj
+        });
+      };
+
+      if (Array.isArray(parsed)){
+        // Si el legacy guardó una lista, intentamos leer elementos cash-like.
+        for (let i=0; i<parsed.length; i++) addObj(parsed[i], i);
+      } else {
+        addObj(parsed, null);
+      }
+    }
+  }catch(err){
+    console.warn('[A33][CASHv2][LEGACY] scan localStorage error', err);
+  }
+
+  // Orden: día desc (si existe), luego key
+  try{
+    items.sort((a,b)=>{
+      const da = a.dayKey || '';
+      const dbk = b.dayKey || '';
+      if (da && dbk && da !== dbk) return (da < dbk) ? 1 : -1;
+      if (!da && dbk) return 1;
+      if (da && !dbk) return -1;
+      return String(a.key).localeCompare(String(b.key));
+    });
+  }catch(_){ }
+  return items;
+}
+
+function cashV2LegacyFmtMoney(n){
+  const v = Number(n);
+  if (!Number.isFinite(v)) return '—';
+  // legacy: mostrar entero si parece entero
+  const isInt = Math.abs(v - Math.round(v)) < 1e-9;
+  return isInt ? String(Math.round(v)) : fmt(v);
+}
+
+function cashV2LegacyRenderList(items){
+  const empty = document.getElementById('cashv2-legacy-empty');
+  const list = document.getElementById('cashv2-legacy-list');
+  if (!list) return;
+
+  list.innerHTML = '';
+  const has = Array.isArray(items) && items.length > 0;
+  try{ if (empty) empty.style.display = has ? 'none' : 'block'; }catch(_){ }
+
+  if (!has) return;
+
+  const mkLine = (txt, muted)=>{
+    const d = document.createElement('div');
+    d.textContent = txt;
+    if (muted){ d.className = 'muted'; d.style.fontSize = '12px'; }
+    return d;
+  };
+
+  for (const it of items){
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn-outline cashv2-legacy-item';
+    btn.style.width = '100%';
+    btn.style.textAlign = 'left';
+    btn.style.padding = '10px 12px';
+
+    const day = it.dayKey ? it.dayKey : 'Sin fecha';
+    const ev = (it.eventId != null) ? ('Evento ' + it.eventId) : 'Evento ?';
+    const t = it.totals || {};
+    const iniN = t.initial ? t.initial.NIO : null;
+    const iniU = t.initial ? t.initial.USD : null;
+    const finN = t.final ? t.final.NIO : null;
+    const finU = t.final ? t.final.USD : null;
+    const mvCount = (t.meta && t.meta.movCount != null) ? t.meta.movCount : null;
+
+    const head = document.createElement('div');
+    head.style.display = 'flex';
+    head.style.justifyContent = 'space-between';
+    head.style.gap = '10px';
+    head.appendChild(mkLine(`${day} · ${ev}`, false));
+    const badge = document.createElement('span');
+    badge.className = 'tag small';
+    badge.textContent = 'LEGACY';
+    head.appendChild(badge);
+
+    btn.appendChild(head);
+
+    const sums = [];
+    if (iniN != null || iniU != null) sums.push(`Inicio: C$ ${cashV2LegacyFmtMoney(iniN)} | USD ${cashV2LegacyFmtMoney(iniU)}`);
+    if (finN != null || finU != null) sums.push(`Final: C$ ${cashV2LegacyFmtMoney(finN)} | USD ${cashV2LegacyFmtMoney(finU)}`);
+    if (mvCount != null) sums.push(`Movimientos: ${mvCount}`);
+    if (!sums.length) sums.push('Estructura legacy (detalle)');
+
+    btn.appendChild(mkLine(sums.join(' · '), true));
+    btn.appendChild(mkLine(`Fuente: ${it.source} · key: ${it.key}${it.idx!=null ? ('#'+it.idx) : ''}`, true));
+
+    btn.addEventListener('click', (e)=>{
+      e.preventDefault();
+      try{ cashV2LegacyOpenDetail(it); }catch(err){ console.warn('[A33][CASHv2][LEGACY] open detail error', err); }
+    });
+    list.appendChild(btn);
+  }
+}
+
+function cashV2LegacyOpenDetail(item){
+  const viewList = document.getElementById('cashv2-legacy-view-list');
+  const viewDetail = document.getElementById('cashv2-legacy-view-detail');
+  const detail = document.getElementById('cashv2-legacy-detail');
+  if (!detail) return;
+
+  try{ if (viewList) viewList.style.display = 'none'; }catch(_){ }
+  try{ if (viewDetail) viewDetail.style.display = 'block'; }catch(_){ }
+
+  detail.innerHTML = '';
+
+  const it = item || {};
+  const obj = it.obj || null;
+  const day = it.dayKey ? it.dayKey : 'Sin fecha';
+  const ev = (it.eventId != null) ? it.eventId : '—';
+
+  const h = document.createElement('div');
+  h.className = 'card inner';
+  h.style.marginTop = '10px';
+  h.innerHTML = `
+    <div class="row" style="align-items:baseline; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+      <div>
+        <div><b>${escapeHtml(day)}</b> <span class="muted">· Evento ${escapeHtml(ev)}</span></div>
+        <small class="muted">LEGACY (solo lectura)</small>
+      </div>
+      <div class="muted" style="font-size:12px;">${escapeHtml(String(it.source||''))}</div>
+    </div>
+    <div class="muted" style="font-size:12px; margin-top:6px;">Key: ${escapeHtml(String(it.key||''))}${it.idx!=null ? ('#'+escapeHtml(String(it.idx))) : ''}</div>
+  `;
+  detail.appendChild(h);
+
+  const t = it.totals || cashV2LegacyExtractTotals(obj);
+  const hasTotals = (t && (t.initial || t.final || t.netMov));
+
+  const box = document.createElement('div');
+  box.className = 'card inner';
+  box.style.marginTop = '10px';
+
+  const lines = [];
+  const iniN = t && t.initial ? t.initial.NIO : null;
+  const iniU = t && t.initial ? t.initial.USD : null;
+  const netN = t && t.netMov ? t.netMov.NIO : null;
+  const netU = t && t.netMov ? t.netMov.USD : null;
+  const finN = t && t.final ? t.final.NIO : null;
+  const finU = t && t.final ? t.final.USD : null;
+
+  if (iniN != null || iniU != null) lines.push(`Inicial: C$ ${cashV2LegacyFmtMoney(iniN)} | USD ${cashV2LegacyFmtMoney(iniU)}`);
+  if (netN != null || netU != null) lines.push(`Neto Movimientos: C$ ${cashV2LegacyFmtMoney(netN)} | USD ${cashV2LegacyFmtMoney(netU)}`);
+  if (finN != null || finU != null) lines.push(`Final: C$ ${cashV2LegacyFmtMoney(finN)} | USD ${cashV2LegacyFmtMoney(finU)}`);
+
+  if (!lines.length) lines.push('Estructura desconocida (legacy).');
+
+  box.innerHTML = `
+    <div><b>Resumen</b></div>
+    <div class="muted" style="white-space:pre-line; margin-top:6px; font-size:13px;">${escapeHtml(lines.join('\n'))}</div>
+    <div class="info" style="margin-top:10px"><small>Esto no afecta Efectivo v2.</small></div>
+  `;
+  detail.appendChild(box);
+
+  // Preview JSON (limitado)
+  const pre = document.createElement('pre');
+  pre.className = 'mono';
+  pre.style.whiteSpace = 'pre-wrap';
+  pre.style.wordBreak = 'break-word';
+  pre.style.marginTop = '10px';
+  pre.style.fontSize = '12px';
+  pre.style.maxHeight = '40vh';
+  pre.style.overflow = 'auto';
+
+  let raw = '';
+  try{ raw = JSON.stringify(obj, null, 2) || ''; }catch(_){ raw = String(obj); }
+  if (raw.length > 6000) raw = raw.slice(0, 6000) + '\n…(truncado)';
+  pre.textContent = raw || '—';
+
+  const wrap = document.createElement('div');
+  wrap.className = 'card inner';
+  wrap.style.marginTop = '10px';
+  wrap.innerHTML = '<div><b>Detalle (raw)</b></div>';
+  wrap.appendChild(pre);
+  detail.appendChild(wrap);
+}
+
+async function cashV2LegacyRefreshUI(){
+  const items = cashV2LegacyScanLocalStorage();
+  cashV2LegacyRenderList(items);
+
+  // Log suave (sin escribir) para smoke test
+  try{ console.log(`[A33][CASHv2][LEGACY] encontrados: ${items.length}`); }catch(_){ }
+}
+
+
 
 
 async function renderEfectivoTab(){
@@ -1001,6 +1436,8 @@ async function renderEfectivoTab(){
   cashV2InitFinalUIOnce();
   // Etapa 6: Cierre duro (no cerrar con diferencia)
   cashV2InitCloseUIOnce();
+  // Etapa 9: Visor LEGACY (solo lectura)
+  cashV2InitLegacyUIOnce();
 
   // Reset UI
   try{ if (elErr){ elErr.style.display = 'none'; elErr.textContent = ''; } }catch(_){ }
@@ -1051,7 +1488,17 @@ async function renderEfectivoTab(){
   try{ if (elEventId) elEventId.textContent = String(eventId); }catch(_){ }
 
   try{
-    const rec = await cashV2Ensure(eventId, dayKey);
+    let locked = false;
+    try{ locked = await isDayLocked(eventId, dayKey); }catch(_){ locked = false; }
+    if (locked){
+      const lk = `${eventId}|${dayKey}`;
+      if (!__CASHV2_LOCK_LOG_ONCE.has(lk)){
+        __CASHV2_LOCK_LOG_ONCE.add(lk);
+        console.log(`[A33][CASHv2] lock detected ${eventId} ${dayKey}`);
+      }
+    }
+
+    const rec = locked ? await cashV2Load(eventId, dayKey) : await cashV2Ensure(eventId, dayKey);
     try{ cashV2SetLastRec(rec); }catch(_){ }
     try{
       const card = document.getElementById('cashv2-initial-card');
@@ -1074,8 +1521,14 @@ async function renderEfectivoTab(){
     try{ cashV2ApplyFinalToDom((rec && rec.final) ? rec.final : null); }catch(_){ }
     try{ cashV2UpdateCloseSummary(rec); }catch(_){ }
     try{ cashV2UpdateCloseEligibility(rec); }catch(_){ }
-    try{ cashV2ApplyReadOnlyUi(cashV2IsClosed(rec)); }catch(_){ }
-    const ui = cashV2StatusToUiPOS(rec && rec.status);
+    try{
+      const ro = !!(locked || cashV2IsClosed(rec));
+      cashV2ApplyReadOnlyUi(ro);
+      if (locked && !cashV2IsClosed(rec)){
+        cashV2SetCloseUiState({ canClose:false, reason:'Día bloqueado (cierre del sistema)' });
+      }
+    }catch(_){ }
+    const ui = cashV2StatusToUiPOS(locked ? 'LOCKED' : (rec && rec.status));
     if (statusTag){
       statusTag.textContent = ui.text;
       statusTag.classList.toggle('open', ui.cls === 'open');
@@ -1189,59 +1642,10 @@ function clearPendingSaleUidPOS(){
   try{ localStorage.removeItem(A33_PENDING_SALE_AT_KEY); }catch(e){}
 }
 
-// --- Etapa 11D: Limpieza automática de keys legacy del módulo removido (solo localStorage; no toca ventas/cierres)
+// --- Etapa 9: NO tocar legacy automáticamente.
+// Antes se limpiaban llaves legacy del módulo removido; ahora se conservan para el visor LEGACY (solo lectura).
 function cleanupLegacyLocalStoragePOS(){
-  // Limpia SOLO llaves legacy del módulo removido (no afecta ventas ni cierres).
-  try{
-    if (typeof localStorage === 'undefined' || !localStorage) return;
-
-    const A = 'a33';
-    const U = '_';
-    const POS = U + 'pos' + U;
-    const PFX_PC = (A + U + ('p'+'c') + U);
-    const PFX_POS_PC = (A + POS + ('p'+'c') + U);
-
-    const W1 = ('pe'+'tty');
-    const W2 = ('ca'+'sh');
-    const W3 = ('caja');
-    const W4 = ('chica');
-    const W5 = ('sec'+'cion');
-
-    const prefixes = [
-      PFX_PC,
-      PFX_POS_PC,
-      (A + POS + W1),
-      (A + U + W1),
-      (A + U + W3 + W4),
-      (A + POS + W3 + W4),
-      (A + U + W3 + U + W4),
-      (A + POS + W3 + U + W4),
-      (A + POS + W5 + U),
-      (A + U + W5 + U),
-      ('__' + A + U + ('p'+'c'))
-    ];
-
-    const pref = prefixes.map(s => String(s).toLowerCase());
-    const keys = [];
-    for (let i=0; i<localStorage.length; i++){
-      const k = localStorage.key(i);
-      if (k) keys.push(k);
-    }
-
-    const token1 = (W1 + W2).toLowerCase();
-    const token2 = (W3 + W4).toLowerCase();
-    const token3 = (W3 + U + W4).toLowerCase();
-    const token4 = W5.toLowerCase();
-
-    for (const k of keys){
-      const kl = String(k).toLowerCase();
-      const starts = pref.some(p => kl.startsWith(p));
-      const looks = (kl.startsWith(A) && (kl.includes(token1) || kl.includes(token2) || kl.includes(token3) || kl.includes(token4)));
-      if (starts || looks){
-        try{ localStorage.removeItem(k); }catch(_){ }
-      }
-    }
-  }catch(_){ }
+  return; // Anti-sótano: no borrar / no escribir legacy.
 }
 
 
@@ -10932,6 +11336,8 @@ async function renderSummaryDailyCloseCardPOS(){
     if (targetEl){ targetEl.style.display = 'none'; targetEl.textContent = ''; }
     if (returnEl){ returnEl.style.display = 'none'; returnEl.innerHTML = ''; delete returnEl.dataset.forEventId; delete returnEl.dataset.prevEventId; }
     if (blockerEl){ blockerEl.style.display = 'none'; blockerEl.innerHTML = ''; }
+
+  try{ await renderSummaryCashV2SnapshotPOS({ eventId: null, dayKey: null }); }catch(_){ }
     return;
   }
 
@@ -11020,7 +11426,181 @@ async function renderSummaryDailyCloseCardPOS(){
       noteEl.textContent = '';
     }
   }
+
+  try{ await renderSummaryCashV2SnapshotPOS({ eventId: ev.id, dayKey }); }catch(_){ }
+
 }
+
+// --- POS: Efectivo v2 — Snapshot para Cierre Diario / Resumen (Etapa 8)
+function cashV2BlankCloseNumsPOS(){
+  return {
+    NIO: { initial:0, net:0, expected:0, final:0, diff:0 },
+    USD: { initial:0, net:0, expected:0, final:0, diff:0 }
+  };
+}
+
+async function cashV2ComputeSnapshotPOS(eventId, dayKey){
+  const eid = Number(eventId);
+  const dk = safeYMD(dayKey);
+  if (!eid || !dk) return null;
+
+  let rec = null;
+  try{ rec = await cashV2Load(eid, dk); }catch(err){
+    console.warn('cashV2ComputeSnapshotPOS: no se pudo leer record', err);
+    rec = null;
+  }
+
+  const status = rec ? String(rec.status || 'OPEN').trim().toUpperCase() : 'MISSING';
+
+  let nums = cashV2BlankCloseNumsPOS();
+  try{
+    if (rec){
+      nums = cashV2ComputeCloseNumbers(rec, { preferDom: false });
+    }
+  }catch(err){
+    console.warn('cashV2ComputeSnapshotPOS: computeCloseNumbers falló', err);
+    nums = cashV2BlankCloseNumsPOS();
+  }
+
+  const snap = {
+    version: 2,
+    eventId: eid,
+    dayKey: dk,
+    status,
+    totals: {
+      NIO: {
+        initial: Number(nums.NIO && nums.NIO.initial || 0),
+        netMov: Number(nums.NIO && nums.NIO.net || 0),
+        expected: Number(nums.NIO && nums.NIO.expected || 0),
+        final: Number(nums.NIO && nums.NIO.final || 0),
+        diff: Number(nums.NIO && nums.NIO.diff || 0)
+      },
+      USD: {
+        initial: Number(nums.USD && nums.USD.initial || 0),
+        netMov: Number(nums.USD && nums.USD.net || 0),
+        expected: Number(nums.USD && nums.USD.expected || 0),
+        final: Number(nums.USD && nums.USD.final || 0),
+        diff: Number(nums.USD && nums.USD.diff || 0)
+      }
+    }
+  };
+
+  return snap;
+}
+
+function clearSummaryCashV2SnapshotPOS(){
+  const card = document.getElementById('summary-cashv2-card');
+  if (card) card.style.display = 'none';
+
+  const tag = document.getElementById('summary-cashv2-status-tag');
+  if (tag){
+    tag.textContent = '—';
+    tag.className = 'tag small';
+  }
+
+  const warn = document.getElementById('summary-cashv2-warn');
+  if (warn){
+    warn.style.display = 'none';
+    const sm = warn.querySelector('small');
+    if (sm) sm.textContent = 'Efectivo no está cerrado';
+  }
+
+  const setTxt = (id, val)=>{
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = String(val);
+  };
+
+  setTxt('summary-cashv2-initial-nio', '0');
+  setTxt('summary-cashv2-net-nio', '0');
+  setTxt('summary-cashv2-expected-nio', '0');
+  setTxt('summary-cashv2-final-nio', '0');
+  setTxt('summary-cashv2-initial-usd', '0');
+  setTxt('summary-cashv2-net-usd', '0');
+  setTxt('summary-cashv2-expected-usd', '0');
+  setTxt('summary-cashv2-final-usd', '0');
+
+  const dN = document.getElementById('summary-cashv2-diff-nio');
+  const dU = document.getElementById('summary-cashv2-diff-usd');
+  if (dN) cashV2SetDiffPill(dN, 0);
+  if (dU) cashV2SetDiffPill(dU, 0);
+}
+
+async function renderSummaryCashV2SnapshotPOS({ eventId, dayKey }){
+  const card = document.getElementById('summary-cashv2-card');
+  if (!card) return;
+
+  const eid = Number(eventId);
+  const dk = dayKey ? safeYMD(dayKey) : '';
+  if (!eid || !dk){
+    clearSummaryCashV2SnapshotPOS();
+    return;
+  }
+
+  const tag = document.getElementById('summary-cashv2-status-tag');
+  const warn = document.getElementById('summary-cashv2-warn');
+
+  const setTag = (text, cls)=>{
+    if (!tag) return;
+    tag.textContent = String(text || '—');
+    tag.className = 'tag small' + (cls ? (' ' + cls) : '');
+  };
+
+  const setNum = (id, n)=>{
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = cashV2FmtInt(n);
+  };
+
+  let snap = null;
+  try{ snap = await cashV2ComputeSnapshotPOS(eid, dk); }catch(err){
+    console.warn('renderSummaryCashV2SnapshotPOS: compute snapshot falló', err);
+    snap = null;
+  }
+
+  // Mostrar card
+  card.style.display = 'block';
+
+  const status = snap ? String(snap.status || 'MISSING').trim().toUpperCase() : 'MISSING';
+  const isClosed = (status === 'CLOSED');
+
+  // Tag + warning
+  if (status === 'MISSING'){
+    setTag('Sin registro', '');
+    if (warn){
+      warn.style.display = 'block';
+      const sm = warn.querySelector('small');
+      if (sm) sm.textContent = 'Efectivo no está cerrado (sin registro)';
+    }
+  } else {
+    const ui = cashV2StatusToUiPOS(status);
+    setTag(ui.text, ui.cls);
+    if (warn){
+      warn.style.display = isClosed ? 'none' : 'block';
+      const sm = warn.querySelector('small');
+      if (sm) sm.textContent = 'Efectivo no está cerrado';
+    }
+  }
+
+  const t = snap ? (snap.totals || {}) : {};
+  const nio = t.NIO || {};
+  const usd = t.USD || {};
+
+  setNum('summary-cashv2-initial-nio', nio.initial || 0);
+  setNum('summary-cashv2-net-nio', nio.netMov || 0);
+  setNum('summary-cashv2-expected-nio', nio.expected || 0);
+  setNum('summary-cashv2-final-nio', nio.final || 0);
+  setNum('summary-cashv2-initial-usd', usd.initial || 0);
+  setNum('summary-cashv2-net-usd', usd.netMov || 0);
+  setNum('summary-cashv2-expected-usd', usd.expected || 0);
+  setNum('summary-cashv2-final-usd', usd.final || 0);
+
+  const dN = document.getElementById('summary-cashv2-diff-nio');
+  const dU = document.getElementById('summary-cashv2-diff-usd');
+  if (dN) cashV2SetDiffPill(dN, nio.diff || 0);
+  if (dU) cashV2SetDiffPill(dU, usd.diff || 0);
+}
+
 
 
 function getSummaryCloseDayKeyPOS(){
@@ -13753,7 +14333,7 @@ async function init(){
     return;
   }
 
-  // Etapa 11D: limpiar keys legacy del módulo removido en localStorage (solo esas)
+  // Etapa 9: NO borrar legacy automáticamente (se conserva para visor LEGACY read-only)
   try{ cleanupLegacyLocalStoragePOS(); }catch(_){ }
 
   // Helper para que cada paso falle de forma aislada sin tumbar todo el POS
