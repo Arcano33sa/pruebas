@@ -4,10 +4,10 @@ const DB_VER = 31; // Etapa 1/5 (Efectivo v2 Histórico): nuevos stores aislados
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.66';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.70';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r32');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r36');
 
 // --- Date helpers (POS)
 // Normaliza YYYY-MM-DD y da fallback robusto (consistente con Centro de Mando)
@@ -279,6 +279,8 @@ async function cashV2Ensure(eventId, dayKey){
     if (changed){
       try{ existing = await cashV2Save(existing); }catch(_){ }
     }
+    // Etapa 2/5: Histórico debe reflejar días OPEN/CLOSED aunque no haya snapshot.
+    try{ await cashV2HistUpsertHeaderFromV2(existing); }catch(_){ }
     return existing;
   }
 
@@ -308,6 +310,8 @@ async function cashV2Ensure(eventId, dayKey){
     meta: { createdAt: nowIso, updatedAt: nowIso }
   };
   await put(CASH_V2_STORE, cashDay);
+  // Etapa 2/5: registrar header OPEN en Histórico (sin snapshot)
+  try{ await cashV2HistUpsertHeaderFromV2(cashDay); }catch(_){ }
   return cashDay;
 }
 
@@ -491,15 +495,35 @@ async function listHistEvents(){
   if (!db) await openDB();
   let all = [];
   try{ all = await getAll(CASH_V2_HIST_STORE); if (!Array.isArray(all)) all = []; }catch(_){ all = []; }
-  const seen = new Set();
-  const out = [];
+  // Devuelve metadata por evento. Orden: lastUpdatedTs DESC (fallback: dayKey DESC).
+  // Nota: el orden de días dentro de un evento es dayKey DESC (ver listHistDaysForEvent).
+  const map = new Map();
   for (const r of (all || [])){
     const eid = String(r && r.eventId || '').trim();
     if (!eid) continue;
-    if (seen.has(eid)) continue;
-    seen.add(eid);
-    out.push(eid);
+    const dk = safeYMD(r && r.dayKey);
+    const updatedTs = Math.max(
+      Number(r && r.updatedTs) || 0,
+      Number(r && r.openTs) || 0,
+      Number(r && r.closeTs) || 0
+    );
+    const cur = map.get(eid) || { eventId: eid, lastUpdatedTs: 0, lastDayKey: '', daysCount: 0 };
+    cur.daysCount += 1;
+    if (updatedTs > (Number(cur.lastUpdatedTs) || 0)) cur.lastUpdatedTs = updatedTs;
+    if (dk && dk > String(cur.lastDayKey || '')) cur.lastDayKey = dk;
+    map.set(eid, cur);
   }
+  const out = Array.from(map.values());
+  out.sort((a,b)=>{
+    const at = Number(a && a.lastUpdatedTs) || 0;
+    const bt = Number(b && b.lastUpdatedTs) || 0;
+    if (bt !== at) return bt - at;
+    const ad = String(a && a.lastDayKey || '');
+    const bd = String(b && b.lastDayKey || '');
+    if (bd > ad) return 1;
+    if (bd < ad) return -1;
+    return String(b && b.eventId || '').localeCompare(String(a && a.eventId || ''));
+  });
   return out;
 }
 
@@ -587,6 +611,160 @@ try{ window.listHistEvents = listHistEvents; }catch(_){ }
 try{ window.saveSnapshot = saveSnapshot; }catch(_){ }
 try{ window.loadSnapshot = loadSnapshot; }catch(_){ }
 try{ window.listSnapshots = listSnapshots; }catch(_){ }
+
+
+// --- POS: Efectivo v2 — Histórico (hook al cierre + OPEN visible) — Etapa 2/5
+function cashV2HistNormalizeMove(m){
+  const o = (m && typeof m === 'object') ? m : {};
+  const kind = String(o.kind || '').trim().toUpperCase();
+  const currency = String(o.currency || '').trim().toUpperCase();
+  const out = {
+    ts: Number(o.ts) || 0,
+    kind: kind || 'IN',
+    currency: (currency === 'USD' ? 'USD' : 'NIO'),
+    amount: cashV2Round2Money(o.amount || 0)
+  };
+  try{
+    const n = (o.note != null) ? String(o.note).trim() : '';
+    const d = (o.desc != null) ? String(o.desc).trim() : '';
+    const s = n || d;
+    if (s) out.note = s;
+  }catch(_){ }
+  try{ if (o.id != null && String(o.id).trim() !== '') out.id = String(o.id); }catch(_){ }
+  return out;
+}
+
+function cashV2HistPickCounts(block){
+  const b = (block && typeof block === 'object') ? block : null;
+  if (!b) return null;
+  const denomCounts = (b.denomCounts && typeof b.denomCounts === 'object') ? b.denomCounts : null;
+  const total = cashV2Round2Money(b.total || 0);
+  return { denomCounts: denomCounts || {}, total };
+}
+
+async function cashV2HistUpsertHeaderFromV2(recordV2){
+  const rec = (recordV2 && typeof recordV2 === 'object') ? recordV2 : null;
+  if (!rec) return null;
+  const eid = cashV2AssertEventId(rec.eventId);
+  const dk = cashV2AssertDayKeyCanon(safeYMD(rec.dayKey || getCashV2HistDayKey(rec)));
+  const status = cashV2NormStatus(rec.status);
+  const openTs = Number(cashV2DeriveOpenTs(rec)) || null;
+  const closeTs = (status === 'CLOSED') ? (Number(cashV2DeriveCloseTs(rec)) || Number(rec.closeTs) || Date.now()) : null;
+  try{
+    return await saveHistDay(eid, dk, { status, openTs, closeTs });
+  }catch(_){
+    return null;
+  }
+}
+
+async function createHistorySnapshotFromV2(recordV2){
+  const rec = (recordV2 && typeof recordV2 === 'object') ? recordV2 : null;
+  if (!rec) return null;
+  const eid = cashV2AssertEventId(rec.eventId);
+  const dk = cashV2AssertDayKeyCanon(safeYMD(rec.dayKey || getCashV2HistDayKey(rec)));
+  const st = cashV2NormStatus(rec.status);
+  if (st !== 'CLOSED') return null;
+
+  // HistDay actual
+  let hist = null;
+  try{ hist = await loadHistDay(eid, dk); }catch(_){ hist = null; }
+  const versions = (hist && Array.isArray(hist.versions)) ? hist.versions.slice() : [];
+  let maxV = 0;
+  for (const it of versions){
+    const n = Number(it && it.v);
+    if (Number.isFinite(n) && n > maxV) maxV = Math.trunc(n);
+  }
+  // Defensa extra: si snapshots existen pero versions no, igual incrementamos bien.
+  try{
+    const vs = await listSnapshots(eid, dk);
+    for (const v of (vs || [])){
+      const n = Number(v);
+      if (Number.isFinite(n) && n > maxV) maxV = Math.trunc(n);
+    }
+  }catch(_){ }
+  const nextV = Math.max(1, maxV + 1);
+
+  const openTs = Number(cashV2DeriveOpenTs(rec)) || null;
+  const closeTs = Number(cashV2DeriveCloseTs(rec)) || Number(rec.closeTs) || Date.now();
+  const snapTs = Number(rec.meta && rec.meta.closedAt) || closeTs || Date.now();
+
+  // Números (expected/diff) del cierre
+  let nums = null;
+  try{ nums = cashV2ComputeCloseNumbers(rec, { preferDom: false }); }catch(_){ nums = null; }
+  const nN = (nums && nums.NIO) ? nums.NIO : { expected:0, diff:0 };
+  const nU = (nums && nums.USD) ? nums.USD : { expected:0, diff:0 };
+
+  // Ventas en efectivo C$ (solo NIO)
+  let cashSalesC = 0;
+  try{
+    if (rec.cashSalesC != null && Number.isFinite(Number(rec.cashSalesC))) cashSalesC = cashV2Round2Money(rec.cashSalesC);
+    else cashSalesC = cashV2Round2Money(cashV2GetCashSalesC());
+  }catch(_){ cashSalesC = 0; }
+  if (!Number.isFinite(Number(cashSalesC))) cashSalesC = 0;
+
+  const movs = Array.isArray(rec.movements) ? rec.movements : [];
+  const movN = [];
+  const movU = [];
+  for (const m of movs){
+    const mm = cashV2HistNormalizeMove(m);
+    if (mm.currency === 'USD') movU.push(mm);
+    else movN.push(mm);
+  }
+
+  const snapshot = {
+    schema: 1,
+    eventId: eid,
+    dayKey: dk,
+    v: nextV,
+    ts: snapTs,
+    source: 'CLOSE',
+    data: {
+      NIO: {
+        initial: cashV2HistPickCounts(rec.initial && rec.initial.NIO),
+        movements: movN,
+        cashSalesC$: cashSalesC,
+        expected: cashV2Round2Money(nN.expected || 0),
+        finalCount: cashV2HistPickCounts(rec.final && rec.final.NIO),
+        diff: cashV2Round2Money(nN.diff || 0)
+      },
+      USD: {
+        initial: cashV2HistPickCounts(rec.initial && rec.initial.USD),
+        movements: movU,
+        expected: cashV2Round2Money(nU.expected || 0),
+        finalCount: cashV2HistPickCounts(rec.final && rec.final.USD),
+        diff: cashV2Round2Money(nU.diff || 0)
+      },
+      meta: {
+        openTs,
+        closeTs,
+        eventId: eid,
+        dayKey: dk,
+        audit: (Array.isArray(rec.audit) ? rec.audit : [])
+      }
+    }
+  };
+
+  let savedSnap = null;
+  try{ savedSnap = await saveSnapshot(snapshot); }catch(_){ savedSnap = null; }
+
+  // HistDay update (status=CLOSED + append version)
+  const versions2 = versions.slice();
+  if (!versions2.some(it => Number(it && it.v) === nextV)){
+    versions2.push({ v: nextV, ts: snapTs, source: 'CLOSE' });
+  }
+  try{
+    await saveHistDay(eid, dk, {
+      status: 'CLOSED',
+      openTs,
+      closeTs,
+      versions: versions2
+    });
+  }catch(_){ }
+
+  return savedSnap;
+}
+
+try{ window.createHistorySnapshotFromV2 = createHistorySnapshotFromV2; }catch(_){ }
 
 
 // --- POS: Efectivo v2 (UI mínima) — Etapa 2
@@ -1877,6 +2055,9 @@ function cashV2InitCloseUIOnce(){
       const saved = await cashV2Save(rec);
       cashV2SetLastRec(saved);
 
+      // Etapa 2/5: Snapshot versionado al cerrar (v1, v2, ... por eventId+dayKey)
+      try{ await createHistorySnapshotFromV2(saved); }catch(_){ }
+
       // UI: bloquear + refrescar indicadores
       cashV2ApplyReadOnlyUi(true);
       cashV2UpdateCloseEligibility(saved);
@@ -2065,6 +2246,8 @@ function cashV2InitAdminReopenUIOnce(){
       try{ btnConfirm.disabled = true; }catch(_){ }
       try{
         await cashV2AdminReopenAtomic(eid, dk, reason);
+        // Etapa 2/5: reflejar reapertura en Histórico como OPEN (sin snapshot)
+        try{ const rr = await cashV2Load(eid, dk); if (rr) await cashV2HistUpsertHeaderFromV2(rr); }catch(_){ }
         close();
         try{ toast('Día reabierto (admin)'); }catch(_){ }
         try{ await renderEfectivoTab(); }catch(_){ }
@@ -2209,6 +2392,829 @@ function cashV2InitEventSelectorUIOnce(){
 }
 
 
+// --- POS: Efectivo v2 — Histórico: UI listado (solo lectura) — Etapa 3/5
+function cashV2HistSafeTs(ts){
+  const n = Number(ts);
+  return (Number.isFinite(n) && n > 0) ? n : 0;
+}
+
+function cashV2HistEventLabel(evMap, eventId){
+  const eid = String(eventId || '').trim();
+  if (!eid) return 'Evento';
+  try{
+    const ev = (evMap && typeof evMap.get === 'function') ? evMap.get(eid) : null;
+    const name = (ev && ev.name != null) ? String(ev.name).trim() : '';
+    return name ? `${name} (#${eid})` : `Evento #${eid}`;
+  }catch(_){
+    return `Evento #${eid}`;
+  }
+}
+
+// --- POS: Efectivo v2 — Histórico: Vista DETALLE por día + versión + auditoría — Etapa 4/5
+let __CASHV2_HIST_EVMAP = new Map();
+let __CASHV2_HIST_DETAIL_STATE = null;
+
+function cashV2HistShowListView(){
+  const listEl = document.getElementById('cashv2-hist-list');
+  const detailEl = document.getElementById('cashv2-hist-detail');
+  const noSnap = document.getElementById('cashv2-hist-detail-nosnap');
+  const vBox = document.getElementById('cashv2-hist-version-box');
+  const vBtns = document.getElementById('cashv2-hist-version-buttons');
+  const vMeta = document.getElementById('cashv2-hist-version-meta');
+  const body = document.getElementById('cashv2-hist-detail-body');
+  try{ if (listEl) listEl.style.display = 'block'; }catch(_){ }
+  try{ if (detailEl) detailEl.style.display = 'none'; }catch(_){ }
+  try{ if (noSnap) noSnap.style.display = 'none'; }catch(_){ }
+  try{ if (vBox) vBox.style.display = 'none'; }catch(_){ }
+  try{ if (vBtns) vBtns.innerHTML = ''; }catch(_){ }
+  try{ if (vMeta) vMeta.textContent = ''; }catch(_){ }
+  try{ if (body) body.innerHTML = ''; }catch(_){ }
+  try{ __CASHV2_HIST_DETAIL_STATE = null; }catch(_){ }
+}
+
+function cashV2HistShowDetailView(){
+  const listEl = document.getElementById('cashv2-hist-list');
+  const detailEl = document.getElementById('cashv2-hist-detail');
+  try{ if (listEl) listEl.style.display = 'none'; }catch(_){ }
+  try{ if (detailEl) detailEl.style.display = 'block'; }catch(_){ }
+}
+
+function cashV2HistSetStatusPill(el, status){
+  if (!el) return;
+  const ui = cashV2StatusToUiPOS(status);
+  try{ el.textContent = (ui && ui.text) ? ui.text : '—'; }catch(_){ }
+  try{ el.classList.remove('warn'); el.classList.remove('danger'); }catch(_){ }
+  // OPEN => warn (visual), CLOSED => normal
+  try{ if ((ui && ui.cls) === 'open') el.classList.add('warn'); }catch(_){ }
+}
+
+function cashV2HistKindLabel(kind){
+  const k = String(kind || '').toUpperCase();
+  if (k === 'OUT') return 'Salida';
+  if (k === 'ADJUST') return 'Ajuste';
+  return 'Entrada';
+}
+
+function cashV2HistCurrencySym(ccy){
+  const c = String(ccy || '').toUpperCase();
+  return (c === 'USD') ? 'USD$' : 'C$';
+}
+
+function cashV2HistSumMoves(moves, wantKind){
+  const k = String(wantKind || '').toUpperCase();
+  let sum = 0;
+  for (const m of (Array.isArray(moves) ? moves : [])){
+    try{
+      const mk = String(m && m.kind || '').toUpperCase();
+      if (mk !== k) continue;
+      let a = Number(m && m.amount);
+      if (!Number.isFinite(a)) a = 0;
+      if (k === 'IN' || k === 'OUT') a = Math.abs(a);
+      sum += a;
+    }catch(_){ }
+  }
+  return cashV2Round2Money(sum);
+}
+
+function cashV2HistDenomTable(ccy, title, block){
+  const b = (block && typeof block === 'object') ? block : { denomCounts:{}, total:0 };
+  const dc = (b.denomCounts && typeof b.denomCounts === 'object') ? b.denomCounts : {};
+  const denoms = (CASHV2_DENOMS && CASHV2_DENOMS[ccy]) ? CASHV2_DENOMS[ccy] : [];
+  const rows = [];
+  for (const d of (denoms || [])){
+    const key = String(d);
+    let cnt = Number(dc[key]);
+    if (!Number.isFinite(cnt)) cnt = 0;
+    cnt = Math.max(0, Math.trunc(cnt));
+    const sub = cashV2Round2Money(Number(d) * cnt);
+    const label = (ccy === 'USD') ? ('$' + String(d)) : ('C$ ' + String(d));
+    rows.push(`<tr><td class="denom"><b>${escapeHtml(label)}</b></td><td>${escapeHtml(cashV2FmtInt(cnt))}</td><td class="sub">${escapeHtml(cashV2FmtMoney(sub))}</td></tr>`);
+  }
+  const total = cashV2Round2Money(b.total != null ? b.total : cashV2SumDenomTotal(ccy, dc));
+  return `
+    <div class="${title === 'Inicial' ? 'cashv2-initial' : 'cashv2-final'}">
+      <div class="muted"><small><b>${escapeHtml(title)}</b></small></div>
+      <table class="cashv2-summary-table" style="margin-top:6px">
+        <tbody>
+          ${rows.join('')}
+          <tr><td colspan="2"><b>Total</b></td><td class="sub"><b>${escapeHtml(cashV2FmtMoney(total))}</b></td></tr>
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function cashV2HistBuildSummaryTable(ccy, block){
+  const b = (block && typeof block === 'object') ? block : {};
+  const initial = cashV2Round2Money(b.initial && b.initial.total);
+  const finalT = cashV2Round2Money(b.finalCount && b.finalCount.total);
+  const moves = Array.isArray(b.movements) ? b.movements : [];
+  const entradas = cashV2HistSumMoves(moves, 'IN');
+  const salidas = cashV2HistSumMoves(moves, 'OUT');
+  const ajuste = cashV2HistSumMoves(moves, 'ADJUST');
+  const ventas = (ccy === 'NIO') ? cashV2Round2Money(b.cashSalesC$ || 0) : null;
+  const esperado = cashV2Round2Money(b.expected || 0);
+  const dif = cashV2Round2Money(b.diff || 0);
+  const difCls = (dif !== 0) ? 'pill danger' : 'pill';
+
+  const sym = cashV2HistCurrencySym(ccy);
+  return `
+    <table class="cashv2-summary-table">
+      <tbody>
+        <tr><td>Inicial</td><td class="sub">${escapeHtml(sym)} ${escapeHtml(cashV2FmtMoney(initial))}</td></tr>
+        <tr><td>Entradas</td><td class="sub">${escapeHtml(sym)} ${escapeHtml(cashV2FmtMoney(entradas))}</td></tr>
+        <tr><td>Salidas</td><td class="sub">${escapeHtml(sym)} ${escapeHtml(cashV2FmtMoney(salidas))}</td></tr>
+        <tr><td>VentasCashC$</td><td class="sub">${(ventas == null) ? '—' : (escapeHtml(sym) + ' ' + escapeHtml(cashV2FmtMoney(ventas)))}</td></tr>
+        <tr><td>Ajuste</td><td class="sub">${escapeHtml(sym)} ${escapeHtml(cashV2FmtMoney(ajuste))}</td></tr>
+        <tr><td><b>Esperado</b></td><td class="sub"><b>${escapeHtml(sym)} ${escapeHtml(cashV2FmtMoney(esperado))}</b></td></tr>
+        <tr><td>Final</td><td class="sub">${escapeHtml(sym)} ${escapeHtml(cashV2FmtMoney(finalT))}</td></tr>
+        <tr><td><b>Diferencia</b></td><td class="sub"><span class="${difCls}">${escapeHtml(cashV2FmtMoney(dif))}</span></td></tr>
+      </tbody>
+    </table>
+  `;
+}
+
+function cashV2HistRenderAudit(audit){
+  const arr = Array.isArray(audit) ? audit.slice() : [];
+  arr.sort((a,b)=> (cashV2HistSafeTs(a && a.ts) - cashV2HistSafeTs(b && b.ts)) );
+  if (!arr.length){
+    return '<div class="muted"><small>Sin auditoría.</small></div>';
+  }
+  const rows = [];
+  for (const it of arr){
+    const ts = cashV2HistSafeTs(it && it.ts);
+    const action = String(it && it.action || '').trim() || '—';
+    const reason = String(it && it.reason || '').trim() || '';
+    rows.push(`
+      <div class="cashv2-hist-audit-row">
+        <div class="cashv2-hist-audit-left">
+          <div class="cashv2-hist-audit-action">${escapeHtml(action)}</div>
+          <div class="cashv2-hist-audit-reason">${escapeHtml(reason || '—')}</div>
+        </div>
+        <div class="cashv2-hist-audit-ts">${escapeHtml(ts ? fmtDateTimePOS(ts) : '—')}</div>
+      </div>
+    `);
+  }
+  return `<div class="cashv2-hist-audit-list">${rows.join('')}</div>`;
+}
+
+function cashV2HistRenderMovements(nioMoves, usdMoves){
+  const all = [];
+  for (const m of (Array.isArray(nioMoves) ? nioMoves : [])) all.push({ ...m, currency: 'NIO' });
+  for (const m of (Array.isArray(usdMoves) ? usdMoves : [])) all.push({ ...m, currency: 'USD' });
+  all.sort((a,b)=> cashV2HistSafeTs(b && b.ts) - cashV2HistSafeTs(a && a.ts));
+  if (!all.length){
+    return '<div class="muted"><small>Sin movimientos.</small></div>';
+  }
+  const rows = [];
+  for (const m of all){
+    const ts = cashV2HistSafeTs(m && m.ts);
+    const kind = String(m && m.kind || '').toUpperCase();
+    const ccy = (String(m && m.currency || '').toUpperCase() === 'USD') ? 'USD' : 'NIO';
+    let amt = Number(m && m.amount);
+    if (!Number.isFinite(amt)) amt = 0;
+
+    let sign = '';
+    let shown = amt;
+    if (kind === 'OUT'){ sign = '-'; shown = Math.abs(amt); }
+    else if (kind === 'IN'){ sign = '+'; shown = Math.abs(amt); }
+    else { sign = (amt >= 0) ? '+' : ''; shown = amt; }
+
+    const sym = cashV2HistCurrencySym(ccy);
+    const topTag = `<span class="cashv2-mtag"><b>${escapeHtml(cashV2HistKindLabel(kind))}</b><span>${escapeHtml(sym)}</span></span>`;
+    const note = (m && m.note != null) ? String(m.note).trim() : '';
+
+    rows.push(`
+      <div class="cashv2-move-row">
+        <div class="cashv2-move-left">
+          <div class="cashv2-move-top">
+            ${topTag}
+            <small class="muted">${escapeHtml(ts ? fmtDateTimePOS(ts) : '—')}</small>
+          </div>
+          <div class="cashv2-move-note">${escapeHtml(note || '—')}</div>
+        </div>
+        <div class="cashv2-move-amt">${escapeHtml(sign)} ${escapeHtml(sym)} ${escapeHtml(cashV2FmtMoney(shown))}</div>
+      </div>
+    `);
+  }
+  return `<div class="cashv2-move-list">${rows.join('')}</div>`;
+}
+
+function cashV2HistRenderSnapshot(snapshot){
+  const snap = (snapshot && typeof snapshot === 'object') ? snapshot : null;
+  if (!snap || !snap.data || typeof snap.data !== 'object'){
+    return '<div class="warn"><small>Snapshot inválido.</small></div>';
+  }
+  const d = snap.data;
+  const nio = (d.NIO && typeof d.NIO === 'object') ? d.NIO : {};
+  const usd = (d.USD && typeof d.USD === 'object') ? d.USD : {};
+  const meta = (d.meta && typeof d.meta === 'object') ? d.meta : {};
+
+  const sumN = cashV2HistBuildSummaryTable('NIO', nio);
+  const sumU = cashV2HistBuildSummaryTable('USD', usd);
+
+  const movHtml = cashV2HistRenderMovements(nio.movements, usd.movements);
+
+  const denomN = `
+    <div class="cashv2-hist-section">
+      <h5>C$ (NIO)</h5>
+      <div class="cashv2-hist-grid2">
+        ${cashV2HistDenomTable('NIO','Inicial', nio.initial || {})}
+        ${cashV2HistDenomTable('NIO','Final', nio.finalCount || {})}
+      </div>
+    </div>
+  `;
+  const denomU = `
+    <div class="cashv2-hist-section">
+      <h5>USD</h5>
+      <div class="cashv2-hist-grid2">
+        ${cashV2HistDenomTable('USD','Inicial', usd.initial || {})}
+        ${cashV2HistDenomTable('USD','Final', usd.finalCount || {})}
+      </div>
+    </div>
+  `;
+
+  const auditHtml = cashV2HistRenderAudit(meta && meta.audit);
+
+  return `
+    <div class="cashv2-hist-detail-body" id="cashv2-hist-detail-body-inner">
+      <div class="cashv2-hist-section">
+        <h4>Tablero resumen (solo lectura)</h4>
+        <div class="cashv2-hist-grid2">
+          <div>
+            <h5>C$ (NIO)</h5>
+            ${sumN}
+          </div>
+          <div>
+            <h5>USD</h5>
+            ${sumU}
+          </div>
+        </div>
+      </div>
+
+      <div class="cashv2-hist-section">
+        <h4>Movimientos</h4>
+        ${movHtml}
+      </div>
+
+      <div class="cashv2-hist-section">
+        <h4>Conteo por denominaciones</h4>
+        ${denomN}
+        ${denomU}
+      </div>
+
+      <div class="cashv2-hist-section">
+        <h4>Auditoría</h4>
+        ${auditHtml}
+      </div>
+    </div>
+  `;
+}
+
+async function cashV2OpenHistDetail(eventId, dayKey, wantV){
+  const eid = String(eventId || '').trim();
+  const dk = safeYMD(dayKey);
+  if (!eid || !dk) return;
+
+  cashV2HistShowDetailView();
+
+  const hdDay = document.getElementById('cashv2-hist-detail-day');
+  const hdSt = document.getElementById('cashv2-hist-detail-status');
+  const hdEv = document.getElementById('cashv2-hist-detail-event');
+  const noSnap = document.getElementById('cashv2-hist-detail-nosnap');
+  const vBox = document.getElementById('cashv2-hist-version-box');
+  const vBtns = document.getElementById('cashv2-hist-version-buttons');
+  const vMeta = document.getElementById('cashv2-hist-version-meta');
+  const body = document.getElementById('cashv2-hist-detail-body');
+
+  try{ if (hdDay) hdDay.textContent = dk; }catch(_){ }
+  try{ if (hdEv) hdEv.textContent = cashV2HistEventLabel(__CASHV2_HIST_EVMAP, eid); }catch(_){ try{ if (hdEv) hdEv.textContent = `Evento #${eid}`; }catch(__){ } }
+
+  try{ if (body) body.innerHTML = ''; }catch(_){ }
+  try{ if (noSnap) noSnap.style.display = 'none'; }catch(_){ }
+  try{ if (vBox) vBox.style.display = 'none'; }catch(_){ }
+  try{ if (vMeta) vMeta.textContent = ''; }catch(_){ }
+
+  let hist = null;
+  try{ hist = await loadHistDay(eid, dk); }catch(_){ hist = null; }
+  const status = hist && hist.status ? hist.status : 'OPEN';
+  cashV2HistSetStatusPill(hdSt, status);
+
+  let versions = [];
+  try{ versions = await listSnapshots(eid, dk); if (!Array.isArray(versions)) versions = []; }catch(_){ versions = []; }
+
+  if (!versions.length){
+    // OPEN o CLOSED sin snapshots
+    try{ if (noSnap) noSnap.style.display = 'block'; }catch(_){ }
+    try{
+      const msg = (String(status||'').toUpperCase() === 'OPEN') ? 'Día abierto. Aún no hay cierre/snapshot.' : 'Aún no hay cierre/snapshot.';
+      if (body) body.innerHTML = '<div class="muted"><small>' + escapeHtml(msg) + '</small></div>';
+    }catch(_){ }
+    __CASHV2_HIST_DETAIL_STATE = { eventId: eid, dayKey: dk, v: null };
+    return;
+  }
+
+  const maxV = Math.max.apply(null, versions);
+  let selV = Number(wantV);
+  if (!Number.isFinite(selV) || versions.indexOf(Math.trunc(selV)) === -1) selV = maxV;
+  selV = Math.trunc(selV);
+
+  __CASHV2_HIST_DETAIL_STATE = { eventId: eid, dayKey: dk, v: selV };
+
+  // Version buttons
+  try{
+    if (vBtns){
+      const parts = [];
+      for (const v of versions){
+        const vv = Math.trunc(Number(v));
+        if (!Number.isFinite(vv) || vv <= 0) continue;
+        const cls = (vv === selV) ? 'btn-outline btn-pill btn-pill-mini active' : 'btn-outline btn-pill btn-pill-mini';
+        parts.push(`<button type="button" class="${cls}" data-v="${escapeHtml(String(vv))}">v${escapeHtml(String(vv))}</button>`);
+      }
+      vBtns.innerHTML = parts.join('');
+    }
+  }catch(_){ }
+  try{ if (vBox) vBox.style.display = 'block'; }catch(_){ }
+
+  // Load snapshot
+  let snap = null;
+  try{ snap = await loadSnapshot(eid, dk, selV); }catch(_){ snap = null; }
+  if (!snap){
+    try{ if (body) body.innerHTML = '<div class="warn"><small>No se encontró el snapshot.</small></div>'; }catch(_){ }
+    return;
+  }
+
+  // Meta line
+  try{
+    const ts = cashV2HistSafeTs(snap && snap.ts);
+    const stp = ts ? fmtDateTimePOS(ts) : '—';
+    const ct = hist && hist.closeTs ? fmtDateTimePOS(cashV2HistSafeTs(hist.closeTs)) : '—';
+    if (vMeta) vMeta.textContent = `Snapshot: ${stp} · Cerrado: ${ct}`;
+  }catch(_){ }
+
+  const html = cashV2HistRenderSnapshot(snap);
+  try{ if (body) body.innerHTML = html; }catch(_){ }
+}
+
+let __CASHV2_HIST_UI_ONCE = false;
+function cashV2InitHistUIOnce(){
+  if (__CASHV2_HIST_UI_ONCE) return;
+  const btn = document.getElementById('cashv2-btn-hist');
+  if (!btn) return;
+  const closeBtn = document.getElementById('cashv2-hist-close');
+  const backBtn = document.getElementById('cashv2-hist-back');
+  const expDayBtn = document.getElementById('cashv2-hist-export-day');
+  const vBtns = document.getElementById('cashv2-hist-version-buttons');
+  const modalId = 'cashv2-hist-modal';
+
+  btn.addEventListener('click', async()=>{
+    try{ openModalPOS(modalId); }catch(_){ }
+    try{ cashV2HistShowListView(); }catch(_){ }
+    try{ await cashV2RenderHistModal(); }catch(err){ console.error(err); }
+  });
+  if (closeBtn){
+    closeBtn.addEventListener('click', ()=>{
+      try{ cashV2HistShowListView(); }catch(_){ }
+      try{ closeModalPOS(modalId); }catch(_){ }
+    });
+  }
+  if (backBtn){
+    backBtn.addEventListener('click', ()=>{ try{ cashV2HistShowListView(); }catch(_){ } });
+  }
+  if (expDayBtn){
+    expDayBtn.addEventListener('click', ()=>{
+      cashV2ExportHistExcelDay().catch(err=>{
+        console.error(err);
+        try{ showToast('No se pudo exportar el Excel.', 'error', 4500); }catch(_){ }
+      });
+    });
+  }
+  if (vBtns && vBtns.dataset.ready !== '1'){
+    vBtns.addEventListener('click', (ev)=>{
+      const b = ev && ev.target ? ev.target.closest('button[data-v]') : null;
+      if (!b) return;
+      const v = Number(b.dataset.v);
+      if (!Number.isFinite(v)) return;
+      const st = __CASHV2_HIST_DETAIL_STATE;
+      if (!st || !st.eventId || !st.dayKey) return;
+      cashV2OpenHistDetail(st.eventId, st.dayKey, v).catch(err=>console.error(err));
+    });
+    vBtns.dataset.ready = '1';
+  }
+
+  __CASHV2_HIST_UI_ONCE = true;
+}
+
+async function cashV2RenderHistModal(){
+  const listEl = document.getElementById('cashv2-hist-list');
+  const emptyEl = document.getElementById('cashv2-hist-empty');
+  const errEl = document.getElementById('cashv2-hist-error');
+  if (!listEl) return;
+
+  try{ cashV2HistShowListView(); }catch(_){ }
+  try{ listEl.innerHTML = ''; }catch(_){ }
+  try{ if (emptyEl) emptyEl.style.display = 'none'; }catch(_){ }
+  try{
+    if (errEl){
+      errEl.style.display = 'none';
+      const sm = errEl.querySelector('small');
+      if (sm) sm.textContent = '';
+    }
+  }catch(_){ }
+
+  let eventsMeta = [];
+  try{ eventsMeta = await listHistEvents(); if (!Array.isArray(eventsMeta)) eventsMeta = []; }catch(err){
+    console.error('[A33][CASHv2][HIST] listHistEvents', err);
+    try{
+      if (errEl){
+        const sm = errEl.querySelector('small');
+        if (sm) sm.textContent = 'No se pudo cargar el histórico.';
+        errEl.style.display = 'block';
+      }
+    }catch(_){ }
+    eventsMeta = [];
+  }
+
+  if (!eventsMeta.length){
+    try{ if (emptyEl) emptyEl.style.display = 'block'; }catch(_){ }
+    return;
+  }
+
+  // Nombres de eventos (si existen)
+  let evs = [];
+  try{ evs = await getAll('events'); if (!Array.isArray(evs)) evs = []; }catch(_){ evs = []; }
+  const evMap = new Map();
+  for (const e of (evs || [])){
+    try{ if (e && e.id != null) evMap.set(String(e.id), e); }catch(_){ }
+  }
+
+  try{ __CASHV2_HIST_EVMAP = evMap; }catch(_){ }
+
+  for (const meta of (eventsMeta || [])){
+    const eid = String(meta && meta.eventId || '').trim();
+    if (!eid) continue;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'cashv2-hist-event';
+
+    const head = document.createElement('div');
+    head.className = 'cashv2-hist-event-head';
+
+    const title = document.createElement('h4');
+    title.textContent = cashV2HistEventLabel(evMap, eid);
+
+    const when = document.createElement('div');
+    when.className = 'muted';
+    const ts = cashV2HistSafeTs(meta && meta.lastUpdatedTs);
+    const whenSmall = document.createElement('small');
+    whenSmall.textContent = ts ? ('Actualizado: ' + fmtDateTimePOS(ts)) : 'Actualizado: —';
+    when.appendChild(whenSmall);
+
+    head.appendChild(title);
+    head.appendChild(when);
+
+    // Etapa 5/5: Exportar Excel (Evento)
+    try{
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+      actions.style.gap = '8px';
+      actions.style.flexWrap = 'wrap';
+      actions.style.alignItems = 'center';
+
+      const btnExport = document.createElement('button');
+      btnExport.type = 'button';
+      btnExport.className = 'btn-outline btn-pill btn-pill-mini';
+      btnExport.textContent = 'Exportar Excel (Evento)';
+      btnExport.addEventListener('click', async()=>{
+        if (btnExport.disabled) return;
+        btnExport.disabled = true;
+        try{ await cashV2ExportHistExcelEvent(eid); }
+        catch(err){ console.error(err); try{ showToast('No se pudo exportar el Excel.', 'error', 4500); }catch(_){ } }
+        finally{ btnExport.disabled = false; }
+      });
+      actions.appendChild(btnExport);
+      head.appendChild(actions);
+    }catch(_){ }
+
+    wrap.appendChild(head);
+
+    const daysBox = document.createElement('div');
+    daysBox.className = 'cashv2-hist-days';
+
+    let days = [];
+    try{ days = await listHistDaysForEvent(eid); if (!Array.isArray(days)) days = []; }catch(_){ days = []; }
+
+    if (!days.length){
+      const m = document.createElement('div');
+      m.className = 'muted';
+      const sm = document.createElement('small');
+      sm.textContent = 'Sin días registrados.';
+      m.appendChild(sm);
+      daysBox.appendChild(m);
+    }else{
+      for (const d of (days || [])){
+        const dayKey = safeYMD(d && d.dayKey);
+        if (!dayKey) continue;
+
+        const row = document.createElement('div');
+        row.className = 'cashv2-hist-day';
+
+        const left = document.createElement('div');
+        left.className = 'cashv2-hist-day-left';
+
+        const dk = document.createElement('div');
+        dk.className = 'cashv2-hist-daykey';
+        dk.textContent = dayKey;
+
+        const st = cashV2StatusToUiPOS(d && d.status);
+        const tag = document.createElement('span');
+        tag.className = 'tag ' + (st && st.cls ? st.cls : 'open');
+        tag.textContent = (st && st.text) ? st.text : 'Abierto';
+
+        const vCount = (d && Array.isArray(d.versions)) ? d.versions.length : 0;
+        const v = document.createElement('span');
+        v.className = 'cashv2-hist-versions';
+        v.textContent = (vCount > 0) ? ('v' + String(vCount)) : '—';
+
+        left.appendChild(dk);
+        left.appendChild(tag);
+        left.appendChild(v);
+
+        const actions = document.createElement('div');
+        actions.className = 'actions end';
+        actions.style.gap = '8px';
+        actions.style.alignItems = 'center';
+        actions.style.flexWrap = 'wrap';
+
+        const btnDetail = document.createElement('button');
+        btnDetail.type = 'button';
+        btnDetail.className = 'btn-outline btn-pill btn-pill-mini';
+        btnDetail.textContent = 'Ver detalle';
+        btnDetail.addEventListener('click', ()=>{
+          cashV2OpenHistDetail(eid, dayKey).catch(err=>{
+            console.error(err);
+            try{ toast('No se pudo abrir detalle.'); }catch(_){ }
+          });
+        });
+        actions.appendChild(btnDetail);
+
+        row.appendChild(left);
+        row.appendChild(actions);
+        daysBox.appendChild(row);
+      }
+    }
+
+    wrap.appendChild(daysBox);
+    listEl.appendChild(wrap);
+  }
+}
+
+// --- POS: Efectivo v2 — Histórico: Export Excel (multi-hoja) — Etapa 5/5
+function cashV2HistExcelEnsureXLSX(){
+  if (typeof XLSX === 'undefined'){
+    throw new Error('No se pudo generar el Excel (XLSX no cargado). Si es tu primera carga offline: abrí el POS una vez con internet para cachear y reintentá.');
+  }
+}
+
+function cashV2HistExcelApply2Dec(ws, cols2dec, startRowIdx){
+  try{
+    if (!ws || !ws['!ref'] || !Array.isArray(cols2dec) || !cols2dec.length) return;
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    const start = Number.isFinite(Number(startRowIdx)) ? Math.max(0, Math.trunc(Number(startRowIdx))) : 1;
+    for (let r = start; r <= range.e.r; r++){
+      for (const c0 of cols2dec){
+        const c = Math.trunc(Number(c0));
+        if (!Number.isFinite(c) || c < 0) continue;
+        const addr = XLSX.utils.encode_cell({ r, c });
+        const cell = ws[addr];
+        if (!cell || cell.t !== 'n') continue;
+        cell.z = '0.00';
+      }
+    }
+  }catch(_){ }
+}
+
+function cashV2HistWriteWorkbookExcel(filename, sheets, fmtSpecByName){
+  cashV2HistExcelEnsureXLSX();
+  const wb = XLSX.utils.book_new();
+  for (const sh of (sheets || [])){
+    const name = String(sh && sh.name || 'Hoja').slice(0, 31);
+    const ws = XLSX.utils.aoa_to_sheet((sh && sh.rows) ? sh.rows : []);
+    try{
+      const spec = (fmtSpecByName && fmtSpecByName[name]) ? fmtSpecByName[name] : null;
+      if (spec && Array.isArray(spec.cols2dec)) cashV2HistExcelApply2Dec(ws, spec.cols2dec, spec.startRowIdx);
+    }catch(_){ }
+    XLSX.utils.book_append_sheet(wb, ws, name);
+  }
+  XLSX.writeFile(wb, filename);
+}
+
+function cashV2HistExcelSnapToSummaryRow(eid, dk, v, snap){
+  const s = (snap && typeof snap === 'object') ? snap : {};
+  const d = (s.data && typeof s.data === 'object') ? s.data : {};
+  const N = (d.NIO && typeof d.NIO === 'object') ? d.NIO : {};
+  const U = (d.USD && typeof d.USD === 'object') ? d.USD : {};
+
+  const nInit = cashV2Round2Money((N.initial && N.initial.total) || 0);
+  const nIn = cashV2Round2Money(cashV2HistSumMoves(N.movements, 'IN'));
+  const nOut = cashV2Round2Money(cashV2HistSumMoves(N.movements, 'OUT'));
+  const nAdj = cashV2Round2Money(cashV2HistSumMoves(N.movements, 'ADJUST'));
+  const nSales = cashV2Round2Money(N.cashSalesC$ || 0);
+  const nExp = cashV2Round2Money(N.expected || 0);
+  const nFinal = cashV2Round2Money((N.finalCount && N.finalCount.total) || 0);
+  const nDiff = cashV2Round2Money(N.diff || 0);
+
+  const uInit = cashV2Round2Money((U.initial && U.initial.total) || 0);
+  const uIn = cashV2Round2Money(cashV2HistSumMoves(U.movements, 'IN'));
+  const uOut = cashV2Round2Money(cashV2HistSumMoves(U.movements, 'OUT'));
+  const uAdj = cashV2Round2Money(cashV2HistSumMoves(U.movements, 'ADJUST'));
+  const uSales = 0; // regla: no inventar ventas USD
+  const uExp = cashV2Round2Money(U.expected || 0);
+  const uFinal = cashV2Round2Money((U.finalCount && U.finalCount.total) || 0);
+  const uDiff = cashV2Round2Money(U.diff || 0);
+
+  let snapAt = '';
+  try{ snapAt = s.ts ? fmtDateTimePOS(cashV2HistSafeTs(s.ts)) : ''; }catch(_){ snapAt = ''; }
+
+  return [
+    String(eid), String(dk), Math.trunc(Number(v)), snapAt,
+    nInit, nIn, nOut, nSales, nAdj, nExp, nFinal, nDiff,
+    uInit, uIn, uOut, uSales, uAdj, uExp, uFinal, uDiff
+  ];
+}
+
+function cashV2HistExcelBuildSheetsFromSnapshots(snapshotTuples){
+  const resumen = [[
+    'eventId','dayKey','v','snapshotTs',
+    'NIO_Inicial','NIO_Entradas','NIO_Salidas','NIO_VentasC$','NIO_Ajuste','NIO_Esperado','NIO_Final','NIO_Dif',
+    'USD_Inicial','USD_Entradas','USD_Salidas','USD_Ventas','USD_Ajuste','USD_Esperado','USD_Final','USD_Dif'
+  ]];
+
+  const movs = [['eventId','dayKey','v','currency','kind','amount','ts','note','id']];
+  const conteo = [['eventId','dayKey','v','currency','block','denom','count','subtotal','total']];
+  const audit = [['eventId','dayKey','v','ts','action','reason']];
+
+  const tuples = Array.isArray(snapshotTuples) ? snapshotTuples.slice() : [];
+  tuples.sort((a,b)=>{
+    const ae = String(a && a.eventId || '');
+    const be = String(b && b.eventId || '');
+    if (ae !== be) return ae.localeCompare(be);
+    const ad = String(a && a.dayKey || '');
+    const bd = String(b && b.dayKey || '');
+    if (ad !== bd) return ad.localeCompare(bd);
+    const av = Number(a && a.v || 0);
+    const bv = Number(b && b.v || 0);
+    return av - bv;
+  });
+
+  for (const it of tuples){
+    const eid = String(it && it.eventId || '').trim();
+    const dk = safeYMD(it && it.dayKey);
+    const v = Math.trunc(Number(it && it.v));
+    const snap = (it && it.snap) ? it.snap : null;
+    if (!eid || !dk || !snap || !Number.isFinite(v) || v <= 0) continue;
+
+    // Resumen
+    try{ resumen.push(cashV2HistExcelSnapToSummaryRow(eid, dk, v, snap)); }catch(_){ }
+
+    // Movimientos
+    try{
+      const d = (snap.data && typeof snap.data === 'object') ? snap.data : {};
+      const N = (d.NIO && typeof d.NIO === 'object') ? d.NIO : {};
+      const U = (d.USD && typeof d.USD === 'object') ? d.USD : {};
+      const addMovs = (arr, ccy)=>{
+        for (const m of (arr || [])){
+          const mm = cashV2HistNormalizeMove(m);
+          const ts = mm.ts ? fmtDateTimePOS(cashV2HistSafeTs(mm.ts)) : '';
+          movs.push([eid, dk, v, ccy, mm.kind, cashV2Round2Money(mm.amount || 0), ts, (mm.note || ''), (mm.id || '')]);
+        }
+      };
+      addMovs(N.movements, 'NIO');
+      addMovs(U.movements, 'USD');
+    }catch(_){ }
+
+    // Conteo (Inicial y Final)
+    try{
+      const d = (snap.data && typeof snap.data === 'object') ? snap.data : {};
+      const blocks = [
+        { ccy:'NIO', name:'Inicial', obj: (d.NIO && d.NIO.initial) ? d.NIO.initial : null },
+        { ccy:'USD', name:'Inicial', obj: (d.USD && d.USD.initial) ? d.USD.initial : null },
+        { ccy:'NIO', name:'Final', obj: (d.NIO && d.NIO.finalCount) ? d.NIO.finalCount : null },
+        { ccy:'USD', name:'Final', obj: (d.USD && d.USD.finalCount) ? d.USD.finalCount : null }
+      ];
+      for (const b of blocks){
+        const ccy = b.ccy;
+        const blk = b.obj;
+        if (!blk) continue;
+        const denoms = CASHV2_DENOMS[ccy] || [];
+        const counts = normalizeDenomCounts(ccy, blk.denomCounts || {});
+        const total = cashV2Round2Money(blk.total || 0);
+        for (const denom of denoms){
+          const k = String(denom);
+          const cnt = cashV2NormCount(counts[k]);
+          const sub = cashV2Round2Money(Number(denom) * Number(cnt));
+          conteo.push([eid, dk, v, ccy, b.name, Number(denom), cnt, sub, total]);
+        }
+      }
+    }catch(_){ }
+
+    // Auditoría
+    try{
+      const meta = (snap.data && snap.data.meta) ? snap.data.meta : {};
+      const rows = Array.isArray(meta.audit) ? meta.audit : [];
+      for (const a of rows){
+        const tsn = cashV2HistSafeTs(a && a.ts);
+        const ts = tsn ? fmtDateTimePOS(tsn) : '';
+        const action = (a && a.action != null) ? String(a.action) : '';
+        const reason = (a && a.reason != null) ? String(a.reason) : '';
+        audit.push([eid, dk, v, ts, action, reason]);
+      }
+    }catch(_){ }
+  }
+
+  const sheets = [
+    { name:'Resumen', rows: resumen },
+    { name:'Movimientos', rows: movs },
+    { name:'Conteo', rows: conteo },
+    { name:'Auditoria', rows: audit }
+  ];
+
+  const fmt = {
+    'Resumen': { startRowIdx: 1, cols2dec: [4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19] },
+    'Movimientos': { startRowIdx: 1, cols2dec: [5] },
+    'Conteo': { startRowIdx: 1, cols2dec: [7,8] }
+  };
+
+  return { sheets, fmt };
+}
+
+async function cashV2ExportHistExcelEvent(eventId){
+  const eid = String(eventId || '').trim();
+  if (!eid){ try{ showToast('Evento inválido.', 'warn', 3000); }catch(_){ } return; }
+
+  let days = [];
+  try{ days = await listHistDaysForEvent(eid); if (!Array.isArray(days)) days = []; }catch(_){ days = []; }
+  if (!days.length){ try{ showToast('Sin días en el histórico.', 'warn', 3000); }catch(_){ } return; }
+
+  const tuples = [];
+  let openOrNoSnap = 0;
+  for (const d of (days || [])){
+    const dk = safeYMD(d && d.dayKey);
+    if (!dk) continue;
+    let versions = [];
+    try{ versions = await listSnapshots(eid, dk); if (!Array.isArray(versions)) versions = []; }catch(_){ versions = []; }
+    if (!versions.length){ openOrNoSnap++; continue; }
+    for (const v of versions){
+      const vv = Math.trunc(Number(v));
+      if (!Number.isFinite(vv) || vv <= 0) continue;
+      let snap = null;
+      try{ snap = await loadSnapshot(eid, dk, vv); }catch(_){ snap = null; }
+      if (!snap) continue;
+      tuples.push({ eventId: eid, dayKey: dk, v: vv, snap });
+    }
+  }
+
+  if (!tuples.length){
+    try{ showToast('Sin cierres/snapshots para exportar.', 'warn', 3500); }catch(_){ }
+    return;
+  }
+
+  const today = safeYMD(getTodayDayKey());
+  const ymd = String(today || '').replace(/-/g,'');
+  const filename = `A33_EfectivoHistorico_evento_${eid}_${ymd}.xlsx`;
+
+  const { sheets, fmt } = cashV2HistExcelBuildSheetsFromSnapshots(tuples);
+  cashV2HistWriteWorkbookExcel(filename, sheets, fmt);
+
+  try{
+    const extra = openOrNoSnap ? ` · ${openOrNoSnap} día(s) OPEN sin cierre` : '';
+    showToast(`Excel exportado (${tuples.length} snapshot(s))${extra}.`, 'ok', 4200);
+  }catch(_){ }
+}
+
+async function cashV2ExportHistExcelDay(){
+  const st = __CASHV2_HIST_DETAIL_STATE;
+  const eid = st && st.eventId ? String(st.eventId).trim() : '';
+  const dk = st && st.dayKey ? safeYMD(st.dayKey) : '';
+  const vv = st && st.v ? Math.trunc(Number(st.v)) : 0;
+  if (!eid || !dk || !Number.isFinite(vv) || vv <= 0){
+    try{ showToast('Sin cierre. No hay snapshot para exportar.', 'warn', 3500); }catch(_){ }
+    return;
+  }
+  let snap = null;
+  try{ snap = await loadSnapshot(eid, dk, vv); }catch(_){ snap = null; }
+  if (!snap){
+    try{ showToast('Sin cierre. No hay snapshot para exportar.', 'warn', 3500); }catch(_){ }
+    return;
+  }
+
+  const filename = `A33_EfectivoHistorico_${eid}_${dk}_v${String(vv).padStart(2,'0')}.xlsx`;
+  const { sheets, fmt } = cashV2HistExcelBuildSheetsFromSnapshots([{ eventId: eid, dayKey: dk, v: vv, snap }]);
+  cashV2HistWriteWorkbookExcel(filename, sheets, fmt);
+  try{ showToast('Excel exportado.', 'ok', 3000); }catch(_){ }
+}
+
+
 async function renderEfectivoTab(){
   const tab = document.getElementById('tab-efectivo');
   if (!tab) return;
@@ -2240,6 +3246,9 @@ async function renderEfectivoTab(){
   cashV2InitAdminReopenUIOnce();
   // Etapa 1/7: selector + activador
   cashV2InitEventSelectorUIOnce();
+
+  // Etapa 3/5: Histórico (UI listado solo lectura)
+  cashV2InitHistUIOnce();
 
   // Etapa 3/7: Tipo de cambio
   cashV2InitFxUIOnce();

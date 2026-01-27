@@ -1244,4 +1244,39 @@ small.muted{color:var(--muted)}
 .cashv2-summary-table td.sub{text-align:right;font-weight:850}
 .cashv2-summary-table .pill{margin-left:0}
 
+/* Efectivo v2 — Histórico (Etapa 3/5) */
+.cashv2-hist-list{display:flex;flex-direction:column;gap:10px}
+.cashv2-hist-event{background:#121212;border:1px solid #2a2a2a;border-radius:14px;padding:10px}
+.cashv2-hist-event-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.cashv2-hist-event-head h4{margin:0;font-size:15px}
+.cashv2-hist-event-head .muted{font-size:12px}
+.cashv2-hist-days{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.cashv2-hist-day{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;border-top:1px dashed #2a2a2a;padding-top:8px}
+.cashv2-hist-days .cashv2-hist-day:first-child{border-top:none;padding-top:0}
+.cashv2-hist-day-left{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;flex:1}
+.cashv2-hist-daykey{font-weight:850;white-space:nowrap}
+.cashv2-hist-versions{font-size:12px;color:#cfcfcf;white-space:nowrap}
+
+/* Efectivo v2 — Histórico: Detalle por día (Etapa 4/5) */
+.cashv2-hist-version-buttons{display:flex;flex-wrap:wrap;gap:6px}
+.cashv2-hist-version-buttons button{padding:6px 10px;font-size:12px}
+.cashv2-hist-version-buttons button.active{border-color:#555;background:#1b1b1b}
+
+.cashv2-hist-detail-body{display:flex;flex-direction:column;gap:12px}
+.cashv2-hist-grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+@media (max-width:640px){
+  .cashv2-hist-grid2{grid-template-columns:1fr}
+}
+
+.cashv2-hist-section h4{margin:0 0 6px 0;font-size:14px}
+.cashv2-hist-section h5{margin:0 0 6px 0;font-size:13px}
+
+.cashv2-hist-audit-list{display:flex;flex-direction:column;gap:6px}
+.cashv2-hist-audit-row{display:flex;gap:10px;align-items:center;justify-content:space-between;background:#121212;border:1px solid #2a2a2a;border-radius:12px;padding:8px 10px}
+.cashv2-hist-audit-left{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.cashv2-hist-audit-action{font-weight:850;white-space:nowrap}
+.cashv2-hist-audit-reason{font-size:12px;color:#cfcfcf;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.cashv2-hist-audit-ts{font-size:12px;color:#cfcfcf;white-space:nowrap}
+
+
 

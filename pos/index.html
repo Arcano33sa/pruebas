@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.66&r=32">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.70&r=36">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.66&r=32">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.66" />
+<link rel="stylesheet" href="styles.css?v=4.20.70&r=36">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.70" />
 </head>
 <body>
   <header class="a33-header" role="banner">
@@ -467,6 +467,9 @@
           <div>Día operativo: <b id="cashv2-daykey">—</b></div>
         <div>Apertura: <b id="cashv2-opened-at">—</b></div>
           <div id="cashv2-cashsales-line" style="margin-top:6px;">Ventas en efectivo (C$): <b id="cashv2-cashsales">C$ 0.00</b></div>
+        </div>
+        <div class="actions end" style="gap:8px; align-items:center; flex-wrap:wrap;">
+          <button id="cashv2-btn-hist" class="btn-outline btn-pill" type="button">Histórico</button>
         </div>
       </div>
 
@@ -1413,6 +1416,51 @@
     </div>
   </div>
 </div>
+
+
+<!-- Modal Histórico Efectivo (Efectivo v2) — Solo lectura -->
+<div id="cashv2-hist-modal" class="modal">
+  <div class="panel panel-compact">
+    <button id="cashv2-hist-close" class="close btn-warn btn-pill btn-pill-mini" type="button">Cerrar</button>
+    <h3>Histórico de Efectivo</h3>
+    <div class="muted" style="margin-top:4px"><small>Solo lectura. Eventos y días ordenados por más reciente.</small></div>
+
+    <div id="cashv2-hist-error" class="warn" style="display:none; margin-top:10px"><small></small></div>
+    <div id="cashv2-hist-empty" class="muted" style="display:none; margin-top:10px"><small>Sin registros.</small></div>
+    <div id="cashv2-hist-list" class="cashv2-hist-list" style="margin-top:10px; max-height:70vh; overflow:auto;"></div>
+
+    <div id="cashv2-hist-detail" class="cashv2-hist-detail" style="display:none; margin-top:10px">
+      <div class="actions" style="justify-content:space-between; gap:8px; flex-wrap:wrap; align-items:center">
+        <div class="actions" style="gap:8px; flex-wrap:wrap; align-items:center">
+          <button id="cashv2-hist-back" class="btn-outline btn-pill btn-pill-mini" type="button">← Volver</button>
+          <button id="cashv2-hist-export-day" class="btn-outline btn-pill btn-pill-mini" type="button">Exportar Excel (Día)</button>
+        </div>
+        <div class="cashv2-hist-detail-head">
+          <div class="cashv2-hist-detail-line">
+            <span id="cashv2-hist-detail-day" class="cashv2-hist-daykey">—</span>
+            <span id="cashv2-hist-detail-status" class="pill">—</span>
+          </div>
+          <div class="muted"><small id="cashv2-hist-detail-event">Evento —</small></div>
+        </div>
+      </div>
+
+      <div id="cashv2-hist-detail-nosnap" class="muted" style="display:none; margin-top:10px"><small>Aún no hay cierre/snapshot.</small></div>
+
+      <div id="cashv2-hist-version-box" style="display:none; margin-top:10px">
+        <div class="row" style="grid-template-columns:1fr; gap:6px">
+          <label>Versiones</label>
+          <div id="cashv2-hist-version-buttons" class="cashv2-hist-version-buttons"></div>
+          <div class="muted"><small id="cashv2-hist-version-meta"></small></div>
+        </div>
+      </div>
+
+      <div id="cashv2-hist-detail-scroll" class="cashv2-hist-detail-scroll" style="margin-top:10px; max-height:70vh; overflow:auto;">
+        <div id="cashv2-hist-detail-body"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Modal Seleccionar Cliente (Clientes v2) -->
 <div id="customer-picker-modal" class="modal">
   <div class="panel panel-compact">
@@ -1507,25 +1555,25 @@
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
-<script src="/assets/js/a33-storage.js?v=4.20.66"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.66"></script>
-<script src="/assets/js/a33-auth.js?v=4.20.66"></script>
-<script src="/assets/js/a33-build.js?v=4.20.66"></script>
+<script src="/assets/js/a33-storage.js?v=4.20.70"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.70"></script>
+<script src="/assets/js/a33-auth.js?v=4.20.70"></script>
+<script src="/assets/js/a33-build.js?v=4.20.70"></script>
 <script>
   (function(){
-    try{      const v = '4.20.66';
+    try{      const v = '4.20.70';
       try{ window.A33_VERSION = v; }catch(_){ }
       // POS: bump revision local (solo este modulo) para forzar limpieza de caches
-      try{ window.A33_ASSET_REV = '32'; }catch(_){ }
-      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r32').toString(); }catch(_){ }
-      try{ window.A33_BUILD_TAG = (v + '-r32').toString(); }catch(_){ }
+      try{ window.A33_ASSET_REV = '36'; }catch(_){ }
+      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r36').toString(); }catch(_){ }
+      try{ window.A33_BUILD_TAG = (v + '-r36').toString(); }catch(_){ }
       const verEl = document.getElementById('a33-version-text');
       if (verEl) verEl.textContent = 'v' + v;
       const bEl = document.getElementById('pos-build-id');
       if (bEl) bEl.textContent = 'POS Build: ' + v;
       const cEl = document.getElementById('pos-sw-cache-id');
       if (cEl){
-        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r32')).toString();
+        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r36')).toString();
         cEl.textContent = 'SW Cache: ' + cn;
         cEl.title = cn;
       }
@@ -1557,11 +1605,11 @@
     }
   })();
 </script>
-<script src="app.js?v=4.20.66&r=32"></script>
-<script src="/assets/js/a33-input-ux.js?v=4.20.66"></script>
+<script src="app.js?v=4.20.70&r=36"></script>
+<script src="/assets/js/a33-input-ux.js?v=4.20.70"></script>
 <script>
   (function(){
-    const BUILD = (window.A33_VERSION || '4.20.66').toString();
+    const BUILD = (window.A33_VERSION || '4.20.70').toString();
     const REV = (window.A33_ASSET_REV || '10').toString();
     const SW_URL = './sw.js?v=' + encodeURIComponent(BUILD) + '&r=' + encodeURIComponent(REV);
     const btn = document.getElementById('btn-update');
