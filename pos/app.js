@@ -4,10 +4,10 @@ const DB_VER = 30; // Etapa 1 (Efectivo v2): nuevo store aislado + llaves canón
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.51';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.52';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r17');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r18');
 
 // --- Date helpers (POS)
 // Normaliza YYYY-MM-DD y da fallback robusto (consistente con Centro de Mando)
@@ -1061,6 +1061,133 @@ function cashV2InitLegacyUIOnce(){
   btnOpen.dataset.ready = '1';
 }
 
+
+// --- POS: Efectivo v2 — Selector de evento (TODOS) + “Efectivo activo” por evento + Modo BLOQUEADO — Etapa 1/7
+const CASHV2_FLAGS_LS_KEY = 'A33.EF2.eventFlags';
+const CASHV2_VIEW_EVENT_LS_KEY = 'A33.EF2.viewEventId';
+let __CASHV2_VIEW_EVENT_ID = null;
+
+function cashV2GetViewEventId(){
+  try{ if (__CASHV2_VIEW_EVENT_ID != null && String(__CASHV2_VIEW_EVENT_ID).trim() !== '') return String(__CASHV2_VIEW_EVENT_ID); }catch(_){ }
+  try{
+    const v = localStorage.getItem(CASHV2_VIEW_EVENT_LS_KEY);
+    if (v != null && String(v).trim() !== ''){
+      __CASHV2_VIEW_EVENT_ID = String(v).trim();
+      return String(__CASHV2_VIEW_EVENT_ID);
+    }
+  }catch(_){ }
+  return '';
+}
+
+function cashV2SetViewEventId(v){
+  const s = (v == null) ? '' : String(v).trim();
+  __CASHV2_VIEW_EVENT_ID = s || null;
+  try{
+    if (s) localStorage.setItem(CASHV2_VIEW_EVENT_LS_KEY, s);
+    else localStorage.removeItem(CASHV2_VIEW_EVENT_LS_KEY);
+  }catch(_){ }
+}
+
+function cashV2LoadFlagsLS(){
+  try{
+    const raw = localStorage.getItem(CASHV2_FLAGS_LS_KEY);
+    if (!raw) return {};
+    const obj = JSON.parse(raw);
+    if (obj && typeof obj === 'object') return obj;
+  }catch(_){ }
+  return {};
+}
+
+function cashV2SaveFlagsLS(obj){
+  try{
+    if (!obj || typeof obj !== 'object') return;
+    localStorage.setItem(CASHV2_FLAGS_LS_KEY, JSON.stringify(obj));
+  }catch(_){ }
+}
+
+function cashV2GetFlagForEventObj(ev){
+  // Default conservador (retro-compat): si no hay bandera, asumimos ON.
+  try{
+    if (ev && typeof ev.cashV2Active === 'boolean') return ev.cashV2Active;
+  }catch(_){ }
+  try{
+    const m = cashV2LoadFlagsLS();
+    const k = ev && (ev.id != null) ? String(ev.id) : '';
+    if (k && Object.prototype.hasOwnProperty.call(m, k)) return !!m[k];
+  }catch(_){ }
+  return true;
+}
+
+async function cashV2PersistEventFlag(eventId, enabled){
+  const eidNum = Number(eventId);
+  const en = !!enabled;
+  let saved = false;
+
+  // Preferir donde ya persisten eventos (IndexedDB store 'events')
+  try{
+    if (!db) await openDB();
+    if (Number.isFinite(eidNum)){
+      const ev = await getOne('events', eidNum);
+      if (ev && typeof ev === 'object'){
+        ev.cashV2Active = en;
+        await put('events', ev);
+        saved = true;
+      }
+    }
+  }catch(_){ saved = false; }
+
+  // Fallback mínimo canónico (sin legacy)
+  if (!saved){
+    try{
+      const m = cashV2LoadFlagsLS();
+      if (Number.isFinite(eidNum)) m[String(eidNum)] = en;
+      cashV2SaveFlagsLS(m);
+      saved = true;
+    }catch(_){ saved = false; }
+  }
+
+  return saved;
+}
+
+function cashV2RenderEventBadgesUI(state){
+  const host = document.getElementById('cashv2-event-badges');
+  if (!host) return;
+  const s = state && typeof state === 'object' ? state : {};
+  const parts = [];
+  if (s.isActive) parts.push('<span class="tag small open">Activo</span>');
+  if (s.isInactive) parts.push('<span class="tag small closed">Inactivo (solo lectura)</span>');
+  if (s.isOff) parts.push('<span class="tag small" style="border-color:#b16; color:#b16;">Efectivo OFF</span>');
+  host.innerHTML = parts.join('');
+}
+
+function cashV2InitEventSelectorUIOnce(){
+  const sel = document.getElementById('cashv2-event-select');
+  const tog = document.getElementById('cashv2-event-enabled');
+  if (!sel || !tog) return;
+  if (sel.dataset.ready === '1') return;
+
+  sel.addEventListener('change', ()=>{
+    try{ cashV2SetViewEventId(sel.value || ''); }catch(_){ }
+    renderEfectivoTab().catch(err=>console.error(err));
+  });
+
+  tog.addEventListener('change', async ()=>{
+    const eid = String(sel.value || '').trim();
+    if (!eid) return;
+    let activeId = null;
+    try{ activeId = await getMeta('currentEventId'); }catch(_){ activeId = null; }
+    if (activeId == null || String(activeId).trim() !== String(eid)){
+      // Por regla: solo editable si el evento es ACTIVO
+      try{ tog.checked = !!tog.checked; }catch(_){ }
+      return;
+    }
+    try{ await cashV2PersistEventFlag(eid, tog.checked); }catch(_){ }
+    renderEfectivoTab().catch(err=>console.error(err));
+  });
+
+  sel.dataset.ready = '1';
+}
+
 function cashV2LegacyIsCashLike(obj){
   try{
     if (!obj || typeof obj !== 'object') return false;
@@ -1426,7 +1553,11 @@ async function renderEfectivoTab(){
   const elEventId = document.getElementById('cashv2-eventid');
   const elDayKey = document.getElementById('cashv2-daykey');
   const elNoEvent = document.getElementById('cashv2-no-event');
+  const elBlocked = document.getElementById('cashv2-blocked-note');
   const elErr = document.getElementById('cashv2-error');
+  const selEvent = document.getElementById('cashv2-event-select');
+  const togEnabled = document.getElementById('cashv2-event-enabled');
+  const togHint = document.getElementById('cashv2-event-enabled-hint');
 
   // Etapa 3: UI Inicio (denominaciones)
   cashV2InitInitialUIOnce();
@@ -1438,18 +1569,66 @@ async function renderEfectivoTab(){
   cashV2InitCloseUIOnce();
   // Etapa 9: Visor LEGACY (solo lectura)
   cashV2InitLegacyUIOnce();
+  // Etapa 1/7: selector + activador
+  cashV2InitEventSelectorUIOnce();
 
   // Reset UI
   try{ if (elErr){ elErr.style.display = 'none'; elErr.textContent = ''; } }catch(_){ }
   try{ if (elNoEvent){ elNoEvent.style.display = 'none'; } }catch(_){ }
+  try{ if (elBlocked){ elBlocked.style.display = 'none'; } }catch(_){ }
 
   const dayKey = safeYMD(getSaleDayKeyPOS());
   try{ if (elDayKey) elDayKey.textContent = dayKey; }catch(_){ }
 
-  let eventId = null;
-  try{ eventId = await getMeta('currentEventId'); }catch(_){ eventId = null; }
+  let activeEventId = null;
+  try{ activeEventId = await getMeta('currentEventId'); }catch(_){ activeEventId = null; }
 
-  if (eventId == null || eventId === '' || String(eventId).trim() === ''){
+  // Cargar TODOS los eventos para selector
+  let allEvents = [];
+  try{ allEvents = await getAll('events'); if (!Array.isArray(allEvents)) allEvents = []; }catch(_){ allEvents = []; }
+
+  // Selección local (Efectivo) NO afecta el evento global
+  let viewEventId = '';
+  try{ viewEventId = String(cashV2GetViewEventId() || '').trim(); }catch(_){ viewEventId = ''; }
+  if (!viewEventId){
+    try{ viewEventId = (activeEventId == null) ? '' : String(activeEventId).trim(); }catch(_){ viewEventId = ''; }
+  }
+  if (viewEventId && !allEvents.some(e=>e && String(e.id)===String(viewEventId))){
+    // Si el id guardado ya no existe, caemos al evento activo o a vacío.
+    try{ viewEventId = (activeEventId == null) ? '' : String(activeEventId).trim(); }catch(_){ viewEventId = ''; }
+    if (viewEventId && !allEvents.some(e=>e && String(e.id)===String(viewEventId))) viewEventId = '';
+  }
+
+  // Render selector
+  try{
+    if (selEvent){
+      const cur = String(viewEventId || '');
+      const act = (activeEventId == null) ? '' : String(activeEventId).trim();
+      const sorted = (allEvents || []).slice().sort((a,b)=>{
+        const ad = a && a.createdAt ? String(a.createdAt) : '';
+        const bd = b && b.createdAt ? String(b.createdAt) : '';
+        return (bd > ad) ? 1 : (bd < ad ? -1 : 0);
+      });
+      const opts = ['<option value="">— Selecciona evento —</option>'];
+      for (const ev of sorted){
+        if (!ev || ev.id == null) continue;
+        const id = String(ev.id);
+        const name = (ev.name != null ? String(ev.name) : ('Evento ' + id)).trim();
+        const isActive = (act && id === act);
+        const flag = cashV2GetFlagForEventObj(ev);
+        const badges = [isActive ? 'Activo' : 'Inactivo (solo lectura)'];
+        if (!flag) badges.push('Efectivo OFF');
+        const label = `${name} · ${badges.join(' · ')} (#${id})`;
+        opts.push(`<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`);
+      }
+      selEvent.innerHTML = opts.join('');
+      selEvent.value = cur;
+    }
+  }catch(_){ }
+
+  // Si no hay selección, dejar en modo vacío
+  const eventId = String((selEvent && selEvent.value) ? selEvent.value : (viewEventId || '')).trim();
+  if (!eventId){
     try{ if (elEventId) elEventId.textContent = '—'; }catch(_){ }
     try{
       if (statusTag){
@@ -1485,7 +1664,38 @@ async function renderEfectivoTab(){
     return;
   }
 
-  try{ if (elEventId) elEventId.textContent = String(eventId); }catch(_){ }
+  // Estado ACTIVO/INACTIVO del evento (activo = evento global del POS)
+  const isActiveEvent = (activeEventId != null && String(activeEventId).trim() === String(eventId));
+  const evObj = allEvents.find(e=>e && String(e.id)===String(eventId)) || null;
+  const flagOn = cashV2GetFlagForEventObj(evObj);
+  const blocked = (!isActiveEvent) || (isActiveEvent && !flagOn);
+
+  // UI selector: toggle habilitado solo si el evento es ACTIVO
+  try{
+    if (togEnabled){
+      togEnabled.checked = !!flagOn;
+      togEnabled.disabled = !isActiveEvent;
+    }
+  }catch(_){ }
+  try{
+    if (togHint){
+      if (!isActiveEvent) togHint.textContent = 'Evento inactivo: solo lectura';
+      else if (!flagOn) togHint.textContent = 'Efectivo OFF: activa para editar';
+      else togHint.textContent = 'Efectivo activo: editable';
+    }
+  }catch(_){ }
+
+  try{ cashV2RenderEventBadgesUI({ isActive: isActiveEvent, isInactive: !isActiveEvent, isOff: !flagOn }); }catch(_){ }
+
+  try{ if (elBlocked) elBlocked.style.display = blocked ? 'block' : 'none'; }catch(_){ }
+
+  // Mostrar evento seleccionado (más útil que solo el id)
+  try{
+    if (elEventId){
+      const nm = (evObj && evObj.name != null) ? String(evObj.name).trim() : '';
+      elEventId.textContent = nm ? (nm + ' (#' + String(eventId) + ')') : String(eventId);
+    }
+  }catch(_){ }
 
   try{
     let locked = false;
@@ -1498,7 +1708,9 @@ async function renderEfectivoTab(){
       }
     }
 
-    const rec = locked ? await cashV2Load(eventId, dayKey) : await cashV2Ensure(eventId, dayKey);
+    // Regla: si está BLOQUEADO (evento inactivo o flag OFF), solo lectura => no ensure (no writes)
+    const editable = (!!isActiveEvent && !!flagOn);
+    const rec = (editable && !locked) ? await cashV2Ensure(eventId, dayKey) : await cashV2Load(eventId, dayKey);
     try{ cashV2SetLastRec(rec); }catch(_){ }
     try{
       const card = document.getElementById('cashv2-initial-card');
@@ -1511,7 +1723,7 @@ async function renderEfectivoTab(){
       const mcard = document.getElementById('cashv2-movements-card');
       if (mcard){ mcard.style.display = 'block'; mcard.dataset.eventId = String(eventId); mcard.dataset.dayKey = dayKey; }
     }catch(_){ }
-    try{ cashV2RenderMovementsUI(rec); }catch(_){ }
+    try{ cashV2RenderMovementsUI(rec || { movements: [] }); }catch(_){ }
     // Etapa 5: mostrar Cierre
     try{
       const fcard = document.getElementById('cashv2-final-card');
@@ -1522,13 +1734,21 @@ async function renderEfectivoTab(){
     try{ cashV2UpdateCloseSummary(rec); }catch(_){ }
     try{ cashV2UpdateCloseEligibility(rec); }catch(_){ }
     try{
-      const ro = !!(locked || cashV2IsClosed(rec));
+      const ro = !!(blocked || locked || cashV2IsClosed(rec));
       cashV2ApplyReadOnlyUi(ro);
+      if (blocked && !cashV2IsClosed(rec)){
+        cashV2SetCloseUiState({ canClose:false, reason:'Bloqueado: Efectivo OFF o evento inactivo' });
+      }
       if (locked && !cashV2IsClosed(rec)){
         cashV2SetCloseUiState({ canClose:false, reason:'Día bloqueado (cierre del sistema)' });
       }
+      if (!rec){
+        cashV2SetCloseUiState({ canClose:false, reason:'Sin registro (solo lectura)' });
+      }
     }catch(_){ }
-    const ui = cashV2StatusToUiPOS(locked ? 'LOCKED' : (rec && rec.status));
+    const baseStatus = (rec && rec.status) ? rec.status : 'OPEN';
+    const statusForUi = cashV2IsClosed(rec) ? 'CLOSED' : ((locked || blocked) ? 'LOCKED' : baseStatus);
+    const ui = cashV2StatusToUiPOS(statusForUi);
     if (statusTag){
       statusTag.textContent = ui.text;
       statusTag.classList.toggle('open', ui.cls === 'open');
