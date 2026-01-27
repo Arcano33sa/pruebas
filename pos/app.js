@@ -4,10 +4,10 @@ const DB_VER = 30; // Etapa 1 (Efectivo v2): nuevo store aislado + llaves canón
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.64';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.65';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r30');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r31');
 
 // --- Date helpers (POS)
 // Normaliza YYYY-MM-DD y da fallback robusto (consistente con Centro de Mando)
@@ -16713,8 +16713,7 @@ function initPosCalculatorTabOnce(){
     fxNio: document.getElementById('fx-nio'),
     fxMeta: document.getElementById('fx-meta'),
     fxStatus: document.getElementById('fx-status'),
-    fxRefresh: document.getElementById('fx-refresh'),
-    fxClear: document.getElementById('fx-clear')
+fxClear: document.getElementById('fx-clear')
   };
 
   const calc = {
@@ -16933,9 +16932,7 @@ function initPosCalculatorTabOnce(){
     els.fxRate.addEventListener('change', fxPersistRate);
     els.fxRate.addEventListener('blur', fxPersistRate);
   }
-
-  if (els.fxRefresh) els.fxRefresh.addEventListener('click', ()=>{ onOpenPosCalculatorTab().catch(err=>console.error(err)); });
-  if (els.fxClear) els.fxClear.addEventListener('click', ()=>{
+if (els.fxClear) els.fxClear.addEventListener('click', ()=>{
     if (els.fxUsd) els.fxUsd.value = '';
     if (els.fxNio) els.fxNio.value = '';
     fxShowStatus('');
