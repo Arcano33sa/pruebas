@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.52&r=18">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.56&r=22">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.52&r=18">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.52" />
+<link rel="stylesheet" href="styles.css?v=4.20.56&r=22">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.56" />
 </head>
 <body>
   <header class="a33-header" role="banner">
@@ -465,6 +465,7 @@
         <div class="muted" style="font-size:12px;">
           <div>Evento: <b id="cashv2-eventid">—</b></div>
           <div>Día: <b id="cashv2-daykey">—</b></div>
+          <div id="cashv2-cashsales-line" style="margin-top:6px;">Ventas en efectivo (C$): <b id="cashv2-cashsales">C$ 0.00</b></div>
         </div>
       </div>
 
@@ -497,7 +498,29 @@
     </div>
   
 
-    <div id="cashv2-initial-card" class="card inner cashv2-initial" style="margin-top:10px; display:none">
+      
+
+    <div id="cashv2-fx-card" class="card inner cashv2-fx" style="margin-top:10px; display:none">
+      <div class="row" style="align-items:baseline; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+        <div>
+          <h3 style="margin:0;">Tipo de cambio</h3>
+          <small class="muted">USD → C$ (informativo para el evento)</small>
+        </div>
+        <div class="actions end" style="gap:8px; align-items:center; flex-wrap:wrap;">
+          <input id="cashv2-fx-input"
+                 type="number" min="0.01" step="0.01"
+                 inputmode="decimal"
+                 placeholder="0.00"
+                 style="max-width:140px;">
+          <button id="cashv2-btn-save-fx" class="btn-ok btn-pill" type="button">Guardar</button>
+        </div>
+      </div>
+
+      <div id="cashv2-fx-error" class="warn" style="display:none; margin-top:8px"><small></small></div>
+      <small id="cashv2-fx-save-status" class="muted" style="display:block; margin-top:6px;"></small>
+    </div>
+
+<div id="cashv2-initial-card" class="card inner cashv2-initial" style="margin-top:10px; display:none">
       <div class="row" style="align-items:baseline; justify-content:space-between; gap:10px; flex-wrap:wrap;">
         <div>
           <h3 style="margin:0;">Inicio</h3>
@@ -533,10 +556,51 @@
       <div class="row" style="align-items:baseline; justify-content:space-between; gap:10px; flex-wrap:wrap;">
         <div>
           <h3 style="margin:0;">Movimientos</h3>
-          <small class="muted">Entradas/Salidas/Ajuste (no ventas) por moneda.</small>
+          <small class="muted">Ingresos/Egresos/Ajuste (no ventas) por moneda.</small>
         </div>
-        <div class="actions end" style="gap:8px; align-items:center; flex-wrap:wrap;">
-          <button id="cashv2-btn-add-movement" class="btn-primary btn-pill" type="button">+ Agregar movimiento</button>
+      </div>
+
+      <!-- Etapa 2/7: bloque visible (sin modal) -->
+      <div class="card inner" style="margin-top:10px; padding:10px;">
+        <div class="row" style="gap:10px; flex-wrap:wrap;">
+          <div style="flex:1; min-width:200px;">
+            <div class="muted" style="font-size:12px; margin-bottom:6px;">Fecha</div>
+            <input id="cashv2-move-date-inline" type="date" disabled>
+          </div>
+          <div style="flex:1; min-width:200px;">
+            <div class="muted" style="font-size:12px; margin-bottom:6px;">Tipo</div>
+            <select id="cashv2-move-kind-inline">
+              <option value="IN">Ingreso</option>
+              <option value="OUT">Egreso</option>
+              <option value="ADJUST">Ajuste</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row" style="gap:10px; flex-wrap:wrap; margin-top:8px;">
+          <div style="flex:1; min-width:200px;">
+            <div class="muted" style="font-size:12px; margin-bottom:6px;">Moneda</div>
+            <select id="cashv2-move-currency-inline">
+              <option value="NIO">C$</option>
+              <option value="USD">USD</option>
+            </select>
+          </div>
+          <div style="flex:1; min-width:200px;">
+            <div class="muted" style="font-size:12px; margin-bottom:6px;">Monto</div>
+            <input id="cashv2-move-amount-inline" type="number" step="1" inputmode="numeric" placeholder="0">
+          </div>
+        </div>
+
+        <div style="margin-top:8px;">
+          <div class="muted" style="font-size:12px; margin-bottom:6px;">Descripción</div>
+          <input id="cashv2-move-desc-inline" type="text" maxlength="120" placeholder="Opcional">
+        </div>
+
+        <div class="row" style="align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-top:10px;">
+          <div id="cashv2-move-inline-error" class="warn" style="display:none"><small></small></div>
+          <div class="actions end" style="gap:8px; align-items:center; flex-wrap:wrap;">
+            <button id="cashv2-btn-add-movement" class="btn-primary btn-pill" type="button">Agregar movimiento</button>
+          </div>
         </div>
       </div>
 
@@ -584,11 +648,14 @@
           <div class="muted" style="font-size:12px; margin-bottom:6px;">Resumen C$ (NIO)</div>
           <table class="cashv2-summary-table">
             <tbody>
-              <tr><td>Inicial</td><td id="cashv2-sum-initial-nio" class="sub">0</td></tr>
-              <tr><td>Neto Movimientos</td><td id="cashv2-sum-net-nio" class="sub">0</td></tr>
-              <tr><td>Esperado</td><td id="cashv2-sum-expected-nio" class="sub">0</td></tr>
-              <tr><td>Final</td><td id="cashv2-sum-final-nio" class="sub">0</td></tr>
-              <tr><td><b>Diferencia</b></td><td class="sub"><span id="cashv2-sum-diff-nio" class="pill">0</span></td></tr>
+              <tr><td>Saldo inicial</td><td id="cashv2-sum-initial-nio" class="sub">0.00</td></tr>
+              <tr><td>Entradas</td><td id="cashv2-sum-in-nio" class="sub">0.00</td></tr>
+              <tr><td>Salidas</td><td id="cashv2-sum-out-nio" class="sub">0.00</td></tr>
+              <tr><td>Ventas en efectivo</td><td id="cashv2-sum-sales-nio" class="sub">0.00</td></tr>
+              <tr><td>Ajuste</td><td id="cashv2-sum-adjust-nio" class="sub">0.00</td></tr>
+              <tr><td>Saldo esperado</td><td id="cashv2-sum-expected-nio" class="sub">0.00</td></tr>
+              <tr><td>Saldo final contado</td><td id="cashv2-sum-final-nio" class="sub">0.00</td></tr>
+              <tr><td><b>Diferencia</b></td><td class="sub"><span id="cashv2-sum-diff-nio" class="pill">0.00</span></td></tr>
             </tbody>
           </table>
         </div>
@@ -596,11 +663,13 @@
           <div class="muted" style="font-size:12px; margin-bottom:6px;">Resumen USD</div>
           <table class="cashv2-summary-table">
             <tbody>
-              <tr><td>Inicial</td><td id="cashv2-sum-initial-usd" class="sub">0</td></tr>
-              <tr><td>Neto Movimientos</td><td id="cashv2-sum-net-usd" class="sub">0</td></tr>
-              <tr><td>Esperado</td><td id="cashv2-sum-expected-usd" class="sub">0</td></tr>
-              <tr><td>Final</td><td id="cashv2-sum-final-usd" class="sub">0</td></tr>
-              <tr><td><b>Diferencia</b></td><td class="sub"><span id="cashv2-sum-diff-usd" class="pill">0</span></td></tr>
+              <tr><td>Saldo inicial</td><td id="cashv2-sum-initial-usd" class="sub">0.00</td></tr>
+              <tr><td>Entradas</td><td id="cashv2-sum-in-usd" class="sub">0.00</td></tr>
+              <tr><td>Salidas</td><td id="cashv2-sum-out-usd" class="sub">0.00</td></tr>
+              <tr><td>Ajuste</td><td id="cashv2-sum-adjust-usd" class="sub">0.00</td></tr>
+              <tr><td>Saldo esperado</td><td id="cashv2-sum-expected-usd" class="sub">0.00</td></tr>
+              <tr><td>Saldo final contado</td><td id="cashv2-sum-final-usd" class="sub">0.00</td></tr>
+              <tr><td><b>Diferencia</b></td><td class="sub"><span id="cashv2-sum-diff-usd" class="pill">0.00</span></td></tr>
             </tbody>
           </table>
         </div>
@@ -1292,7 +1361,7 @@
       </div>
       <div>
         <label>Monto</label>
-        <input id="cashv2-move-amount" type="number" min="1" step="1" inputmode="numeric" pattern="[0-9]*" placeholder="0">
+        <input id="cashv2-move-amount" type="number" step="1" inputmode="numeric" placeholder="0">
       </div>
     </div>
 
@@ -1428,25 +1497,25 @@
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
-<script src="/assets/js/a33-storage.js?v=4.20.52"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.52"></script>
-<script src="/assets/js/a33-auth.js?v=4.20.52"></script>
-<script src="/assets/js/a33-build.js?v=4.20.52"></script>
+<script src="/assets/js/a33-storage.js?v=4.20.56"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.56"></script>
+<script src="/assets/js/a33-auth.js?v=4.20.56"></script>
+<script src="/assets/js/a33-build.js?v=4.20.56"></script>
 <script>
   (function(){
-    try{      const v = '4.20.52';
+    try{      const v = '4.20.55';
       try{ window.A33_VERSION = v; }catch(_){ }
       // POS: bump revision local (solo este modulo) para forzar limpieza de caches
-      try{ window.A33_ASSET_REV = '18'; }catch(_){ }
-      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r18').toString(); }catch(_){ }
-      try{ window.A33_BUILD_TAG = (v + '-r18').toString(); }catch(_){ }
+      try{ window.A33_ASSET_REV = '22'; }catch(_){ }
+      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r22').toString(); }catch(_){ }
+      try{ window.A33_BUILD_TAG = (v + '-r21').toString(); }catch(_){ }
       const verEl = document.getElementById('a33-version-text');
       if (verEl) verEl.textContent = 'v' + v;
       const bEl = document.getElementById('pos-build-id');
       if (bEl) bEl.textContent = 'POS Build: ' + v;
       const cEl = document.getElementById('pos-sw-cache-id');
       if (cEl){
-        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r18')).toString();
+        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r22')).toString();
         cEl.textContent = 'SW Cache: ' + cn;
         cEl.title = cn;
       }
@@ -1478,11 +1547,11 @@
     }
   })();
 </script>
-<script src="app.js?v=4.20.52&r=18"></script>
-<script src="/assets/js/a33-input-ux.js?v=4.20.52"></script>
+<script src="app.js?v=4.20.56&r=22"></script>
+<script src="/assets/js/a33-input-ux.js?v=4.20.56"></script>
 <script>
   (function(){
-    const BUILD = (window.A33_VERSION || '4.20.52').toString();
+    const BUILD = (window.A33_VERSION || '4.20.55').toString();
     const REV = (window.A33_ASSET_REV || '10').toString();
     const SW_URL = './sw.js?v=' + encodeURIComponent(BUILD) + '&r=' + encodeURIComponent(REV);
     const btn = document.getElementById('btn-update');

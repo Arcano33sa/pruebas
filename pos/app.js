@@ -4,10 +4,10 @@ const DB_VER = 30; // Etapa 1 (Efectivo v2): nuevo store aislado + llaves canón
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.52';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.56';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r18');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r22');
 
 // --- Date helpers (POS)
 // Normaliza YYYY-MM-DD y da fallback robusto (consistente con Centro de Mando)
@@ -84,6 +84,7 @@ async function cashV2Ensure(eventId, dayKey){
     eventId: eid,
     dayKey: dk,
     status: 'OPEN',
+    fx: null,
     initial: null,
     movements: [],
     final: null,
@@ -113,6 +114,7 @@ async function cashV2Save(cashDay){
     eventId: eid,
     dayKey: dk,
     status: String(cashDay.status || 'OPEN'),
+    fx: cashV2CoerceFx(cashDay.fx),
     initial: (cashDay.initial == null ? null : cashDay.initial),
     movements: Array.isArray(cashDay.movements) ? cashDay.movements : [],
     final: (cashDay.final == null ? null : cashDay.final),
@@ -146,7 +148,14 @@ const CASHV2_DENOMS = {
 };
 
 let CASHV2_LAST_REC = null;
-function cashV2SetLastRec(rec){ CASHV2_LAST_REC = rec || null; }
+function cashV2SetLastRec(rec){
+  try{
+    if (rec && typeof rec === 'object'){
+      if (rec.cashSalesC == null) rec.cashSalesC = cashV2GetCashSalesC();
+    }
+  }catch(_){ }
+  CASHV2_LAST_REC = rec || null;
+}
 function cashV2GetLastRec(){ return CASHV2_LAST_REC; }
 
 function cashV2DefaultInitial(){
@@ -168,6 +177,21 @@ function cashV2NormCount(v){
 function cashV2FmtInt(n){
   const x = Number(n||0);
   try{ return x.toLocaleString('es-NI'); }catch(_){ return String(x); }
+}
+
+function cashV2Round2Money(v){
+  let n = Number(v || 0);
+  if (!Number.isFinite(n)) n = 0;
+  n = Math.round(n * 100) / 100;
+  if (!Number.isFinite(n)) n = 0;
+  return n;
+}
+
+function cashV2FmtMoney(v){
+  const n = cashV2Round2Money(v);
+  try{ return fmt(n); }catch(_){
+    try{ return n.toLocaleString('es-NI', {minimumFractionDigits:2, maximumFractionDigits:2}); }catch(__){ return String(n); }
+  }
 }
 
 function cashV2CoerceInitial(initial){
@@ -198,6 +222,165 @@ function cashV2CoerceInitial(initial){
   }
   return base;
 }
+
+
+// --- POS: Efectivo v2 — Tipo de cambio (USD → C$) — Etapa 3/7
+const CASHV2_FX_LS_KEY = 'A33.EF2.fxByEvent';
+
+function cashV2FxNorm(raw){
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const r = Math.round(n * 100) / 100;
+  if (!Number.isFinite(r) || r <= 0) return null;
+  return r;
+}
+
+function cashV2FxFmt2(v){
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return (Math.round(n * 100) / 100).toFixed(2);
+}
+
+function cashV2FxLoadMap(){
+  try{
+    const raw = localStorage.getItem(CASHV2_FX_LS_KEY);
+    if (!raw) return {};
+    const m = JSON.parse(raw);
+    return (m && typeof m === 'object') ? m : {};
+  }catch(_){ return {}; }
+}
+
+function cashV2FxSaveMap(m){
+  try{ localStorage.setItem(CASHV2_FX_LS_KEY, JSON.stringify(m || {})); }catch(_){ }
+}
+
+function cashV2FxGetCached(eventId){
+  const eid = cashV2AssertEventId(eventId);
+  try{
+    const m = cashV2FxLoadMap();
+    return cashV2FxNorm(m[eid]);
+  }catch(_){ return null; }
+}
+
+function cashV2FxSetCached(eventId, rate){
+  const eid = cashV2AssertEventId(eventId);
+  const n = cashV2FxNorm(rate);
+  if (n == null) return false;
+  try{
+    const m = cashV2FxLoadMap();
+    m[eid] = cashV2FxFmt2(n); // guardamos "36.50" para precarga
+    cashV2FxSaveMap(m);
+    return true;
+  }catch(_){ return false; }
+}
+
+// Normaliza lo que entra al record v2 (persistencia)
+function cashV2CoerceFx(v){
+  const n = cashV2FxNorm(v);
+  return (n == null) ? null : n;
+}
+
+function cashV2SetFxEnabled(en){
+  const card = document.getElementById('cashv2-fx-card');
+  if (!card) return;
+  const ok = !!en;
+  try{ const inp = document.getElementById('cashv2-fx-input'); if (inp) inp.disabled = !ok; }catch(_){ }
+  try{ const btn = document.getElementById('cashv2-btn-save-fx'); if (btn) btn.disabled = !ok; }catch(_){ }
+}
+
+function cashV2ApplyFxToDom(rec, eventId){
+  const inp = document.getElementById('cashv2-fx-input');
+  const st = document.getElementById('cashv2-fx-save-status');
+  const err = document.getElementById('cashv2-fx-error');
+  const errSm = err ? err.querySelector('small') : null;
+
+  try{ if (err) err.style.display = 'none'; }catch(_){ }
+  try{ if (errSm) errSm.textContent = ''; }catch(_){ }
+
+  if (!inp) return;
+
+  let rate = cashV2FxNorm(rec && rec.fx);
+
+  // fallback: cache por evento (nuevo, no legacy)
+  if (rate == null && eventId){
+    try{ rate = cashV2FxGetCached(eventId); }catch(_){ rate = null; }
+  }
+
+  const fixed = (rate != null) ? cashV2FxFmt2(rate) : '';
+  try{ inp.value = fixed; }catch(_){ }
+  try{ if (st) st.textContent = fixed ? `Actual: ${fixed}` : '—'; }catch(_){ }
+}
+
+function cashV2InitFxUIOnce(){
+  const card = document.getElementById('cashv2-fx-card');
+  const inp = document.getElementById('cashv2-fx-input');
+  const btn = document.getElementById('cashv2-btn-save-fx');
+  const st = document.getElementById('cashv2-fx-save-status');
+  const err = document.getElementById('cashv2-fx-error');
+  const errSm = err ? err.querySelector('small') : null;
+  if (!card || !inp || !btn) return;
+  if (btn.dataset.ready === '1') return;
+
+  const showErr = (msg)=>{
+    try{ if (errSm) errSm.textContent = msg || ''; }catch(_){ }
+    try{ if (err) err.style.display = msg ? 'block' : 'none'; }catch(_){ }
+  };
+
+  inp.addEventListener('input', ()=>{
+    const n = cashV2FxNorm(inp.value);
+    try{ if (st) st.textContent = n != null ? `Actual: ${cashV2FxFmt2(n)}` : '—'; }catch(_){ }
+  });
+
+  inp.addEventListener('blur', ()=>{
+    const n = cashV2FxNorm(inp.value);
+    if (n != null){
+      try{ inp.value = cashV2FxFmt2(n); }catch(_){ }
+    }
+  });
+
+  btn.addEventListener('click', async ()=>{
+    if (btn.disabled) return;
+    showErr('');
+
+    const eid = String(card.dataset.eventId || '').trim();
+    const dk = String(card.dataset.dayKey || '').trim();
+    const ro = String(card.dataset.readonly || '') === '1';
+    if (!eid || !dk) return;
+    if (ro){
+      try{ toast('Bloqueado: no editable'); }catch(_){ }
+      return;
+    }
+
+    const n = cashV2FxNorm(inp.value);
+    if (n == null){
+      showErr('Ingresa un tipo de cambio válido (> 0).');
+      try{ toast('Tipo de cambio inválido'); }catch(_){ }
+      return;
+    }
+
+    const fixed = cashV2FxFmt2(n);
+    try{ inp.value = fixed; }catch(_){ }
+
+    try{
+      const rec = await cashV2Ensure(eid, dk);
+      rec.fx = cashV2CoerceFx(n);
+      const saved = await cashV2Save(rec);
+
+      try{ cashV2SetLastRec(saved); }catch(_){ }
+      cashV2FxSetCached(eid, n);
+
+      try{ if (st) st.textContent = `Guardado: ${fixed}`; }catch(_){ }
+      try{ toast('Tipo de cambio guardado'); }catch(_){ }
+    }catch(e){
+      console.error('[A33][CASHv2][FX] save error', e);
+      showErr('No se pudo guardar.');
+      try{ toast('Error al guardar'); }catch(_){ }
+    }
+  });
+
+  btn.dataset.ready = '1';
+}
+
 
 function cashV2InitInitialUIOnce(){
   const card = document.getElementById('cashv2-initial-card');
@@ -338,12 +521,120 @@ function cashV2SetInitialEnabled(enabled){
   if (btn) btn.disabled = !en;
 }
 
+// --- POS: Efectivo v2 — “Ventas en efectivo” (C$) desde POS (read-only) por evento/día — Etapa 4/7
+let __CASHV2_CASHSALES_C = 0;
+
+function cashV2SetCashSalesC(v){
+  let n = Number(v || 0);
+  if (!Number.isFinite(n)) n = 0;
+  n = Math.round(n * 100) / 100;
+  if (!Number.isFinite(n)) n = 0;
+  __CASHV2_CASHSALES_C = n;
+}
+
+function cashV2GetCashSalesC(){
+  return Number.isFinite(__CASHV2_CASHSALES_C) ? __CASHV2_CASHSALES_C : 0;
+}
+
+function cashV2ApplyCashSalesToDom(amount){
+  const line = document.getElementById('cashv2-cashsales-line');
+  const el = document.getElementById('cashv2-cashsales');
+  if (!line || !el) return;
+
+  if (amount == null){
+    try{ line.style.display = 'none'; }catch(_){ }
+    try{ el.textContent = 'C$ 0.00'; }catch(_){ }
+    try{ cashV2SetCashSalesC(0); }catch(_){ }
+    return;
+  }
+
+  let n = Number(amount);
+  if (!Number.isFinite(n)) n = 0;
+  try{ el.textContent = 'C$ ' + fmt(n); }catch(_){ el.textContent = 'C$ 0.00'; }
+  try{ cashV2SetCashSalesC(n); }catch(_){ }
+  try{ line.style.display = 'block'; }catch(_){ }
+}
+
+async function cashV2GetSalesByEventPOS(eventId){
+  const eidStr = String(eventId || '').trim();
+  if (!eidStr) return [];
+  try{ if (!db) await openDB(); }catch(_){ }
+
+  const eidNum = Number(eidStr);
+  const keys = [];
+  if (Number.isFinite(eidNum)) keys.push(eidNum);
+  keys.push(eidStr);
+
+  const uniq = [];
+  const seen = new Set();
+  for (const k of keys){
+    const sk = (typeof k === 'number') ? ('n:' + String(k)) : ('s:' + String(k));
+    if (seen.has(sk)) continue;
+    seen.add(sk);
+    uniq.push(k);
+  }
+
+  // Fast path: index by_event
+  for (const key of uniq){
+    const arr = await new Promise((resolve)=>{
+      try{
+        if (!db){ resolve(null); return; }
+        const tr = db.transaction(['sales'], 'readonly');
+        const store = tr.objectStore('sales');
+        let idx = null;
+        try{ idx = store.index('by_event'); }catch(_){ idx = null; }
+        if (!idx){ resolve(null); return; }
+        const req = idx.getAll(IDBKeyRange.only(key));
+        req.onsuccess = ()=> resolve(req.result || []);
+        req.onerror = ()=> resolve(null);
+      }catch(_){ resolve(null); }
+    });
+    if (Array.isArray(arr) && arr.length) return arr;
+  }
+
+  // Fallback: getAll + filter
+  try{
+    const all = await getAll('sales');
+    return (Array.isArray(all) ? all : []).filter(s => s && String(s.eventId) === eidStr);
+  }catch(_){
+    return [];
+  }
+}
+
+async function cashV2ComputeCashSalesC(eventId, dayKey){
+  const eidStr = String(eventId || '').trim();
+  if (!eidStr) return 0;
+  const dk = safeYMD(dayKey);
+  let sum = 0;
+
+  let sales = [];
+  try{ sales = await cashV2GetSalesByEventPOS(eidStr); }catch(_){ sales = []; }
+
+  for (const s of (sales || [])){
+    if (!s || typeof s !== 'object') continue;
+    if (safeYMD(s.date || '') !== dk) continue;
+    const pay = String(s.payment || '').toLowerCase();
+    if (pay !== 'efectivo' && pay !== 'cash') continue;
+    try{ if (typeof isCourtesySalePOS === 'function' && isCourtesySalePOS(s)) continue; }catch(_){ }
+    let t = Number(s.total != null ? s.total : 0);
+    if (!Number.isFinite(t)) t = 0;
+    sum += t;
+  }
+
+  // Redondeo 2 dec (ventas pueden venir con centavos)
+  sum = Math.round(sum * 100) / 100;
+  if (!Number.isFinite(sum)) sum = 0;
+  return sum;
+}
+
 // --- POS: Efectivo v2 — Movimientos (Entradas/Salidas/Ajuste) por moneda — Etapa 4
-function cashV2NormAmountInt(v){
+function cashV2NormAmountInt(v, opts){
+  const allowNeg = !!(opts && opts.allowNegative);
   let n = Number(v);
   if (!Number.isFinite(n)) return 0;
   n = Math.trunc(n);
-  if (n < 0) n = 0;
+  if (!allowNeg && n < 0) n = Math.abs(n);
+  // En ajuste se permite negativo. 0 se considera inválido para agregar movimiento.
   return n;
 }
 
@@ -353,11 +644,13 @@ function cashV2NewMovementId(){
 
 function cashV2MovementKindToUi(kind){
   const k = String(kind || '').trim().toUpperCase();
-  if (k === 'IN') return { text:'Entrada', sign:+1 };
-  if (k === 'OUT') return { text:'Salida', sign:-1 };
-  if (k === 'ADJUST_IN') return { text:'Ajuste +', sign:+1 };
-  if (k === 'ADJUST_OUT') return { text:'Ajuste −', sign:-1 };
+  // Etapa 2/7: 3 tipos canónicos
+  if (k === 'IN') return { text:'Ingreso', sign:+1 };
+  if (k === 'OUT') return { text:'Egreso', sign:-1 };
   if (k === 'ADJUST') return { text:'Ajuste', sign:+1 };
+  // Compat: formas antiguas (si existen en datos viejos)
+  if (k === 'ADJUST_IN') return { text:'Ajuste', sign:+1 };
+  if (k === 'ADJUST_OUT') return { text:'Ajuste', sign:-1 };
   return { text: (k || 'Mov'), sign: 0 };
 }
 
@@ -368,11 +661,14 @@ function cashV2NetForCurrency(movements, currency){
   for (const m of arr){
     if (!m || typeof m !== 'object') continue;
     if (String(m.currency || '').trim().toUpperCase() != ccy) continue;
-    const amt = cashV2NormAmountInt(m.amount);
     const k = String(m.kind || '').trim().toUpperCase();
-    if (k === 'IN' || k === 'ADJUST_IN') net += amt;
-    else if (k === 'OUT' || k === 'ADJUST_OUT') net -= amt;
-    else if (k === 'ADJUST') net += amt; // fallback conservador
+    const allowNeg = (k === 'ADJUST');
+    let amt = cashV2NormAmountInt(m.amount, { allowNegative: allowNeg });
+    if (!Number.isFinite(amt)) amt = 0;
+
+    if (k === 'IN' || k === 'ADJUST_IN') net += Math.abs(amt);
+    else if (k === 'OUT' || k === 'ADJUST_OUT') net -= Math.abs(amt);
+    else if (k === 'ADJUST') net += amt;
   }
   return net;
 }
@@ -386,6 +682,26 @@ function cashV2FmtTime(ts){
     try{
       const d = new Date(Number(ts || 0) || 0);
       return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+    }catch(__){
+      return '—';
+    }
+  }
+}
+
+function cashV2FmtDateTime(ts){
+  try{
+    const d = new Date(Number(ts || 0) || 0);
+    if (!isFinite(d)) return '—';
+    return d.toLocaleString('es-NI', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+  }catch(_){
+    try{
+      const d = new Date(Number(ts || 0) || 0);
+      const y = d.getFullYear();
+      const m = String(d.getMonth()+1).padStart(2,'0');
+      const day = String(d.getDate()).padStart(2,'0');
+      const hh = String(d.getHours()).padStart(2,'0');
+      const mm = String(d.getMinutes()).padStart(2,'0');
+      return `${y}-${m}-${day} ${hh}:${mm}`;
     }catch(__){
       return '—';
     }
@@ -407,6 +723,13 @@ function cashV2RenderMovementsUI(cashDay){
   const elNetNio = document.getElementById('cashv2-net-nio');
   const elNetUsd = document.getElementById('cashv2-net-usd');
 
+  // Fecha visible del bloque (readonly)
+  try{
+    const inpDate = document.getElementById('cashv2-move-date-inline');
+    const dk = (cashDay && cashDay.dayKey) ? String(cashDay.dayKey) : String(card.dataset.dayKey || '');
+    if (inpDate && dk) inpDate.value = dk;
+  }catch(_){ }
+
   const movs = cashV2CoerceMovements(cashDay && cashDay.movements);
   const netNio = cashV2NetForCurrency(movs, 'NIO');
   const netUsd = cashV2NetForCurrency(movs, 'USD');
@@ -418,6 +741,7 @@ function cashV2RenderMovementsUI(cashDay){
   try{ cashV2UpdateCloseSummary(cashDay); }catch(_){ }
 
   if (!list) return;
+
   if (!movs.length){
     try{ if (empty) empty.style.display = 'block'; }catch(_){ }
     list.innerHTML = '';
@@ -426,165 +750,167 @@ function cashV2RenderMovementsUI(cashDay){
 
   try{ if (empty) empty.style.display = 'none'; }catch(_){ }
 
-  // Último primero
-  const sorted = movs.slice().sort((a,b)=> (Number(b.ts||0) - Number(a.ts||0)));
+  // Más reciente arriba: ts DESC, desempate estable por id
+  const sorted = movs.slice().sort((a,b)=>{
+    const dt = (Number(b.ts || 0) - Number(a.ts || 0));
+    if (dt) return dt;
+    return String(b.id || '').localeCompare(String(a.id || ''));
+  });
 
   list.innerHTML = sorted.map(m => {
     const ccy = String(m.currency || '').trim().toUpperCase();
-    const sym = (ccy === 'NIO') ? 'C$' : '$';
-    const amt = cashV2NormAmountInt(m.amount);
-    const ui = cashV2MovementKindToUi(m.kind);
-    const sign = ui.sign > 0 ? '+' : (ui.sign < 0 ? '−' : '');
-    const amountText = `${sign} ${sym} ${cashV2FmtInt(amt)}`.trim();
-    const note = (m.note == null ? '' : String(m.note)).trim();
-    const noteHtml = note ? `<div class="cashv2-move-note">${escapeHtml(note)}</div>` : '';
+    const ccyLabel = (ccy === 'NIO') ? 'C$' : 'USD';
+    const k = String(m.kind || '').trim().toUpperCase();
+    const allowNeg = (k === 'ADJUST');
+    let amt = cashV2NormAmountInt(m.amount, { allowNegative: allowNeg });
+    if (!Number.isFinite(amt)) amt = 0;
+    const ui = cashV2MovementKindToUi(k);
+    let sign = ui.sign > 0 ? '+' : (ui.sign < 0 ? '−' : '');
+    if (k === 'ADJUST') sign = (amt < 0 ? '−' : '+');
+    const amountText = `${sign} ${ccyLabel} ${cashV2FmtInt(Math.abs(amt))}`.trim();
 
-    return `<div class="cashv2-move-row">  <div class="cashv2-move-left">    <div class="cashv2-move-top">      <span class="cashv2-mtag"><b>${escapeHtml(cashV2FmtTime(m.ts))}</b></span>      <span class="cashv2-mtag">${escapeHtml(ccy)}</span>      <span class="cashv2-mtag">${escapeHtml(ui.text)}</span>    </div>    ${noteHtml}  </div>  <div class="cashv2-move-amt">${escapeHtml(amountText)}</div></div>`;
+    const desc = (m.desc != null ? String(m.desc) : (m.note != null ? String(m.note) : '')).trim();
+    const descHtml = desc ? `<div class="cashv2-move-note" style="white-space:normal; overflow:visible; text-overflow:unset;">${escapeHtml(desc)}</div>` : '';
+
+    return `<div class="cashv2-move-row">
+      <div class="cashv2-move-left">
+        <div class="cashv2-move-top">
+          <span class="cashv2-mtag"><b>${escapeHtml(cashV2FmtDateTime(m.ts))}</b></span>
+          <span class="cashv2-mtag">${escapeHtml(ui.text)}</span>
+          <span class="cashv2-mtag">${escapeHtml(ccyLabel)}</span>
+        </div>
+        ${descHtml}
+      </div>
+      <div class="cashv2-move-amt">${escapeHtml(amountText)}</div>
+    </div>`;
   }).join('');
 }
 
 function cashV2InitMovementsUIOnce(){
-  const modal = document.getElementById('cashv2-movement-modal');
-  if (!modal) return;
-  if (modal.dataset.ready === '1') return;
+  const card = document.getElementById('cashv2-movements-card');
+  if (!card) return;
+  if (card.dataset.readyMove === '1') return;
 
+  const inpDate = document.getElementById('cashv2-move-date-inline');
+  const selKind = document.getElementById('cashv2-move-kind-inline');
+  const selCcy = document.getElementById('cashv2-move-currency-inline');
+  const inpAmt = document.getElementById('cashv2-move-amount-inline');
+  const inpDesc = document.getElementById('cashv2-move-desc-inline');
   const btnAdd = document.getElementById('cashv2-btn-add-movement');
-  const btnCancel = document.getElementById('cashv2-move-cancel');
-  const btnCancel2 = document.getElementById('cashv2-move-cancel2');
-  const btnSave = document.getElementById('cashv2-move-save');
-
-  const selKind = document.getElementById('cashv2-move-kind');
-  const wrapAdj = document.getElementById('cashv2-move-adjust-wrap');
-  const selAdj = document.getElementById('cashv2-move-adjust-dir');
-  const selCcy = document.getElementById('cashv2-move-currency');
-  const inpAmt = document.getElementById('cashv2-move-amount');
-  const inpNote = document.getElementById('cashv2-move-note');
-  const elErr = document.getElementById('cashv2-move-modal-error');
+  const elErr = document.getElementById('cashv2-move-inline-error');
+  const elErrSmall = elErr ? elErr.querySelector('small') : null;
 
   function showErr(msg){
     if (!elErr) return;
     if (!msg){
-      elErr.style.display = 'none';
-      elErr.textContent = '';
+      try{ elErr.style.display = 'none'; }catch(_){ }
+      try{ if (elErrSmall) elErrSmall.textContent = ''; else elErr.textContent = ''; }catch(_){ }
       return;
     }
-    elErr.style.display = 'block';
-    elErr.textContent = String(msg);
-  }
-
-  function open(){
-    showErr('');
-    try{ if (inpAmt) inpAmt.value = ''; }catch(_){ }
-    try{ if (inpNote) inpNote.value = ''; }catch(_){ }
-    try{ if (selKind) selKind.value = 'IN'; }catch(_){ }
-    try{ if (selCcy) selCcy.value = 'NIO'; }catch(_){ }
-    try{ if (selAdj) selAdj.value = '+'; }catch(_){ }
-    try{ if (wrapAdj) wrapAdj.style.display = 'none'; }catch(_){ }
-
-    openModalPOS('cashv2-movement-modal');
-    try{ if (inpAmt) inpAmt.focus(); }catch(_){ }
-  }
-
-  function close(){
-    showErr('');
-    closeModalPOS('cashv2-movement-modal');
+    try{ elErr.style.display = 'block'; }catch(_){ }
+    try{ if (elErrSmall) elErrSmall.textContent = String(msg); else elErr.textContent = String(msg); }catch(_){ }
   }
 
   function currentCtx(){
-    const card = document.getElementById('cashv2-movements-card');
-    const eid = card ? String(card.dataset.eventId || '').trim() : '';
-    const dk = card ? String(card.dataset.dayKey || '').trim() : '';
+    const eid = String(card.dataset.eventId || '').trim();
+    const dk = String(card.dataset.dayKey || '').trim();
     return { eid, dk };
   }
 
-  function refreshListWithRecord(rec){
-    try{ cashV2SetLastRec(rec); }catch(_){ }
-    try{ cashV2RenderMovementsUI(rec); }catch(_){ }
-    try{ cashV2UpdateCloseSummary(rec); }catch(_){ }
-    try{ cashV2UpdateCloseEligibility(rec); }catch(_){ }
+  function resetForm(){
+    showErr('');
+    try{ if (selKind) selKind.value = 'IN'; }catch(_){ }
+    try{ if (selCcy) selCcy.value = 'NIO'; }catch(_){ }
+    try{ if (inpAmt) inpAmt.value = ''; }catch(_){ }
+    try{ if (inpDesc) inpDesc.value = ''; }catch(_){ }
+    try{
+      const { dk } = currentCtx();
+      if (inpDate && dk) inpDate.value = dk;
+    }catch(_){ }
   }
 
-  if (selKind){
-    selKind.addEventListener('change', ()=>{
-      const k = String(selKind.value || '').trim().toUpperCase();
-      const isAdj = (k === 'ADJUST');
-      try{ if (wrapAdj) wrapAdj.style.display = isAdj ? 'block' : 'none'; }catch(_){ }
-    });
+  async function addMovement(){
+    const { eid, dk } = currentCtx();
+    if (!eid || !dk){ showErr('Falta evento o día.'); return; }
+    if (btnAdd && btnAdd.disabled){ return; }
+
+    const kind = selKind ? String(selKind.value || '').trim().toUpperCase() : 'IN';
+    const ccy = selCcy ? String(selCcy.value || '').trim().toUpperCase() : 'NIO';
+    const desc = inpDesc ? String(inpDesc.value || '').trim() : '';
+    const ksel = String(selKind ? selKind.value : '').trim().toUpperCase();
+    const allowNeg = (ksel === 'ADJUST');
+    let amt = cashV2NormAmountInt(inpAmt ? inpAmt.value : 0, { allowNegative: allowNeg });
+    if (!Number.isFinite(amt)) amt = 0;
+    if (!allowNeg) amt = Math.abs(amt);
+
+    if (!(kind === 'IN' || kind === 'OUT' || kind === 'ADJUST')){
+      showErr('Tipo inválido.');
+      return;
+    }
+    if (!(ccy === 'NIO' || ccy === 'USD')){
+      showErr('Moneda inválida.');
+      return;
+    }
+    if (!allowNeg){
+      if (!amt || amt <= 0){
+        showErr('Monto inválido.');
+        return;
+      }
+    }else{
+      if (amt == 0){
+        showErr('Monto inválido.');
+        return;
+      }
+    }
+
+    try{
+      const rec = await cashV2Ensure(eid, dk);
+
+      const movement = {
+        id: cashV2NewMovementId(),
+        ts: Date.now(),
+        kind,
+        currency: ccy,
+        amount: amt,
+        desc: desc ? desc.slice(0, 120) : ''
+      };
+
+      const next = { ...rec };
+      const movs = Array.isArray(next.movements) ? next.movements.slice() : [];
+      movs.push(movement);
+      next.movements = movs;
+
+      const saved = await cashV2Save(next);
+      console.log(`[A33][CASHv2] movement add: ${kind} ${ccy} ${amt}`);
+
+      try{ cashV2SetLastRec(saved); }catch(_){ }
+      try{ cashV2RenderMovementsUI(saved); }catch(_){ }
+      try{ cashV2UpdateCloseSummary(saved); }catch(_){ }
+      try{ cashV2UpdateCloseEligibility(saved); }catch(_){ }
+
+      resetForm();
+      try{ if (inpAmt) inpAmt.focus(); }catch(_){ }
+    }catch(err){
+      console.error('[A33][CASHv2] movement add error', err);
+      const msg = (err && (err.message || err.name)) ? (err.message || err.name) : String(err);
+      showErr(msg);
+    }
   }
 
   if (btnAdd){
-    btnAdd.addEventListener('click', ()=>{
-      const {eid, dk} = currentCtx();
-      if (!eid || !dk) return;
-      open();
-    });
+    btnAdd.addEventListener('click', (e)=>{ try{ if (e) e.preventDefault(); }catch(_){ } addMovement(); });
+  }
+  if (inpAmt){
+    inpAmt.addEventListener('keydown', (e)=>{ if (e && e.key === 'Enter'){ try{ e.preventDefault(); }catch(_){ } addMovement(); } });
+  }
+  if (inpDesc){
+    inpDesc.addEventListener('keydown', (e)=>{ if (e && e.key === 'Enter'){ try{ e.preventDefault(); }catch(_){ } addMovement(); } });
   }
 
-  if (btnCancel) btnCancel.addEventListener('click', close);
-  if (btnCancel2) btnCancel2.addEventListener('click', close);
-
-  // Cerrar tocando el backdrop
-  modal.addEventListener('click', (e)=>{
-    if (e && e.target === modal) close();
-  });
-
-  if (btnSave){
-    btnSave.addEventListener('click', async ()=>{
-      const {eid, dk} = currentCtx();
-      if (!eid || !dk){ showErr('Falta evento o día.'); return; }
-
-      let kind = selKind ? String(selKind.value || '').trim().toUpperCase() : 'IN';
-      const ccy = selCcy ? String(selCcy.value || '').trim().toUpperCase() : 'NIO';
-      const note = inpNote ? String(inpNote.value || '').trim() : '';
-      let amt = cashV2NormAmountInt(inpAmt ? inpAmt.value : 0);
-
-      if (kind === 'ADJUST'){
-        const dir = selAdj ? String(selAdj.value || '+').trim() : '+';
-        kind = (dir === '-') ? 'ADJUST_OUT' : 'ADJUST_IN';
-      }
-
-      // Validación amount: entero > 0
-      if (!amt || amt <= 0){
-        showErr('Monto inválido. Debe ser entero > 0.');
-        return;
-      }
-
-      try{
-        // Cargar/asegurar
-        const rec = await cashV2Ensure(eid, dk);
-        const before = cashV2NetForCurrency(rec && rec.movements, ccy);
-
-        const movement = {
-          id: cashV2NewMovementId(),
-          ts: Date.now(),
-          kind,
-          currency: ccy,
-          amount: amt,
-          note: note ? note.slice(0, 80) : ''
-        };
-
-        const next = { ...rec };
-        const movs = Array.isArray(next.movements) ? next.movements.slice() : [];
-        movs.push(movement);
-        next.movements = movs;
-
-        const saved = await cashV2Save(next);
-        const after = cashV2NetForCurrency(saved && saved.movements, ccy);
-
-        console.log(`[A33][CASHv2] movement add: ${kind} ${ccy} ${amt} net ${before}=>${after}`);
-
-        close();
-        refreshListWithRecord(saved);
-      }catch(err){
-        console.error('[A33][CASHv2] movement add error', err);
-        const msg = (err && (err.message || err.name)) ? (err.message || err.name) : String(err);
-        showErr(msg);
-      }
-    });
-  }
-
-  modal.dataset.ready = '1';
+  resetForm();
+  card.dataset.readyMove = '1';
 }
+
 
 
 // --- POS: Efectivo v2 — Cierre (Final + Esperado + Diferencia) — Etapa 5
@@ -730,10 +1056,33 @@ function cashV2SetFinalEnabled(enabled){
   if (btn) btn.disabled = !en;
 }
 
+function cashV2SumMovementsByCurrency(movements, currency){
+  const ccy = String(currency || '').trim().toUpperCase();
+  const arr = Array.isArray(movements) ? movements : [];
+  let inc = 0;
+  let out = 0;
+  let adj = 0;
+
+  for (const m of arr){
+    if (!m || typeof m !== 'object') continue;
+    if (String(m.currency || '').trim().toUpperCase() != ccy) continue;
+    const k = String(m.kind || '').trim().toUpperCase();
+    const allowNeg = (k === 'ADJUST');
+    let amt = cashV2NormAmountInt(m.amount, { allowNegative: allowNeg });
+    if (!Number.isFinite(amt)) amt = 0;
+
+    if (k === 'IN' || k === 'ADJUST_IN') inc += Math.abs(amt);
+    else if (k === 'OUT' || k === 'ADJUST_OUT') out += Math.abs(amt);
+    else if (k === 'ADJUST') adj += amt;
+  }
+
+  return { in: inc, out, adjust: adj };
+}
+
 function cashV2ComputeCloseNumbers(rec, opts){
   const o = {
-    NIO: { initial:0, net:0, expected:0, final:0, diff:0 },
-    USD: { initial:0, net:0, expected:0, final:0, diff:0 }
+    NIO: { initial:0, net:0, in:0, out:0, sales:0, adjust:0, expected:0, final:0, diff:0 },
+    USD: { initial:0, net:0, in:0, out:0, sales:0, adjust:0, expected:0, final:0, diff:0 }
   };
 
   const preferDom = !(opts && opts.preferDom === false);
@@ -757,45 +1106,59 @@ function cashV2ComputeCloseNumbers(rec, opts){
   if (!finObj) finObj = finalOverride ? cashV2CoerceFinal(finalOverride) : cashV2CoerceFinal(rec && rec.final);
 
   const movs = cashV2CoerceMovements(rec && rec.movements);
-  const netNio = cashV2NetForCurrency(movs, 'NIO');
-  const netUsd = cashV2NetForCurrency(movs, 'USD');
 
   const iN = (initObj && initObj.NIO && Number(initObj.NIO.total)) || 0;
   const iU = (initObj && initObj.USD && Number(initObj.USD.total)) || 0;
   const fN = (finObj && finObj.NIO && Number(finObj.NIO.total)) || 0;
   const fU = (finObj && finObj.USD && Number(finObj.USD.total)) || 0;
 
-  const eN = iN + netNio;
-  const eU = iU + netUsd;
+  const sN = cashV2SumMovementsByCurrency(movs, 'NIO');
+  const sU = cashV2SumMovementsByCurrency(movs, 'USD');
 
-  o.NIO.initial = iN;
+  const salesC = cashV2Round2Money((rec && rec.cashSalesC != null) ? rec.cashSalesC : cashV2GetCashSalesC());
+
+  const netNio = cashV2Round2Money((sN.in - sN.out) + sN.adjust);
+  const netUsd = cashV2Round2Money((sU.in - sU.out) + sU.adjust);
+
+  const eN = cashV2Round2Money(iN + sN.in - sN.out + salesC + sN.adjust);
+  const eU = cashV2Round2Money(iU + sU.in - sU.out + sU.adjust);
+
+  o.NIO.initial = cashV2Round2Money(iN);
+  o.NIO.in = cashV2Round2Money(sN.in);
+  o.NIO.out = cashV2Round2Money(sN.out);
+  o.NIO.sales = salesC;
+  o.NIO.adjust = cashV2Round2Money(sN.adjust);
   o.NIO.net = netNio;
   o.NIO.expected = eN;
-  o.NIO.final = fN;
-  o.NIO.diff = fN - eN;
+  o.NIO.final = cashV2Round2Money(fN);
+  o.NIO.diff = cashV2Round2Money(fN - eN);
 
-  o.USD.initial = iU;
+  o.USD.initial = cashV2Round2Money(iU);
+  o.USD.in = cashV2Round2Money(sU.in);
+  o.USD.out = cashV2Round2Money(sU.out);
+  o.USD.sales = 0;
+  o.USD.adjust = cashV2Round2Money(sU.adjust);
   o.USD.net = netUsd;
   o.USD.expected = eU;
-  o.USD.final = fU;
-  o.USD.diff = fU - eU;
+  o.USD.final = cashV2Round2Money(fU);
+  o.USD.diff = cashV2Round2Money(fU - eU);
 
   return o;
 }
 
 function cashV2SetDiffPill(el, diff){
   if (!el) return;
-  const n = Number(diff || 0);
-  el.textContent = cashV2FmtInt(n);
+  const n = cashV2Round2Money(diff);
+  el.textContent = cashV2FmtMoney(n);
   el.classList.toggle('danger', n !== 0);
 }
 
 function cashV2ClearCloseSummary(){
   const ids = [
-    'cashv2-sum-initial-nio','cashv2-sum-net-nio','cashv2-sum-expected-nio','cashv2-sum-final-nio',
-    'cashv2-sum-initial-usd','cashv2-sum-net-usd','cashv2-sum-expected-usd','cashv2-sum-final-usd'
+    'cashv2-sum-initial-nio','cashv2-sum-in-nio','cashv2-sum-out-nio','cashv2-sum-sales-nio','cashv2-sum-adjust-nio','cashv2-sum-expected-nio','cashv2-sum-final-nio',
+    'cashv2-sum-initial-usd','cashv2-sum-in-usd','cashv2-sum-out-usd','cashv2-sum-adjust-usd','cashv2-sum-expected-usd','cashv2-sum-final-usd'
   ];
-  ids.forEach(id=>{ try{ const el = document.getElementById(id); if (el) el.textContent = '0'; }catch(_){ } });
+  ids.forEach(id=>{ try{ const el = document.getElementById(id); if (el) el.textContent = '0.00'; }catch(_){ } });
   try{ cashV2SetDiffPill(document.getElementById('cashv2-sum-diff-nio'), 0); }catch(_){ }
   try{ cashV2SetDiffPill(document.getElementById('cashv2-sum-diff-usd'), 0); }catch(_){ }
 }
@@ -805,16 +1168,21 @@ function cashV2UpdateCloseSummary(rec){
   if (!r){ cashV2ClearCloseSummary(); return; }
 
   const nums = cashV2ComputeCloseNumbers(r, { preferDom: true });
-  try{ const el = document.getElementById('cashv2-sum-initial-nio'); if (el) el.textContent = cashV2FmtInt(nums.NIO.initial); }catch(_){ }
-  try{ const el = document.getElementById('cashv2-sum-net-nio'); if (el) el.textContent = cashV2FmtInt(nums.NIO.net); }catch(_){ }
-  try{ const el = document.getElementById('cashv2-sum-expected-nio'); if (el) el.textContent = cashV2FmtInt(nums.NIO.expected); }catch(_){ }
-  try{ const el = document.getElementById('cashv2-sum-final-nio'); if (el) el.textContent = cashV2FmtInt(nums.NIO.final); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-initial-nio'); if (el) el.textContent = cashV2FmtMoney(nums.NIO.initial); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-in-nio'); if (el) el.textContent = cashV2FmtMoney(nums.NIO.in); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-out-nio'); if (el) el.textContent = cashV2FmtMoney(nums.NIO.out); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-sales-nio'); if (el) el.textContent = cashV2FmtMoney(nums.NIO.sales); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-adjust-nio'); if (el) el.textContent = cashV2FmtMoney(nums.NIO.adjust); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-expected-nio'); if (el) el.textContent = cashV2FmtMoney(nums.NIO.expected); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-final-nio'); if (el) el.textContent = cashV2FmtMoney(nums.NIO.final); }catch(_){ }
   try{ cashV2SetDiffPill(document.getElementById('cashv2-sum-diff-nio'), nums.NIO.diff); }catch(_){ }
 
-  try{ const el = document.getElementById('cashv2-sum-initial-usd'); if (el) el.textContent = cashV2FmtInt(nums.USD.initial); }catch(_){ }
-  try{ const el = document.getElementById('cashv2-sum-net-usd'); if (el) el.textContent = cashV2FmtInt(nums.USD.net); }catch(_){ }
-  try{ const el = document.getElementById('cashv2-sum-expected-usd'); if (el) el.textContent = cashV2FmtInt(nums.USD.expected); }catch(_){ }
-  try{ const el = document.getElementById('cashv2-sum-final-usd'); if (el) el.textContent = cashV2FmtInt(nums.USD.final); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-initial-usd'); if (el) el.textContent = cashV2FmtMoney(nums.USD.initial); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-in-usd'); if (el) el.textContent = cashV2FmtMoney(nums.USD.in); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-out-usd'); if (el) el.textContent = cashV2FmtMoney(nums.USD.out); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-adjust-usd'); if (el) el.textContent = cashV2FmtMoney(nums.USD.adjust); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-expected-usd'); if (el) el.textContent = cashV2FmtMoney(nums.USD.expected); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-final-usd'); if (el) el.textContent = cashV2FmtMoney(nums.USD.final); }catch(_){ }
   try{ cashV2SetDiffPill(document.getElementById('cashv2-sum-diff-usd'), nums.USD.diff); }catch(_){ }
 }
 
@@ -862,6 +1230,14 @@ function cashV2SetMovementsEnabled(enabled){
   const en = !!enabled;
   const btnAdd = document.getElementById('cashv2-btn-add-movement');
   if (btnAdd) btnAdd.disabled = !en;
+
+  // Etapa 2/7: bloque visible (inline)
+  ['cashv2-move-kind-inline','cashv2-move-currency-inline','cashv2-move-amount-inline','cashv2-move-desc-inline'].forEach(id=>{
+    const el = document.getElementById(id);
+    if (el) el.disabled = !en;
+  });
+
+  // Compat: modal legacy (si existe en DOM)
   const btnSave = document.getElementById('cashv2-move-save');
   if (btnSave) btnSave.disabled = !en;
 }
@@ -942,6 +1318,7 @@ function cashV2EvalCloseRule(rec){
 
 function cashV2ApplyReadOnlyUi(isClosed){
   const ro = !!isClosed;
+  try{ cashV2SetFxEnabled(!ro); }catch(_){ }
   try{ cashV2SetInitialEnabled(!ro); }catch(_){ }
   try{ cashV2SetFinalEnabled(!ro); }catch(_){ }
   try{ cashV2SetMovementsEnabled(!ro); }catch(_){ }
@@ -1572,6 +1949,9 @@ async function renderEfectivoTab(){
   // Etapa 1/7: selector + activador
   cashV2InitEventSelectorUIOnce();
 
+  // Etapa 3/7: Tipo de cambio
+  cashV2InitFxUIOnce();
+
   // Reset UI
   try{ if (elErr){ elErr.style.display = 'none'; elErr.textContent = ''; } }catch(_){ }
   try{ if (elNoEvent){ elNoEvent.style.display = 'none'; } }catch(_){ }
@@ -1638,7 +2018,19 @@ async function renderEfectivoTab(){
       }
     }catch(_){ }
     try{ if (elNoEvent){ elNoEvent.style.display = 'block'; } }catch(_){ }
-    // Etapa 3: sin evento => oculta Inicio y bloquea controles
+    
+    // Etapa 3/7: sin evento => oculta Tipo de cambio
+    try{
+      const fx = document.getElementById('cashv2-fx-card');
+      if (fx){ fx.style.display = 'none'; fx.dataset.eventId=''; fx.dataset.dayKey=dayKey; fx.dataset.readonly='1'; }
+    }catch(_){ }
+    try{ cashV2SetFxEnabled(false); }catch(_){ }
+    try{ cashV2ApplyFxToDom(null, ''); }catch(_){ }
+// Etapa 3: sin evento => oculta Inicio y bloquea controles
+    try{
+      const fx = document.getElementById('cashv2-fx-card');
+      if (fx){ fx.style.display = 'none'; fx.dataset.eventId=''; fx.dataset.dayKey=dayKey; fx.dataset.readonly='1'; }
+    }catch(_){ }
     try{
       const card = document.getElementById('cashv2-initial-card');
       if (card){ card.style.display = 'none'; card.dataset.eventId = ''; card.dataset.dayKey = dayKey; }
@@ -1661,6 +2053,7 @@ async function renderEfectivoTab(){
     try{ cashV2SetLastRec(null); }catch(_){ }
     try{ cashV2ClearCloseSummary(); }catch(_){ }
     try{ cashV2UpdateCloseEligibility(null); }catch(_){ }
+    try{ cashV2ApplyCashSalesToDom(null); }catch(_){ }
     return;
   }
 
@@ -1697,6 +2090,11 @@ async function renderEfectivoTab(){
     }
   }catch(_){ }
 
+  // Etapa 4/7: Ventas en efectivo (C$) — solo lectura (no toca flujo de ventas)
+  let cashSalesC = 0;
+  try{ cashSalesC = await cashV2ComputeCashSalesC(eventId, dayKey); }catch(_){ cashSalesC = 0; }
+  try{ cashV2ApplyCashSalesToDom(cashSalesC); }catch(_){ }
+
   try{
     let locked = false;
     try{ locked = await isDayLocked(eventId, dayKey); }catch(_){ locked = false; }
@@ -1711,7 +2109,14 @@ async function renderEfectivoTab(){
     // Regla: si está BLOQUEADO (evento inactivo o flag OFF), solo lectura => no ensure (no writes)
     const editable = (!!isActiveEvent && !!flagOn);
     const rec = (editable && !locked) ? await cashV2Ensure(eventId, dayKey) : await cashV2Load(eventId, dayKey);
+    try{ if (rec && typeof rec === 'object') rec.cashSalesC = cashSalesC; }catch(_){ }
     try{ cashV2SetLastRec(rec); }catch(_){ }
+    // Etapa 3/7: mostrar Tipo de cambio
+    try{
+      const fx = document.getElementById('cashv2-fx-card');
+      if (fx){ fx.style.display = 'block'; fx.dataset.eventId = String(eventId); fx.dataset.dayKey = dayKey; }
+    }catch(_){ }
+    try{ cashV2ApplyFxToDom(rec, eventId); }catch(_){ }
     try{
       const card = document.getElementById('cashv2-initial-card');
       if (card){ card.style.display = 'block'; card.dataset.eventId = String(eventId); card.dataset.dayKey = dayKey; }
@@ -1736,6 +2141,7 @@ async function renderEfectivoTab(){
     try{
       const ro = !!(blocked || locked || cashV2IsClosed(rec));
       cashV2ApplyReadOnlyUi(ro);
+      try{ const fx = document.getElementById('cashv2-fx-card'); if (fx) fx.dataset.readonly = ro ? '1' : '0'; }catch(_){ }
       if (blocked && !cashV2IsClosed(rec)){
         cashV2SetCloseUiState({ canClose:false, reason:'Bloqueado: Efectivo OFF o evento inactivo' });
       }
@@ -14827,6 +15233,7 @@ async function init(){
     try{ await renderSummaryDailyCloseCardPOS(); }catch(e){}
     try{ await refreshSaleStockLabel(); }catch(e){}
     try{ if (window.__A33_ACTIVE_TAB === 'checklist') await renderChecklistTab(); }catch(e){}
+    try{ if (window.__A33_ACTIVE_TAB === 'efectivo') await renderEfectivoTab(); }catch(e){}
   });
   const btnGoCaja = document.getElementById('btn-go-caja');
   if (btnGoCaja){
