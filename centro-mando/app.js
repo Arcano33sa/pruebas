@@ -1302,6 +1302,60 @@ function computeChecklistProgress(ev, dayKey){
   return { ok:true, text:`${checked}/${total}`, checked, total, reason:'' };
 }
 
+function truncateChecklistLine(s, maxLen){
+  const v = (s == null) ? '' : String(s);
+  const t = v.trim();
+  const m = (typeof maxLen === 'number' && isFinite(maxLen) && maxLen > 10) ? Math.floor(maxLen) : 92;
+  if (t.length <= m) return t;
+  return (t.slice(0, Math.max(1, m-1)).trimEnd() + '…');
+}
+
+function getPendingChecklistTexts(ev, dayKey){
+  try{
+    if (!ev || typeof ev !== 'object') return [];
+    const tpl = (ev.checklistTemplate && typeof ev.checklistTemplate === 'object') ? ev.checklistTemplate : null;
+    if (!tpl) return [];
+
+    const arr = (x)=> Array.isArray(x) ? x : [];
+    const flat = ([]
+      .concat(arr(tpl.pre))
+      .concat(arr(tpl.evento))
+      .concat(arr(tpl.cierre)))
+      .filter(x=> x && typeof x === 'object');
+    if (!flat.length) return [];
+
+    const day = (ev.days && typeof ev.days === 'object') ? ev.days[dayKey] : null;
+    const st = (day && day.checklistState && typeof day.checklistState === 'object') ? day.checklistState : null;
+    const checkedIds = st ? uniq(st.checkedIds) : [];
+    const checkedSet = new Set(checkedIds.map(String));
+
+    const out = [];
+    const seen = new Set();
+    for (const it of flat){
+      const id = String(it.id || '');
+      if (!id) continue;
+      if (checkedSet.has(id)) continue;
+      const raw = String(it.text || '').trim();
+      if (!raw) continue;
+      const t = truncateChecklistLine(raw, 92);
+      const k = t.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(t);
+    }
+    return out;
+  }catch(_){ }
+  return [];
+}
+
+function getFirstPendingChecklistText(ev, dayKey){
+  try{
+    const pending = getPendingChecklistTexts(ev, dayKey);
+    return (Array.isArray(pending) && pending.length) ? pending[0] : null;
+  }catch(_){ }
+  return null;
+}
+
 function hasPettyDayActivity(day){
   if (!day || typeof day !== 'object') return false;
   if (day.initial && day.initial.savedAt) return true;
@@ -2102,17 +2156,39 @@ function buildActionableAlerts(ev, dayKey, cv2){
     // No se puede evaluar con seguridad (sin evento / sin datos)
     unavailable.push({ key: 'fx-missing', label: labelForAlertKey('fx-missing'), reason: (cv2 && cv2.reason) ? cv2.reason : 'No disponible' });
   }
-
-  // 3) Checklist hoy incompleto (solo si existe plantilla)
+  // 3) Checklist hoy (PRO: top 3 + +N + Al día) — solo si existe plantilla
   if (ev && ev.checklistTemplate && typeof ev.checklistTemplate === 'object'){
     const chk = computeChecklistProgress(ev, dayKey);
     if (chk && chk.ok && typeof chk.checked === 'number' && typeof chk.total === 'number' && chk.total > 0){
-      if (chk.checked < chk.total){
+      const pending = getPendingChecklistTexts(ev, dayKey);
+      const pcount = Array.isArray(pending) ? pending.length : 0;
+      const lines = [`Hoy (${dayKey}): ${chk.checked}/${chk.total}`];
+
+      const isComplete = (chk.checked >= chk.total);
+
+      if (isComplete){
+        lines.push('Al día ✅');
+        alerts.push({
+          key: 'checklist-incomplete',
+          icon: '✅',
+          title: 'Checklist al día',
+          sub: lines.join('\n'),
+          cta: 'Abrir Checklist',
+          tab: 'checklist'
+        });
+      } else {
+        const top = Array.isArray(pending) ? pending.slice(0,3) : [];
+        for (const t of top){
+          if (t) lines.push(`• ${t}`);
+        }
+        if (pcount > 3){
+          lines.push(`+${pcount - 3} más`);
+        }
         alerts.push({
           key: 'checklist-incomplete',
           icon: '✅',
           title: 'Checklist hoy incompleto',
-          sub: `Hoy (${dayKey}): ${chk.checked}/${chk.total}`,
+          sub: lines.join('\n'),
           cta: 'Abrir Checklist',
           tab: 'checklist'
         });
@@ -2457,6 +2533,7 @@ async function reloadEventsFromDB(){
 let __CMD_GLOBAL_EVT_TIMER = null;
 let __CMD_GLOBAL_EVT_BUSY = false;
 let __CMD_GLOBAL_EVT_LASTRUN = 0;
+let __CMD_GLOBAL_EVT_LASTFULL = 0;
 let __CMD_GLOBAL_EVT_LASTID = null;
 
 function scheduleGlobalEventRefresh(reason){
@@ -2470,6 +2547,35 @@ function scheduleGlobalEventRefresh(reason){
       void doGlobalEventRefresh(reason);
     }, delay);
   }catch(_){ }
+}
+
+async function refreshFocusEventFromDB(){
+  try{
+    const id = Number(state && state.focusId || 0);
+    if (!id) return false;
+    if (!state.db || !hasStore(state.db, 'events')) return false;
+
+    const fresh = await idbGet(state.db, 'events', id);
+    if (fresh && fresh.id != null){
+      if (state.eventsById && typeof state.eventsById.set === 'function') state.eventsById.set(id, fresh);
+      state.focusEvent = fresh;
+      if (Array.isArray(state.events) && state.events.length){
+        const ix = state.events.findIndex(e=> e && Number(e.id) === id);
+        if (ix >= 0) state.events[ix] = fresh;
+      }
+      // Best-effort: si el usuario NO está editando el buscador, mantener nombre actualizado
+      try{
+        const input = $('eventSearch');
+        if (input && document && document.activeElement !== input){
+          input.value = safeStr(fresh.name) || '';
+        }
+      }catch(_){ }
+      try{ renderFocusHint(); }catch(_){ }
+      try{ renderRadarBasics(); }catch(_){ }
+      return true;
+    }
+  }catch(_){ }
+  return false;
 }
 
 async function doGlobalEventRefresh(reason){
@@ -2489,6 +2595,7 @@ async function doGlobalEventRefresh(reason){
     const db = state.db;
     if (!db || !hasStore(db, 'meta')){
       if (dayChanged && state.focusEvent) await refreshAll();
+      __CMD_GLOBAL_EVT_LASTFULL = Date.now();
       return;
     }
 
@@ -2497,6 +2604,7 @@ async function doGlobalEventRefresh(reason){
     const gid = Number(globalId || 0) || null;
     if (!gid){
       if (dayChanged && state.focusEvent) await refreshAll();
+      __CMD_GLOBAL_EVT_LASTFULL = Date.now();
       return;
     }
 
@@ -2505,18 +2613,29 @@ async function doGlobalEventRefresh(reason){
     // Si el evento global cambió y no está en el índice local, recargar lista (sin inventar)
     if (changed && (!state.eventsById || !state.eventsById.has(gid))){
       await reloadEventsFromDB();
-      try{ renderEventList(safeStr($('eventSearch')?.value || '')); }catch(_){ }
+      try{
+        const se = $('eventSearch');
+        const q = se ? safeStr(se.value) : '';
+        renderEventList(q);
+      }catch(_){ }
     }
 
     if (changed && state.eventsById && state.eventsById.has(gid)){
       await setFocusEvent(gid);
       __CMD_GLOBAL_EVT_LASTID = gid;
+      __CMD_GLOBAL_EVT_LASTFULL = Date.now();
       return;
     }
-
-    // Evento igual: refrescar solo si cambió el día (evitar spam)
-    if (!changed && dayChanged && state.focusEvent){
-      await refreshAll();
+    // Evento igual: al volver desde POS, refrescar (sin recargar) progreso/lista de Checklist y demás
+    if (!changed && state.focusEvent){
+      const now = Date.now();
+      const elapsedFull = now - (__CMD_GLOBAL_EVT_LASTFULL || 0);
+      if (elapsedFull > 900){
+        // No escribir: solo re-leer el evento del store y re-render
+        await refreshFocusEventFromDB();
+        await refreshAll();
+        __CMD_GLOBAL_EVT_LASTFULL = now;
+      }
     }
 
     __CMD_GLOBAL_EVT_LASTID = gid;

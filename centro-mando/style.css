@@ -183,7 +183,7 @@ html, body{
 }
 .cmd-alert-text{ flex: 1 1 auto; min-width: 0; }
 .cmd-alert-title{ font-weight: 800; font-size: 13.5px; }
-.cmd-alert-sub{ color: var(--muted); font-size: 12px; margin-top: 2px; }
+.cmd-alert-sub{ color: var(--muted); font-size: 12px; margin-top: 2px; white-space: pre-line; }
 
 .cmd-btn{
   border: 1px solid rgba(221,191,100,0.22);
