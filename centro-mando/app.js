@@ -1304,8 +1304,9 @@ function computeChecklistProgress(ev, dayKey){
 
 function truncateChecklistLine(s, maxLen){
   const v = (s == null) ? '' : String(s);
-  const t = v.trim();
-  const m = (typeof maxLen === 'number' && isFinite(maxLen) && maxLen > 10) ? Math.floor(maxLen) : 92;
+  // Aplanar whitespace (incluye saltos de línea) para que el truncado/ellipsis sea predecible.
+  const t = v.replace(/\s+/g, ' ').trim();
+  const m = (typeof maxLen === 'number' && isFinite(maxLen) && maxLen > 10) ? Math.floor(maxLen) : 180;
   if (t.length <= m) return t;
   return (t.slice(0, Math.max(1, m-1)).trimEnd() + '…');
 }
@@ -1469,7 +1470,7 @@ function getPendingChecklistTexts(ev, dayKey){
       const raw = resolveTextoPendiente(it, dayTextMap);
       if (!raw) continue;
 
-      const t = truncateChecklistLine(raw, 92);
+      const t = truncateChecklistLine(raw, 180);
       if (!t) continue;
 
       const k = _normStrNoAccentsA33(t).toLowerCase().replace(/\s+/g,' ').trim();
@@ -1488,6 +1489,61 @@ function getFirstPendingChecklistText(ev, dayKey){
     return (Array.isArray(pending) && pending.length) ? pending[0] : null;
   }catch(_){ }
   return null;
+}
+
+
+function getFocusedPendingReminderTextsForDay(remRows, ev, dayKey){
+  try{
+    const rows = Array.isArray(remRows) ? remRows : [];
+    const evId = (ev && ev.id != null) ? String(ev.id) : '';
+    const dk = String(dayKey || '').trim();
+    if (!evId || !dk || !rows.length) return { top:[], pendingCount:0 };
+
+    const filtered = [];
+    for (const r of rows){
+      if (!r || typeof r !== 'object') continue;
+      if (r.done) continue;
+      const rdk = safeStr(r.dayKey);
+      if (rdk && rdk !== dk) continue;
+      const rid = (r.eventId != null) ? String(r.eventId) : '';
+      if (!rid || rid !== evId) continue;
+      const txt = safeStr(r.text).trim();
+      if (!txt) continue;
+      if (isClearlyPlaceholderChecklistText(txt)) continue;
+      filtered.push(r);
+    }
+
+    // Orden consistente con “Recordatorios · Próximos 7 días”
+    filtered.sort((a,b)=>{
+      const ad = remindersDueMinutes(a);
+      const bd = remindersDueMinutes(b);
+      if (ad !== bd) return ad - bd;
+      const ap = remindersPriorityRank(a && a.priority);
+      const bp = remindersPriorityRank(b && b.priority);
+      if (ap !== bp) return ap - bp;
+      const au = Number((a && (a.updatedAt || a.createdAt)) || 0);
+      const bu = Number((b && (b.updatedAt || b.createdAt)) || 0);
+      if (au !== bu) return bu - au;
+      return safeStr(a && a.idxId).localeCompare(safeStr(b && b.idxId));
+    });
+
+    const top = [];
+    const seen = new Set();
+    for (const r of filtered){
+      const raw = safeStr(r.text);
+      const t = truncateChecklistLine(raw, 180);
+      if (!t) continue;
+      const k = _normStrNoAccentsA33(t).toLowerCase().replace(/\s+/g,' ').trim();
+      if (!k || seen.has(k)) continue;
+      seen.add(k);
+      top.push(t);
+      if (top.length >= 3) break;
+    }
+
+    return { top, pendingCount: filtered.length };
+  }catch(_){
+    return { top:[], pendingCount:0 };
+  }
 }
 
 function hasPettyDayActivity(day){
@@ -1620,7 +1676,21 @@ function renderAlerts(alerts){
 
     const sub = document.createElement('div');
     sub.className = 'cmd-alert-sub';
-    sub.textContent = (a && a.sub != null) ? String(a.sub) : '';
+
+    // Checklist (alerta premium): render por líneas para permitir truncado elegante (ellipsis)
+    if (a && String(a.key || '') === 'checklist-incomplete' && a.sub != null){
+      sub.classList.add('cmd-alert-sub-lines');
+      const raw = String(a.sub);
+      const parts = raw.split('\n').map(x=> String(x ?? '').trim()).filter(Boolean);
+      for (const line of (parts.length ? parts : ['—'])){
+        const ln = document.createElement('div');
+        ln.className = 'cmd-alert-subline';
+        ln.textContent = line;
+        sub.appendChild(ln);
+      }
+    } else {
+      sub.textContent = (a && a.sub != null) ? String(a.sub) : '';
+    }
 
     main.appendChild(title);
     main.appendChild(sub);
@@ -2246,7 +2316,7 @@ function labelForAlertKey(k){
 }
 
 
-function buildActionableAlerts(ev, dayKey, cv2){
+function buildActionableAlerts(ev, dayKey, cv2, remindersToday){
   const alerts = [];
   const unavailable = [];
 
@@ -2294,8 +2364,6 @@ function buildActionableAlerts(ev, dayKey, cv2){
   if (ev && ev.checklistTemplate && typeof ev.checklistTemplate === 'object'){
     const chk = computeChecklistProgress(ev, dayKey);
     if (chk && chk.ok && typeof chk.checked === 'number' && typeof chk.total === 'number' && chk.total > 0){
-      const pending = getPendingChecklistTexts(ev, dayKey);
-      const pcount = Array.isArray(pending) ? pending.length : 0;
       const lines = [`Hoy (${dayKey}): ${chk.checked}/${chk.total}`];
 
       const isComplete = (chk.checked >= chk.total);
@@ -2311,13 +2379,36 @@ function buildActionableAlerts(ev, dayKey, cv2){
           tab: 'checklist'
         });
       } else {
-        const top = Array.isArray(pending) ? pending.slice(0,3) : [];
-        for (const t of top){
-          if (t) lines.push(`• ${t}`);
+        // Fuente principal: Recordatorios reales (HOY + Evento enfocado + NO completados)
+        const remRows = (remindersToday && remindersToday.ok && Array.isArray(remindersToday.rows))
+          ? remindersToday.rows
+          : (Array.isArray(remindersToday) ? remindersToday : []);
+        const remInfo = getFocusedPendingReminderTextsForDay(remRows, ev, dayKey);
+        const remTop = (remInfo && Array.isArray(remInfo.top)) ? remInfo.top : [];
+        const remCount = (remInfo && typeof remInfo.pendingCount === 'number') ? remInfo.pendingCount : remTop.length;
+
+        if (remTop.length){
+          for (const t of remTop){
+            if (t) lines.push(`• ${t}`);
+          }
+          if (remCount > remTop.length){
+            lines.push(`+${remCount - remTop.length} más`);
+          }
+        } else {
+          // Fallback: checklist pendiente (si existe) pero sin placeholders (“Nuevo ítem”, etc.)
+          const pending = getPendingChecklistTexts(ev, dayKey).filter(t => t && !isClearlyPlaceholderChecklistText(t));
+          const top = pending.slice(0,3);
+          for (const t of top){
+            if (t) lines.push(`• ${t}`);
+          }
+          if (pending.length > top.length){
+            lines.push(`+${pending.length - top.length} más`);
+          }
+          if (!top.length){
+            lines.push('—');
+          }
         }
-        if (pcount > 3){
-          lines.push(`+${pcount - 3} más`);
-        }
+
         alerts.push({
           key: 'checklist-incomplete',
           icon: '✅',
@@ -2472,7 +2563,9 @@ async function syncAlerts(){
         try{ en = await resolveCashV2EnabledForEvent(ev); }catch(_){ en = null; }
         cv2 = { ok:false, enabled: en ? (en.enabled === true) : null, reason:'No disponible' };
       }
-      const al = buildActionableAlerts(ev, dayKey, cv2);
+      let remToday = null;
+      try{ remToday = await readRemindersIndexForDay(state.db, dayKey); }catch(_){ remToday = null; }
+      const al = buildActionableAlerts(ev, dayKey, cv2, remToday);
       if (al && Array.isArray(al.unavailable) && al.unavailable.length){
         unavailable.push(...al.unavailable);
       }
@@ -2923,6 +3016,14 @@ async function refreshAll(){
 
   const dk = state.today;
 
+  // Recordatorios de HOY (para alertas accionables: evento enfocado)
+  let remToday = null;
+  try{
+    remToday = await readRemindersIndexForDay(state.db, dk);
+  }catch(_){
+    remToday = { ok:false, rows:[], reason:'No disponible' };
+  }
+
   // Checklist
   const chk = computeChecklistProgress(ev, dk);
   setText('checklistProgress', chk.text);
@@ -2996,7 +3097,7 @@ if (cv2.ok && cv2.enabled === false){
   setText('radarUnclosed', (unc && unc.ok) ? unc.value : '—');
 
   // Alertas accionables (solo con señal real)
-  const al = buildActionableAlerts(ev, dk, cv2);
+  const al = buildActionableAlerts(ev, dk, cv2, remToday);
   const mergedAlerts = ([]
     .concat((ordersOut && Array.isArray(ordersOut.alerts)) ? ordersOut.alerts : [])
     .concat(Array.isArray(al.alerts) ? al.alerts : []));
