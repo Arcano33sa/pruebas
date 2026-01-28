@@ -208,6 +208,11 @@ async function cashV2OpenTodayFromPrevClosed(eventId, todayDayKey){
     }
   }catch(_){ }
 
+  let inheritedFx = null;
+  try{ inheritedFx = await cashV2ReadEventFxCanon(eid); }catch(_){ inheritedFx = null; }
+  // Fallback: si el día anterior tenía FX válido y aún no hay canon/cache, heredar ese.
+  try{ if (inheritedFx == null){ inheritedFx = cashV2FxNorm(prev && prev.fx); } }catch(_){ }
+
   const rec = {
     version: 2,
     key: cashV2Key(eid, todayKey),
@@ -216,7 +221,7 @@ async function cashV2OpenTodayFromPrevClosed(eventId, todayDayKey){
     openTs,
     status: 'OPEN',
     closeTs: null,
-    fx: null,
+    fx: (inheritedFx != null ? cashV2CoerceFx(inheritedFx) : null),
     initial,
     movements: [],
     final: null,
@@ -296,6 +301,17 @@ async function cashV2Ensure(eventId, dayKey){
       }
     }catch(_){ }
 
+    // Etapa 2/3: Herencia automática de FX al abrir día (sin reingresar) — ensure (existing)
+    try{
+      if (cashV2FxNorm(existing.fx) == null){
+        const canon = await cashV2ReadEventFxCanon(eid);
+        if (canon != null){
+          existing.fx = cashV2CoerceFx(canon);
+          changed = true;
+        }
+      }
+    }catch(_){ }
+
     if (changed){
       try{ existing = await cashV2Save(existing); }catch(_){ }
     }
@@ -315,6 +331,9 @@ async function cashV2Ensure(eventId, dayKey){
     }
   }catch(_){ }
 
+  let inheritedFx = null;
+  try{ inheritedFx = await cashV2ReadEventFxCanon(eid); }catch(_){ inheritedFx = null; }
+
   const cashDay = {
     version: 2,
     key,
@@ -323,7 +342,7 @@ async function cashV2Ensure(eventId, dayKey){
     openTs,
     status: 'OPEN',
     closeTs: null,
-    fx: null,
+    fx: (inheritedFx != null ? cashV2CoerceFx(inheritedFx) : null),
     initial: null,
     movements: [],
     final: null,
@@ -1021,6 +1040,83 @@ function cashV2FxSetCached(eventId, rate){
   }catch(_){ return false; }
 }
 
+// Canon: FX por EVENTO (IndexedDB store 'events')
+// - Se guarda en events.fx como string con 2 decimales (ej: "36.50").
+// - Lectura única: evento(canon) -> cache por evento -> fx del día.
+const CASHV2_EVENT_FX_PROP = 'fx';
+const CASHV2_EVENT_FX_FALLBACK_PROPS = ['fx','exchangeRate','exchange_rate','fxRate','tc','tipoCambio','tipo_cambio'];
+
+function cashV2GetFxFromEventObj(ev){
+  if (!ev || typeof ev !== 'object') return null;
+  for (const p of CASHV2_EVENT_FX_FALLBACK_PROPS){
+    try{
+      if (ev[p] == null) continue;
+      const n = cashV2FxNorm(ev[p]);
+      if (n != null) return n;
+    }catch(_){ }
+  }
+  return null;
+}
+
+async function cashV2PersistEventFx(eventId, rate){
+  const eidNum = Number(eventId);
+  const n = cashV2FxNorm(rate);
+  if (!Number.isFinite(eidNum) || n == null) return false;
+
+  try{
+    if (!db) await openDB();
+    const ev = await getOne('events', eidNum);
+    if (ev && typeof ev === 'object'){
+      ev[CASHV2_EVENT_FX_PROP] = cashV2FxFmt2(n);
+      await put('events', ev);
+      return true;
+    }
+  }catch(_){ }
+
+  return false;
+}
+
+
+// Etapa 2/3: Herencia automática de FX al abrir día (sin reingresar)
+// Lee el FX CANON del evento (events.fx) y, si no existe, usa fallback del cache por evento.
+async function cashV2ReadEventFxCanon(eventId){
+  const eid = cashV2AssertEventId(eventId);
+
+  // 1) Canon en IndexedDB (store 'events')
+  try{
+    const eidNum = Number(eid);
+    if (Number.isFinite(eidNum)){
+      if (!db) await openDB();
+      const ev = await getOne('events', eidNum);
+      const r = cashV2GetFxFromEventObj(ev);
+      if (r != null) return r;
+    }
+  }catch(_){ }
+
+  // 2) Fallback: cache por evento (compatibilidad / precarga)
+  try{
+    const r2 = cashV2FxGetCached(eid);
+    if (r2 != null) return r2;
+  }catch(_){ }
+
+  return null;
+}
+
+function cashV2GetFxEffective(rec, eventId, evObj){
+  // a) canon en evento
+  let rate = cashV2GetFxFromEventObj(evObj);
+  // b) cache por evento
+  if (rate == null && eventId){
+    try{ rate = cashV2FxGetCached(eventId); }catch(_){ rate = null; }
+  }
+  // c) último recurso: fx del día
+  if (rate == null){
+    rate = cashV2FxNorm(rec && rec.fx);
+  }
+  return rate;
+}
+
+
 // Normaliza lo que entra al record v2 (persistencia)
 function cashV2CoerceFx(v){
   const n = cashV2FxNorm(v);
@@ -1035,7 +1131,7 @@ function cashV2SetFxEnabled(en){
   try{ const btn = document.getElementById('cashv2-btn-save-fx'); if (btn) btn.disabled = !ok; }catch(_){ }
 }
 
-function cashV2ApplyFxToDom(rec, eventId){
+function cashV2ApplyFxToDom(rec, eventId, evObj){
   const inp = document.getElementById('cashv2-fx-input');
   const st = document.getElementById('cashv2-fx-save-status');
   const err = document.getElementById('cashv2-fx-error');
@@ -1046,12 +1142,7 @@ function cashV2ApplyFxToDom(rec, eventId){
 
   if (!inp) return;
 
-  let rate = cashV2FxNorm(rec && rec.fx);
-
-  // fallback: cache por evento (nuevo, no legacy)
-  if (rate == null && eventId){
-    try{ rate = cashV2FxGetCached(eventId); }catch(_){ rate = null; }
-  }
+  let rate = cashV2GetFxEffective(rec, eventId, evObj);
 
   const fixed = (rate != null) ? cashV2FxFmt2(rate) : '';
   try{ inp.value = fixed; }catch(_){ }
@@ -1115,6 +1206,7 @@ function cashV2InitFxUIOnce(){
 
       try{ cashV2SetLastRec(saved); }catch(_){ }
       cashV2FxSetCached(eid, n);
+      try{ await cashV2PersistEventFx(eid, n); }catch(_){ }
 
       // write-through: also save FX where Calculadora reads its rate (single source of truth)
       try{
@@ -3444,7 +3536,7 @@ async function renderEfectivoTab(){
       if (fx){ fx.style.display = 'none'; fx.dataset.eventId=''; fx.dataset.dayKey=dayKey; fx.dataset.readonly='1'; }
     }catch(_){ }
     try{ cashV2SetFxEnabled(false); }catch(_){ }
-    try{ cashV2ApplyFxToDom(null, ''); }catch(_){ }
+    try{ cashV2ApplyFxToDom(null, '', null); }catch(_){ }
 // Etapa 3: sin evento => oculta Inicio y bloquea controles
     try{
       const fx = document.getElementById('cashv2-fx-card');
@@ -3634,7 +3726,7 @@ async function renderEfectivoTab(){
         const fx = document.getElementById('cashv2-fx-card');
         if (fx){ fx.style.display = 'block'; fx.dataset.eventId = String(eventId); fx.dataset.dayKey = dayKey; fx.dataset.readonly = '1'; }
       }catch(_){ }
-      try{ cashV2ApplyFxToDom(null, eventId); }catch(_){ }
+      try{ cashV2ApplyFxToDom(null, eventId, evObj); }catch(_){ }
       try{ cashV2SetFxEnabled(false); }catch(_){ }
 
       // Ocultar/inhabilitar el resto hasta abrir el día
@@ -3682,7 +3774,7 @@ async function renderEfectivoTab(){
       const fx = document.getElementById('cashv2-fx-card');
       if (fx){ fx.style.display = 'block'; fx.dataset.eventId = String(eventId); fx.dataset.dayKey = dayKey; }
     }catch(_){ }
-    try{ cashV2ApplyFxToDom(rec, eventId); }catch(_){ }
+    try{ cashV2ApplyFxToDom(rec, eventId, evObj); }catch(_){ }
     try{
       const card = document.getElementById('cashv2-initial-card');
       if (card){ card.style.display = 'block'; card.dataset.eventId = String(eventId); card.dataset.dayKey = dayKey; }

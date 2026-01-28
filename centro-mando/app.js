@@ -19,6 +19,8 @@ const SAFE_SCAN_LIMIT = 4000; // seguridad: evitar loops gigantes
 
 // Efectivo v2: cache FX por evento (misma llave que POS)
 const CASHV2_FX_LS_KEY = 'A33.EF2.fxByEvent';
+// Efectivo v2: bandera ON/OFF por evento (fallback), misma llave que POS
+const CASHV2_FLAGS_LS_KEY = 'A33.EF2.eventFlags';
 
 // --- Recordatorios (índice liviano desde POS)
 const REMINDERS_STORE = 'posRemindersIndex';
@@ -576,6 +578,59 @@ function readCashV2FxCached(eventId){
   }catch(_){
     return null;
   }
+}
+
+function readCashV2FlagsCached(){
+  try{
+    const raw = localStorage.getItem(CASHV2_FLAGS_LS_KEY);
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    if (obj && typeof obj === 'object') return obj;
+  }catch(_){ }
+  return null;
+}
+
+async function resolveCashV2EnabledForEvent(ev){
+  // Estrategia (alineada a POS) + default seguro OFF:
+  // a) bandera persistida en EVENTO
+  // b) fallback cache por evento (localStorage)
+  // c) evidencia real en store cashV2 (si existe)
+  // d) default: OFF
+  try{
+    if (ev && typeof ev.cashV2Active === 'boolean'){
+      return { enabled: !!ev.cashV2Active, source: 'event' };
+    }
+  }catch(_){ }
+
+  const eid = Number(ev && ev.id);
+  if (eid){
+    try{
+      const m = readCashV2FlagsCached();
+      const k = String(eid);
+      if (m && Object.prototype.hasOwnProperty.call(m, k)){
+        return { enabled: !!m[k], source: 'cache' };
+      }
+      // por si guardaron numérico
+      if (m && Object.prototype.hasOwnProperty.call(m, eid)){
+        return { enabled: !!m[eid], source: 'cache' };
+      }
+    }catch(_){ }
+  }
+
+  // Evidencia real: si hay registros en cashV2 para el evento, asumimos ON.
+  try{
+    const db = state.db;
+    if (db && eid && hasStore(db, 'cashV2')){
+      let c = await idbCountByIndex(db, 'cashV2', 'by_event', IDBKeyRange.only(eid));
+      if (typeof c !== 'number'){
+        const rows = await idbGetAllByIndex(db, 'cashV2', 'by_event', IDBKeyRange.only(eid));
+        c = Array.isArray(rows) ? rows.length : 0;
+      }
+      if (typeof c === 'number' && c > 0) return { enabled: true, source: 'cashV2' };
+    }
+  }catch(_){ }
+
+  return { enabled: false, source: 'default' };
 }
 
 function safeStr(x){
@@ -1758,8 +1813,9 @@ async function computeCashV2Status(ev, dayKey){
     return { ok:false, enabled:null, isOpen:null, dayState:null, opDayKey:null, fx:null, fxMissing:null, fxKnown:false, status:null, fxSource:'unknown', reason:'No disponible' };
   }
 
-  // Regla Etapa 3/4: NO APLICA si la bandera NO es true (estricto)
-  const enabled = (ev.cashV2Active === true);
+  // Detección NO estricta (align POS): evento.flag -> cache -> evidencia store -> default OFF
+  const en = await resolveCashV2EnabledForEvent(ev);
+  const enabled = !!(en && en.enabled === true);
   if (!enabled){
     return { ok:true, enabled:false, isOpen:false, dayState:'No aplica', opDayKey:null, fx:null, fxMissing:false, fxKnown:false, status:null, fxSource:'unknown', reason:'' };
   }
@@ -1839,9 +1895,15 @@ async function computeCashV2Status(ev, dayKey){
 async function computeUnclosed7d(ev, todayDayKey){
   // Radar 7d: conteo de días con Efectivo ABIERTO / sin cierre (cashV2).
   // Regla: NO inventar. Si no hay data, decirlo.
-  if (!ev || ev.cashV2Active !== true) return { ok:true, value:'—', reason:'' };
+  if (!ev) return { ok:true, value:'—', reason:'' };
   const db = state.db;
-  if (!db || !hasStore(db, 'cashV2')) return { ok:false, value:'—', reason:'No disponible' };
+  if (!db) return { ok:false, value:'—', reason:'No disponible' };
+
+  const en = await resolveCashV2EnabledForEvent(ev);
+  if (!en || en.enabled !== true) return { ok:true, value:'—', reason:'' };
+
+  // cashV2 es la fuente de verdad del estado OPEN/CLOSED
+  if (!hasStore(db, 'cashV2')) return { ok:false, value:'—', reason:'No disponible' };
 
   const eid = Number(ev.id);
 
@@ -1857,7 +1919,6 @@ async function computeUnclosed7d(ev, todayDayKey){
     return '';
   };
 
-  // Tomar los últimos 7 dayKeys REALES del evento.
   // Si hay duplicados por día, quedarnos con el más reciente por timestamp.
   const byDay = new Map();
   for (const r of rows){
@@ -1869,18 +1930,60 @@ async function computeUnclosed7d(ev, todayDayKey){
     if (!cur || ts >= Number(cur.ts || 0)) byDay.set(dk, { rec: r, ts });
   }
 
-  const keys = Array.from(byDay.keys()).sort((a,b)=> b.localeCompare(a));
+  // Tomar últimos 7 dayKeys disponibles (dayLocks y/o histórico) + cashV2
+  const keySet = new Set(Array.from(byDay.keys()));
+  const addKey = (k)=>{ const dk = safeYMD(k || ''); if (dk) keySet.add(dk); };
+
+  // dayLocks (cierres) — si existe
+  if (hasStore(db, 'dayLocks')){
+    try{
+      let locks = await idbGetAllByIndex(db, 'dayLocks', 'by_event', IDBKeyRange.only(eid));
+      if (locks === null) locks = await idbGetAll(db, 'dayLocks');
+      if (Array.isArray(locks)){
+        if (locks.length <= SAFE_SCAN_LIMIT){
+          for (const r of locks){
+            if (!r || Number(r.eventId) !== eid) continue;
+            addKey(r.dateKey || r.dayKey);
+          }
+        }
+      }
+    }catch(_){ }
+  }
+
+  // cashV2 histórico (headers) — si existe
+  if (hasStore(db, 'cashv2hist')){
+    try{
+      let hist = await idbGetAllByIndex(db, 'cashv2hist', 'by_event', IDBKeyRange.only(eid));
+      if (hist === null) hist = await idbGetAll(db, 'cashv2hist');
+      if (Array.isArray(hist)){
+        if (hist.length <= SAFE_SCAN_LIMIT){
+          for (const r of hist){
+            if (!r || Number(r.eventId) !== eid) continue;
+            addKey(r.dayKey);
+          }
+        }
+      }
+    }catch(_){ }
+  }
+
+  const keys = Array.from(keySet).sort((a,b)=> b.localeCompare(a));
   if (!keys.length) return { ok:true, value:'Sin datos', reason:'' };
 
   const top7 = keys.slice(0, 7);
-  let cnt = 0;
+  let cntOpen = 0;
+  let known = 0;
   for (const dk of top7){
     const wrap = byDay.get(dk);
-    const st = normStatus(wrap && wrap.rec ? wrap.rec.status : '');
-    if (st === 'OPEN') cnt += 1;
+    if (!wrap || !wrap.rec){
+      continue; // no dato real de cashV2 para ese día
+    }
+    known += 1;
+    const st = normStatus(wrap.rec.status);
+    if (st === 'OPEN') cntOpen += 1;
   }
 
-  return { ok:true, value: String(cnt), reason:'' };
+  if (known === 0) return { ok:true, value:'Sin datos', reason:'' };
+  return { ok:true, value: String(cntOpen), reason:'' };
 }
 
 // --- Alertas (motor + Sincronizar)
@@ -2102,7 +2205,9 @@ async function syncAlerts(){
       try{
         cv2 = await computeCashV2Status(ev, dayKey);
       }catch(err){
-        cv2 = { ok:false, enabled: (ev && ev.cashV2Active === true) ? true : null, reason:'No disponible' };
+        let en = null;
+        try{ en = await resolveCashV2EnabledForEvent(ev); }catch(_){ en = null; }
+        cv2 = { ok:false, enabled: en ? (en.enabled === true) : null, reason:'No disponible' };
       }
       const al = buildActionableAlerts(ev, dayKey, cv2);
       if (al && Array.isArray(al.unavailable) && al.unavailable.length){
@@ -2273,6 +2378,103 @@ function eventSortKey(ev){
   return Number(ev.id || 0);
 }
 
+async function reloadEventsFromDB(){
+  const db = state.db;
+  if (!db || !hasStore(db, 'events')){
+    state.events = [];
+    state.eventsById = new Map();
+    return;
+  }
+
+  let events = await idbGetAll(db, 'events');
+  if (!Array.isArray(events)) events = [];
+
+  const cleaned = events.filter(e=> e && e.id != null);
+  cleaned.sort((a,b)=> eventSortKey(b) - eventSortKey(a));
+
+  state.events = cleaned;
+  const map = new Map();
+  for (const ev of cleaned){
+    map.set(Number(ev.id), ev);
+  }
+  state.eventsById = map;
+}
+
+// --- Evento GLOBAL: refresh sin recarga (focus/visibility)
+let __CMD_GLOBAL_EVT_TIMER = null;
+let __CMD_GLOBAL_EVT_BUSY = false;
+let __CMD_GLOBAL_EVT_LASTRUN = 0;
+let __CMD_GLOBAL_EVT_LASTID = null;
+
+function scheduleGlobalEventRefresh(reason){
+  try{
+    const now = Date.now();
+    const elapsed = now - (__CMD_GLOBAL_EVT_LASTRUN || 0);
+    const delay = (elapsed < 600) ? 650 : 140;
+    if (__CMD_GLOBAL_EVT_TIMER) clearTimeout(__CMD_GLOBAL_EVT_TIMER);
+    __CMD_GLOBAL_EVT_TIMER = setTimeout(()=>{
+      __CMD_GLOBAL_EVT_TIMER = null;
+      void doGlobalEventRefresh(reason);
+    }, delay);
+  }catch(_){ }
+}
+
+async function doGlobalEventRefresh(reason){
+  if (__CMD_GLOBAL_EVT_BUSY) return;
+  __CMD_GLOBAL_EVT_BUSY = true;
+  try{
+    // Solo actuar cuando la pestaña está visible
+    try{
+      if (document && document.visibilityState && document.visibilityState !== 'visible') return;
+    }catch(_){ }
+
+    // Día actual (por si el usuario regresa después de medianoche)
+    const t = todayYMD();
+    const dayChanged = !!(t && String(t) !== String(state.today));
+    if (dayChanged) state.today = t;
+
+    const db = state.db;
+    if (!db || !hasStore(db, 'meta')){
+      if (dayChanged && state.focusEvent) await refreshAll();
+      return;
+    }
+
+    let globalId = null;
+    try{ globalId = await getMeta(db, 'currentEventId'); }catch(_){ globalId = null; }
+    const gid = Number(globalId || 0) || null;
+    if (!gid){
+      if (dayChanged && state.focusEvent) await refreshAll();
+      return;
+    }
+
+    const changed = (Number(state.focusId || 0) !== Number(gid));
+
+    // Si el evento global cambió y no está en el índice local, recargar lista (sin inventar)
+    if (changed && (!state.eventsById || !state.eventsById.has(gid))){
+      await reloadEventsFromDB();
+      try{ renderEventList(safeStr($('eventSearch')?.value || '')); }catch(_){ }
+    }
+
+    if (changed && state.eventsById && state.eventsById.has(gid)){
+      await setFocusEvent(gid);
+      __CMD_GLOBAL_EVT_LASTID = gid;
+      return;
+    }
+
+    // Evento igual: refrescar solo si cambió el día (evitar spam)
+    if (!changed && dayChanged && state.focusEvent){
+      await refreshAll();
+    }
+
+    __CMD_GLOBAL_EVT_LASTID = gid;
+  }catch(e){
+    console.warn('Global event refresh failed', reason, e);
+  }finally{
+    __CMD_GLOBAL_EVT_LASTRUN = Date.now();
+    __CMD_GLOBAL_EVT_BUSY = false;
+  }
+}
+
 function filterEvents(query){
   const q = safeStr(query).toLowerCase();
   if (!q) return state.events.slice(0, 40);
@@ -2327,9 +2529,30 @@ function hideEventList(){
 
 async function setFocusEvent(eventId){
   const id = Number(eventId);
-  if (!id || !state.eventsById.has(id)) return;
+  if (!id) return;
+  // Si el índice local no tiene el evento (p. ej., creado/cambiado en Resumen), recargar sin inventar
+  if (!state.eventsById || !state.eventsById.has(id)){
+    try{ await reloadEventsFromDB(); }catch(_){ }
+  }
+  if (!state.eventsById || !state.eventsById.has(id)) return;
   state.focusId = id;
   state.focusEvent = state.eventsById.get(id) || null;
+
+  // Refrescar el evento desde DB (por si cashV2Active / fx / nombre cambió)
+  try{
+    if (state.db && hasStore(state.db, 'events')){
+      const fresh = await idbGet(state.db, 'events', id);
+      if (fresh && fresh.id != null){
+        state.eventsById.set(id, fresh);
+        state.focusEvent = fresh;
+        // Mantener state.events consistente (best-effort, sin reordenar)
+        if (Array.isArray(state.events) && state.events.length){
+          const ix = state.events.findIndex(e=> e && Number(e.id) === id);
+          if (ix >= 0) state.events[ix] = fresh;
+        }
+      }
+    }
+  }catch(_){ }
 
   // Persistencia: meta + localStorage (robusto)
   try{ localStorage.setItem(LS_FOCUS_KEY, String(id)); }catch(_){ }
@@ -2637,10 +2860,7 @@ async function init(){
 
   // Load events
   try{
-    const evs = await idbGetAll(db, 'events');
-    state.events = Array.isArray(evs) ? evs.slice() : [];
-    state.events.sort((a,b)=> eventSortKey(b) - eventSortKey(a));
-    state.eventsById = new Map(state.events.map(e=> [Number(e.id), e]));
+    await reloadEventsFromDB();
   }catch(err){
     console.warn('Centro de Mando: error cargando eventos', err);
     state.events = [];
@@ -2670,9 +2890,28 @@ async function init(){
   }
 
   // Pre-render list
-  if (input) input.value = safeStr(state.eventsById.get(Number(focusId))?.name || '');
+  try{
+    if (input){
+      const fev = state.eventsById && state.eventsById.get ? state.eventsById.get(Number(focusId)) : null;
+      input.value = safeStr(fev && fev.name ? fev.name : '');
+    }
+  }catch(_){ }
   renderEventList('');
   hideEventList();
+
+  // REFRESH SIN RECARGA: si el Evento GLOBAL cambia (en Resumen), CdM se actualiza al volver (focus/visible)
+  try{
+    if (!state.__globalWatchAttached){
+      state.__globalWatchAttached = true;
+      window.addEventListener('focus', ()=> scheduleGlobalEventRefresh('focus'));
+      window.addEventListener('pageshow', ()=> scheduleGlobalEventRefresh('pageshow'));
+      document.addEventListener('visibilitychange', ()=>{
+        try{
+          if (document.visibilityState === 'visible') scheduleGlobalEventRefresh('visibilitychange');
+        }catch(_){ }
+      });
+    }
+  }catch(_){ }
 
   await setFocusEvent(Number(focusId));
 }
