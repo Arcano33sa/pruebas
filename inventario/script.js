@@ -28,12 +28,14 @@ const CAPS_KEYS = [
   'gallon',
   'pulsoLitro',
   'djebaMedia',
+  'vasos12oz',
 ];
 
 const CAPS = [
   { id: 'gallon', nombre: 'Tapa Galón' },
   { id: 'pulsoLitro', nombre: 'Tapa Pulso/Litro' },
   { id: 'djebaMedia', nombre: 'Tapa Djeba/Media' },
+  { id: 'vasos12oz', nombre: 'Vasos 12oz' },
 ];
 
 function defaultCapsSection(){
