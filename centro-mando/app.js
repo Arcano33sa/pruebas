@@ -1835,7 +1835,7 @@ async function computeUnclosed7d(ev, pcDayKey){
 
 // --- Alertas (motor + Sincronizar)
 const ALERT_LABELS = {
-  'petty-open': 'Caja Chica: día abierto',
+  'petty-open': 'Efectivo: día abierto',
   'fx-missing': 'Tipo de cambio vacío hoy',
   'checklist-incomplete': 'Checklist hoy incompleto',
   'inventory-critical': 'Inventario crítico',
@@ -2257,7 +2257,7 @@ async function refreshAll(){
   if (pc.ok && pc.enabled === false){
     setText('pettyState', 'No aplica');
     setText('pettyDayState', '—');
-    setText('pettyHint', 'Caja Chica desactivada en este evento.');
+    setText('pettyHint', 'Efectivo desactivado en este evento.');
     setDisabled('btnGoCaja', true);
   } else if (pc.ok && pc.enabled === true){
     setText('pettyState', 'Activa');
