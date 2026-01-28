@@ -4685,6 +4685,28 @@ function del(name, key){
           warnings.push('No se pudieron revertir vasos de sangría (la venta sí se eliminó).');
         }
 
+
+        // VASOS (Etapa 3/3): Revertir consumible Vasos 12oz (Tapas Auto) por operación (idempotente)
+        try{
+          if (sale && isCupSaleRecord(sale)){
+            const vSrc = (sale.invEffects && sale.invEffects.vasos12oz && sale.invEffects.vasos12oz.sourceId)
+              ? String(sale.invEffects.vasos12oz.sourceId)
+              : getVasos12ozSourceIdFromSalePOS(sale);
+            const qRaw = (sale.invEffects && sale.invEffects.vasos12oz && (sale.invEffects.vasos12oz.qtyApplied ?? sale.invEffects.vasos12oz.qty))
+              ?? sale.qty;
+            const q = toIntSafePOS(qRaw, 0);
+            const rCap = adjustVasos12ozStockFromPOS(q, { sourceId: vSrc, mode:'revert' });
+            if (rCap && rCap.ok){
+              // ok (o skipped por idempotencia)
+            } else {
+              warnings.push('No se pudieron revertir Vasos 12oz (la venta sí se eliminó).');
+            }
+          }
+        }catch(e){
+          console.error('Error revertiendo Vasos 12oz al eliminar venta', e);
+          warnings.push('No se pudieron revertir Vasos 12oz (la venta sí se eliminó).');
+        }
+
         try{
           const saleId = (sale.id != null) ? sale.id : key;
           await Promise.resolve(deleteFinanzasEntriesForSalePOS(saleId));
@@ -6796,6 +6818,148 @@ function applyFinishedFromSalePOS(sale, direction){
     console.error('Error ajustando inventario central desde venta', e);
   }
 }
+
+
+// ------------------------------------------------------------
+// VASOS (Etapa 2/3): Auto-descuento de consumible "Vasos 12oz"
+// - Fuente: panel VASOS del POS (venta/cortesía por vaso)
+// - Destino: Inventario central (Tapas Auto) -> caps.vasos12oz.stock
+// - Nota: SIN reversión todavía (Etapa 3)
+// ------------------------------------------------------------
+const CAP_ITEM_VASOS12OZ_ID = 'vasos12oz';
+
+function toIntSafePOS(v, fallback=0){
+  const n = parseInt(String(v ?? ''), 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+
+
+function getVasos12ozSourceIdFromSalePOS(sale){
+  try{
+    if (!sale || typeof sale !== 'object') return 'vasos12oz|sale:unknown';
+    const uid = (sale.uid != null && String(sale.uid).trim() !== '') ? String(sale.uid).trim() : '';
+    const id = (sale.id != null && String(sale.id).trim() !== '') ? String(sale.id).trim() : '';
+    const createdAt = (sale.createdAt != null && String(sale.createdAt).trim() !== '') ? String(sale.createdAt).trim() : '';
+    const base = uid || (id ? ('id:' + id) : (createdAt ? ('ts:' + createdAt) : 'unknown'));
+    return 'vasos12oz|' + base;
+  }catch(_){
+    return 'vasos12oz|sale:unknown';
+  }
+}
+function ensureCapsShapePOS(inv){
+  if (!inv || typeof inv !== 'object') inv = {};
+  if (!inv.caps || typeof inv.caps !== 'object') inv.caps = {};
+  if (!inv.caps[CAP_ITEM_VASOS12OZ_ID] || typeof inv.caps[CAP_ITEM_VASOS12OZ_ID] !== 'object'){
+    inv.caps[CAP_ITEM_VASOS12OZ_ID] = { stock: 0, min: 0 };
+  }
+  const it = inv.caps[CAP_ITEM_VASOS12OZ_ID];
+  // Stock puede ser negativo (entero). Min siempre >= 0.
+  it.stock = toIntSafePOS(it.stock, 0);
+  it.min = Math.max(0, toIntSafePOS(it.min, 0));
+  return inv;
+}
+
+
+function adjustVasos12ozStockFromPOS(qtyUsed, opts){
+  const raw = toIntSafePOS(qtyUsed, 0);
+  const qty = Math.abs(raw);
+  const mode = (opts && opts.mode === 'revert') ? 'revert' : 'apply';
+  const sourceId = (opts && opts.sourceId != null && String(opts.sourceId).trim() !== '') ? String(opts.sourceId).trim() : '';
+
+  if (!(qty > 0)) return { ok:true, skipped:true, before:null, after:null, mode, sourceId, reason:'qty_zero' };
+
+  const nowTs = ()=>{
+    try{ return Date.now(); }catch(_){ return (new Date()).getTime(); }
+  };
+
+  function applyEffectToInv(invObj){
+    const inv = ensureCapsShapePOS(invObj || {});
+    const it = inv.caps[CAP_ITEM_VASOS12OZ_ID];
+    const before = toIntSafePOS(it.stock, 0);
+
+    // Sin sourceId: comportamiento legacy (solo ajustar stock)
+    if (!sourceId){
+      const delta = (mode === 'revert') ? qty : (-qty);
+      it.stock = before + delta;
+      return { inv, before, after: it.stock, skipped:false, reason:'' };
+    }
+
+    if (!it.effects || typeof it.effects !== 'object') it.effects = {};
+    const eff = it.effects[sourceId];
+
+    if (mode === 'apply'){
+      if (eff && eff.state === 'APPLIED'){
+        return { inv, before, after: before, skipped:true, reason:'already_applied' };
+      }
+      const after = before - qty;
+      it.stock = after;
+      it.effects[sourceId] = {
+        qty,
+        state: 'APPLIED',
+        appliedAt: nowTs(),
+        revertedAt: (eff && eff.revertedAt != null) ? eff.revertedAt : null
+      };
+      return { inv, before, after, skipped:false, reason:'' };
+    }
+
+    // mode === 'revert'
+    if (eff && eff.state === 'REVERTED'){
+      return { inv, before, after: before, skipped:true, reason:'already_reverted' };
+    }
+
+    // Si hay evidencia previa, revertimos exactamente lo aplicado. Si no, hacemos reversión best-effort (una sola vez).
+    const qtyEff = (eff && eff.qty != null) ? Math.abs(toIntSafePOS(eff.qty, qty)) : qty;
+    const after = before + qtyEff;
+    it.stock = after;
+    it.effects[sourceId] = {
+      qty: qtyEff,
+      state: 'REVERTED',
+      appliedAt: (eff && eff.appliedAt != null) ? eff.appliedAt : null,
+      revertedAt: nowTs(),
+      legacy: !(eff && eff.state)
+    };
+    return { inv, before, after, skipped:false, reason:'' };
+  }
+
+  // Mejor opción: sharedRead + sharedSet con bloqueo por conflicto y reintento.
+  try{
+    if (window.A33Storage && typeof A33Storage.sharedRead === 'function' && typeof A33Storage.sharedSet === 'function'){
+      for (let attempt=0; attempt<2; attempt++){
+        const r0 = A33Storage.sharedRead(STORAGE_KEY_INVENTARIO, {}, 'local');
+        const baseRev = (r0 && r0.meta && typeof r0.meta.rev === 'number') ? r0.meta.rev : null;
+
+        const applied = applyEffectToInv((r0 && r0.data) ? r0.data : {});
+        if (applied && applied.skipped){
+          return { ok:true, skipped:true, before:applied.before, after:applied.after, mode, sourceId, reason:applied.reason };
+        }
+
+        const r = A33Storage.sharedSet(STORAGE_KEY_INVENTARIO, applied.inv, { source:'pos', baseRev, conflictPolicy:'block' });
+        if (r && r.ok) return { ok:true, skipped:false, before:applied.before, after:applied.after, mode, sourceId };
+        if (r && r.conflict) continue; // reintentar con data fresca
+        return { ok:false, skipped:false, mode, sourceId, message: (r && r.message) ? r.message : 'No se pudo actualizar Vasos 12oz.' };
+      }
+      return { ok:false, skipped:false, mode, sourceId, message:'Conflicto al actualizar Vasos 12oz. Recargá e intentá de nuevo.' };
+    }
+  }catch(e){
+    console.warn('Error actualizando Vasos 12oz (shared)', e);
+  }
+
+  // Fallback (si no está el contrato shared)
+  try{
+    const applied = applyEffectToInv(invCentralLoadPOS());
+    if (applied && applied.skipped){
+      return { ok:true, skipped:true, before:applied.before, after:applied.after, mode, sourceId, reason:applied.reason, fallback:true };
+    }
+    invCentralSavePOS(applied.inv);
+    return { ok:true, skipped:false, before:applied.before, after:applied.after, mode, sourceId, fallback:true };
+  }catch(e){
+    console.warn('Error actualizando Vasos 12oz (fallback)', e);
+    return { ok:false, skipped:false, mode, sourceId, message:'No se pudo actualizar Vasos 12oz (fallback).' };
+  }
+}
+
+
 async function renderCentralFinishedPOS(){
   const tbody = document.querySelector('#tbl-inv-central tbody');
   if (!tbody) return;
@@ -11416,6 +11580,40 @@ async function sellCupsPOS(isCourtesy){
     showPersistFailPOS('venta por vaso', err);
     try{ await refreshCupBlock(); }catch(_e){}
     return;
+  }
+
+  // VASOS (Etapa 3/3): Auto-descuento Vasos 12oz (Tapas Auto) con idempotencia por operación
+  try{
+    const vSrc = getVasos12ozSourceIdFromSalePOS(saleRecord);
+    const rCap = adjustVasos12ozStockFromPOS(qty, { sourceId: vSrc, mode:'apply' });
+
+    // Registrar marca en la operación (auditoría + idempotencia simple)
+    try{
+      const sFresh = await getOne('sales', saleRecord.id);
+      if (sFresh){
+        if (!sFresh.invEffects || typeof sFresh.invEffects !== 'object') sFresh.invEffects = {};
+        sFresh.invEffects.vasos12oz = {
+          sourceId: vSrc,
+          qtyApplied: toIntSafePOS(qty, qty),
+          state: (rCap && rCap.ok) ? 'APPLIED' : 'FAILED',
+          skipped: !!(rCap && rCap.skipped),
+          reason: (rCap && rCap.reason) ? String(rCap.reason) : '',
+          at: Date.now()
+        };
+        await put('sales', sFresh);
+      }
+    }catch(_e){ }
+
+    if (rCap && rCap.ok && !rCap.skipped){
+      try{ if (typeof showToast === 'function') showToast(`Vasos 12oz: -${qty}`, 'ok', 1600); }catch(_){ }
+    } else if (rCap && rCap.ok && rCap.skipped){
+      // Ya aplicado (idempotente) → no volver a descontar
+      try{ if (typeof showToast === 'function') showToast('Vasos 12oz: ya aplicado (idempotente).', 'ok', 1800); }catch(_){ }
+    } else if (rCap && !rCap.ok){
+      try{ if (typeof showToast === 'function') showToast('No se pudo descontar Vasos 12oz.', 'error', 4200); }catch(_){ }
+    }
+  }catch(e){
+    console.warn('Auto-descuento Vasos 12oz falló', e);
   }
 
   // Invalida cache liviano de Consolidado (ventas del período actual)
