@@ -3,7 +3,7 @@
 
   Fuentes reales (descubiertas en /pos/app.js dentro de esta ZIP):
   - DB_NAME: 'a33-pos'
-  - Stores: meta, events, sales, pettyCash, products, inventory, banks
+  - Stores: meta, events, sales, cashV2, products, inventory, banks
   - Meta key del evento actual: id='currentEventId' (value = number|null)
 
   Regla clave: NO inventar números.
@@ -16,6 +16,9 @@ const LS_FOCUS_KEY = 'a33_cmd_focusEventId';
 const ORDERS_LS_KEY = 'arcano33_pedidos';
 const ORDERS_ROUTE = '../pedidos/index.html';
 const SAFE_SCAN_LIMIT = 4000; // seguridad: evitar loops gigantes
+
+// Efectivo v2: cache FX por evento (misma llave que POS)
+const CASHV2_FX_LS_KEY = 'A33.EF2.fxByEvent';
 
 // --- Recordatorios (índice liviano desde POS)
 const REMINDERS_STORE = 'posRemindersIndex';
@@ -546,6 +549,33 @@ function fmtMoneyNIO(n){
   const parts = s.split('.');
   parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   return `C$ ${parts.join('.')}`;
+}
+
+function fxNorm(v){
+  const n = Number(v);
+  const r = Math.round(n * 100) / 100;
+  if (!Number.isFinite(r) || r <= 0) return null;
+  return r;
+}
+
+function fmtFX2(v){
+  const n = fxNorm(v);
+  return (n == null) ? '' : n.toFixed(2);
+}
+
+function readCashV2FxCached(eventId){
+  const eid = Number(eventId || 0);
+  if (!eid) return null;
+  try{
+    const raw = localStorage.getItem(CASHV2_FX_LS_KEY);
+    if (!raw) return null;
+    const m = JSON.parse(raw);
+    if (!m || typeof m !== 'object') return null;
+    // Guardado como string "36.50" por evento
+    return fxNorm(m[eid] != null ? m[eid] : m[String(eid)]);
+  }catch(_){
+    return null;
+  }
 }
 
 function safeStr(x){
@@ -1277,6 +1307,7 @@ function clearMetricsToDash(){
   setText('pettyState', '—');
   setText('pettyDayState', '—');
   setText('pettyHint', 'No disponible');
+  setText('pettyFx', '—');
   setText('checklistProgress', '—');
   setText('checklistHint', 'No disponible');
   setText('topProducts', '—');
@@ -1720,123 +1751,142 @@ async function computeSalesToday(eventId, dayKey){
   return { ok:true, total, count: filtered.length, top, reason:'' };
 }
 
-async function computePettyStatus(ev, dayKey){
+
+async function computeCashV2Status(ev, dayKey){
   const db = state.db;
   if (!db || !ev){
-    return { ok:false, enabled:null, isOpen:null, dayState:null, fxMissing:null, fxKnown:false, closedAt:null, pcDay:null, fxSource:'unknown', reason:'No disponible' };
+    return { ok:false, enabled:null, isOpen:null, dayState:null, opDayKey:null, fx:null, fxMissing:null, fxKnown:false, status:null, fxSource:'unknown', reason:'No disponible' };
   }
 
-  const enabled = !!ev.pettyEnabled;
+  // Regla Etapa 3/4: NO APLICA si la bandera NO es true (estricto)
+  const enabled = (ev.cashV2Active === true);
   if (!enabled){
-    return { ok:true, enabled:false, isOpen:false, dayState:'No aplica', fxMissing:false, fxKnown:false, closedAt:null, pcDay:null, fxSource:'unknown', reason:'' };
+    return { ok:true, enabled:false, isOpen:false, dayState:'No aplica', opDayKey:null, fx:null, fxMissing:false, fxKnown:false, status:null, fxSource:'unknown', reason:'' };
   }
 
-  // T/C por evento (preferido). Fallback: legado en Caja Chica (day.fxRate)
-  const fxEventRaw = Number(ev.fxRate || 0);
-  const fxEvent = (Number.isFinite(fxEventRaw) && fxEventRaw > 0) ? fxEventRaw : null;
-
-  const hasPettyStore = hasStore(db, 'pettyCash');
-  const hasLocksStore = hasStore(db, 'dayLocks');
-
-  // Si no hay ninguna fuente canónica, no inventar.
-  if (!hasPettyStore && !hasLocksStore){
-    const fxKnown = (fxEvent != null);
-    const fxMissing = fxKnown ? false : null;
-    return { ok:false, enabled:true, isOpen:null, dayState:null, fxMissing, fxKnown, closedAt:null, pcDay:null, fxSource: fxKnown ? 'event' : 'unknown', reason:'No disponible' };
+  if (!hasStore(db, 'cashV2')){
+    return { ok:false, enabled:true, isOpen:null, dayState:null, opDayKey:null, fx:null, fxMissing:null, fxKnown:false, status:null, fxSource:'unknown', reason:'No disponible' };
   }
 
-  // 1) Leer candado oficial del día (dayLocks) si existe.
-  let lock = null;
-  let lockIsClosed = false;
-  let lockClosedAt = null;
-  if (hasLocksStore){
-    const lockKey = `${Number(ev.id)}|${safeYMD(dayKey)}`;
-    try{ lock = await idbGet(db, 'dayLocks', lockKey); }catch(_){ lock = null; }
-    lockIsClosed = !!(lock && lock.isClosed === true);
-    lockClosedAt = (lock && lock.closedAt) ? lock.closedAt : null;
-  }
+  const eid = Number(ev.id);
+  const dk = safeYMD(dayKey);
 
-  // 2) Leer Caja Chica del día (pettyCash) si existe.
-  let day = null;
-  if (hasPettyStore){
-    let pc = null;
-    try{ pc = await idbGet(db, 'pettyCash', Number(ev.id)); }catch(_){ pc = null; }
-    if (pc && pc.days && typeof pc.days === 'object'){
-      const d = pc.days[safeYMD(dayKey)];
-      if (d && typeof d === 'object') day = d;
+  // FX por evento (si existe) — fallback defensivo
+  const fxEvent = fxNorm(ev.fxRate || ev.exchangeRate || ev.fx || 0);
+  const fxCached = readCashV2FxCached(eid);
+
+  // 1) Buscar si existe un día OPEN real (operativo) para este evento.
+  let rows = await idbGetAllByIndex(db, 'cashV2', 'by_event', IDBKeyRange.only(eid));
+  if (rows === null){
+    // Sin índice, fallback controlado
+    rows = await idbGetAll(db, 'cashV2');
+  }
+  if (!Array.isArray(rows)) rows = [];
+  if (rows.length > SAFE_SCAN_LIMIT) return { ok:false, enabled:true, isOpen:null, dayState:null, opDayKey:null, fx:null, fxMissing:null, fxKnown:false, status:null, fxSource:'unknown', reason:'No disponible' };
+
+  const filtered = rows.filter(r => r && Number(r.eventId) === eid);
+
+  const normStatus = (v)=>{
+    const s = String(v || '').trim().toUpperCase();
+    if (s === 'OPEN' || s === 'ABIERTO') return 'OPEN';
+    if (s === 'CLOSED' || s === 'CERRADO') return 'CLOSED';
+    return '';
+  };
+
+  const open = filtered
+    .filter(r => normStatus(r.status) === 'OPEN')
+    .sort((a,b)=> (Number(b.openTs||0) - Number(a.openTs||0)))[0] || null;
+
+  let rec = null;
+  if (open){
+    rec = open;
+  } else {
+    // 2) Si no hay OPEN, mirar el día de HOY (si existe)
+    const key = `cash:v2:${eid}:${dk}`;
+    rec = await idbGet(db, 'cashV2', key);
+    if (!rec){
+      const byEvDay = await idbGetAllByIndex(db, 'cashV2', 'by_event_day', IDBKeyRange.only([eid, dk]));
+      if (Array.isArray(byEvDay) && byEvDay.length) rec = byEvDay[0];
     }
   }
 
-  // Cierre legacy (Caja Chica vieja): day.closedAt
-  const legacyClosedAt = (day && day.closedAt) ? day.closedAt : null;
+  if (!rec){
+    // Activo, pero aún no hay día operativo en cashV2
+    const fxEffective = (fxCached != null) ? fxCached : fxEvent;
+    const fxMissing = !(fxEffective && fxEffective > 0);
+    const fxSource = (fxCached != null) ? 'cache' : (fxEvent != null ? 'event' : 'none');
+    return { ok:true, enabled:true, isOpen:false, dayState:'SIN ACTIVIDAD', opDayKey:null, fx: fxEffective || null, fxMissing, fxKnown:true, status:null, fxSource, reason:'' };
+  }
 
-  // CIERRE REAL = dayLocks (oficial) OR legacy closedAt
-  const isClosed = (lockIsClosed === true) || !!lockClosedAt || !!legacyClosedAt;
-  const closedAt = lockClosedAt || legacyClosedAt || null;
+  const st = normStatus(rec.status);
+  const isOpen = (st === 'OPEN');
+  const dayState = isOpen ? 'ABIERTO' : (st === 'CLOSED' ? 'CERRADO' : 'SIN ACTIVIDAD');
 
-  // APERTURA REAL = evidencia de sesión (actividad) y NO cerrado
-  // Nota: POS no guarda openedAt. “Equivalente” = algo guardado (inicial/final/movs/fx/ajuste) para ese día.
-  const hasSession = !!(day && hasPettyDayActivity(day));
-  const isOpen = hasSession && !isClosed;
+  // Día operativo: preferir rec.dayKey; fallback: dk
+  let opDayKey = safeYMD(rec.dayKey || '');
+  if (!opDayKey){ opDayKey = safeYMD(dk); }
 
-  // Estado del día (para UI). Importante: NO confundir “Caja habilitada” con “Caja abierta”.
-  const dayState = isClosed ? 'Cerrado' : (isOpen ? 'Abierto' : 'Sin actividad');
+  const fxRec = fxNorm(rec.fx);
+  const fxEffective = (fxRec != null) ? fxRec : ((fxCached != null) ? fxCached : fxEvent);
 
-  // FX efectivo: preferir evento; si no, tomar day.fxRate
-  const fxDayRaw = (day && day.fxRate != null) ? Number(day.fxRate) : NaN;
-  const fxDay = (Number.isFinite(fxDayRaw) && fxDayRaw > 0) ? fxDayRaw : null;
+  const fxMissing = !(fxEffective && fxEffective > 0);
+  const fxSource = (fxRec != null) ? 'cashV2' : ((fxCached != null) ? 'cache' : (fxEvent != null ? 'event' : 'none'));
 
-  const fxEffective = (fxEvent != null) ? fxEvent : fxDay;
-
-  // Confiabilidad de FX:
-  // - Si hay fxEvent: conocido
-  // - Si hay day: conocido (aunque no tenga valor)
-  // - Si no hay day ni fxEvent: desconocido
-  const fxKnown = (fxEvent != null) || !!day;
-  const fxMissing = fxKnown ? !(fxEffective && fxEffective > 0) : null;
-  const fxSource = (fxEvent != null) ? 'event' : (fxDay != null ? 'pettyCash' : (fxKnown ? 'none' : 'unknown'));
-
-  return { ok:true, enabled:true, isOpen, dayState, fxMissing, fxKnown, closedAt, pcDay: day, fxSource, reason:'' };
+  return { ok:true, enabled:true, isOpen, dayState, opDayKey, fx: fxEffective || null, fxMissing, fxKnown:true, status: st || null, fxSource, reason:'' };
 }
 
-async function computeUnclosed7d(ev, pcDayKey){
-  if (!ev || !ev.pettyEnabled) return { ok:true, value:'—', reason:'' };
+
+async function computeUnclosed7d(ev, todayDayKey){
+  // Radar 7d: conteo de días con Efectivo ABIERTO / sin cierre (cashV2).
+  // Regla: NO inventar. Si no hay data, decirlo.
+  if (!ev || ev.cashV2Active !== true) return { ok:true, value:'—', reason:'' };
   const db = state.db;
-  if (!db || !hasStore(db, 'pettyCash')) return { ok:false, value:'—', reason:'No disponible' };
+  if (!db || !hasStore(db, 'cashV2')) return { ok:false, value:'—', reason:'No disponible' };
 
-  const pc = await idbGet(db, 'pettyCash', Number(ev.id));
-  if (!pc || !pc.days || typeof pc.days !== 'object') return { ok:false, value:'—', reason:'No disponible' };
+  const eid = Number(ev.id);
 
-  const hasLocks = hasStore(db, 'dayLocks');
+  let rows = await idbGetAllByIndex(db, 'cashV2', 'by_event', IDBKeyRange.only(eid));
+  if (rows === null) rows = await idbGetAll(db, 'cashV2');
+  if (!Array.isArray(rows)) rows = [];
+  if (rows.length > SAFE_SCAN_LIMIT) return { ok:false, value:'—', reason:'No disponible' };
 
-  // últimos 7 días incluyendo hoy
-  let cnt = 0;
-  for (let i = 0; i < 7; i++){
-    const d = ymdAddDays(pcDayKey, -i);
-    const day = pc.days[d];
-    if (!day || typeof day !== 'object') continue;
+  const normStatus = (v)=>{
+    const s = String(v || '').trim().toUpperCase();
+    if (s === 'OPEN' || s === 'ABIERTO') return 'OPEN';
+    if (s === 'CLOSED' || s === 'CERRADO') return 'CLOSED';
+    return '';
+  };
 
-    // Contar solo si hay actividad (evitar “inventar”)
-    if (!hasPettyDayActivity(day)) continue;
-
-    // Cerrado real: dayLocks (oficial) OR legacy day.closedAt
-    let isClosed = !!day.closedAt;
-    if (!isClosed && hasLocks){
-      const lockKey = `${Number(ev.id)}|${safeYMD(d)}`;
-      let lock = null;
-      try{ lock = await idbGet(db, 'dayLocks', lockKey); }catch(_){ lock = null; }
-      if (lock && (lock.isClosed === true || lock.closedAt)) isClosed = true;
-    }
-
-    if (!isClosed) cnt += 1;
+  // Tomar los últimos 7 dayKeys REALES del evento.
+  // Si hay duplicados por día, quedarnos con el más reciente por timestamp.
+  const byDay = new Map();
+  for (const r of rows){
+    if (!r || Number(r.eventId) !== eid) continue;
+    const dk = safeYMD(r.dayKey || '');
+    if (!dk) continue;
+    const ts = Math.max(Number(r.openTs || 0), Number(r.closeTs || 0), Number(r.ts || 0), 0);
+    const cur = byDay.get(dk);
+    if (!cur || ts >= Number(cur.ts || 0)) byDay.set(dk, { rec: r, ts });
   }
+
+  const keys = Array.from(byDay.keys()).sort((a,b)=> b.localeCompare(a));
+  if (!keys.length) return { ok:true, value:'Sin datos', reason:'' };
+
+  const top7 = keys.slice(0, 7);
+  let cnt = 0;
+  for (const dk of top7){
+    const wrap = byDay.get(dk);
+    const st = normStatus(wrap && wrap.rec ? wrap.rec.status : '');
+    if (st === 'OPEN') cnt += 1;
+  }
+
   return { ok:true, value: String(cnt), reason:'' };
 }
 
 // --- Alertas (motor + Sincronizar)
 const ALERT_LABELS = {
-  'petty-open': 'Efectivo: día abierto',
-  'fx-missing': 'Tipo de cambio vacío hoy',
+  'petty-open': 'Efectivo abierto hoy',
+  'fx-missing': 'Falta T/C',
   'checklist-incomplete': 'Checklist hoy incompleto',
   'inventory-critical': 'Inventario crítico',
   'orders-deliver-today': 'Entregas hoy',
@@ -1855,43 +1905,45 @@ function labelForAlertKey(k){
 }
 
 
-function buildActionableAlerts(ev, dayKey, pc){
+function buildActionableAlerts(ev, dayKey, cv2){
   const alerts = [];
   const unavailable = [];
 
-  // 1) Caja Chica activa y hoy NO está cerrado (solo con señal real)
-  if (pc && pc.enabled === true){
-    if (pc.ok){
-      if (pc.isOpen === true){
+  // 1) Efectivo v2 activo: día ABIERTO (solo con señal real)
+  if (cv2 && cv2.enabled === true){
+    if (cv2.ok){
+      if (cv2.isOpen === true){
+        const op = cv2.opDayKey ? String(cv2.opDayKey) : String(dayKey);
         alerts.push({
           key: 'petty-open',
           icon: '🔓',
-          title: 'Registro del día abierto',
-          sub: `Hoy (${dayKey}): hay un día abierto`,
+          title: 'Efectivo abierto hoy',
+          sub: `Día operativo: ${op} (ABIERTO)`,
           cta: 'Abrir Resumen',
           tab: 'resumen'
         });
       }
     } else {
       // No se pudo leer el día (no inventar)
-      unavailable.push({ key: 'petty-open', label: labelForAlertKey('petty-open'), reason: pc.reason || 'No disponible' });
+      unavailable.push({ key: 'petty-open', label: labelForAlertKey('petty-open'), reason: cv2.reason || 'No disponible' });
     }
 
-    // 2) Tipo de cambio vacío hoy (POS actual: ev.fxRate; fallback legado: day.fxRate)
-    if (pc.fxKnown === true){
-      if (pc.fxMissing === true){
+    // 2) Falta T/C
+    if (cv2.fxKnown === true){
+      if (cv2.fxMissing === true){
+        const op = cv2.opDayKey ? String(cv2.opDayKey) : String(dayKey);
         alerts.push({
           key: 'fx-missing',
           icon: '💱',
-          title: 'Tipo de cambio vacío hoy',
-          sub: `Hoy (${dayKey}): falta tipo de cambio`,
+          title: 'Falta T/C',
+          sub: `Día operativo: ${op} (sin tipo de cambio)`,
           cta: 'Abrir Resumen',
           tab: 'resumen'
         });
       }
     } else {
       // No se puede evaluar con seguridad (store/campo faltante)
-      unavailable.push({ key: 'fx-missing', label: labelForAlertKey('fx-missing'), reason: pc.reason || 'No disponible' });
+      unavailable.push({ key: 'fx-missing', label: labelForAlertKey('fx-missing'), reason: cv2.reason || 'No disponible' });
     }
   }
 
@@ -2046,13 +2098,13 @@ async function syncAlerts(){
     }
 
     if (ev && state.db){
-      let pc;
+      let cv2;
       try{
-        pc = await computePettyStatus(ev, dayKey);
+        cv2 = await computeCashV2Status(ev, dayKey);
       }catch(err){
-        pc = { ok:false, enabled: (ev && ev.pettyEnabled) ? true : null, reason:'No disponible' };
+        cv2 = { ok:false, enabled: (ev && ev.cashV2Active === true) ? true : null, reason:'No disponible' };
       }
-      const al = buildActionableAlerts(ev, dayKey, pc);
+      const al = buildActionableAlerts(ev, dayKey, cv2);
       if (al && Array.isArray(al.unavailable) && al.unavailable.length){
         unavailable.push(...al.unavailable);
       }
@@ -2092,6 +2144,99 @@ function navigateToPedidos(){
   }catch(_){ }
 }
 
+
+
+// POS route resolver (robusto: /pruebas/pos vs /pos, según dónde viva el Centro de Mando)
+let __A33_POS_INDEX_HREF = null;
+const LS_POS_ROUTE_KEY = 'a33_cmd_pos_index_href_v1';
+
+function a33SuiteBasePathFromHere(){
+  const p = String(window.location.pathname || '/');
+  // Caso típico: /<root>/pruebas/centro-mando/index.html  -> /<root>/pruebas/
+  const i = p.indexOf('/pruebas/');
+  if (i >= 0) return p.slice(0, i) + '/pruebas/';
+
+  // Caso típico: /<root>/centro-mando/index.html -> /<root>/
+  const j1 = p.indexOf('/centro-mando/');
+  const j2 = p.indexOf('/centro_mando/');
+  const j = (j1 >= 0 || j2 >= 0) ? Math.max(j1, j2) : -1;
+  if (j >= 0) return p.slice(0, j) + '/';
+
+  // Fallback: quitar filename
+  return p.replace(/[^/]*$/, '');
+}
+
+function a33ProbeUrlOk(url, ms){
+  const timeoutMs = (typeof ms === 'number' && isFinite(ms) && ms > 0) ? ms : 650;
+  return new Promise((resolve)=>{
+    let done = false;
+    const t = setTimeout(()=>{ if (!done){ done = true; resolve(null); } }, timeoutMs);
+    try{
+      fetch(url, { method:'GET', cache:'no-store' })
+        .then(r=>{
+          if (done) return;
+          clearTimeout(t);
+          done = true;
+          resolve(!!(r && r.ok));
+        })
+        .catch(()=>{
+          if (done) return;
+          clearTimeout(t);
+          done = true;
+          resolve(null);
+        });
+    }catch(_){
+      if (done) return;
+      clearTimeout(t);
+      done = true;
+      resolve(null);
+    }
+  });
+}
+
+async function resolvePosIndexHref(){
+  if (__A33_POS_INDEX_HREF) return __A33_POS_INDEX_HREF;
+
+  const base = a33SuiteBasePathFromHere();
+  const p = String(window.location.pathname || '/');
+  const hasPruebas = (p.indexOf('/pruebas/') >= 0);
+
+  const baseNoPruebas = base.replace(/\/pruebas\/$/, '/');
+
+  // Candidatos (orden por probabilidad, sin inventar rutas raras)
+  const candidates = [];
+  const push = (u)=>{ if (u && !candidates.includes(u)) candidates.push(u); };
+
+  if (hasPruebas){
+    push(base + 'pos/index.html');
+    push(baseNoPruebas + 'pos/index.html');
+  } else {
+    push(base + 'pos/index.html');
+    push(base + 'pruebas/pos/index.html');
+  }
+
+  // Cache: si ya resolvimos una vez en este mismo entorno, reutilizar (ayuda offline).
+  try{
+    const cached = localStorage.getItem(LS_POS_ROUTE_KEY);
+    if (cached && candidates.includes(cached)){
+      __A33_POS_INDEX_HREF = cached;
+      return cached;
+    }
+  }catch(_){ }
+
+  // Si no podemos probar (offline / fetch bloqueado), usamos el primero.
+  let chosen = candidates[0] || '../pos/index.html';
+
+  // Probe rápido: si uno responde 200, lo usamos.
+  for (const u of candidates){
+    const ok = await a33ProbeUrlOk(u, 700);
+    if (ok === true){ chosen = u; break; }
+  }
+
+  __A33_POS_INDEX_HREF = chosen;
+  try{ localStorage.setItem(LS_POS_ROUTE_KEY, chosen); }catch(_){ }
+  return chosen;
+}
 async function navigateToPOS(tab){
   const ev = state.focusEvent;
   if (!ev || !state.db) return;
@@ -2101,7 +2246,8 @@ async function navigateToPOS(tab){
   // Etapa 11B: bloquear deep-link/ruta legacy hacia Caja Chica (no existe como ruta en POS).
   const t0 = safeStr(tab) || 'vender';
   const t = (t0 === 'caja' || t0 === 'caja-chica' || t0 === 'cajachica' || t0 === 'petty' || t0 === 'pettycash') ? 'vender' : t0;
-  window.location.href = `../pos/index.html?tab=${encodeURIComponent(t)}`;
+    const posHref = await resolvePosIndexHref();
+  window.location.href = `${posHref}?tab=${encodeURIComponent(t)}`;
 }
 
 async function navigateToPOSReminders(){
@@ -2110,7 +2256,8 @@ async function navigateToPOSReminders(){
     if (ev && state.db) await setMeta(state.db, 'currentEventId', Number(ev.id));
   }catch(_){ }
   // Deep-link: POS abre Checklist y hace scroll a la card Recordatorios
-  window.location.href = `../pos/index.html#checklist-reminders`;
+    const posHref = await resolvePosIndexHref();
+  window.location.href = `${posHref}#checklist-reminders`;
 }
 
 // --- Picker
@@ -2252,32 +2399,45 @@ async function refreshAll(){
   setText('checklistProgress', chk.text);
   setText('checklistHint', chk.ok ? 'Hoy' : chk.reason);
 
-  // Caja chica
-  const pc = await computePettyStatus(ev, dk);
-  if (pc.ok && pc.enabled === false){
-    setText('pettyState', 'No aplica');
-    setText('pettyDayState', '—');
-    setText('pettyHint', 'Efectivo desactivado en este evento.');
-    setDisabled('btnGoCaja', true);
-  } else if (pc.ok && pc.enabled === true){
-    setText('pettyState', 'Activa');
-    setText('pettyDayState', pc.dayState || '—');
-    setText('pettyHint', pc.dayState ? `Día ${dk}: ${pc.dayState}` : 'No disponible');
-    setDisabled('btnGoCaja', false);
-  } else if (pc.enabled === true){
-    // enabled pero no se pudo leer
-    setText('pettyState', 'Activa');
-    setText('pettyDayState', '—');
-    setText('pettyHint', pc.reason || 'No disponible');
-    setDisabled('btnGoCaja', false);
-  } else {
-    setText('pettyState', '—');
-    setText('pettyDayState', '—');
-    setText('pettyHint', pc.reason || 'No disponible');
-    setDisabled('btnGoCaja', true);
-  }
 
-  // Ventas hoy + Top productos
+// Efectivo (estado real desde cashV2)
+const cv2 = await computeCashV2Status(ev, dk);
+if (cv2.ok && cv2.enabled === false){
+  setText('pettyState', 'No aplica');
+  setText('pettyDayState', '—');
+  setText('pettyHint', 'Efectivo desactivado en este evento.');
+  setDisabled('btnGoCaja', true);
+} else if (cv2.ok && cv2.enabled === true){
+  setText('pettyState', 'Activo');
+  setText('pettyDayState', cv2.dayState || '—');
+  if (cv2.opDayKey){
+    setText('pettyHint', `Día operativo: ${cv2.opDayKey}`);
+  } else {
+    setText('pettyHint', 'Hoy: sin actividad.');
+  }
+  setDisabled('btnGoCaja', false);
+} else if (cv2.enabled === true){
+  // Activo pero no se pudo leer
+  setText('pettyState', 'Activo');
+  setText('pettyDayState', '—');
+  setText('pettyHint', cv2.reason || 'No disponible');
+  setDisabled('btnGoCaja', false);
+} else {
+  setText('pettyState', '—');
+  setText('pettyDayState', '—');
+  setText('pettyHint', cv2.reason || 'No disponible');
+  setDisabled('btnGoCaja', true);
+}
+
+// T/C visible (2 dec) — siempre
+{
+  const fxLine = (cv2 && typeof cv2.fx === 'number' && isFinite(cv2.fx) && cv2.fx > 0)
+    ? `T/C: ${fmtFX2(cv2.fx)}`
+    : 'T/C: —';
+  setText('pettyFx', fxLine);
+}
+
+// Ventas hoy + Top productos
   const sales = await computeSalesToday(Number(ev.id), dk);
   if (sales.ok){
     setText('salesToday', fmtMoneyNIO(sales.total));
@@ -2307,7 +2467,7 @@ async function refreshAll(){
   setText('radarUnclosed', (unc && unc.ok) ? unc.value : '—');
 
   // Alertas accionables (solo con señal real)
-  const al = buildActionableAlerts(ev, dk, pc);
+  const al = buildActionableAlerts(ev, dk, cv2);
   const mergedAlerts = ([]
     .concat((ordersOut && Array.isArray(ordersOut.alerts)) ? ordersOut.alerts : [])
     .concat(Array.isArray(al.alerts) ? al.alerts : []));
@@ -2369,8 +2529,8 @@ async function init(){
     el.addEventListener('click', ()=> navigateToPOS(tab));
   };
   bind('btnGoSell', 'vender');
-  // Etapa 11B: btnGoCaja ya no navega a Caja Chica (ruta removida).
-bind('btnGoResumen', 'resumen');
+  bind('btnGoCaja', 'efectivo');
+  bind('btnGoResumen', 'resumen');
   bind('btnGoChecklist', 'checklist');
   bind('btnOpenChecklist', 'checklist');
 
