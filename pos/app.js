@@ -4,10 +4,19 @@ const DB_VER = 31; // Etapa 1/5 (Efectivo v2 Histórico): nuevos stores aislados
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.70';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.71';
 
 
 const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r36');
+
+// --- Util: round2 (2 decimales) — Hotfix Ventas Etapa 1/3
+// Nota: evita NaN y errores de flotante (EPSILON). Retorna Number.
+function round2(n){
+  let x = Number(n);
+  if (!Number.isFinite(x)) x = 0;
+  return Math.round((x + Number.EPSILON) * 100) / 100;
+}
+
 
 // --- Date helpers (POS)
 // Normaliza YYYY-MM-DD y da fallback robusto (consistente con Centro de Mando)
@@ -794,7 +803,8 @@ function cashV2SetLastRec(rec){
 function cashV2GetLastRec(){ return CASHV2_LAST_REC; }
 
 function cashV2DefaultInitial(){
-  const mk = (arr)=>{ const o = {}; (arr||[]).forEach(d=>{ o[String(d)] = 0; }); return o; };
+  // UX Etapa 2/3: counts VACÍOS por defecto; los cálculos interpretan vacío como 0.
+  const mk = (arr)=>{ const o = {}; (arr||[]).forEach(d=>{ o[String(d)] = ''; }); return o; };
   return {
     NIO: { denomCounts: mk(CASHV2_DENOMS.NIO), total: 0 },
     USD: { denomCounts: mk(CASHV2_DENOMS.USD), total: 0 }
@@ -809,6 +819,70 @@ function cashV2NormCount(v){
   return n;
 }
 
+// UX Etapa 2/3: helpers para inputs vacíos (mantener vacío en UI, tratarlo como 0 en cálculos).
+function cashV2IsBlankInput(v){
+  if (v == null) return true;
+  if (typeof v === 'string') return v.trim() === '';
+  return false;
+}
+
+function cashV2CountToStore(raw){
+  if (raw == null) return '';
+  const s = String(raw).trim();
+  if (!s) return '';
+  return cashV2NormCount(s);
+}
+
+function cashV2CountDomValue(raw){
+  if (raw == null) return '';
+  const s = String(raw).trim();
+  if (!s) return '';
+  return String(cashV2NormCount(raw));
+}
+
+function cashV2InitUXInputsOnce(){
+  const tab = document.getElementById('tab-efectivo');
+  if (!tab) return;
+  if (tab.dataset.uxInputs === '1') return;
+
+  const root = document;
+
+  const isEditable = (t)=>{
+    if (!t || t.tagName !== 'INPUT') return false;
+    if (t.disabled || t.readOnly) return false;
+    const type = String(t.getAttribute('type') || '').trim().toLowerCase();
+    if (type !== 'number') return false;
+    // Solo inputs del módulo Efectivo v2
+    const id = String(t.id || '');
+    if (!id.startsWith('cashv2-')) return false;
+    return true;
+  };
+
+  const queueSelectAll = (t)=>{
+    try{ if (t == null) return; }catch(_){ return; }
+    // Solo si tiene valor real (incluye 0)
+    try{ if (String(t.value) === '') return; }catch(_){ return; }
+    setTimeout(()=>{
+      try{ t.focus(); }catch(_){ }
+      try{ t.select(); }catch(_){ }
+      try{ if (t.setSelectionRange) t.setSelectionRange(0, String(t.value||'').length); }catch(_){ }
+    }, 0);
+  };
+
+  root.addEventListener('focusin', (e)=>{
+    const t = e && e.target;
+    if (!isEditable(t)) return;
+    queueSelectAll(t);
+  });
+  root.addEventListener('click', (e)=>{
+    const t = e && e.target;
+    if (!isEditable(t)) return;
+    queueSelectAll(t);
+  });
+
+  tab.dataset.uxInputs = '1';
+}
+
 // Helper pedido (Etapa 4/5): normaliza denomCounts, garantiza claves y sanea valores.
 function normalizeDenomCounts(currency, counts){
   const ccy = String(currency || '').trim().toUpperCase();
@@ -817,8 +891,10 @@ function normalizeDenomCounts(currency, counts){
   const out = {};
   for (const d of denoms){
     const k = String(d);
-    const raw = (src[k] != null) ? src[k] : ((src[d] != null) ? src[d] : 0);
-    out[k] = cashV2NormCount(raw);
+    let raw = (src[k] != null) ? src[k] : ((src[d] != null) ? src[d] : '');
+    // Si nunca se ingresó, mantener vacío (UI). Cálculos: vacío => 0.
+    const rs = (raw == null) ? '' : String(raw);
+    out[k] = (rs.trim() === '') ? '' : cashV2NormCount(raw);
   }
   return out;
 }
@@ -1052,7 +1128,7 @@ function cashV2InitInitialUIOnce(){
     tbody.innerHTML = denoms.map(d=>{
       const k = String(d);
       const sym = (ccy === 'NIO') ? 'C$' : '$';
-      return `\n<tr>\n  <td class=\"denom\"><b>${sym} ${k}</b></td>\n  <td>\n    <input type=\"number\" min=\"0\" step=\"1\" inputmode=\"numeric\" pattern=\"[0-9]*\"\n      class=\"cashv2-denom-input\"\n      data-cashv2-initial=\"1\" data-ccy=\"${ccy}\" data-denom=\"${k}\"\n      id=\"cashv2-initial-${ccy}-${k}\" value=\"0\"\n    >\n  </td>\n  <td class=\"sub\"><span id=\"cashv2-sub-${ccy}-${k}\">0</span></td>\n</tr>`;
+      return `\n<tr>\n  <td class=\"denom\"><b>${sym} ${k}</b></td>\n  <td>\n    <input type=\"number\" min=\"0\" step=\"1\" inputmode=\"numeric\" pattern=\"[0-9]*\"\n      class=\"cashv2-denom-input\"\n      data-cashv2-initial=\"1\" data-ccy=\"${ccy}\" data-denom=\"${k}\"\n      id=\"cashv2-initial-${ccy}-${k}\" placeholder=\"0\" value=\"\"\n    >\n  </td>\n  <td class=\"sub\"><span id=\"cashv2-sub-${ccy}-${k}\">0</span></td>\n</tr>`;
     }).join('');
   }
 
@@ -1071,7 +1147,14 @@ function cashV2InitInitialUIOnce(){
   card.addEventListener('focusout', (e)=>{
     const t = e && e.target;
     if (!t || t.getAttribute('data-cashv2-initial') !== '1') return;
-    const n = cashV2NormCount(t.value);
+    const raw = (t.value != null) ? String(t.value) : '';
+    if (raw.trim() === ''){
+      try{ t.value = ''; }catch(_){ }
+      cashV2UpdateInitialTotals();
+      try{ cashV2UpdateCloseSummary(); }catch(_){ }
+      return;
+    }
+    const n = cashV2NormCount(raw);
     t.value = String(n);
     cashV2UpdateInitialTotals();
     try{ cashV2UpdateCloseSummary(); }catch(_){ }
@@ -1126,7 +1209,7 @@ function cashV2ReadInitialFromDom(updateUi){
     const ccy = String(inp.dataset.ccy || '').trim();
     const denom = String(inp.dataset.denom || '').trim();
     if (!ccy || !denom || !initial[ccy]) return;
-    initial[ccy].denomCounts[denom] = cashV2NormCount(inp.value);
+    initial[ccy].denomCounts[denom] = cashV2CountToStore(inp.value);
   });
 
   // Calcular subtotales + totales
@@ -1164,7 +1247,7 @@ function cashV2ApplyInitialToDom(initial){
     for (const d of (CASHV2_DENOMS[ccy] || [])){
       const k = String(d);
       const inp = document.getElementById(`cashv2-initial-${ccy}-${k}`);
-      if (inp) inp.value = String(cashV2NormCount(v[ccy].denomCounts[k]));
+      if (inp) inp.value = cashV2CountDomValue(v[ccy].denomCounts[k]);
     }
   }
   cashV2UpdateInitialTotals();
@@ -1589,7 +1672,7 @@ function cashV2InitFinalUIOnce(){
     tbody.innerHTML = denoms.map(d=>{
       const k = String(d);
       const sym = (ccy === 'NIO') ? 'C$' : '$';
-      return `\n<tr>\n  <td class=\"denom\"><b>${sym} ${k}</b></td>\n  <td>\n    <input type=\"number\" min=\"0\" step=\"1\" inputmode=\"numeric\" pattern=\"[0-9]*\"\n      class=\"cashv2-denom-input\"\n      data-cashv2-final=\"1\" data-ccy=\"${ccy}\" data-denom=\"${k}\"\n      id=\"cashv2-final-${ccy}-${k}\" value=\"0\"\n    >\n  </td>\n  <td class=\"sub\"><span id=\"cashv2-final-sub-${ccy}-${k}\">0</span></td>\n</tr>`;
+      return `\n<tr>\n  <td class=\"denom\"><b>${sym} ${k}</b></td>\n  <td>\n    <input type=\"number\" min=\"0\" step=\"1\" inputmode=\"numeric\" pattern=\"[0-9]*\"\n      class=\"cashv2-denom-input\"\n      data-cashv2-final=\"1\" data-ccy=\"${ccy}\" data-denom=\"${k}\"\n      id=\"cashv2-final-${ccy}-${k}\" placeholder=\"0\" value=\"\"\n    >\n  </td>\n  <td class=\"sub\"><span id=\"cashv2-final-sub-${ccy}-${k}\">0</span></td>\n</tr>`;
     }).join('');
   }
 
@@ -1607,7 +1690,13 @@ function cashV2InitFinalUIOnce(){
   card.addEventListener('focusout', (e)=>{
     const t = e && e.target;
     if (!t || t.getAttribute('data-cashv2-final') !== '1') return;
-    const n = cashV2NormCount(t.value);
+    const raw = (t.value != null) ? String(t.value) : '';
+    if (raw.trim() === ''){
+      try{ t.value = ''; }catch(_){ }
+      cashV2UpdateFinalTotals();
+      return;
+    }
+    const n = cashV2NormCount(raw);
     t.value = String(n);
     cashV2UpdateFinalTotals();
   });
@@ -1661,7 +1750,7 @@ function cashV2ReadFinalFromDom(updateUi){
     const ccy = String(inp.dataset.ccy || '').trim();
     const denom = String(inp.dataset.denom || '').trim();
     if (!ccy || !denom || !final[ccy]) return;
-    final[ccy].denomCounts[denom] = cashV2NormCount(inp.value);
+    final[ccy].denomCounts[denom] = cashV2CountToStore(inp.value);
   });
 
   for (const ccy of ['NIO','USD']){
@@ -1699,7 +1788,7 @@ function cashV2ApplyFinalToDom(final){
     for (const d of (CASHV2_DENOMS[ccy] || [])){
       const k = String(d);
       const inp = document.getElementById(`cashv2-final-${ccy}-${k}`);
-      if (inp) inp.value = String(cashV2NormCount(v[ccy].denomCounts[k]));
+      if (inp) inp.value = cashV2CountDomValue(v[ccy].denomCounts[k]);
     }
   }
   cashV2UpdateFinalTotals();
@@ -2339,7 +2428,7 @@ async function cashV2PersistEventFlag(eventId, enabled){
     }
   }catch(_){ saved = false; }
 
-  // Fallback mínimo canónico (sin legacy)
+  // Fallback mínimo canónico (sin compatibilidad anterior)
   if (!saved){
     try{
       const m = cashV2LoadFlagsLS();
@@ -3252,6 +3341,9 @@ async function renderEfectivoTab(){
 
   // Etapa 3/7: Tipo de cambio
   cashV2InitFxUIOnce();
+
+  // Etapa 2/3: UX inputs (vacío primero + select-all reingreso)
+  cashV2InitUXInputsOnce();
 
   // Reset UI
   try{ if (tab){ tab.classList.remove('cashv2-readonly'); tab.classList.remove('cashv2-closed'); } }catch(_){ }
@@ -9479,7 +9571,7 @@ function bindChecklistEventsOncePOS(){
   // Delegación de acciones dentro del tab
   const tab = document.getElementById('tab-checklist');
   if (tab){
-    tab.addEventListener('click', async (e)=>{
+    root.addEventListener('click', async (e)=>{
       const remAdd = e.target.closest('#checklist-reminder-add');
       const remDoneToggle = e.target.closest('#checklist-reminder-done-toggle');
       const remClearDone = e.target.closest('#checklist-reminder-clear-done');
