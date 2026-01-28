@@ -527,6 +527,10 @@ html, body{
 }
 
 
+/* --- Panel Hoy: Pedidos compacto (evita alturas gigantes) --- */
+#todayPanel #ordersTopToday .cmd-order-item:nth-child(n+3){ display:none; }
+
+
 /* --- Recordatorios (solo lectura) --- */
 .cmd-reminders{ margin-top: 12px; }
 

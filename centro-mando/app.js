@@ -1310,6 +1310,132 @@ function truncateChecklistLine(s, maxLen){
   return (t.slice(0, Math.max(1, m-1)).trimEnd() + '…');
 }
 
+function _normStrNoAccentsA33(s){
+  try{
+    return String((s==null)?'':s).normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  }catch(_){
+    return String((s==null)?'':s);
+  }
+}
+
+function isClearlyPlaceholderChecklistText(s){
+  try{
+    const t = String((s==null)?'':s).trim();
+    if (!t) return true;
+    const n = _normStrNoAccentsA33(t).toLowerCase().replace(/\s+/g,' ').trim();
+    if (n === 'nuevo item' || n.startsWith('nuevo item')) return true;
+    if (n === 'item') return true;
+  }catch(_){ }
+  return false;
+}
+
+function _extractTextLikeA33(o){
+  if (o == null) return '';
+  if (typeof o === 'string') return o;
+  if (typeof o !== 'object') return '';
+  const keys = ['text','title','name','label','desc','description','value','task','todo'];
+  for (const k of keys){
+    const v = o[k];
+    if (typeof v === 'string' && v.trim()) return v;
+  }
+  return '';
+}
+
+function buildDayChecklistTextMap(ev, dayKey){
+  const map = new Map();
+  try{
+    if (!ev || typeof ev !== 'object') return map;
+    const dk = String(dayKey || '').trim();
+    const day = (ev.days && typeof ev.days === 'object') ? ev.days[dk] : null;
+    if (!day || typeof day !== 'object') return map;
+
+    const consider = (id, text)=>{
+      const iid = String(id || '').trim();
+      const t = String(text || '').trim();
+      if (!iid || !t) return;
+      if (!map.has(iid)){
+        map.set(iid, t);
+        return;
+      }
+      const prev = String(map.get(iid) || '').trim();
+      if (isClearlyPlaceholderChecklistText(prev) && !isClearlyPlaceholderChecklistText(t)) map.set(iid, t);
+    };
+
+    const scanArray = (arr)=>{
+      if (!Array.isArray(arr)) return;
+      for (const raw of arr){
+        if (!raw) continue;
+        if (typeof raw === 'string') continue; // sin id fiable
+        if (typeof raw !== 'object') continue;
+        const id = raw.id || raw.itemId || raw.key || raw.uid;
+        const txt = _extractTextLikeA33(raw);
+        consider(id, txt);
+      }
+    };
+
+    const scanObjMap = (obj)=>{
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return;
+      for (const k in obj){
+        if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
+        const v = obj[k];
+        if (typeof v === 'string') consider(k, v);
+        else if (v && typeof v === 'object') consider(k, _extractTextLikeA33(v));
+      }
+    };
+
+    const st = (day.checklistState && typeof day.checklistState === 'object') ? day.checklistState : null;
+    if (st){
+      scanArray(st.items); scanObjMap(st.items);
+      scanArray(st.list); scanObjMap(st.list);
+      scanArray(st.todos); scanObjMap(st.todos);
+      scanArray(st.pending); scanObjMap(st.pending);
+    }
+
+    const ch = (day.checklist && typeof day.checklist === 'object') ? day.checklist : null;
+    if (ch){
+      scanArray(ch.items); scanObjMap(ch.items);
+      scanArray(ch.list); scanObjMap(ch.list);
+    }
+
+    scanArray(day.checklist);
+  }catch(_){ }
+  return map;
+}
+
+function resolveTextoPendiente(item, dayTextMap){
+  try{
+    const it = (item && typeof item === 'object') ? item : {};
+    const id = String(it.id || '').trim();
+    const cand = [];
+
+    // prioridad: texto del día (si existe)
+    try{
+      if (dayTextMap && id && typeof dayTextMap.get === 'function'){
+        const v = dayTextMap.get(id);
+        if (v) cand.push(v);
+      }
+    }catch(_e){ }
+
+    // luego: campos típicos del template/legacy
+    const keys = ['text','title','name','label','desc','description','value'];
+    for (const k of keys){
+      const v = it[k];
+      if (typeof v === 'string' && v.trim()) cand.push(v);
+    }
+
+    let fallback = '';
+    for (const v of cand){
+      const t = String(v || '').trim();
+      if (!t) continue;
+      if (!isClearlyPlaceholderChecklistText(t)) return t;
+      if (!fallback) fallback = t;
+    }
+    return fallback || '';
+  }catch(_){ }
+  return '';
+}
+
+
 function getPendingChecklistTexts(ev, dayKey){
   try{
     if (!ev || typeof ev !== 'object') return [];
@@ -1324,10 +1450,14 @@ function getPendingChecklistTexts(ev, dayKey){
       .filter(x=> x && typeof x === 'object');
     if (!flat.length) return [];
 
-    const day = (ev.days && typeof ev.days === 'object') ? ev.days[dayKey] : null;
+    const dk = String(dayKey || '');
+    const day = (ev.days && typeof ev.days === 'object') ? ev.days[dk] : null;
     const st = (day && day.checklistState && typeof day.checklistState === 'object') ? day.checklistState : null;
     const checkedIds = st ? uniq(st.checkedIds) : [];
     const checkedSet = new Set(checkedIds.map(String));
+
+    // Si existe data del día con textos reales, la priorizamos sobre el template (sin reordenar)
+    const dayTextMap = buildDayChecklistTextMap(ev, dk);
 
     const out = [];
     const seen = new Set();
@@ -1335,10 +1465,14 @@ function getPendingChecklistTexts(ev, dayKey){
       const id = String(it.id || '');
       if (!id) continue;
       if (checkedSet.has(id)) continue;
-      const raw = String(it.text || '').trim();
+
+      const raw = resolveTextoPendiente(it, dayTextMap);
       if (!raw) continue;
+
       const t = truncateChecklistLine(raw, 92);
-      const k = t.toLowerCase();
+      if (!t) continue;
+
+      const k = _normStrNoAccentsA33(t).toLowerCase().replace(/\s+/g,' ').trim();
       if (seen.has(k)) continue;
       seen.add(k);
       out.push(t);
