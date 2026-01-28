@@ -565,6 +565,35 @@ function fmtFX2(v){
   return (n == null) ? '' : n.toFixed(2);
 }
 
+// FX (T/C) — canon por evento (alineado a POS: events.fx)
+const FX_EVENT_CANON_PROP = 'fx';
+const FX_EVENT_FALLBACK_PROPS = ['exchangeRate','exchange_rate','fxRate','tc','tipoCambio','tipo_cambio'];
+
+function resolveEventFxInfo(ev){
+  try{
+    if (!ev || typeof ev !== 'object') return { fx:null, source:'none' };
+    const eid = Number(ev.id || 0);
+
+    // a) Canon: events.fx
+    let fx = fxNorm(ev[FX_EVENT_CANON_PROP]);
+    if (fx != null) return { fx, source:'event.fx' };
+
+    // b) Fallback legacy/meta (solo lectura)
+    for (const prop of FX_EVENT_FALLBACK_PROPS){
+      fx = fxNorm(ev[prop]);
+      if (fx != null) return { fx, source: 'event.' + prop };
+    }
+
+    // c) Cache por evento (misma llave que POS)
+    fx = readCashV2FxCached(eid);
+    if (fx != null) return { fx, source:'cache' };
+
+    return { fx:null, source:'none' };
+  }catch(_){
+    return { fx:null, source:'none' };
+  }
+}
+
 function readCashV2FxCached(eventId){
   const eid = Number(eventId || 0);
   if (!eid) return null;
@@ -591,11 +620,10 @@ function readCashV2FlagsCached(){
 }
 
 async function resolveCashV2EnabledForEvent(ev){
-  // Estrategia (alineada a POS) + default seguro OFF:
-  // a) bandera persistida en EVENTO
-  // b) fallback cache por evento (localStorage)
-  // c) evidencia real en store cashV2 (si existe)
-  // d) default: OFF
+  // CANON POS (pos/app.js :: cashV2GetFlagForEventObj):
+  // 1) ev.cashV2Active (boolean, persistido en store 'events')
+  // 2) localStorage A33.EF2.eventFlags[eid]
+  // 3) default TRUE (retro-compat): si NO hay evidencia explícita de OFF, NO asumir OFF.
   try{
     if (ev && typeof ev.cashV2Active === 'boolean'){
       return { enabled: !!ev.cashV2Active, source: 'event' };
@@ -610,28 +638,16 @@ async function resolveCashV2EnabledForEvent(ev){
       if (m && Object.prototype.hasOwnProperty.call(m, k)){
         return { enabled: !!m[k], source: 'cache' };
       }
-      // por si guardaron numérico
+      // Por si guardaron numérico
       if (m && Object.prototype.hasOwnProperty.call(m, eid)){
         return { enabled: !!m[eid], source: 'cache' };
       }
     }catch(_){ }
   }
 
-  // Evidencia real: si hay registros en cashV2 para el evento, asumimos ON.
-  try{
-    const db = state.db;
-    if (db && eid && hasStore(db, 'cashV2')){
-      let c = await idbCountByIndex(db, 'cashV2', 'by_event', IDBKeyRange.only(eid));
-      if (typeof c !== 'number'){
-        const rows = await idbGetAllByIndex(db, 'cashV2', 'by_event', IDBKeyRange.only(eid));
-        c = Array.isArray(rows) ? rows.length : 0;
-      }
-      if (typeof c === 'number' && c > 0) return { enabled: true, source: 'cashV2' };
-    }
-  }catch(_){ }
-
-  return { enabled: false, source: 'default' };
+  return { enabled: true, source: 'default_on' };
 }
+
 
 function safeStr(x){
   const s = (x == null) ? '' : String(x);
@@ -1808,37 +1824,58 @@ async function computeSalesToday(eventId, dayKey){
 
 
 async function computeCashV2Status(ev, dayKey){
-  const db = state.db;
-  if (!db || !ev){
+  // Nota: FX (T/C) se resuelve SIEMPRE desde el EVENTO ACTIVO (Evento GLOBAL),
+  // independientemente de cashV2 ON/OFF. cashV2 sigue siendo la fuente de verdad
+  // SOLO para el estado operativo (ABIERTO/CERRADO/SIN ACTIVIDAD).
+
+  if (!ev){
     return { ok:false, enabled:null, isOpen:null, dayState:null, opDayKey:null, fx:null, fxMissing:null, fxKnown:false, status:null, fxSource:'unknown', reason:'No disponible' };
   }
 
-  // Detección NO estricta (align POS): evento.flag -> cache -> evidencia store -> default OFF
-  const en = await resolveCashV2EnabledForEvent(ev);
+  // 0) FX por evento (canon) — siempre
+  const fxInfo = resolveEventFxInfo(ev);
+  let fxEvent = (fxInfo && fxInfo.fx != null) ? fxInfo.fx : null;
+  let fxSourceEvent = (fxInfo && fxInfo.source) ? String(fxInfo.source) : 'none';
+
+  // 1) Detección (CANON POS): evento.flag -> cache -> default ON
+  let en = null;
+  try{ en = await resolveCashV2EnabledForEvent(ev); }catch(_){ en = null; }
   const enabled = !!(en && en.enabled === true);
+
+  // Si cashV2 está OFF, igual devolvemos FX (evento) para que CdM lo muestre siempre.
   if (!enabled){
-    return { ok:true, enabled:false, isOpen:false, dayState:'No aplica', opDayKey:null, fx:null, fxMissing:false, fxKnown:false, status:null, fxSource:'unknown', reason:'' };
+    const fxMissing = !(fxEvent && fxEvent > 0);
+    return { ok:true, enabled:false, isOpen:false, dayState:'No aplica', opDayKey:null, fx: fxEvent || null, fxMissing, fxKnown:true, status:null, fxSource: fxSourceEvent, reason:'' };
+  }
+
+  const db = state.db;
+  if (!db){
+    const fxMissing = !(fxEvent && fxEvent > 0);
+    return { ok:false, enabled:true, isOpen:null, dayState:null, opDayKey:null, fx: fxEvent || null, fxMissing, fxKnown:true, status:null, fxSource: fxSourceEvent, reason:'No disponible' };
   }
 
   if (!hasStore(db, 'cashV2')){
-    return { ok:false, enabled:true, isOpen:null, dayState:null, opDayKey:null, fx:null, fxMissing:null, fxKnown:false, status:null, fxSource:'unknown', reason:'No disponible' };
+    const fxMissing = !(fxEvent && fxEvent > 0);
+    return { ok:false, enabled:true, isOpen:null, dayState:null, opDayKey:null, fx: fxEvent || null, fxMissing, fxKnown:true, status:null, fxSource: fxSourceEvent, reason:'No disponible' };
   }
 
   const eid = Number(ev.id);
   const dk = safeYMD(dayKey);
 
-  // FX por evento (si existe) — fallback defensivo
-  const fxEvent = fxNorm(ev.fxRate || ev.exchangeRate || ev.fx || 0);
+  // Cache por evento (POS): si existe
   const fxCached = readCashV2FxCached(eid);
 
-  // 1) Buscar si existe un día OPEN real (operativo) para este evento.
+  // 2) Buscar si existe un día OPEN real (operativo) para este evento.
   let rows = await idbGetAllByIndex(db, 'cashV2', 'by_event', IDBKeyRange.only(eid));
   if (rows === null){
     // Sin índice, fallback controlado
     rows = await idbGetAll(db, 'cashV2');
   }
   if (!Array.isArray(rows)) rows = [];
-  if (rows.length > SAFE_SCAN_LIMIT) return { ok:false, enabled:true, isOpen:null, dayState:null, opDayKey:null, fx:null, fxMissing:null, fxKnown:false, status:null, fxSource:'unknown', reason:'No disponible' };
+  if (rows.length > SAFE_SCAN_LIMIT){
+    const fxMissing = !(fxEvent && fxEvent > 0);
+    return { ok:false, enabled:true, isOpen:null, dayState:null, opDayKey:null, fx: fxEvent || null, fxMissing, fxKnown:true, status:null, fxSource: fxSourceEvent, reason:'No disponible' };
+  }
 
   const filtered = rows.filter(r => r && Number(r.eventId) === eid);
 
@@ -1857,7 +1894,7 @@ async function computeCashV2Status(ev, dayKey){
   if (open){
     rec = open;
   } else {
-    // 2) Si no hay OPEN, mirar el día de HOY (si existe)
+    // 3) Si no hay OPEN, mirar el día de HOY (si existe)
     const key = `cash:v2:${eid}:${dk}`;
     rec = await idbGet(db, 'cashV2', key);
     if (!rec){
@@ -1866,11 +1903,30 @@ async function computeCashV2Status(ev, dayKey){
     }
   }
 
+  // 4) FX efectivo (canon del evento -> cache -> último recurso: fx del día)
+  let fxRec = null;
+  if (rec){
+    fxRec = fxNorm(rec.fx);
+  }
+
+  let fxEffective = null;
+  let fxSource = 'none';
+
+  if (fxEvent != null){
+    fxEffective = fxEvent;
+    fxSource = fxSourceEvent || 'event.fx';
+  } else if (fxCached != null){
+    fxEffective = fxCached;
+    fxSource = 'cache';
+  } else if (fxRec != null){
+    fxEffective = fxRec;
+    fxSource = 'cashV2';
+  }
+
+  const fxMissing = !(fxEffective && fxEffective > 0);
+
   if (!rec){
     // Activo, pero aún no hay día operativo en cashV2
-    const fxEffective = (fxCached != null) ? fxCached : fxEvent;
-    const fxMissing = !(fxEffective && fxEffective > 0);
-    const fxSource = (fxCached != null) ? 'cache' : (fxEvent != null ? 'event' : 'none');
     return { ok:true, enabled:true, isOpen:false, dayState:'SIN ACTIVIDAD', opDayKey:null, fx: fxEffective || null, fxMissing, fxKnown:true, status:null, fxSource, reason:'' };
   }
 
@@ -1881,12 +1937,6 @@ async function computeCashV2Status(ev, dayKey){
   // Día operativo: preferir rec.dayKey; fallback: dk
   let opDayKey = safeYMD(rec.dayKey || '');
   if (!opDayKey){ opDayKey = safeYMD(dk); }
-
-  const fxRec = fxNorm(rec.fx);
-  const fxEffective = (fxRec != null) ? fxRec : ((fxCached != null) ? fxCached : fxEvent);
-
-  const fxMissing = !(fxEffective && fxEffective > 0);
-  const fxSource = (fxRec != null) ? 'cashV2' : ((fxCached != null) ? 'cache' : (fxEvent != null ? 'event' : 'none'));
 
   return { ok:true, enabled:true, isOpen, dayState, opDayKey, fx: fxEffective || null, fxMissing, fxKnown:true, status: st || null, fxSource, reason:'' };
 }
@@ -2030,24 +2080,27 @@ function buildActionableAlerts(ev, dayKey, cv2){
       // No se pudo leer el día (no inventar)
       unavailable.push({ key: 'petty-open', label: labelForAlertKey('petty-open'), reason: cv2.reason || 'No disponible' });
     }
+  }
 
-    // 2) Falta T/C
-    if (cv2.fxKnown === true){
-      if (cv2.fxMissing === true){
-        const op = cv2.opDayKey ? String(cv2.opDayKey) : String(dayKey);
-        alerts.push({
-          key: 'fx-missing',
-          icon: '💱',
-          title: 'Falta T/C',
-          sub: `Día operativo: ${op} (sin tipo de cambio)`,
-          cta: 'Abrir Resumen',
-          tab: 'resumen'
-        });
-      }
-    } else {
-      // No se puede evaluar con seguridad (store/campo faltante)
-      unavailable.push({ key: 'fx-missing', label: labelForAlertKey('fx-missing'), reason: cv2.reason || 'No disponible' });
+  // 2) Falta T/C (evento) — SIEMPRE (independiente de cashV2 ON/OFF)
+  if (cv2 && cv2.fxKnown === true){
+    if (cv2.fxMissing === true){
+      const evName = safeStr(ev && ev.name) || '—';
+      const sub = (cv2 && cv2.enabled === true)
+        ? (`Día operativo: ${(cv2.opDayKey ? String(cv2.opDayKey) : String(dayKey))} (sin tipo de cambio)`)
+        : (`Evento: ${evName} (sin tipo de cambio)`);
+      alerts.push({
+        key: 'fx-missing',
+        icon: '💱',
+        title: 'Falta T/C',
+        sub,
+        cta: 'Abrir Resumen',
+        tab: 'resumen'
+      });
     }
+  } else {
+    // No se puede evaluar con seguridad (sin evento / sin datos)
+    unavailable.push({ key: 'fx-missing', label: labelForAlertKey('fx-missing'), reason: (cv2 && cv2.reason) ? cv2.reason : 'No disponible' });
   }
 
   // 3) Checklist hoy incompleto (solo si existe plantilla)
