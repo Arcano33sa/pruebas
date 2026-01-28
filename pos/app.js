@@ -4,10 +4,10 @@ const DB_VER = 31; // Etapa 1/5 (Efectivo v2 Histórico): nuevos stores aislados
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.71';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.72';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r36');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r39');
 
 // --- Util: round2 (2 decimales) — Hotfix Ventas Etapa 1/3
 // Nota: evita NaN y errores de flotante (EPSILON). Retorna Number.
@@ -16,6 +16,17 @@ function round2(n){
   if (!Number.isFinite(x)) x = 0;
   return Math.round((x + Number.EPSILON) * 100) / 100;
 }
+
+
+// --- Util: moneyEquals (comparación monetaria robusta) — Hotfix Ventas Etapa 1/2
+// Compara montos a nivel de centavos (evita falsos negativos por flotantes).
+function moneyEquals(a, b, epsilonCents){
+  const eps = (epsilonCents == null || epsilonCents === '') ? 0 : Math.max(0, Math.round(Number(epsilonCents)));
+  const ca = Math.round((round2(a) + Number.EPSILON) * 100);
+  const cb = Math.round((round2(b) + Number.EPSILON) * 100);
+  return Math.abs(ca - cb) <= eps;
+}
+try{ window.moneyEquals = moneyEquals; }catch(_){ }
 
 
 // --- Date helpers (POS)
@@ -860,8 +871,16 @@ function cashV2InitUXInputsOnce(){
 
   const queueSelectAll = (t)=>{
     try{ if (t == null) return; }catch(_){ return; }
-    // Solo si tiene valor real (incluye 0)
-    try{ if (String(t.value) === '') return; }catch(_){ return; }
+    // UX: si el input arranca con "0" (por default/placeholder viejo), lo tratamos como vacío en el primer foco.
+    // Para cálculos, vacío = 0 (ver cashV2NormCount + cashV2CountFromDom).
+    try{
+      const v = String(t.value == null ? '' : t.value);
+      if (v === '0'){
+        t.value = '';
+        return;
+      }
+      if (v === '') return;
+    }catch(_){ return; }
     setTimeout(()=>{
       try{ t.focus(); }catch(_){ }
       try{ t.select(); }catch(_){ }
@@ -1128,7 +1147,7 @@ function cashV2InitInitialUIOnce(){
     tbody.innerHTML = denoms.map(d=>{
       const k = String(d);
       const sym = (ccy === 'NIO') ? 'C$' : '$';
-      return `\n<tr>\n  <td class=\"denom\"><b>${sym} ${k}</b></td>\n  <td>\n    <input type=\"number\" min=\"0\" step=\"1\" inputmode=\"numeric\" pattern=\"[0-9]*\"\n      class=\"cashv2-denom-input\"\n      data-cashv2-initial=\"1\" data-ccy=\"${ccy}\" data-denom=\"${k}\"\n      id=\"cashv2-initial-${ccy}-${k}\" placeholder=\"0\" value=\"\"\n    >\n  </td>\n  <td class=\"sub\"><span id=\"cashv2-sub-${ccy}-${k}\">0</span></td>\n</tr>`;
+      return `\n<tr>\n  <td class=\"denom\"><b>${sym} ${k}</b></td>\n  <td>\n    <input type=\"number\" min=\"0\" step=\"1\" inputmode=\"numeric\" pattern=\"[0-9]*\"\n      class=\"cashv2-denom-input\"\n      data-cashv2-initial=\"1\" data-ccy=\"${ccy}\" data-denom=\"${k}\"\n      id=\"cashv2-initial-${ccy}-${k}\" placeholder=\"\" value=\"\"\n    >\n  </td>\n  <td class=\"sub\"><span id=\"cashv2-sub-${ccy}-${k}\">0</span></td>\n</tr>`;
     }).join('');
   }
 
@@ -1672,7 +1691,7 @@ function cashV2InitFinalUIOnce(){
     tbody.innerHTML = denoms.map(d=>{
       const k = String(d);
       const sym = (ccy === 'NIO') ? 'C$' : '$';
-      return `\n<tr>\n  <td class=\"denom\"><b>${sym} ${k}</b></td>\n  <td>\n    <input type=\"number\" min=\"0\" step=\"1\" inputmode=\"numeric\" pattern=\"[0-9]*\"\n      class=\"cashv2-denom-input\"\n      data-cashv2-final=\"1\" data-ccy=\"${ccy}\" data-denom=\"${k}\"\n      id=\"cashv2-final-${ccy}-${k}\" placeholder=\"0\" value=\"\"\n    >\n  </td>\n  <td class=\"sub\"><span id=\"cashv2-final-sub-${ccy}-${k}\">0</span></td>\n</tr>`;
+      return `\n<tr>\n  <td class=\"denom\"><b>${sym} ${k}</b></td>\n  <td>\n    <input type=\"number\" min=\"0\" step=\"1\" inputmode=\"numeric\" pattern=\"[0-9]*\"\n      class=\"cashv2-denom-input\"\n      data-cashv2-final=\"1\" data-ccy=\"${ccy}\" data-denom=\"${k}\"\n      id=\"cashv2-final-${ccy}-${k}\" placeholder=\"\" value=\"\"\n    >\n  </td>\n  <td class=\"sub\"><span id=\"cashv2-final-sub-${ccy}-${k}\">0</span></td>\n</tr>`;
     }).join('');
   }
 

@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.71&r=37">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.72&r=39">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.71&r=37">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.71" />
+<link rel="stylesheet" href="styles.css?v=4.20.72&r=39">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.72" />
 </head>
 <body>
   <header class="a33-header" role="banner">
@@ -1555,25 +1555,25 @@
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
-<script src="/assets/js/a33-storage.js?v=4.20.71"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.71"></script>
-<script src="/assets/js/a33-auth.js?v=4.20.71"></script>
-<script src="/assets/js/a33-build.js?v=4.20.71"></script>
+<script src="/assets/js/a33-storage.js?v=4.20.72"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.72"></script>
+<script src="/assets/js/a33-auth.js?v=4.20.72"></script>
+<script src="/assets/js/a33-build.js?v=4.20.72"></script>
 <script>
   (function(){
-    try{      const v = '4.20.71';
+    try{      const v = '4.20.72';
       try{ window.A33_VERSION = v; }catch(_){ }
       // POS: bump revision local (solo este modulo) para forzar limpieza de caches
-      try{ window.A33_ASSET_REV = '37'; }catch(_){ }
-      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r37').toString(); }catch(_){ }
-      try{ window.A33_BUILD_TAG = (v + '-r37').toString(); }catch(_){ }
+      try{ window.A33_ASSET_REV = '38'; }catch(_){ }
+      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r39').toString(); }catch(_){ }
+      try{ window.A33_BUILD_TAG = (v + '-r38').toString(); }catch(_){ }
       const verEl = document.getElementById('a33-version-text');
       if (verEl) verEl.textContent = 'v' + v;
       const bEl = document.getElementById('pos-build-id');
       if (bEl) bEl.textContent = 'POS Build: ' + v;
       const cEl = document.getElementById('pos-sw-cache-id');
       if (cEl){
-        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r37')).toString();
+        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r39')).toString();
         cEl.textContent = 'SW Cache: ' + cn;
         cEl.title = cn;
       }
@@ -1605,11 +1605,11 @@
     }
   })();
 </script>
-<script src="app.js?v=4.20.71&r=37"></script>
-<script src="/assets/js/a33-input-ux.js?v=4.20.71"></script>
+<script src="app.js?v=4.20.72&r=39"></script>
+<script src="/assets/js/a33-input-ux.js?v=4.20.72"></script>
 <script>
   (function(){
-    const BUILD = (window.A33_VERSION || '4.20.71').toString();
+    const BUILD = (window.A33_VERSION || '4.20.72').toString();
     const REV = (window.A33_ASSET_REV || '10').toString();
     const SW_URL = './sw.js?v=' + encodeURIComponent(BUILD) + '&r=' + encodeURIComponent(REV);
     const btn = document.getElementById('btn-update');

@@ -2,26 +2,26 @@
    Objetivo: cachés acotadas por módulo (sin “guerra” entre SW).
 */
 
-const SW_VERSION = '4.20.71';
-const SW_REV = '37';
+const SW_VERSION = '4.20.72';
+const SW_REV = '39';
 const MODULE = 'pos';
 const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}-r${SW_REV}`;
 
 const PRECACHE_URLS = [
   './',
-  './index.html?v=4.20.71',
-  './index.html?v=4.20.71&r=37',
-  './styles.css?v=4.20.71&r=37',
-  './app.js?v=4.20.71&r=37',
-  './manifest.webmanifest?v=4.20.71&r=37',
+  './index.html?v=4.20.72',
+  './index.html?v=4.20.72&r=39',
+  './styles.css?v=4.20.72&r=39',
+  './app.js?v=4.20.72&r=39',
+  './manifest.webmanifest?v=4.20.72&r=39',
   './offline.html',
   './logo.png',
   './vendor/xlsx.full.min.js?v=0.18.5',
-  '/assets/js/a33-input-ux.js?v=4.20.71',
-  '/assets/js/a33-storage.js?v=4.20.71',
-  '/assets/js/a33-presentations.js?v=4.20.71',
-  '/assets/js/a33-auth.js?v=4.20.71',
-  '/assets/css/a33-header.css?v=4.20.71'
+  '/assets/js/a33-input-ux.js?v=4.20.72',
+  '/assets/js/a33-storage.js?v=4.20.72',
+  '/assets/js/a33-presentations.js?v=4.20.72',
+  '/assets/js/a33-auth.js?v=4.20.72',
+  '/assets/css/a33-header.css?v=4.20.72'
 ];
 
 function sameOrigin(url){
@@ -86,6 +86,7 @@ async function handleNavigate(request){
     const cache = await caches.open(CACHE_NAME);
     return (
       (await cache.match(request)) ||
+      (await cache.match('./index.html?v=4.20.72')) ||
       (await cache.match('./index.html?v=4.20.71')) ||
       (await cache.match('./index.html?v=4.20.70')) ||
       (await cache.match('./index.html?v=4.20.69')) ||
