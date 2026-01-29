@@ -9874,7 +9874,8 @@ async function saveChecklistStatePOS(ctx){
 }
 
 async function renderChecklistTab(){
-  bindChecklistEventsOncePOS();
+  // Bind listeners (idempotente)
+  try{ bindChecklistEventsOncePOS(); }catch(_e){}
 
   // Hardening: asegurar índice posRemindersIndex coherente (se ejecuta 1 vez)
   try{ await maybeRebuildRemindersIndexPOS(); }catch(_e){}
@@ -9883,453 +9884,506 @@ async function renderChecklistTab(){
   const grid = document.getElementById('checklist-grid');
   const sel = document.getElementById('checklist-event');
 
-  const current = await getMeta('currentEventId');
-  const currentId = (current === null || current === undefined || current === '') ? null : parseInt(current, 10);
+  const fail = (msg)=>{
+    try{
+      if (grid) grid.style.display = 'none';
+      if (empty){
+        empty.style.display = 'block';
+        empty.textContent = msg || 'Checklist no disponible.';
+      }
+    }catch(_e){}
+  };
 
   try{
-    window.__A33_CHECKLIST_EVENT_ID = currentId;
-    const d = _getChecklistDraftStorePOS();
-    d.eventId = currentId;
-  }catch(_e){}
+    // Hardening: si el selector quedó vacío por orden de carga, repoblar localmente (sin tocar refreshEventUI global)
+    try{
+      if (sel && sel.options && sel.options.length <= 1){
+        const evs = await getAll('events');
+        sel.innerHTML = '<option value="">— Selecciona evento —</option>';
+        for (const evx of (evs || [])){
+          const o = document.createElement('option');
+          o.value = evx.id;
+          o.textContent = (evx.name || 'Evento') + (evx.closedAt ? ' (cerrado)' : '');
+          sel.appendChild(o);
+        }
+      }
+    }catch(_e){}
 
-  if (sel) sel.value = currentId ? String(currentId) : '';
+    const current = await getMeta('currentEventId');
+    const currentId = (current === null || current === undefined || current === '') ? null : parseInt(current, 10);
 
-  if (!currentId) {
-    if (empty) empty.style.display = 'block';
-    if (grid) grid.style.display = 'none';
-    return;
-  }
+    try{
+      window.__A33_CHECKLIST_EVENT_ID = currentId;
+      const d = _getChecklistDraftStorePOS();
+      d.eventId = currentId;
+    }catch(_e){}
 
-  const ev = await getEventByIdPOS(currentId);
-  if (!ev) {
-    if (empty) empty.style.display = 'block';
-    if (grid) grid.style.display = 'none';
-    return;
-  }
+    if (sel) sel.value = currentId ? String(currentId) : '';
 
-  const dayKey = safeYMD(getSaleDayKeyPOS());
-
-  // Default de fecha para nuevos recordatorios: sigue el día del Checklist (sin pisar si el usuario la cambió manualmente)
-  try{
-    const dateEl = document.getElementById('checklist-reminder-date');
-    if (dateEl){
-      const last = (dateEl.dataset.lastDayKey || '').toString();
-      const curVal = (dateEl.value || '').toString().trim();
-      if (!curVal || curVal === last) dateEl.value = dayKey;
-      dateEl.dataset.lastDayKey = dayKey;
+    if (!currentId) {
+      fail('Selecciona un evento para ver el Checklist.');
+      return;
     }
-  }catch(_e){}
-  const { changed, template, state } = ensureChecklistDataPOS(ev, dayKey);
-  if (changed) {
-    try{ await put('events', ev); }catch(e){ console.error('Checklist: no se pudo persistir inicialización', e); }
-    // Si acabamos de normalizar/crear recordatorios del día (datos antiguos), mantenemos el índice coherente.
-    try{ await syncRemindersIndexForDay(ev, dayKey); }catch(e){}
+
+    const ev = await getEventByIdPOS(currentId);
+    if (!ev) {
+      fail('Evento no encontrado. Revisa la pestaña Eventos.');
+      return;
+    }
+
+    const dayKey = safeYMD(getSaleDayKeyPOS());
+
+    // Default de fecha para nuevos recordatorios: sigue el día del Checklist (sin pisar si el usuario la cambió manualmente)
+    try{
+      const dateEl = document.getElementById('checklist-reminder-date');
+      if (dateEl){
+        const last = (dateEl.dataset.lastDayKey || '').toString();
+        const curVal = (dateEl.value || '').toString().trim();
+        if (!curVal || curVal === last) dateEl.value = dayKey;
+        dateEl.dataset.lastDayKey = dayKey;
+      }
+    }catch(_e){}
+
+    const { changed, template, state } = ensureChecklistDataPOS(ev, dayKey);
+    if (changed) {
+      try{ await put('events', ev); }catch(e){ console.error('Checklist: no se pudo persistir inicialización', e); }
+      // Si acabamos de normalizar/crear recordatorios del día (datos antiguos), mantenemos el índice coherente.
+      try{ await syncRemindersIndexForDay(ev, dayKey); }catch(e){}
+    }
+
+    if (empty) empty.style.display = 'none';
+    if (grid) grid.style.display = 'grid';
+
+    const checkedSet = new Set((state.checkedIds || []).map(String));
+
+    // Render columnas
+    for (const sec of CHECKLIST_SECTIONS_POS){
+      const listEl = document.getElementById(sec.listId);
+      renderChecklistSectionPOS(sec.key, listEl, template[sec.key] || [], checkedSet);
+    }
+
+    const notes = document.getElementById('checklist-notes');
+    if (notes) notes.value = state.notes || '';
+
+    // Recordatorios (por día)
+    try{ renderChecklistRemindersPOS(ev, dayKey); }catch(e){ console.warn('Checklist: recordatorios', e); }
+  }catch(err){
+    console.error('Checklist render error', err);
+    fail('Checklist: no se pudo cargar. Recarga el POS o vuelve a intentar.');
+    try{ showToast('Checklist: error al cargar (ver consola).'); }catch(_e){}
   }
+}
 
-  if (empty) empty.style.display = 'none';
-  if (grid) grid.style.display = 'grid';
-
-  const checkedSet = new Set((state.checkedIds || []).map(String));
-
-  // Render columnas
-  for (const sec of CHECKLIST_SECTIONS_POS){
-    const listEl = document.getElementById(sec.listId);
-    renderChecklistSectionPOS(sec.key, listEl, template[sec.key] || [], checkedSet);
+function _getChecklistBindStorePOS(){
+  if (!window.__A33_CHECKLIST_BIND_STORE_POS){
+    window.__A33_CHECKLIST_BIND_STORE_POS = { h: Object.create(null), notesTimer: null };
   }
-
-  const notes = document.getElementById('checklist-notes');
-  if (notes) notes.value = state.notes || '';
-
-  // Recordatorios (por día)
-  try{ renderChecklistRemindersPOS(ev, dayKey); }catch(e){ console.warn('Checklist: recordatorios', e); }
+  return window.__A33_CHECKLIST_BIND_STORE_POS;
 }
 
 function bindChecklistEventsOncePOS(){
-  if (window.__A33_CHECKLIST_BOUND) return;
-  window.__A33_CHECKLIST_BOUND = true;
+  const tab = document.getElementById('tab-checklist');
+  if (!tab) return;
 
+  // Lifecycle flush (idempotente)
   try{ bindChecklistLifecycleFlushPOS(); }catch(_e){}
 
-  const sel = document.getElementById('checklist-event');
-  if (sel){
-    sel.addEventListener('change', async ()=>{
-      // Etapa 2: limpiar cliente al cambiar evento
-      try{ await flushChecklistTextQueuePOS({ reason:'event-switch', force:true }); }catch(_e){}
-      await resetOperationalStateOnEventSwitchPOS();
-      const val = (sel.value || '').trim();
-      if (!val) {
-        await setMeta('currentEventId', null);
-      } else {
-        await setMeta('currentEventId', parseInt(val,10));
-      }
-      await refreshEventUI();
-      try{ await refreshSaleStockLabel(); }catch(e){}
-      try{ await renderDay(); }catch(e){}
-      try{ await renderChecklistTab(); }catch(e){}
-      try{ showToast('Evento actualizado en todo el POS.'); }catch(e){}
-    });
-  }
+  const s = _getChecklistBindStorePOS();
 
-  const go = document.getElementById('checklist-go-events');
-  if (go){
-    go.addEventListener('click', ()=> setTab('eventos'));
-  }
-
-  // + Agregar ítem (por sección)
-  for (const sec of CHECKLIST_SECTIONS_POS){
-    // Soporta tanto IDs fijos (recomendado) como botones por clase/data-section (fallback)
-    const btn = document.getElementById(sec.addId) || document.querySelector(`#tab-checklist .chk-add[data-section="${sec.key}"]`);
-    if (!btn) continue;
-    btn.addEventListener('click', async ()=>{
-      const current = await getMeta('currentEventId');
-      const currentId = current ? parseInt(current,10) : null;
-      if (!currentId){
-        try{ showToast('Selecciona un evento primero.'); }catch(e){}
-        return;
-      }
-      const dayKey = safeYMD(getSaleDayKeyPOS());
-      const ev = await getEventByIdPOS(currentId);
-      if (!ev) return;
-      const { template } = ensureChecklistDataPOS(ev, dayKey);
-      const id = makeChecklistItemIdPOS();
-      template[sec.key] = Array.isArray(template[sec.key]) ? template[sec.key] : [];
-      template[sec.key].push({ id, text: 'Nuevo ítem' });
-      ev.checklistTemplate = template;
-      await put('events', ev);
-      await renderChecklistTab();
-      const input = document.querySelector(`#${sec.listId} .chk-text[data-id="${CSS.escape(id)}"]`);
-      if (input){
-        input.focus();
-        try{ input.select(); }catch(e){}
-      }
-    });
-  }
-
-  // Delegación de acciones dentro del tab
-  const tab = document.getElementById('tab-checklist');
-  if (tab){
-    // Persistencia robusta de texto (iPad): guardar mientras escribe + force en blur
-    tab.addEventListener('input', (e)=>{
-      const txt = e.target && e.target.closest ? e.target.closest('.chk-text') : null;
-      if (!txt || !tab.contains(txt)) return;
-      const id = txt.dataset.id;
-      const sectionKey = txt.dataset.section;
-      if (!id || !sectionKey) return;
-      queueChecklistTextSavePOS(sectionKey, id, txt.value, { wait: 260 });
-    });
-
-    // blur no burbujea: capturarlo para iOS/PWA
-    tab.addEventListener('blur', (e)=>{
-      const txt = e.target && e.target.closest ? e.target.closest('.chk-text') : null;
-      if (!txt || !tab.contains(txt)) return;
-      const id = txt.dataset.id;
-      const sectionKey = txt.dataset.section;
-      if (!id || !sectionKey) return;
-      // Normaliza vacío -> placeholder coherente
-      if (!String(txt.value || '').trim()){
-        txt.value = 'Nuevo ítem';
-      }
-      queueChecklistTextSavePOS(sectionKey, id, txt.value, { force:true, wait: 0 });
-      flushChecklistTextQueuePOS({ reason:'blur', force:true }).catch(()=>{});
-    }, true);
-
-    root.addEventListener('click', async (e)=>{
-      const remAdd = e.target.closest('#checklist-reminder-add');
-      const remDoneToggle = e.target.closest('#checklist-reminder-done-toggle');
-      const remClearDone = e.target.closest('#checklist-reminder-clear-done');
-      const remDel = e.target.closest('.rem-del');
-
-      if (remDoneToggle){
-        if (remDoneToggle.disabled) return;
-        window.__A33_REM_DONE_OPEN = !window.__A33_REM_DONE_OPEN;
-        await renderChecklistTab();
-        return;
-      }
-
-      if (remAdd){
-        const ctx = await getChecklistContextPOS();
-        if (!ctx){
-          try{ showToast('Selecciona un evento primero.'); }catch(_e){}
+  if (!s.h.onInput){
+    s.h.onInput = (e)=>{
+      try{
+        const t = e && e.target;
+        const txt = t && t.closest ? t.closest('.chk-text') : null;
+        if (txt && tab.contains(txt)){
+          const id = txt.dataset.id;
+          const sectionKey = txt.dataset.section;
+          if (id && sectionKey) queueChecklistTextSavePOS(sectionKey, id, txt.value, { wait: 260 });
           return;
         }
 
-        const tEl = document.getElementById('checklist-reminder-text');
-        const dateEl = document.getElementById('checklist-reminder-date');
-        const dueEl = document.getElementById('checklist-reminder-due');
-        const priEl = document.getElementById('checklist-reminder-priority');
+        // Notas del día (debounced) — dentro del tab para evitar bind extra
+        if (t && t.id === 'checklist-notes'){
+          try{ clearTimeout(s.notesTimer); }catch(_e){}
+          s.notesTimer = setTimeout(async ()=>{
+            try{
+              const cur = await getMeta('currentEventId');
+              const curId = cur ? parseInt(cur,10) : null;
+              if (!curId) return;
+              const dayKey = safeYMD(getSaleDayKeyPOS());
+              const ev = await getEventByIdPOS(curId);
+              if (!ev) return;
+              const { state } = ensureChecklistDataPOS(ev, dayKey);
+              state.notes = t.value || '';
+              ev.days[dayKey].checklistState = state;
+              await put('events', ev);
+            }catch(err){ console.error('Checklist notes save error', err); }
+          }, 350);
+        }
+      }catch(err){ console.error('Checklist input handler error', err); }
+    };
 
-        const text = (tEl ? (tEl.value || '') : '').trim();
-        if (!text){
-          try{ showToast('Escribe el recordatorio.'); }catch(_e){}
+    s.h.onBlur = (e)=>{
+      try{
+        const t = e && e.target;
+        const txt = t && t.closest ? t.closest('.chk-text') : null;
+        if (!txt || !tab.contains(txt)) return;
+        const id = txt.dataset.id;
+        const sectionKey = txt.dataset.section;
+        if (!id || !sectionKey) return;
+        // Normaliza vacío -> placeholder coherente
+        if (!String(txt.value || '').trim()) txt.value = 'Nuevo ítem';
+        queueChecklistTextSavePOS(sectionKey, id, txt.value, { force:true, wait: 0 });
+        flushChecklistTextQueuePOS({ reason:'blur', force:true }).catch(()=>{});
+      }catch(err){ console.error('Checklist blur handler error', err); }
+    };
+
+    s.h.onKeydown = (e)=>{
+      try{
+        if (!e || e.key !== 'Enter') return;
+        const t = e.target;
+        if (!t || !t.id) return;
+        if (t.id === 'checklist-reminder-text' || t.id === 'checklist-reminder-date' || t.id === 'checklist-reminder-due' || t.id === 'checklist-reminder-priority'){
+          e.preventDefault();
+          const btn = document.getElementById('checklist-reminder-add');
+          try{ btn && btn.click(); }catch(_e){}
+        }
+      }catch(err){ console.error('Checklist keydown handler error', err); }
+    };
+
+    s.h.onClick = (e)=>{
+      (async ()=>{
+        const t = e && e.target;
+        if (!t || !t.closest) return;
+
+        const go = t.closest('#checklist-go-events');
+        if (go){
+          setTab('eventos');
+          return;
+        }
+
+        // + Agregar ítem (delegado)
+        const addBtn = t.closest('.chk-add');
+        if (addBtn){
+          const sectionKey = String(addBtn.dataset.section || '').trim();
+          if (!sectionKey) return;
+          const current = await getMeta('currentEventId');
+          const currentId = current ? parseInt(current,10) : null;
+          if (!currentId){
+            try{ showToast('Selecciona un evento primero.'); }catch(_e){}
+            return;
+          }
+          const dayKey = safeYMD(getSaleDayKeyPOS());
+          const ev = await getEventByIdPOS(currentId);
+          if (!ev) return;
+          const { template } = ensureChecklistDataPOS(ev, dayKey);
+          const id = makeChecklistItemIdPOS();
+          template[sectionKey] = Array.isArray(template[sectionKey]) ? template[sectionKey] : [];
+          template[sectionKey].push({ id, text: 'Nuevo ítem' });
+          ev.checklistTemplate = template;
+          await put('events', ev);
+          await renderChecklistTab();
+          const qid = String(id).replace(/"/g, '\"');
+          const input = document.querySelector(`#tab-checklist .chk-text[data-id="${qid}"]`);
+          if (input){
+            input.focus();
+            try{ input.select(); }catch(_e){}
+          }
+          return;
+        }
+
+        const remAdd = t.closest('#checklist-reminder-add');
+        const remDoneToggle = t.closest('#checklist-reminder-done-toggle');
+        const remClearDone = t.closest('#checklist-reminder-clear-done');
+        const remDel = t.closest('.rem-del');
+
+        if (remDoneToggle){
+          if (remDoneToggle.disabled) return;
+          window.__A33_REM_DONE_OPEN = !window.__A33_REM_DONE_OPEN;
+          await renderChecklistTab();
+          return;
+        }
+
+        if (remAdd){
+          const ctx = await getChecklistContextPOS();
+          if (!ctx){
+            try{ showToast('Selecciona un evento primero.'); }catch(_e){}
+            return;
+          }
+
+          const tEl = document.getElementById('checklist-reminder-text');
+          const dateEl = document.getElementById('checklist-reminder-date');
+          const dueEl = document.getElementById('checklist-reminder-due');
+          const priEl = document.getElementById('checklist-reminder-priority');
+
+          const text = (tEl ? (tEl.value || '') : '').trim();
+          if (!text){
+            try{ showToast('Escribe el recordatorio.'); }catch(_e){}
+            try{ tEl && tEl.focus(); }catch(_e){}
+            return;
+          }
+
+          // Fecha obligatoria (YYYY-MM-DD). Si el input no existe (edge), caemos al día actual.
+          const dueDateRaw = dateEl ? String(dateEl.value || '').trim() : '';
+          const dueDateKey = (dueDateRaw && /^\d{4}-\d{2}-\d{2}$/.test(dueDateRaw)) ? dueDateRaw : null;
+          if (!dueDateKey){
+            try{ showToast('Selecciona una fecha (obligatoria).'); }catch(_e){}
+            try{ dateEl && dateEl.focus(); }catch(_e){}
+            return;
+          }
+
+          const dueTimeRaw = dueEl ? (dueEl.value || '').trim() : '';
+          const dueTime = (dueTimeRaw && /^\d{2}:\d{2}$/.test(dueTimeRaw)) ? dueTimeRaw : null;
+          const priRaw = priEl ? (priEl.value || '').trim() : '';
+          const priority = (priRaw && ['high','med','low'].includes(priRaw)) ? priRaw : null;
+
+          // Guardar en el día destino (dueDateKey). No cambiamos sale-date automáticamente.
+          const { state: destState } = ensureChecklistDataPOS(ctx.ev, dueDateKey);
+          const ctxDest = { ...ctx, dayKey: dueDateKey, state: destState };
+
+          ctxDest.state.reminders = Array.isArray(ctxDest.state.reminders) ? ctxDest.state.reminders : [];
+          const now = Date.now();
+          ctxDest.state.reminders.unshift({
+            id: makeReminderIdPOS(),
+            text,
+            done: false,
+            createdAt: now,
+            updatedAt: now,
+            doneAt: null,
+            dueDateKey,
+            dueTime,
+            priority
+          });
+
+          await saveChecklistStatePOS(ctxDest);
+          try{ await syncRemindersIndexForDay(ctx.ev, dueDateKey); }catch(e){}
+          if (tEl) tEl.value = '';
+          if (dueEl) dueEl.value = '';
+          if (priEl) priEl.value = '';
+          await renderChecklistTab();
+          try{
+            if (String(dueDateKey) !== String(ctx.dayKey)) showToast(`Guardado para ${dueDateKey}`);
+            else showToast('Recordatorio agregado.');
+          }catch(_e){}
           try{ tEl && tEl.focus(); }catch(_e){}
           return;
         }
 
-        // Fecha obligatoria (YYYY-MM-DD). Si el input no existe (edge), caemos al día actual.
-        const dueDateRaw = dateEl ? String(dateEl.value || '').trim() : '';
-        const dueDateKey = (dueDateRaw && /^\d{4}-\d{2}-\d{2}$/.test(dueDateRaw)) ? dueDateRaw : null;
-        if (!dueDateKey){
-          try{ showToast('Selecciona una fecha (obligatoria).'); }catch(_e){}
-          try{ dateEl && dateEl.focus(); }catch(_e){}
+        if (remClearDone){
+          const ctx = await getChecklistContextPOS();
+          if (!ctx) return;
+          const ok = confirm('¿Limpiar todos los recordatorios completados de los próximos 7 días?');
+          if (!ok) return;
+
+          const base = safeYMD(ctx.dayKey);
+          const dayKeys = rangeDayKeysPOS(base, 7);
+          const changedDays = [];
+
+          for (const dk of dayKeys){
+            const { state } = ensureChecklistDataPOS(ctx.ev, dk);
+            const arr = Array.isArray(state.reminders) ? state.reminders : [];
+            const next = arr.filter(r=>!r.done);
+            if (next.length !== arr.length){
+              state.reminders = next;
+              ctx.ev.days[dk].checklistState = state;
+              changedDays.push(dk);
+            }
+          }
+
+          if (changedDays.length){
+            await put('events', ctx.ev);
+            for (const dk of changedDays){
+              try{ await syncRemindersIndexForDay(ctx.ev, dk); }catch(e){}
+            }
+          }
+
+          window.__A33_REM_DONE_OPEN = false;
+          await renderChecklistTab();
+          try{ showToast('Completados eliminados (próximos 7 días).'); }catch(_e){}
           return;
         }
 
-        const dueTimeRaw = dueEl ? (dueEl.value || '').trim() : '';
-        const dueTime = (dueTimeRaw && /^\d{2}:\d{2}$/.test(dueTimeRaw)) ? dueTimeRaw : null;
-        const priRaw = priEl ? (priEl.value || '').trim() : '';
-        const priority = (priRaw && ['high','med','low'].includes(priRaw)) ? priRaw : null;
+        if (remDel){
+          const id = remDel.dataset.id;
+          if (!id) return;
+          const ctx = await getChecklistContextPOS();
+          if (!ctx) return;
 
-        // Guardar en el día destino (dueDateKey). No cambiamos sale-date automáticamente.
-        const { state: destState } = ensureChecklistDataPOS(ctx.ev, dueDateKey);
-        const ctxDest = { ...ctx, dayKey: dueDateKey, state: destState };
+          const dkRaw = (remDel.dataset.dayKey || remDel.dataset.daykey || '').toString().trim();
+          const dayKey = (dkRaw && /^\d{4}-\d{2}-\d{2}$/.test(dkRaw)) ? dkRaw : ctx.dayKey;
 
-        ctxDest.state.reminders = Array.isArray(ctxDest.state.reminders) ? ctxDest.state.reminders : [];
-        const now = Date.now();
-        ctxDest.state.reminders.unshift({
-          id: makeReminderIdPOS(),
-          text,
-          done: false,
-          createdAt: now,
-          updatedAt: now,
-          doneAt: null,
-          dueDateKey,
-          dueTime,
-          priority
-        });
+          const { state } = ensureChecklistDataPOS(ctx.ev, dayKey);
+          state.reminders = (Array.isArray(state.reminders) ? state.reminders : []).filter(r=>String(r.id)!==String(id));
+          ctx.ev.days[dayKey].checklistState = state;
 
-        await saveChecklistStatePOS(ctxDest);
-        try{ await syncRemindersIndexForDay(ctx.ev, dueDateKey); }catch(e){}
-        if (tEl) tEl.value = '';
-        if (dueEl) dueEl.value = '';
-        if (priEl) priEl.value = '';
-        await renderChecklistTab();
-        try{
-          if (String(dueDateKey) !== String(ctx.dayKey)) showToast(`Guardado para ${dueDateKey}`);
-          else showToast('Recordatorio agregado.');
-        }catch(_e){}
-        try{ tEl && tEl.focus(); }catch(_e){}
-        return;
-      }
-
-      if (remClearDone){
-        const ctx = await getChecklistContextPOS();
-        if (!ctx) return;
-        const ok = confirm('¿Limpiar todos los recordatorios completados de los próximos 7 días?');
-        if (!ok) return;
-
-        const base = safeYMD(ctx.dayKey);
-        const dayKeys = rangeDayKeysPOS(base, 7);
-        const changedDays = [];
-
-        for (const dk of dayKeys){
-          const { state } = ensureChecklistDataPOS(ctx.ev, dk);
-          const arr = Array.isArray(state.reminders) ? state.reminders : [];
-          const next = arr.filter(r=>!r.done);
-          if (next.length !== arr.length){
-            state.reminders = next;
-            ctx.ev.days[dk].checklistState = state;
-            changedDays.push(dk);
-          }
-        }
-
-        if (changedDays.length){
           await put('events', ctx.ev);
-          for (const dk of changedDays){
-            try{ await syncRemindersIndexForDay(ctx.ev, dk); }catch(e){}
-          }
+          try{ await syncRemindersIndexForDay(ctx.ev, dayKey); }catch(e){}
+          await renderChecklistTab();
+          try{ showToast('Recordatorio eliminado.'); }catch(_e){}
+          return;
         }
 
-        window.__A33_REM_DONE_OPEN = false;
-        await renderChecklistTab();
-        try{ showToast('Completados eliminados (próximos 7 días).'); }catch(_e){}
-        return;
-      }
+        const up = t.closest('.chk-up');
+        const down = t.closest('.chk-down');
+        const delBtn = t.closest('.chk-del');
+        const reset = t.closest('#checklist-reset-day');
 
-      if (remDel){
-        const id = remDel.dataset.id;
-        if (!id) return;
-        const ctx = await getChecklistContextPOS();
-        if (!ctx) return;
+        if (reset){
+          const cur = await getMeta('currentEventId');
+          const curId = cur ? parseInt(cur,10) : null;
+          if (!curId) return;
+          const ok = confirm('¿Reiniciar checks del día? (solo desmarca)');
+          if (!ok) return;
+          const dayKey = safeYMD(getSaleDayKeyPOS());
+          const ev = await getEventByIdPOS(curId);
+          if (!ev) return;
+          const { state } = ensureChecklistDataPOS(ev, dayKey);
+          state.checkedIds = [];
+          ev.days[dayKey].checklistState = state;
+          await put('events', ev);
+          await renderChecklistTab();
+          try{ showToast('Checks reiniciados.'); }catch(e){}
+          return;
+        }
 
-        const dkRaw = (remDel.dataset.dayKey || remDel.dataset.daykey || '').toString().trim();
-        const dayKey = (dkRaw && /^\d{4}-\d{2}-\d{2}$/.test(dkRaw)) ? dkRaw : ctx.dayKey;
-
-        const { state } = ensureChecklistDataPOS(ctx.ev, dayKey);
-        state.reminders = (Array.isArray(state.reminders) ? state.reminders : []).filter(r=>String(r.id)!==String(id));
-        ctx.ev.days[dayKey].checklistState = state;
-
-        await put('events', ctx.ev);
-        try{ await syncRemindersIndexForDay(ctx.ev, dayKey); }catch(e){}
-        await renderChecklistTab();
-        try{ showToast('Recordatorio eliminado.'); }catch(_e){}
-        return;
-      }
-
-      const up = e.target.closest('.chk-up');
-      const down = e.target.closest('.chk-down');
-      const del = e.target.closest('.chk-del');
-      const reset = e.target.closest('#checklist-reset-day');
-
-      if (reset){
+        if (!(up || down || delBtn)) return;
+        const btn = up || down || delBtn;
+        const sectionKey = btn.dataset.section;
+        const id = btn.dataset.id;
         const cur = await getMeta('currentEventId');
         const curId = cur ? parseInt(cur,10) : null;
-        if (!curId) return;
-        const ok = confirm('¿Reiniciar checks del día? (solo desmarca)');
-        if (!ok) return;
+        if (!curId || !sectionKey || !id) return;
+
         const dayKey = safeYMD(getSaleDayKeyPOS());
         const ev = await getEventByIdPOS(curId);
         if (!ev) return;
-        const { state } = ensureChecklistDataPOS(ev, dayKey);
-        state.checkedIds = [];
-        ev.days[dayKey].checklistState = state;
-        await put('events', ev);
-        await renderChecklistTab();
-        try{ showToast('Checks reiniciados.'); }catch(e){}
-        return;
-      }
+        const { template, state } = ensureChecklistDataPOS(ev, dayKey);
 
-      if (!(up || down || del)) return;
-      const btn = up || down || del;
-      const sectionKey = btn.dataset.section;
-      const id = btn.dataset.id;
-      const cur = await getMeta('currentEventId');
-      const curId = cur ? parseInt(cur,10) : null;
-      if (!curId || !sectionKey || !id) return;
+        const arr = Array.isArray(template[sectionKey]) ? template[sectionKey] : [];
+        const idx = arr.findIndex(x=>String(x.id)===String(id));
+        if (idx < 0) return;
 
-      const dayKey = safeYMD(getSaleDayKeyPOS());
-      const ev = await getEventByIdPOS(curId);
-      if (!ev) return;
-      const { template, state } = ensureChecklistDataPOS(ev, dayKey);
+        if (delBtn){
+          const ok = confirm('¿Eliminar este ítem?');
+          if (!ok) return;
+          arr.splice(idx,1);
+          template[sectionKey] = arr;
+          // limpiar del estado del día
+          state.checkedIds = (state.checkedIds||[]).map(String).filter(cid=>cid!==String(id));
+          ev.checklistTemplate = template;
+          ev.days[dayKey].checklistState = state;
+          await put('events', ev);
+          await renderChecklistTab();
+          try{ showToast('Ítem eliminado.'); }catch(e){}
+          return;
+        }
 
-      const arr = Array.isArray(template[sectionKey]) ? template[sectionKey] : [];
-      const idx = arr.findIndex(x=>String(x.id)===String(id));
-      if (idx < 0) return;
-
-      if (del){
-        const ok = confirm('¿Eliminar este ítem?');
-        if (!ok) return;
-        arr.splice(idx,1);
+        const dir = up ? -1 : 1;
+        const j = idx + dir;
+        if (j < 0 || j >= arr.length) return;
+        [arr[idx], arr[j]] = [arr[j], arr[idx]];
         template[sectionKey] = arr;
-        // limpiar del estado del día
-        state.checkedIds = (state.checkedIds||[]).map(String).filter(cid=>cid!==String(id));
         ev.checklistTemplate = template;
-        ev.days[dayKey].checklistState = state;
         await put('events', ev);
         await renderChecklistTab();
-        try{ showToast('Ítem eliminado.'); }catch(e){}
-        return;
-      }
+      })().catch((err)=> console.error('Checklist click handler error', err));
+    };
 
-      const dir = up ? -1 : 1;
-      const j = idx + dir;
-      if (j < 0 || j >= arr.length) return;
-      [arr[idx], arr[j]] = [arr[j], arr[idx]];
-      template[sectionKey] = arr;
-      ev.checklistTemplate = template;
-      await put('events', ev);
-      await renderChecklistTab();
-    });
+    s.h.onChange = (e)=>{
+      (async ()=>{
+        const t = e && e.target;
+        if (!t || !t.closest) return;
 
-    tab.addEventListener('change', async (e)=>{
-      const cb = e.target.closest('.chk-box');
-      const txt = e.target.closest('.chk-text');
-      const remCb = e.target.closest('.rem-toggle');
-      if (!(cb || txt || remCb)) return;
-      const cur = await getMeta('currentEventId');
-      const curId = cur ? parseInt(cur,10) : null;
-      if (!curId) return;
-      const baseDayKey = safeYMD(getSaleDayKeyPOS());
-      const ev = await getEventByIdPOS(curId);
-      if (!ev) return;
-
-      if (remCb){
-        const id = remCb.dataset.id;
-        if (!id) return;
-        const dkRaw = (remCb.dataset.dayKey || remCb.dataset.daykey || '').toString().trim();
-        const dayKey = (dkRaw && /^\d{4}-\d{2}-\d{2}$/.test(dkRaw)) ? dkRaw : baseDayKey;
-        const { state } = ensureChecklistDataPOS(ev, dayKey);
-        const arr = Array.isArray(state.reminders) ? state.reminders : [];
-        const it = arr.find(r=>String(r.id)===String(id));
-        if (!it) return;
-        it.done = !!remCb.checked;
-        it.doneAt = it.done ? Date.now() : null;
-        it.updatedAt = Date.now();
-        state.reminders = arr;
-        ev.days[dayKey].checklistState = state;
-        await put('events', ev);
-        try{ await syncRemindersIndexForDay(ev, dayKey); }catch(e){}
-        await renderChecklistTab();
-        return;
-      }
-
-      const dayKey = baseDayKey;
-      const { template, state } = ensureChecklistDataPOS(ev, dayKey);
-
-      if (cb){
-        const id = cb.dataset.id;
-        if (!id) return;
-        const set = new Set((state.checkedIds||[]).map(String));
-        if (cb.checked) set.add(String(id));
-        else set.delete(String(id));
-        state.checkedIds = Array.from(set);
-        ev.days[dayKey].checklistState = state;
-        await put('events', ev);
-        return;
-      }
-
-      if (txt){
-        const id = txt.dataset.id;
-        const sectionKey = txt.dataset.section;
-        if (!id || !sectionKey) return;
-
-        // Normaliza vacío -> placeholder coherente (evita textos fantasma / contadores raros)
-        if (!String(txt.value || '').trim()){
-          txt.value = 'Nuevo ítem';
+        // Selector de evento del Checklist
+        if (t.id === 'checklist-event'){
+          try{ await flushChecklistTextQueuePOS({ reason:'event-switch', force:true }); }catch(_e){}
+          await resetOperationalStateOnEventSwitchPOS();
+          const val = (t.value || '').trim();
+          if (!val) {
+            await setMeta('currentEventId', null);
+          } else {
+            await setMeta('currentEventId', parseInt(val,10));
+          }
+          await refreshEventUI();
+          try{ await refreshSaleStockLabel(); }catch(e){}
+          try{ await renderDay(); }catch(e){}
+          try{ await renderChecklistTab(); }catch(e){}
+          try{ showToast('Evento actualizado en todo el POS.'); }catch(e){}
+          return;
         }
 
-        // Encolar + flush inmediato como respaldo del input/debounce (iPad-safe)
-        queueChecklistTextSavePOS(sectionKey, id, txt.value, { force:true, wait: 0 });
-        await flushChecklistTextQueuePOS({ reason:'change', force:true });
-        return;
-      }
-    });
-  }
+        const cb = t.closest('.chk-box');
+        const txt = t.closest('.chk-text');
+        const remCb = t.closest('.rem-toggle');
+        if (!(cb || txt || remCb)) return;
 
-  // Recordatorios: Enter = Agregar
-  const hookEnter = (el)=>{
-    if (!el) return;
-    el.addEventListener('keydown', (e)=>{
-      if (e.key !== 'Enter') return;
-      e.preventDefault();
-      const btn = document.getElementById('checklist-reminder-add');
-      try{ btn && btn.click(); }catch(_e){}
-    });
-  };
-  hookEnter(document.getElementById('checklist-reminder-text'));
-  hookEnter(document.getElementById('checklist-reminder-date'));
-  hookEnter(document.getElementById('checklist-reminder-due'));
-  hookEnter(document.getElementById('checklist-reminder-priority'));
-
-  // Notas (debounced)
-  const notes = document.getElementById('checklist-notes');
-  if (notes){
-    let t = null;
-    notes.addEventListener('input', ()=>{
-      clearTimeout(t);
-      t = setTimeout(async ()=>{
         const cur = await getMeta('currentEventId');
         const curId = cur ? parseInt(cur,10) : null;
         if (!curId) return;
-        const dayKey = safeYMD(getSaleDayKeyPOS());
+        const baseDayKey = safeYMD(getSaleDayKeyPOS());
         const ev = await getEventByIdPOS(curId);
         if (!ev) return;
+
+        if (remCb){
+          const id = remCb.dataset.id;
+          if (!id) return;
+          const dkRaw = (remCb.dataset.dayKey || remCb.dataset.daykey || '').toString().trim();
+          const dayKey = (dkRaw && /^\d{4}-\d{2}-\d{2}$/.test(dkRaw)) ? dkRaw : baseDayKey;
+          const { state } = ensureChecklistDataPOS(ev, dayKey);
+          const arr = Array.isArray(state.reminders) ? state.reminders : [];
+          const it = arr.find(r=>String(r.id)===String(id));
+          if (!it) return;
+          it.done = !!remCb.checked;
+          it.doneAt = it.done ? Date.now() : null;
+          it.updatedAt = Date.now();
+          state.reminders = arr;
+          ev.days[dayKey].checklistState = state;
+          await put('events', ev);
+          try{ await syncRemindersIndexForDay(ev, dayKey); }catch(e){}
+          await renderChecklistTab();
+          return;
+        }
+
+        const dayKey = baseDayKey;
         const { state } = ensureChecklistDataPOS(ev, dayKey);
-        state.notes = notes.value || '';
-        ev.days[dayKey].checklistState = state;
-        await put('events', ev);
-      }, 350);
-    });
+
+        if (cb){
+          const id = cb.dataset.id;
+          if (!id) return;
+          const set = new Set((state.checkedIds||[]).map(String));
+          if (cb.checked) set.add(String(id));
+          else set.delete(String(id));
+          state.checkedIds = Array.from(set);
+          ev.days[dayKey].checklistState = state;
+          await put('events', ev);
+          return;
+        }
+
+        if (txt){
+          const id = txt.dataset.id;
+          const sectionKey = txt.dataset.section;
+          if (!id || !sectionKey) return;
+
+          // Normaliza vacío -> placeholder coherente
+          if (!String(txt.value || '').trim()) txt.value = 'Nuevo ítem';
+
+          // Encolar + flush inmediato como respaldo del input/debounce (iPad-safe)
+          queueChecklistTextSavePOS(sectionKey, id, txt.value, { force:true, wait: 0 });
+          await flushChecklistTextQueuePOS({ reason:'change', force:true });
+          return;
+        }
+      })().catch((err)=> console.error('Checklist change handler error', err));
+    };
   }
+
+  // Bind idempotente (misma referencia => no duplica)
+  tab.addEventListener('input', s.h.onInput);
+  tab.addEventListener('blur', s.h.onBlur, true);
+  tab.addEventListener('click', s.h.onClick);
+  tab.addEventListener('change', s.h.onChange);
+  tab.addEventListener('keydown', s.h.onKeydown);
+
+  window.__A33_CHECKLIST_BOUND = true;
 }
 
 // Event UI
