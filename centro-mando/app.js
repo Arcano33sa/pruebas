@@ -1384,21 +1384,79 @@ function buildDayChecklistTextMap(ev, dayKey){
       }
     };
 
+    // Scan profundo (compat): algunos builds guardaron textos por-id en mapas anidados.
+    // LIMITES: para evitar escanear ventas/movimientos enormes, solo se usa en sub-objetos de checklist.
+    const scanDeep = (root, maxDepth)=>{
+      const md = (typeof maxDepth === 'number' && isFinite(maxDepth)) ? Math.max(1, Math.floor(maxDepth)) : 4;
+      const seen = new Set();
+      const stack = [{ v: root, d: 0 }];
+      let steps = 0;
+      while (stack.length){
+        const cur = stack.pop();
+        const v = cur.v;
+        const d = cur.d;
+        if (v == null) continue;
+        if (typeof v !== 'object') continue;
+        if (seen.has(v)) continue;
+        seen.add(v);
+        steps++;
+        if (steps > 900) break;
+
+        if (Array.isArray(v)){
+          if (d >= md) continue;
+          for (let i=v.length-1; i>=0; i--) stack.push({ v: v[i], d: d+1 });
+          continue;
+        }
+
+        // Objeto con forma de item
+        try{
+          const id = v.id || v.itemId || v.key || v.uid;
+          const txt = _extractTextLikeA33(v);
+          if (id && txt) consider(id, txt);
+        }catch(_e){}
+
+        // Mapa: { <id>: <string|obj> }
+        if (d >= md) continue;
+        for (const k in v){
+          if (!Object.prototype.hasOwnProperty.call(v, k)) continue;
+          const child = v[k];
+          if (typeof child === 'string'){
+            // Si la key se parece a un id de checklist, úsala.
+            if (/^(chk_|rem_|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i.test(String(k))) consider(k, child);
+          }
+          stack.push({ v: child, d: d+1 });
+        }
+      }
+    };
+
     const st = (day.checklistState && typeof day.checklistState === 'object') ? day.checklistState : null;
     if (st){
       scanArray(st.items); scanObjMap(st.items);
       scanArray(st.list); scanObjMap(st.list);
       scanArray(st.todos); scanObjMap(st.todos);
       scanArray(st.pending); scanObjMap(st.pending);
+
+      // Compat: mapas típicos (textById, texts, overrides)
+      scanObjMap(st.textById); scanObjMap(st.texts);
+      scanObjMap(st.overrides); scanObjMap(st.draft);
+
+      scanDeep(st, 4);
     }
 
     const ch = (day.checklist && typeof day.checklist === 'object') ? day.checklist : null;
     if (ch){
       scanArray(ch.items); scanObjMap(ch.items);
       scanArray(ch.list); scanObjMap(ch.list);
+      scanObjMap(ch.textById); scanObjMap(ch.texts);
+      scanDeep(ch, 4);
     }
 
+    // Compat: estructuras alternativas
+    try{ scanObjMap(day.checklistTextById); scanObjMap(day.checklistTexts); scanObjMap(day.checklistTextMap); }catch(_e){}
+    try{ scanDeep(day.checklistTextById, 3); scanDeep(day.checklistTexts, 3); scanDeep(day.checklistTextMap, 3); }catch(_e){}
+
     scanArray(day.checklist);
+    try{ scanDeep(day.checklist, 4); }catch(_e){}
   }catch(_){ }
   return map;
 }
@@ -1470,8 +1528,12 @@ function getPendingChecklistTexts(ev, dayKey){
       const raw = resolveTextoPendiente(it, dayTextMap);
       if (!raw) continue;
 
+      // Requisito CdM: nunca mostrar placeholders (“Nuevo ítem”, etc.) en alertas.
+      if (isClearlyPlaceholderChecklistText(raw)) continue;
+
       const t = truncateChecklistLine(raw, 180);
       if (!t) continue;
+      if (isClearlyPlaceholderChecklistText(t)) continue;
 
       const k = _normStrNoAccentsA33(t).toLowerCase().replace(/\s+/g,' ').trim();
       if (seen.has(k)) continue;
@@ -2379,34 +2441,20 @@ function buildActionableAlerts(ev, dayKey, cv2, remindersToday){
           tab: 'checklist'
         });
       } else {
-        // Fuente principal: Recordatorios reales (HOY + Evento enfocado + NO completados)
-        const remRows = (remindersToday && remindersToday.ok && Array.isArray(remindersToday.rows))
-          ? remindersToday.rows
-          : (Array.isArray(remindersToday) ? remindersToday : []);
-        const remInfo = getFocusedPendingReminderTextsForDay(remRows, ev, dayKey);
-        const remTop = (remInfo && Array.isArray(remInfo.top)) ? remInfo.top : [];
-        const remCount = (remInfo && typeof remInfo.pendingCount === 'number') ? remInfo.pendingCount : remTop.length;
-
-        if (remTop.length){
-          for (const t of remTop){
-            if (t) lines.push(`• ${t}`);
-          }
-          if (remCount > remTop.length){
-            lines.push(`+${remCount - remTop.length} más`);
-          }
-        } else {
-          // Fallback: checklist pendiente (si existe) pero sin placeholders (“Nuevo ítem”, etc.)
-          const pending = getPendingChecklistTexts(ev, dayKey).filter(t => t && !isClearlyPlaceholderChecklistText(t));
-          const top = pending.slice(0,3);
-          for (const t of top){
-            if (t) lines.push(`• ${t}`);
-          }
-          if (pending.length > top.length){
-            lines.push(`+${pending.length - top.length} más`);
-          }
-          if (!top.length){
-            lines.push('—');
-          }
+        // Fuente (requisito): Checklist del evento (3 tipos: Pre-evento, Evento, Cierre)
+        // - Pendientes HOY (no completados)
+        // - Sin placeholders/vacíos
+        // - Orden: Pre -> Evento -> Cierre (natural)
+        const pending = getPendingChecklistTexts(ev, dayKey);
+        const top = pending.slice(0,3);
+        for (const t of top){
+          if (t) lines.push(`• ${t}`);
+        }
+        if (pending.length > top.length){
+          lines.push(`+${pending.length - top.length} más`);
+        }
+        if (!top.length){
+          lines.push('—');
         }
 
         alerts.push({

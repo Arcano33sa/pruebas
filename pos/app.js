@@ -8833,7 +8833,7 @@ function bindTabbarOncePOS(){
   // Evitar doble-disparo touch -> click (iOS Safari/PWA)
   let lastTouchTs = 0;
 
-  const onTap = (e)=>{
+  const onTap = async (e)=>{
     // Solo botones con data-tab dentro de la barra
     const btn = e && e.target ? e.target.closest('button[data-tab]') : null;
     if (!btn || !bar.contains(btn)) return;
@@ -8853,7 +8853,10 @@ function bindTabbarOncePOS(){
     if (!target) return;
 
     try{ if (e && e.preventDefault) e.preventDefault(); }catch(_){ }
-    try{ setTab(dest); }catch(err){ console.error('TABNAV error', err); }
+    try{
+      try{ await flushChecklistTextQueuePOS({ reason:'tabnav' }); }catch(_e){}
+      setTab(dest);
+    }catch(err){ console.error('TABNAV error', err); }
   };
 
   // Pointer Events cuando existan; fallback a touch/click
@@ -8872,6 +8875,13 @@ function setTab(name){
   try{
     if (name === 'vender') name = 'venta';
   }catch(_){ }
+
+  // Checklist: antes de salir, intentar persistir texto pendiente (best-effort)
+  try{
+    if (window.__A33_ACTIVE_TAB === 'checklist' && name !== 'checklist'){
+      flushChecklistTextQueuePOS({ reason:'setTab' }).catch(()=>{});
+    }
+  }catch(_e){}
 
 const tabs = $$('.tab');
   const target = document.getElementById('tab-'+name);
@@ -9080,6 +9090,149 @@ function makeChecklistItemIdPOS(){
   try{ return (crypto && crypto.randomUUID) ? crypto.randomUUID() : null; }catch(e){}
   return 'chk_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
 }
+
+// --- Checklist: persistencia robusta del texto (Etapa 1 iPad-safe)
+function _getChecklistDraftStorePOS(){
+  if (!window.__A33_CHECKLIST_DRAFT){
+    window.__A33_CHECKLIST_DRAFT = {
+      eventId: null,
+      q: Object.create(null),          // key: section::id -> rawText
+      lastQueued: Object.create(null), // evitar re-encolar el mismo valor
+      lastSaved: Object.create(null),  // last persisted (para evitar writes)
+      t: null,
+      flushing: false,
+    };
+  }
+  return window.__A33_CHECKLIST_DRAFT;
+}
+
+function _normalizeChecklistTextPOS(raw, prev){
+  const v = (raw == null ? '' : String(raw)).trim();
+  // Comportamiento elegido: si queda vacío, se restaura placeholder coherente con el modelo actual.
+  if (!v) return (prev && String(prev).trim()) ? String(prev).trim() : 'Nuevo ítem';
+  return v;
+}
+
+function queueChecklistTextSavePOS(sectionKey, id, rawText, opts){
+  const o = (opts || {});
+  if (!sectionKey || !id) return;
+  const d = _getChecklistDraftStorePOS();
+  const key = String(sectionKey) + '::' + String(id);
+  const raw = (rawText == null ? '' : String(rawText));
+
+  // Evitar escrituras excesivas: solo encolar si cambió vs último encolado
+  if (d.lastQueued[key] === raw && !o.force) return;
+  d.lastQueued[key] = raw;
+  d.q[key] = raw;
+
+  // Debounce razonable (iPad): guarda mientras escribe, y además se fuerza en blur/navegación
+  if (d.t) clearTimeout(d.t);
+  const wait = (typeof o.wait === 'number') ? o.wait : 280;
+  d.t = setTimeout(()=>{ flushChecklistTextQueuePOS({ reason: 'debounce' }).catch(()=>{}); }, Math.max(120, wait));
+}
+
+async function flushChecklistTextQueuePOS(opts){
+  const o = (opts || {});
+  const d = _getChecklistDraftStorePOS();
+
+  // Nada que hacer
+  const keys = Object.keys(d.q);
+  if (!keys.length) return;
+
+  // Evitar flush concurrente
+  if (d.flushing) return;
+  d.flushing = true;
+
+  try{
+    if (d.t){ clearTimeout(d.t); d.t = null; }
+
+    const evId = (d.eventId != null) ? parseInt(d.eventId, 10) : null;
+    let eventId = (evId && Number.isFinite(evId)) ? evId : null;
+
+    if (!eventId){
+      try{
+        const cur = await getMeta('currentEventId');
+        const curId = (cur === null || cur === undefined || cur === '') ? null : parseInt(cur, 10);
+        if (curId && Number.isFinite(curId)) eventId = curId;
+      }catch(_e){}
+    }
+
+    if (!eventId){
+      // Sin evento: limpiar cola para no envenenar futuras sesiones
+      d.q = Object.create(null);
+      return;
+    }
+
+    const ev = await getEventByIdPOS(eventId);
+    if (!ev){
+      d.q = Object.create(null);
+      return;
+    }
+
+    // ensureChecklistDataPOS garantiza la plantilla base
+    const dayKey = safeYMD(getSaleDayKeyPOS());
+    const { template } = ensureChecklistDataPOS(ev, dayKey);
+
+    let changed = false;
+
+    for (const k of keys){
+      const raw = d.q[k];
+      const parts = String(k).split('::');
+      const sectionKey = parts[0] || '';
+      const id = parts.slice(1).join('::'); // por si acaso
+      if (!sectionKey || !id) continue;
+
+      const arr = Array.isArray(template[sectionKey]) ? template[sectionKey] : [];
+      const it = arr.find(x=>String(x.id)===String(id));
+      if (!it) continue;
+
+      const next = _normalizeChecklistTextPOS(raw, it.text);
+      const lastSavedKey = String(eventId) + '|' + k;
+
+      // Evitar write si no cambió
+      if (String(it.text || '') !== String(next)){
+        it.text = next;
+        template[sectionKey] = arr;
+        changed = true;
+      }
+
+      d.lastSaved[lastSavedKey] = next;
+    }
+
+    // Limpiar cola antes del put para no repetir si ocurre render rápido
+    d.q = Object.create(null);
+
+    if (changed){
+      ev.checklistTemplate = template;
+      await put('events', ev);
+    }
+  }catch(err){
+    console.error('Checklist flush error', err);
+  }finally{
+    d.flushing = false;
+  }
+}
+
+function bindChecklistLifecycleFlushPOS(){
+  if (window.__A33_CHECKLIST_LIFECYCLE_BOUND) return;
+  window.__A33_CHECKLIST_LIFECYCLE_BOUND = true;
+
+  // Si se oculta la app (iPad/PWA), intentar flush best-effort
+  try{
+    document.addEventListener('visibilitychange', ()=>{
+      if (document.visibilityState === 'hidden'){
+        flushChecklistTextQueuePOS({ reason:'visibility' }).catch(()=>{});
+      }
+    });
+  }catch(_e){}
+
+  try{
+    window.addEventListener('pagehide', ()=>{
+      flushChecklistTextQueuePOS({ reason:'pagehide' }).catch(()=>{});
+    });
+  }catch(_e){}
+}
+
 
 function makeReminderIdPOS(){
   try{ return (crypto && crypto.randomUUID) ? crypto.randomUUID() : null; }catch(e){}
@@ -9733,6 +9886,12 @@ async function renderChecklistTab(){
   const current = await getMeta('currentEventId');
   const currentId = (current === null || current === undefined || current === '') ? null : parseInt(current, 10);
 
+  try{
+    window.__A33_CHECKLIST_EVENT_ID = currentId;
+    const d = _getChecklistDraftStorePOS();
+    d.eventId = currentId;
+  }catch(_e){}
+
   if (sel) sel.value = currentId ? String(currentId) : '';
 
   if (!currentId) {
@@ -9789,10 +9948,13 @@ function bindChecklistEventsOncePOS(){
   if (window.__A33_CHECKLIST_BOUND) return;
   window.__A33_CHECKLIST_BOUND = true;
 
+  try{ bindChecklistLifecycleFlushPOS(); }catch(_e){}
+
   const sel = document.getElementById('checklist-event');
   if (sel){
     sel.addEventListener('change', async ()=>{
       // Etapa 2: limpiar cliente al cambiar evento
+      try{ await flushChecklistTextQueuePOS({ reason:'event-switch', force:true }); }catch(_e){}
       await resetOperationalStateOnEventSwitchPOS();
       const val = (sel.value || '').trim();
       if (!val) {
@@ -9846,6 +10008,31 @@ function bindChecklistEventsOncePOS(){
   // Delegación de acciones dentro del tab
   const tab = document.getElementById('tab-checklist');
   if (tab){
+    // Persistencia robusta de texto (iPad): guardar mientras escribe + force en blur
+    tab.addEventListener('input', (e)=>{
+      const txt = e.target && e.target.closest ? e.target.closest('.chk-text') : null;
+      if (!txt || !tab.contains(txt)) return;
+      const id = txt.dataset.id;
+      const sectionKey = txt.dataset.section;
+      if (!id || !sectionKey) return;
+      queueChecklistTextSavePOS(sectionKey, id, txt.value, { wait: 260 });
+    });
+
+    // blur no burbujea: capturarlo para iOS/PWA
+    tab.addEventListener('blur', (e)=>{
+      const txt = e.target && e.target.closest ? e.target.closest('.chk-text') : null;
+      if (!txt || !tab.contains(txt)) return;
+      const id = txt.dataset.id;
+      const sectionKey = txt.dataset.section;
+      if (!id || !sectionKey) return;
+      // Normaliza vacío -> placeholder coherente
+      if (!String(txt.value || '').trim()){
+        txt.value = 'Nuevo ítem';
+      }
+      queueChecklistTextSavePOS(sectionKey, id, txt.value, { force:true, wait: 0 });
+      flushChecklistTextQueuePOS({ reason:'blur', force:true }).catch(()=>{});
+    }, true);
+
     root.addEventListener('click', async (e)=>{
       const remAdd = e.target.closest('#checklist-reminder-add');
       const remDoneToggle = e.target.closest('#checklist-reminder-done-toggle');
@@ -10093,15 +10280,16 @@ function bindChecklistEventsOncePOS(){
       if (txt){
         const id = txt.dataset.id;
         const sectionKey = txt.dataset.section;
-        const val = (txt.value || '').trim();
         if (!id || !sectionKey) return;
-        const arr = Array.isArray(template[sectionKey]) ? template[sectionKey] : [];
-        const it = arr.find(x=>String(x.id)===String(id));
-        if (!it) return;
-        it.text = val || it.text || 'Ítem';
-        template[sectionKey] = arr;
-        ev.checklistTemplate = template;
-        await put('events', ev);
+
+        // Normaliza vacío -> placeholder coherente (evita textos fantasma / contadores raros)
+        if (!String(txt.value || '').trim()){
+          txt.value = 'Nuevo ítem';
+        }
+
+        // Encolar + flush inmediato como respaldo del input/debounce (iPad-safe)
+        queueChecklistTextSavePOS(sectionKey, id, txt.value, { force:true, wait: 0 });
+        await flushChecklistTextQueuePOS({ reason:'change', force:true });
         return;
       }
     });
