@@ -1291,14 +1291,26 @@ function computeChecklistProgress(ev, dayKey){
   const tpl = (ev.checklistTemplate && typeof ev.checklistTemplate === 'object') ? ev.checklistTemplate : null;
   if (!tpl) return { ok:false, text:'—', checked:null, total:null, reason:'No disponible' };
 
+  const sections = getChecklistTemplateSectionsA33(tpl);
   const arr = (x)=> Array.isArray(x) ? x : [];
-  const total = arr(tpl.pre).length + arr(tpl.evento).length + arr(tpl.cierre).length;
+
+  // Total desde plantilla por secciones (preferido)
+  let total = 0;
+  if (sections && sections.hasSections){
+    total = arr(sections.pre).length + arr(sections.event).length + arr(sections.close).length;
+  } else {
+    // Back-compat: plantillas viejas con lista plana
+    total = arr(getChecklistTemplateFlatItemsA33(tpl)).length;
+  }
+
   if (!(total > 0)) return { ok:false, text:'—', checked:0, total:0, reason:'Sin plantilla' };
 
-  const day = (ev.days && typeof ev.days === 'object') ? ev.days[dayKey] : null;
+  const dk = String(dayKey || '').trim();
+  const day = (dk && ev.days && typeof ev.days === 'object') ? ev.days[dk] : null;
   const st = (day && day.checklistState && typeof day.checklistState === 'object') ? day.checklistState : null;
   const checkedIds = st ? uniq(st.checkedIds) : [];
-  const checked = checkedIds.length;
+  const checked = Array.isArray(checkedIds) ? checkedIds.length : 0;
+
   return { ok:true, text:`${checked}/${total}`, checked, total, reason:'' };
 }
 
@@ -1323,9 +1335,16 @@ function isClearlyPlaceholderChecklistText(s){
   try{
     const t = String((s==null)?'':s).trim();
     if (!t) return true;
-    const n = _normStrNoAccentsA33(t).toLowerCase().replace(/\s+/g,' ').trim();
+
+    // Normalizar: sin acentos + lower + colapsar whitespace
+    let n = _normStrNoAccentsA33(t).toLowerCase().replace(/\s+/g,' ').trim();
+
+    // Micro-robustez: si viene con viñetas/guiones al inicio, los quitamos
+    // (p.ej. "• Nuevo ítem" / "- Nuevo item")
+    n = n.replace(/^[\u2022\u00B7\*\-\u2013\u2014]+\s*/,'').trim();
+
     if (n === 'nuevo item' || n.startsWith('nuevo item')) return true;
-    if (n === 'item') return true;
+    if (n === 'item' || n.startsWith('item ')) return true;
   }catch(_){ }
   return false;
 }
@@ -1554,6 +1573,265 @@ function getFirstPendingChecklistText(ev, dayKey){
 }
 
 
+
+// --- Checklist por FASE (CdM, solo lectura)
+// Objetivo: preparar data agrupada en PRE / EVENTO / CIERRE para UI de alertas.
+function inferChecklistPhaseKeyA33(item){
+  try{
+    const it = (item && typeof item === 'object') ? item : {};
+    const raw = (it.fase || it.phase || it.section || it.sectionKey || it.stage || it.bucket);
+    const s = String(raw || '').trim();
+    if (!s) return 'event';
+    const n = _normStrNoAccentsA33(s).toLowerCase().replace(/\s+/g,' ').trim();
+    if (!n) return 'event';
+    if (n === 'pre' || n === 'pre-evento' || n === 'preevento' || n === 'pre evento' || n === 'pre_evento') return 'pre';
+    if (n === 'evento' || n === 'event' || n === 'eventos') return 'event';
+    if (n === 'cierre' || n === 'close' || n === 'closing') return 'close';
+  }catch(_){ }
+  return 'event';
+}
+
+function getChecklistTemplateSectionsA33(tpl){
+  const arr = (x)=> Array.isArray(x) ? x : [];
+  if (!tpl || typeof tpl !== 'object') return { pre:[], event:[], close:[], hasSections:false };
+
+  const pre = ([]
+    .concat(arr(tpl.pre))
+    .concat(arr(tpl.preEvento))
+    .concat(arr(tpl.pre_evento))
+    .concat(arr(tpl.preEventoItems))
+    .concat(arr(tpl.preItems))
+    .concat(arr(tpl.preList))
+    .concat(arr(tpl.prelist)))
+    .filter(x=> x && typeof x === 'object');
+
+  const event = ([]
+    .concat(arr(tpl.evento))
+    .concat(arr(tpl.event))
+    .concat(arr(tpl.eventoItems))
+    .concat(arr(tpl.eventItems))
+    .concat(arr(tpl.eventList)))
+    .filter(x=> x && typeof x === 'object');
+
+  const close = ([]
+    .concat(arr(tpl.cierre))
+    .concat(arr(tpl.close))
+    .concat(arr(tpl.cierreItems))
+    .concat(arr(tpl.closeItems))
+    .concat(arr(tpl.post))
+    .concat(arr(tpl.postEvento))
+    .concat(arr(tpl.post_evento)))
+    .filter(x=> x && typeof x === 'object');
+
+  const hasSections = (pre.length + event.length + close.length) > 0;
+  return { pre, event, close, hasSections };
+}
+
+function getChecklistTemplateFlatItemsA33(tpl){
+  const arr = (x)=> Array.isArray(x) ? x : [];
+  if (!tpl || typeof tpl !== 'object') return [];
+  return ([]
+    .concat(arr(tpl.items))
+    .concat(arr(tpl.list))
+    .concat(arr(tpl.todos))
+    .concat(arr(tpl.tasks))
+    .concat(arr(tpl.checklist)))
+    .filter(x=> x && typeof x === 'object');
+}
+
+function hasChecklistEvidenceA33(ev, dayKey){
+  try{
+    if (!ev || typeof ev !== 'object') return false;
+    if (ev.checklistTemplate && typeof ev.checklistTemplate === 'object') return true;
+    const dk = String(dayKey || '').trim();
+    if (!dk) return false;
+    const day = (ev.days && typeof ev.days === 'object') ? ev.days[dk] : null;
+    if (!day || typeof day !== 'object') return false;
+    if (day.checklistState && typeof day.checklistState === 'object') return true;
+    if (Array.isArray(day.checklistItems) && day.checklistItems.length) return true;
+    if (Array.isArray(day.items) && day.items.length) return true;
+    if (Array.isArray(day.checklist) && day.checklist.length) return true;
+    if (day.checklist && typeof day.checklist === 'object') return true;
+  }catch(_){ }
+  return false;
+}
+
+
+
+function buildChecklistPhasesData(ev, dayKey, opts){
+  const limit = (opts && typeof opts.limit === 'number' && isFinite(opts.limit)) ? Math.max(1, Math.floor(opts.limit)) : 3;
+  const mk = ()=>({ done:0, total:0, pendingTexts:[], pendingCount:0, moreCount:0 });
+  const phases = { pre: mk(), event: mk(), close: mk() };
+
+  // Cache corto (evita doble cálculo en sync/refresh). TTL ~2.5s.
+  try{
+    if (typeof state === 'object' && state){
+      if (!state.__chkPhaseCache || typeof state.__chkPhaseCache.get !== 'function') state.__chkPhaseCache = new Map();
+      const dk0 = String(dayKey || '').trim();
+      const id0 = (ev && ev.id != null) ? String(ev.id) : '0';
+      const ck = `ph|${id0}|${dk0}|${limit}`;
+      const hit = state.__chkPhaseCache.get(ck);
+      const now = Date.now();
+      if (hit && hit.v && (now - (hit.t||0)) < 2500){
+        return hit.v;
+      }
+    }
+  }catch(_){ }
+
+  const res = { ok:true, phases, reason:'', limit };
+
+  try{
+    if (!ev || typeof ev !== 'object') return { ok:false, phases, reason:'No disponible', limit };
+    const dk = String(dayKey || '').trim();
+    if (!dk) return { ok:false, phases, reason:'No disponible', limit };
+
+    const day = (ev.days && typeof ev.days === 'object') ? ev.days[dk] : null;
+    const st = (day && day.checklistState && typeof day.checklistState === 'object') ? day.checklistState : null;
+    const checkedIds = st ? uniq(st.checkedIds) : [];
+    const checkedSet = new Set((Array.isArray(checkedIds) ? checkedIds : []).map(String));
+
+    const tpl = (ev.checklistTemplate && typeof ev.checklistTemplate === 'object') ? ev.checklistTemplate : null;
+
+    // Textos reales del día (si existen) tienen prioridad.
+    const dayTextMap = buildDayChecklistTextMap(ev, dk);
+
+    const pushPending = (bucket, it, seenSet)=>{
+      try{
+        const raw = resolveTextoPendiente(it, dayTextMap);
+        if (!raw) return;
+        if (isClearlyPlaceholderChecklistText(raw)) return;
+        const t = truncateChecklistLine(raw, 180);
+        if (!t) return;
+        if (isClearlyPlaceholderChecklistText(t)) return;
+        const k = _normStrNoAccentsA33(t).toLowerCase().replace(/\s+/g,' ').trim();
+        if (!k) return;
+        if (seenSet && seenSet.has(k)) return;
+        if (seenSet) seenSet.add(k);
+        bucket.pendingCount += 1;
+        if (bucket.pendingTexts.length < limit) bucket.pendingTexts.push(t);
+      }catch(_){ }
+    };
+
+    const fillFromSection = (sectionArr, bucket)=>{
+      const list = (Array.isArray(sectionArr) ? sectionArr : []).filter(x=>x && typeof x === 'object');
+      if (list.length > SAFE_SCAN_LIMIT) throw new Error('scan_limit');
+      bucket.total = list.length;
+      let done = 0;
+      const seen = new Set();
+      for (const it of list){
+        const id = String((it && it.id) || '').trim();
+        if (id && checkedSet.has(id)) { done += 1; continue; }
+        pushPending(bucket, it, seen);
+      }
+      bucket.done = done;
+      bucket.moreCount = Math.max(0, bucket.pendingCount - limit);
+    };
+
+    // 1) Plantilla por secciones (preferido)
+    if (tpl){
+      const sections = getChecklistTemplateSectionsA33(tpl);
+      if (sections && sections.hasSections){
+        fillFromSection(sections.pre, phases.pre);
+        fillFromSection(sections.event, phases.event);
+        fillFromSection(sections.close, phases.close);
+        res.ok = true;
+      } else {
+        // 2) Plantilla vieja: lista plana + fase inferida (fase missing => EVENTO)
+        const flat = getChecklistTemplateFlatItemsA33(tpl);
+        if (flat && flat.length){
+          if (flat.length > SAFE_SCAN_LIMIT) throw new Error('scan_limit');
+          const byKey = { pre: phases.pre, event: phases.event, close: phases.close };
+          const seenBy = { pre: new Set(), event: new Set(), close: new Set() };
+          for (const it of flat){
+            const key = inferChecklistPhaseKeyA33(it);
+            const b = byKey[key] || phases.event;
+            b.total += 1;
+            const id = String((it && it.id) || (it && it.itemId) || (it && it.key) || '').trim();
+            if (id && checkedSet.has(id)) { b.done += 1; continue; }
+            pushPending(b, it, seenBy[key] || seenBy.event);
+          }
+          phases.pre.moreCount = Math.max(0, phases.pre.pendingCount - limit);
+          phases.event.moreCount = Math.max(0, phases.event.pendingCount - limit);
+          phases.close.moreCount = Math.max(0, phases.close.pendingCount - limit);
+          res.ok = true;
+        } else {
+          // Sin data clara: neutro (sin crash)
+          res.ok = true;
+        }
+      }
+    }
+
+    // 3) Legacy: sin plantilla, intentar leer items del día/estado (fail-safe EVENTO)
+    if (!tpl){
+      const legacyItems = [];
+      const addMany = (x)=>{
+        if (!Array.isArray(x)) return;
+        const cut = x.length > SAFE_SCAN_LIMIT ? SAFE_SCAN_LIMIT : x.length;
+        for (let i=0; i<cut; i++){
+          const it = x[i];
+          if (it && typeof it === 'object') legacyItems.push(it);
+        }
+      };
+
+      try{
+        if (day && typeof day === 'object'){
+          addMany(day.checklistItems);
+          addMany(day.items);
+          addMany(day.checklist);
+        }
+      }catch(_){ }
+
+      try{
+        if (st && typeof st === 'object'){
+          addMany(st.items);
+          addMany(st.list);
+          addMany(st.todos);
+          addMany(st.pending);
+        }
+      }catch(_){ }
+
+      if (legacyItems.length){
+        const byKey = { pre: phases.pre, event: phases.event, close: phases.close };
+        const seenBy = { pre: new Set(), event: new Set(), close: new Set() };
+
+        for (const it of legacyItems){
+          const key = inferChecklistPhaseKeyA33(it);
+          const b = byKey[key] || phases.event;
+          b.total += 1;
+          const id = String((it && it.id) || (it && it.itemId) || (it && it.key) || '').trim();
+          if (id && checkedSet.has(id)) { b.done += 1; continue; }
+          pushPending(b, it, seenBy[key] || seenBy.event);
+        }
+
+        phases.pre.moreCount = Math.max(0, phases.pre.pendingCount - limit);
+        phases.event.moreCount = Math.max(0, phases.event.pendingCount - limit);
+        phases.close.moreCount = Math.max(0, phases.close.pendingCount - limit);
+      }
+    }
+
+  }catch(err){
+    res.ok = false;
+    res.reason = 'No disponible';
+    try{ console.warn('Checklist phases: error', err); }catch(_){ }
+  }
+
+  // Guardar cache (best-effort)
+  try{
+    if (typeof state === 'object' && state && state.__chkPhaseCache && typeof state.__chkPhaseCache.set === 'function'){
+      const dk0 = String(dayKey || '').trim();
+      const id0 = (ev && ev.id != null) ? String(ev.id) : '0';
+      const ck = `ph|${id0}|${dk0}|${limit}`;
+      state.__chkPhaseCache.set(ck, { t: Date.now(), v: res });
+      // podar
+      while (state.__chkPhaseCache.size > 60){
+        try{ state.__chkPhaseCache.delete(state.__chkPhaseCache.keys().next().value); }catch(_){ break; }
+      }
+    }
+  }catch(_){ }
+
+  return res;
+}
+
 function getFocusedPendingReminderTextsForDay(remRows, ev, dayKey){
   try{
     const rows = Array.isArray(remRows) ? remRows : [];
@@ -1739,8 +2017,97 @@ function renderAlerts(alerts){
     const sub = document.createElement('div');
     sub.className = 'cmd-alert-sub';
 
-    // Checklist (alerta premium): render por líneas para permitir truncado elegante (ellipsis)
-    if (a && String(a.key || '') === 'checklist-incomplete' && a.sub != null){
+    const isChecklist = (a && String(a.key || '') === 'checklist-incomplete');
+
+    // Checklist por fases (3 columnas, mínimo): PRE-EVENTO | EVENTO | CIERRE
+    if (isChecklist && a && a.checklistPhases && typeof a.checklistPhases === 'object'){
+      sub.classList.add('cmd-alert-sub-grid');
+      sub.innerHTML = '';
+
+      const ph = a.checklistPhases;
+      const phases = (ph && ph.phases && typeof ph.phases === 'object') ? ph.phases : {};
+      const ok = (ph && ph.ok === false) ? false : true;
+
+      const lim = (ph && typeof ph.limit === 'number' && isFinite(ph.limit) && ph.limit > 0) ? Math.floor(ph.limit) : 3;
+
+      const makeCol = (label, bucket)=>{
+        const col = document.createElement('div');
+        col.className = 'cmd-chk-col';
+
+        const hdr = document.createElement('div');
+        hdr.className = 'cmd-chk-hdr';
+
+        const name = document.createElement('span');
+        name.className = 'cmd-chk-name';
+        name.textContent = label;
+
+        const prog = document.createElement('span');
+        prog.className = 'cmd-chk-prog';
+
+        if (ok === false){
+          prog.textContent = '—';
+        } else {
+          const done = (bucket && typeof bucket.done === 'number') ? bucket.done : Number(bucket && bucket.done) || 0;
+          const total = (bucket && typeof bucket.total === 'number') ? bucket.total : Number(bucket && bucket.total) || 0;
+          prog.textContent = `${done}/${total}`;
+        }
+
+        hdr.appendChild(name);
+        hdr.appendChild(prog);
+
+        const body = document.createElement('div');
+        body.className = 'cmd-chk-body';
+
+        if (ok === false){
+          body.textContent = (ph && ph.reason) ? String(ph.reason) : 'No disponible';
+        } else { 
+          const texts = (bucket && Array.isArray(bucket.pendingTexts)) ? bucket.pendingTexts : [];
+          const pendingCount = (bucket && typeof bucket.pendingCount === 'number' && isFinite(bucket.pendingCount))
+            ? bucket.pendingCount
+            : (Array.isArray(texts) ? texts.length : 0);
+
+          if (texts && texts.length){
+            const top = texts.slice(0, lim);
+            for (const t of top){
+              const line = document.createElement('span');
+              line.className = 'cmd-chk-item';
+              line.textContent = `• ${String(t || '')}`;
+              body.appendChild(line);
+            }
+
+            const more = (bucket && typeof bucket.moreCount === 'number' && isFinite(bucket.moreCount))
+              ? bucket.moreCount
+              : Math.max(0, pendingCount - lim);
+
+            if (more > 0){
+              const moreLine = document.createElement('span');
+              moreLine.className = 'cmd-chk-item cmd-chk-more';
+              moreLine.textContent = `+${more} más`;
+              body.appendChild(moreLine);
+            }
+          } else {
+            const okLine = document.createElement('span');
+            okLine.className = 'cmd-chk-item cmd-chk-ok';
+            okLine.textContent = 'Al día ✅';
+            body.appendChild(okLine);
+          }
+        }
+
+        col.appendChild(hdr);
+        col.appendChild(body);
+        return col;
+      };
+
+      const grid = document.createElement('div');
+      grid.className = 'cmd-chk-grid';
+      grid.appendChild(makeCol('PRE-EVENTO', phases.pre || null));
+      grid.appendChild(makeCol('EVENTO', phases.event || null));
+      grid.appendChild(makeCol('CIERRE', phases.close || null));
+
+      sub.appendChild(grid);
+
+    } else if (isChecklist && a.sub != null){
+      // Checklist (legacy): render por líneas para truncado elegante
       sub.classList.add('cmd-alert-sub-lines');
       const raw = String(a.sub);
       const parts = raw.split('\n').map(x=> String(x ?? '').trim()).filter(Boolean);
@@ -2422,53 +2789,55 @@ function buildActionableAlerts(ev, dayKey, cv2, remindersToday){
     // No se puede evaluar con seguridad (sin evento / sin datos)
     unavailable.push({ key: 'fx-missing', label: labelForAlertKey('fx-missing'), reason: (cv2 && cv2.reason) ? cv2.reason : 'No disponible' });
   }
-  // 3) Checklist hoy (PRO: top 3 + +N + Al día) — solo si existe plantilla
-  if (ev && ev.checklistTemplate && typeof ev.checklistTemplate === 'object'){
-    const chk = computeChecklistProgress(ev, dayKey);
-    if (chk && chk.ok && typeof chk.checked === 'number' && typeof chk.total === 'number' && chk.total > 0){
-      const lines = [`Hoy (${dayKey}): ${chk.checked}/${chk.total}`];
 
-      const isComplete = (chk.checked >= chk.total);
-
-      if (isComplete){
-        lines.push('Al día ✅');
-        alerts.push({
-          key: 'checklist-incomplete',
-          icon: '✅',
-          title: 'Checklist al día',
-          sub: lines.join('\n'),
-          cta: 'Abrir Checklist',
-          tab: 'checklist'
-        });
-      } else {
-        // Fuente (requisito): Checklist del evento (3 tipos: Pre-evento, Evento, Cierre)
-        // - Pendientes HOY (no completados)
-        // - Sin placeholders/vacíos
-        // - Orden: Pre -> Evento -> Cierre (natural)
-        const pending = getPendingChecklistTexts(ev, dayKey);
-        const top = pending.slice(0,3);
-        for (const t of top){
-          if (t) lines.push(`• ${t}`);
-        }
-        if (pending.length > top.length){
-          lines.push(`+${pending.length - top.length} más`);
-        }
-        if (!top.length){
-          lines.push('—');
-        }
-
-        alerts.push({
-          key: 'checklist-incomplete',
-          icon: '✅',
-          title: 'Checklist hoy incompleto',
-          sub: lines.join('\n'),
-          cta: 'Abrir Checklist',
-          tab: 'checklist'
-        });
-      }
-    } else if (chk && !chk.ok){
-      unavailable.push({ key: 'checklist-incomplete', label: labelForAlertKey('checklist-incomplete'), reason: chk.reason || 'No disponible' });
+  // 3) Checklist hoy por FASE (mínimo, 3 columnas) — fail-safe
+  if (hasChecklistEvidenceA33(ev, dayKey)){
+    let ph = null;
+    try{
+      ph = buildChecklistPhasesData(ev, dayKey, { limit: 3 });
+    }catch(_){
+      ph = { ok:false, phases:{ pre:{done:0,total:0,pendingTexts:[],pendingCount:0,moreCount:0}, event:{done:0,total:0,pendingTexts:[],pendingCount:0,moreCount:0}, close:{done:0,total:0,pendingTexts:[],pendingCount:0,moreCount:0} }, reason:'No disponible', limit:3 };
     }
+
+    const phases = (ph && ph.phases && typeof ph.phases === 'object') ? ph.phases : null;
+
+    // Resumen total (para título): suma de fases
+    let totalAll = 0;
+    let doneAll = 0;
+    let hasPending = false;
+
+    if (ph && ph.ok === false){
+      totalAll = 0;
+      doneAll = 0;
+      hasPending = false;
+    } else if (phases){
+      const keys = ['pre','event','close'];
+      for (const k of keys){
+        const b = phases[k];
+        if (!b || typeof b !== 'object') continue;
+        const t = Number(b.total || 0);
+        const d = Number(b.done || 0);
+        if (isFinite(t) && t > 0) totalAll += t;
+        if (isFinite(d) && d > 0) doneAll += d;
+        const pc = Number(b.pendingCount || 0);
+        if (pc > 0) hasPending = true;
+      }
+    }
+
+    const isComplete = (!hasPending) && (totalAll <= 0 || doneAll >= totalAll);
+    const title = (ph && ph.ok === false)
+      ? 'Checklist'
+      : (isComplete ? 'Checklist al día' : 'Checklist hoy incompleto');
+
+    alerts.push({
+      key: 'checklist-incomplete',
+      icon: '✅',
+      title,
+      sub: '',
+      checklistPhases: (ph && typeof ph === 'object') ? ph : { ok:false, phases:null, reason:'No disponible', limit:3 },
+      cta: 'Abrir Checklist',
+      tab: 'checklist'
+    });
   }
 
   // 4) Inventario crítico — v1: no hay cálculo “fácil/seguro” en esta ZIP

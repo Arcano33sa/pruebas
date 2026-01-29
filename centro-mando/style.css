@@ -199,6 +199,63 @@ html, body{
 }
 .cmd-alert-subline + .cmd-alert-subline{ margin-top: 2px; }
 
+/* Checklist por fases (Alertas Accionables): 3 columnas responsive (sin scroll horizontal) */
+.cmd-alert-sub.cmd-alert-sub-grid{ white-space: normal; }
+.cmd-chk-grid{
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 4px;
+}
+.cmd-chk-col{
+  min-width: 0;
+  border-radius: 12px;
+  padding: 8px 9px;
+  border: 1px solid rgba(221,191,100,0.12);
+  background: rgba(0,0,0,0.18);
+}
+.cmd-chk-hdr{
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 850;
+  font-size: 11.5px;
+  letter-spacing: 0.35px;
+}
+.cmd-chk-name{
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmd-chk-prog{
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+.cmd-chk-body{
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.cmd-chk-item{
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmd-chk-more{
+  opacity: 0.85;
+  font-style: italic;
+}
+
+@media (max-width: 900px){
+  .cmd-chk-grid{ grid-template-columns: 1fr; }
+}
+
 .cmd-btn{
   border: 1px solid rgba(221,191,100,0.22);
   background: rgba(0,0,0,0.24);
