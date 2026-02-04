@@ -701,14 +701,14 @@
         <label>Período activo</label>
         <div class="row" style="gap:8px; align-items:center">
           <input id="summary-period" type="month">
-          <button id="btn-summary-all" class="btn-link" type="button" title="Ver todo el historial">Todo</button>
           <span id="summary-mode-badge" class="tag small open">En vivo</span>
         </div>
-        <small id="summary-period-hint" class="muted">Filtra el Resumen por mes. Puedes ver “Todo” cuando lo necesites.</small>
+        <small id="summary-period-hint" class="muted">Filtra el Resumen por mes. Para ver el historial completo, usa el botón “Todo”.</small>
       </div>
 	      <div class="summary-controls-right actions end">
 	        <button id="btn-summary-export" class="btn-ok btn-pill" type="button">Exportar Excel</button>
 	        <button id="btn-summary-close-period" class="btn-warn btn-pill" type="button">Cerrar período</button>
+	        <button id="btn-summary-all" class="btn-outline btn-pill btn-pill-mini" type="button" title="Ver todo el historial">Todo</button>
 	        <!-- Archivo debe verse como botón (no como link) -->
 	        <button id="btn-summary-archive" class="btn-outline" type="button" title="Ver períodos cerrados">Archivo</button>
 	        <button id="btn-summary-back-live" class="btn-link" type="button" style="display:none">Volver a en vivo</button>

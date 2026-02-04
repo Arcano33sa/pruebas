@@ -13347,7 +13347,18 @@ function applySummaryArchiveGuardsPOS(){
   const periodEl = document.getElementById('summary-period');
   const btnAll = document.getElementById('btn-summary-all');
   if (periodEl) periodEl.disabled = inArchive;
-  if (btnAll) btnAll.disabled = inArchive;
+  if (btnAll){
+    // En Archivo: NO debe verse (no solo deshabilitado). Al salir: restaurar.
+    if (btnAll.dataset && btnAll.dataset.prevDisplay == null) btnAll.dataset.prevDisplay = btnAll.style.display || '';
+    if (inArchive){
+      try{ btnAll.disabled = true; }catch(_){ }
+      btnAll.style.display = 'none';
+      try{ btnAll.classList.remove('is-active'); btnAll.setAttribute('aria-pressed','false'); }catch(_){ }
+    } else {
+      btnAll.style.display = (btnAll.dataset && btnAll.dataset.prevDisplay != null) ? (btnAll.dataset.prevDisplay || '') : '';
+      try{ btnAll.disabled = false; }catch(_){ }
+    }
+  }
 
   if (inArchive && __A33_ACTIVE_ARCHIVE){
     const pk = String(__A33_ACTIVE_ARCHIVE.periodKey || (__A33_ACTIVE_ARCHIVE.snapshot && __A33_ACTIVE_ARCHIVE.snapshot.periodKey) || '').trim();
@@ -13387,6 +13398,14 @@ function applySummaryArchiveGuardsPOS(){
     if (customerCard.dataset && customerCard.dataset.prevDisplay == null) customerCard.dataset.prevDisplay = customerCard.style.display || '';
     customerCard.style.display = inArchive ? 'none' : ((customerCard.dataset && customerCard.dataset.prevDisplay != null) ? (customerCard.dataset.prevDisplay || '') : '');
   }
+}
+
+function syncSummaryAllButtonStatePOS(){
+  const btnAll = document.getElementById('btn-summary-all');
+  if (!btnAll) return;
+  const active = (__A33_SUMMARY_MODE !== 'archive' && __A33_SUMMARY_VIEW_MODE === 'all');
+  try{ btnAll.classList.toggle('is-active', !!active); }catch(_){ }
+  try{ btnAll.setAttribute('aria-pressed', active ? 'true' : 'false'); }catch(_){ }
 }
 
 function renderSummaryFromSnapshotPOS(archive){
@@ -14645,6 +14664,9 @@ function setSummaryModeBadgePOS(){
     // Solo aparece cuando se está viendo un snapshot archivado
     btnBack.style.display = (__A33_SUMMARY_MODE === 'archive') ? 'inline-flex' : 'none';
   }
+
+  // Estado visual del botón "Todo" (solo en vivo)
+  syncSummaryAllButtonStatePOS();
 }
 
 

@@ -436,6 +436,10 @@ small.muted{color:var(--muted)}
   font-weight:800;
   box-shadow:0 6px 16px rgba(0,0,0,0.18);
 }
+.btn-outline.is-active{
+  border-color: rgba(212,175,55,0.85);
+  background: rgba(212,175,55,0.08);
+}
 .btn-outline:active{filter:brightness(.98)}
 .compact th, .compact td{font-size:13px}
 .info{padding:9px;border-radius:10px;background:#0f1b0f;border:1px solid #214021;color:#b6f0b6;margin-top:8px}
