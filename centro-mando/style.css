@@ -47,7 +47,7 @@ html, body{
 .cmd-main{
   max-width: 1100px;
   margin: 0 auto;
-  padding: 14px 14px 28px;
+  padding: 14px 14px calc(28px + var(--cmdDockH, 0px));
 }
 
 .cmd-card{
@@ -1060,11 +1060,14 @@ button.cmd-pill{ cursor: pointer; }
   padding: 12px;
   display: grid;
   grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto auto;
   gap: 2px 10px;
   color: inherit;
   cursor: pointer;
 }
 .cmd-global-title{
+  grid-column: 1 / 2;
+  grid-row: 1 / 2;
   font-weight: 800;
   font-size: 13.5px;
   min-width: 0;
@@ -1073,6 +1076,8 @@ button.cmd-pill{ cursor: pointer; }
   white-space: nowrap;
 }
 .cmd-global-sub{
+  grid-column: 1 / 2;
+  grid-row: 2 / 3;
   font-size: 12px;
   color: var(--muted);
   min-width: 0;
@@ -1086,23 +1091,159 @@ button.cmd-pill{ cursor: pointer; }
   align-self: center;
   opacity: 0.78;
 }
+
+.cmd-global-kpis{
+  grid-column: 1 / -1;
+  grid-row: 3 / 4;
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cmd-gkpi{
+  flex: 1 1 180px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(0,0,0,0.18);
+}
+.cmd-gkpi-main{
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.22;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.cmd-gkpi-efc-h{
+  font-weight: 800;
+  font-size: 12px;
+  color: var(--gold);
+  margin-bottom: 3px;
+}
+.cmd-gkpi-efc-lines{
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cmd-gkpi-efc-line{
+  font-size: 11.5px;
+  color: rgba(255,255,255,0.86);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .cmd-global-body{
   padding: 12px;
   border-top: 1px solid rgba(255,255,255,0.08);
+}
+
+/* Checklist detallado (GLOBAL cards) */
+.cmd-chk-grid-detailed .cmd-chk-body{
+  margin-top: 6px;
+}
+.cmd-chk-body-detailed{
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cmd-chk-row{
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+.cmd-chk-mark{
+  flex: 0 0 auto;
+  opacity: 0.85;
+  margin-top: 1px;
+}
+.cmd-chk-text{
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.cmd-chk-row.is-done{
+  opacity: 0.65;
 }
 .cmd-global-empty{
   color: var(--muted);
   padding: 10px 2px;
 }
 
+
+
+/* ---------------------------
+   PANEL GLOBAL INFERIOR — fijo (Pedidos/Recordatorios/Inventario)
+----------------------------*/
+.cmd-global-dock{
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 25;
+  border-top: 1px solid rgba(221,191,100,0.16);
+  background: rgba(10,10,11,0.86);
+  box-shadow: 0 -18px 40px rgba(0,0,0,0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  overflow: auto;
+  max-height: min(62vh, 660px);
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cmd-global-dock-inner{
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px));
+}
+
+.cmd-global-dock-grid{
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.cmd-global-dock-col{
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Quitar márgenes de secciones dentro del dock */
+.cmd-global-dock .cmd-reminders,
+.cmd-global-dock .cmd-ops,
+.cmd-global-dock .cmd-inv-risk{
+  margin-top: 0;
+}
+
+/* Dentro del dock, evitar grids apretados que puedan forzar overflow */
+.cmd-global-dock .cmd-ops-grid{
+  grid-template-columns: 1fr;
+}
+
+.cmd-global-dock .cmd-inv-risk-grid{
+  grid-template-columns: 1fr;
+}
+
+@media (max-width: 980px){
+  .cmd-global-dock-grid{
+    grid-template-columns: 1fr;
+  }
+  .cmd-global-dock{
+    max-height: min(70vh, 760px);
+  }
+}
+
+
 /* En modo GLOBAL, ocultar el tablero por-evento para evitar confusión */
 .cmd-mode-global #recosBlock,
 .cmd-mode-global #alerts,
 .cmd-mode-global #emptyState,
 .cmd-mode-global #todayPanel,
-.cmd-mode-global #remindersBlock,
-.cmd-mode-global #ordersOps,
-.cmd-mode-global #invRiskBlock,
 .cmd-mode-global .cmd-quick,
 .cmd-mode-global .cmd-radar{
   display: none !important;

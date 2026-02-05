@@ -121,17 +121,7 @@
         <div class="cmd-muted" id="pettyFx">—</div>
       </article>
 
-        <article class="cmd-card cmd-metric cmd-op" aria-label="Pedidos (Hoy)">
-          <div class="cmd-section-head">
-            <div class="cmd-section-title">Pedidos</div>
-            <button class="cmd-pill cmd-pill-btn" id="btnGoPedidosToday" type="button">Ver Pedidos</button>
-          </div>
-
-          <div class="cmd-op-kpi" id="ordersPending">Pendientes: —</div>
-          <div class="cmd-muted" id="ordersTodayHint">No disponible</div>
-
-          <div class="cmd-order-list" id="ordersTopToday"></div>
-        </article>
+        
 
 
       <article class="cmd-card cmd-metric">
@@ -146,28 +136,66 @@
 
 
     <!-- RECORDATORIOS (solo lectura desde posRemindersIndex) -->
-    <section class="cmd-reminders" id="remindersBlock" aria-label="Recordatorios">
-      <article class="cmd-card cmd-rem-card" aria-label="Recordatorios">
-        <div class="cmd-section-head cmd-rem-head">
-          <div class="cmd-section-title">Recordatorios <span class="cmd-muted">· Pendientes: <b id="remindersPending">—</b></span></div>
-          <div class="cmd-rem-tools">
-            <button class="cmd-pill cmd-pill-mini" id="remindersToggleDone" type="button" aria-pressed="false">Mostrar completados</button>
-            <button class="cmd-pill cmd-pill-mini" id="btnGoPosReminders" type="button">Ir a Recordatorios</button>
-          </div>
-        </div>
-
-        <div class="cmd-rem-empty" id="remindersEmpty" hidden>
-          <div class="cmd-rem-empty-title">Sin recordatorios</div>
-          <div class="cmd-muted" id="remindersEmptyHint">—</div>
-        </div>
-
-        <div class="cmd-rem-list" id="remindersList"></div>
-      </article>
-    </section>
+    
 
 
     <!-- PEDIDOS OPERATIVO (HOY + MAÑANA) -->
-    <section class="cmd-ops" id="ordersOps" aria-label="Pedidos operativo">
+    
+
+
+    <!-- INVENTARIO EN RIESGO -->
+    
+
+
+    <!-- BOTONES RÁPIDOS -->
+    <section class="cmd-card cmd-quick" aria-label="Botones rápidos">
+      <div class="cmd-quick-grid">
+        <button class="cmd-btn cmd-btn-primary" id="btnGoSell" type="button">Ir a POS (Vender)</button>
+        <button class="cmd-btn" id="btnGoCaja" type="button">Ir a Efectivo</button>
+        <button class="cmd-btn" id="btnGoResumen" type="button">Ir a Resumen</button>
+        <button class="cmd-btn" id="btnGoChecklist" type="button">Abrir Checklist</button>
+      </div>
+      <div class="cmd-muted cmd-quick-note" id="navNote">—</div>
+    </section>
+
+    <!-- MINI RADAR GLOBAL -->
+    <section class="cmd-radar" aria-label="Mini radar global">
+      <div class="cmd-radar-item">
+        <div class="cmd-radar-k" id="radarEvents">—</div>
+        <div class="cmd-radar-l">Eventos</div>
+      </div>
+      <div class="cmd-radar-item">
+        <div class="cmd-radar-k" id="radarEventName">—</div>
+        <div class="cmd-radar-l">Evento actual</div>
+      </div>
+      <div class="cmd-radar-item">
+        <div class="cmd-radar-k" id="radarUnclosed">—</div>
+        <div class="cmd-radar-l">Radar 7d (Efectivo abierto)</div>
+      </div>
+      <div class="cmd-radar-item">
+        <div class="cmd-radar-k" id="radarNoStock">—</div>
+        <div class="cmd-radar-l">Productos sin stock</div>
+      </div>
+    </section>
+  </main>
+
+  <!-- PANEL GLOBAL INFERIOR (siempre visible): Pedidos / Recordatorios / Inventario en Riesgo -->
+  <div class="cmd-global-dock" id="globalDock" aria-label="Panel global inferior">
+    <div class="cmd-global-dock-inner">
+      <div class="cmd-global-dock-grid">
+        <div class="cmd-global-dock-col" aria-label="Pedidos">
+          <article class="cmd-card cmd-metric cmd-op" aria-label="Pedidos (Hoy)">
+          <div class="cmd-section-head">
+            <div class="cmd-section-title">Pedidos</div>
+            <button class="cmd-pill cmd-pill-btn" id="btnGoPedidosToday" type="button">Ver Pedidos</button>
+          </div>
+
+          <div class="cmd-op-kpi" id="ordersPending">Pendientes: —</div>
+          <div class="cmd-muted" id="ordersTodayHint">No disponible</div>
+
+          <div class="cmd-order-list" id="ordersTopToday"></div>
+        </article>
+          <section class="cmd-ops" id="ordersOps" aria-label="Pedidos operativo">
       <div class="cmd-ops-grid">
 
         <article class="cmd-card cmd-op" id="ordersTomorrowCard" aria-label="Mañana" hidden>
@@ -185,10 +213,29 @@
         </article>
       </div>
     </section>
+        </div>
+        <div class="cmd-global-dock-col" aria-label="Recordatorios">
+          <section class="cmd-reminders" id="remindersBlock" aria-label="Recordatorios">
+      <article class="cmd-card cmd-rem-card" aria-label="Recordatorios">
+        <div class="cmd-section-head cmd-rem-head">
+          <div class="cmd-section-title">Recordatorios <span class="cmd-muted">· Pendientes: <b id="remindersPending">—</b></span></div>
+          <div class="cmd-rem-tools">
+            <button class="cmd-pill cmd-pill-mini" id="remindersToggleDone" type="button" aria-pressed="false">Mostrar completados</button>
+            <button class="cmd-pill cmd-pill-mini" id="btnGoPosReminders" type="button">Ir a Recordatorios</button>
+          </div>
+        </div>
 
+        <div class="cmd-rem-empty" id="remindersEmpty" hidden>
+          <div class="cmd-rem-empty-title">Sin recordatorios</div>
+          <div class="cmd-muted" id="remindersEmptyHint">—</div>
+        </div>
 
-    <!-- INVENTARIO EN RIESGO -->
-    <section class="cmd-inv-risk" id="invRiskBlock" aria-label="Inventario en riesgo">
+        <div class="cmd-rem-list" id="remindersList"></div>
+      </article>
+    </section>
+        </div>
+        <div class="cmd-global-dock-col" aria-label="Inventario en Riesgo">
+          <section class="cmd-inv-risk" id="invRiskBlock" aria-label="Inventario en riesgo">
       <div class="cmd-section-head cmd-inv-risk-head">
         <div class="cmd-section-title">INVENTARIO EN RIESGO</div>
         <div class="cmd-inv-risk-tools">
@@ -227,39 +274,11 @@
         </article>
       </div>
     </section>
+        </div>
+      </div>
+    </div>
+  </div>
 
-
-    <!-- BOTONES RÁPIDOS -->
-    <section class="cmd-card cmd-quick" aria-label="Botones rápidos">
-      <div class="cmd-quick-grid">
-        <button class="cmd-btn cmd-btn-primary" id="btnGoSell" type="button">Ir a POS (Vender)</button>
-        <button class="cmd-btn" id="btnGoCaja" type="button">Ir a Efectivo</button>
-        <button class="cmd-btn" id="btnGoResumen" type="button">Ir a Resumen</button>
-        <button class="cmd-btn" id="btnGoChecklist" type="button">Abrir Checklist</button>
-      </div>
-      <div class="cmd-muted cmd-quick-note" id="navNote">—</div>
-    </section>
-
-    <!-- MINI RADAR GLOBAL -->
-    <section class="cmd-radar" aria-label="Mini radar global">
-      <div class="cmd-radar-item">
-        <div class="cmd-radar-k" id="radarEvents">—</div>
-        <div class="cmd-radar-l">Eventos</div>
-      </div>
-      <div class="cmd-radar-item">
-        <div class="cmd-radar-k" id="radarEventName">—</div>
-        <div class="cmd-radar-l">Evento actual</div>
-      </div>
-      <div class="cmd-radar-item">
-        <div class="cmd-radar-k" id="radarUnclosed">—</div>
-        <div class="cmd-radar-l">Radar 7d (Efectivo abierto)</div>
-      </div>
-      <div class="cmd-radar-item">
-        <div class="cmd-radar-k" id="radarNoStock">—</div>
-        <div class="cmd-radar-l">Productos sin stock</div>
-      </div>
-    </section>
-  </main>
 
   <!-- Auth gate (mismo patrón del POS) -->
   <script src="/assets/js/a33-auth.js?v=4.20.13"></script>

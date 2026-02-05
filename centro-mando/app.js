@@ -455,6 +455,41 @@ function refreshInvRiskBlock(){
 
 const $ = (id)=> document.getElementById(id);
 
+// --- Panel global inferior: reservar espacio (iPad/PWA safe)
+function bindGlobalDockSpace(){
+  try{
+    if (bindGlobalDockSpace.__bound) return;
+    bindGlobalDockSpace.__bound = true;
+    const dock = $('globalDock');
+    if (!dock) return;
+
+    const root = document.documentElement;
+    const update = ()=>{
+      try{
+        const r = dock.getBoundingClientRect();
+        const h = Math.max(0, Math.round(r.height || 0));
+        root.style.setProperty('--cmdDockH', h ? `${h}px` : '0px');
+      }catch(_){ }
+    };
+
+    const rafUpdate = ()=>{
+      try{ window.requestAnimationFrame(update); }catch(_){ update(); }
+    };
+
+    update();
+    window.addEventListener('resize', rafUpdate, { passive:true });
+    window.addEventListener('orientationchange', rafUpdate, { passive:true });
+
+    try{
+      if (window.ResizeObserver){
+        const ro = new ResizeObserver(()=>{ update(); });
+        ro.observe(dock);
+        bindGlobalDockSpace.__ro = ro;
+      }
+    }catch(_){ }
+  }catch(_){ }
+}
+
 function fmtHHMM(dt){
   try{
     const d = dt instanceof Date ? dt : new Date();
@@ -1927,6 +1962,120 @@ function buildChecklistPhasesData(ev, dayKey, opts){
   return res;
 }
 
+// Checklist DETALLADO por fase (GLOBAL cards) — solo lectura
+// Devuelve: { ok, phases: { pre:{items:[]}, event:{items:[]}, close:{items:[]} }, reason }
+function buildChecklistPhasesDetailedA33(ev, dayKey){
+  const mk = ()=>({ items:[] });
+  const phases = { pre: mk(), event: mk(), close: mk() };
+  const res = { ok:true, phases, reason:'' };
+
+  try{
+    if (!ev || typeof ev !== 'object') return { ok:false, phases, reason:'No disponible' };
+    const dk = String(dayKey || '').trim();
+    if (!dk) return { ok:false, phases, reason:'No disponible' };
+
+    const day = (ev.days && typeof ev.days === 'object') ? ev.days[dk] : null;
+    const st = (day && day.checklistState && typeof day.checklistState === 'object') ? day.checklistState : null;
+    const checkedIds = st ? uniq(st.checkedIds) : [];
+    const checkedSet = new Set((Array.isArray(checkedIds) ? checkedIds : []).map(String));
+
+    const dayTextMap = buildDayChecklistTextMap(ev, dk);
+
+    const seenBy = { pre: new Set(), event: new Set(), close: new Set() };
+    const seenIds = new Set();
+
+    const normKey = (s)=>{
+      try{ return _normStrNoAccentsA33(String(s||'')).toLowerCase().replace(/\s+/g,' ').trim(); }catch(_){ return ''; }
+    };
+
+    const pushItem = (phaseKey, it0)=>{
+      try{
+        const key = (phaseKey === 'pre' || phaseKey === 'close') ? phaseKey : 'event';
+        const bucket = phases[key] || phases.event;
+        const it = (it0 && typeof it0 === 'object') ? it0 : {};
+        const id = String((it.id != null ? it.id : (it.itemId != null ? it.itemId : (it.key != null ? it.key : (it.idxId != null ? it.idxId : '')))) || '').trim();
+        const it2 = (id && !String(it.id || '').trim()) ? ({...it, id}) : it;
+
+        let raw = resolveTextoPendiente(it2, dayTextMap);
+        raw = String(raw || '').trim();
+        if (!raw) return;
+        if (isClearlyPlaceholderChecklistText(raw)) return;
+
+        const text = truncateChecklistLine(raw, 240);
+        if (!text) return;
+        if (isClearlyPlaceholderChecklistText(text)) return;
+
+        const nk = normKey(text);
+        if (!nk) return;
+        const seen = seenBy[key] || seenBy.event;
+        if (seen.has(nk)) return;
+        seen.add(nk);
+
+        const done = (id && checkedSet.has(id)) ? true : !!(it2.done || it2.checked || it2.isDone);
+
+        if (id) seenIds.add(id);
+        bucket.items.push({ id: id || '', text, done });
+      }catch(_){ }
+    };
+
+    const tpl = (ev.checklistTemplate && typeof ev.checklistTemplate === 'object') ? ev.checklistTemplate : null;
+    if (tpl){
+      const sec = getChecklistTemplateSectionsA33(tpl);
+      if (sec && sec.hasSections){
+        for (const it of (Array.isArray(sec.pre) ? sec.pre : [])) pushItem('pre', it);
+        for (const it of (Array.isArray(sec.event) ? sec.event : [])) pushItem('event', it);
+        for (const it of (Array.isArray(sec.close) ? sec.close : [])) pushItem('close', it);
+      } else {
+        const flat = getChecklistTemplateFlatItemsA33(tpl);
+        for (const it of (Array.isArray(flat) ? flat : [])){
+          const k = inferChecklistPhaseKeyA33(it);
+          pushItem(k, it);
+        }
+      }
+    }
+
+    // Legacy / por día (si no hay plantilla o si hay textos huérfanos)
+    if (!tpl){
+      const legacyItems = [];
+      const addMany = (x)=>{
+        if (!Array.isArray(x)) return;
+        const cut = x.length > SAFE_SCAN_LIMIT ? SAFE_SCAN_LIMIT : x.length;
+        for (let i=0; i<cut; i++){
+          const it = x[i];
+          if (it && typeof it === 'object') legacyItems.push(it);
+        }
+      };
+      try{ if (day && typeof day === 'object'){ addMany(day.checklistItems); addMany(day.items); addMany(day.checklist); } }catch(_){ }
+      try{ if (st && typeof st === 'object'){ addMany(st.items); addMany(st.list); addMany(st.todos); addMany(st.pending); } }catch(_){ }
+
+      for (const it of legacyItems){
+        const k = inferChecklistPhaseKeyA33(it);
+        pushItem(k, it);
+      }
+    }
+
+    // Extras: entradas del mapa de textos que no estén representadas por items
+    try{
+      if (dayTextMap && typeof dayTextMap.entries === 'function'){
+        for (const [id0, txt0] of dayTextMap.entries()){
+          const id = String(id0 || '').trim();
+          if (!id) continue;
+          if (seenIds.has(id)) continue;
+          const raw = String(txt0 || '').trim();
+          if (!raw || isClearlyPlaceholderChecklistText(raw)) continue;
+          pushItem('event', { id, text: raw });
+        }
+      }
+    }catch(_){ }
+
+  }catch(_err){
+    res.ok = false;
+    res.reason = 'No disponible';
+  }
+
+  return res;
+}
+
 function getFocusedPendingReminderTextsForDay(remRows, ev, dayKey){
   try{
     const rows = Array.isArray(remRows) ? remRows : [];
@@ -2176,7 +2325,74 @@ function toggleGlobalCard(evId){
   if (!(state.globalExpanded instanceof Set)) state.globalExpanded = new Set();
   if (state.globalExpanded.has(id)) state.globalExpanded.delete(id);
   else state.globalExpanded.add(id);
-  renderGlobalActivesView();
+
+  // Performance iPad/PWA: NO rerender completo. Actualizar solo la card.
+  try{
+    __cmdApplyGlobalCardExpandedState(id);
+  }catch(_){
+    // fallback ultra-seguro
+    try{ renderGlobalActivesView(); }catch(__){ }
+  }
+}
+
+function __cmdApplyGlobalCardExpandedState(eventId){
+  try{
+    if (state.focusMode !== CMD_MODE_GLOBAL) return;
+    const id = Number(eventId || 0);
+    if (!id) return;
+
+    const card = document.querySelector(`.cmd-global-card[data-eid="${id}"]`);
+    if (!card) return;
+
+    const expanded = !!(state.globalExpanded instanceof Set && state.globalExpanded.has(id));
+
+    const head = card.querySelector('.cmd-global-head');
+    if (head) head.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+
+    const chev = card.querySelector('.cmd-global-chev');
+    if (chev) chev.textContent = expanded ? '▴' : '▾';
+
+    const body = card.querySelector('.cmd-global-body');
+    if (!body) return;
+
+    // Snapshot actual (fail-safe)
+    const snap = (state.__globalSnapshots && typeof state.__globalSnapshots.get === 'function')
+      ? (state.__globalSnapshots.get(id) || null)
+      : null;
+
+    const hasChecklist = !!(snap && snap.hasChecklistItems === true);
+
+    if (!expanded || !hasChecklist){
+      try{ body.hidden = true; }catch(_){ }
+      return;
+    }
+
+    try{ body.hidden = false; }catch(_){ }
+
+    const dk = __cmdSafeYMD(snap && snap.checklistDayKey) || '';
+    const cur = (body.dataset && body.dataset.dk != null) ? String(body.dataset.dk || '') : '';
+
+    // Si ya está renderizado con el mismo dayKey, no tocar (sin stutter)
+    if (cur == dk && body.childNodes && body.childNodes.length) return;
+
+    try{ if (body.dataset) body.dataset.dk = dk || ''; }catch(_){ }
+
+    // Resolver evento por id (solo lectura)
+    let ev = null;
+    try{
+      const arr = Array.isArray(state.events) ? state.events : [];
+      for (const e of arr){
+        if (e && Number(e.id) === id){ ev = e; break; }
+      }
+    }catch(_){ ev = null; }
+
+    if (!ev){
+      body.innerHTML = '<div class="cmd-muted">No disponible</div>';
+      return;
+    }
+
+    renderGlobalChecklistForEvent(body, ev, snap);
+  }catch(_){ }
 }
 
 // --- GLOBAL (Activos): Checklist por fases (POR EVENTO) — solo lectura
@@ -2300,6 +2516,546 @@ function resolveChecklistDayKeyForEventA33(ev){
   return { dayKey: dk || '', source: source || '' };
 }
 
+// --- GLOBAL (Activos): Snapshot/KPIs por evento (solo lectura + fail-safe) — Etapa 1/4
+function __cmdIsObj(x){ return !!(x && typeof x === 'object' && !Array.isArray(x)); }
+function __cmdNum(v){
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function __cmdRound2(v){
+  const n = __cmdNum(v);
+  if (n == null) return null;
+  const r = Math.round(n * 100) / 100;
+  return Number.isFinite(r) ? r : null;
+}
+function __cmdSafeYMD(v){ return safeYMD(v || ''); }
+
+function __cmdEnsureMap(key){
+  try{ if (!state[key] || typeof state[key].get !== 'function') state[key] = new Map(); }catch(_){ state[key] = new Map(); }
+  return state[key];
+}
+
+// CashV2: helpers (read-only)
+const __CASHV2_DENOMS_CMD = {
+  NIO: [1000,500,200,100,50,20,10,5,1],
+  USD: [100,50,20,10,5,1]
+};
+
+function __cmdCashV2Key(eid, dk){
+  const id = Number(eid || 0);
+  const day = __cmdSafeYMD(dk);
+  if (!id || !day) return '';
+  return `cash:v2:${id}:${day}`;
+}
+
+function __cmdCashV2NormStatus(v){
+  const s = String(v || '').trim().toUpperCase();
+  if (s === 'OPEN' || s === 'ABIERTO') return 'OPEN';
+  if (s === 'CLOSED' || s === 'CERRADO') return 'CLOSED';
+  return s || '';
+}
+
+function __cmdCashV2SumDenoms(denoms, counts){
+  const c = __cmdIsObj(counts) ? counts : {};
+  let total = 0;
+  for (const d of (Array.isArray(denoms) ? denoms : [])){
+    const k1 = String(d);
+    let raw = (c[k1] != null) ? c[k1] : c[d];
+    if (raw == null || raw === '') raw = 0;
+    let n = Number(raw);
+    if (!Number.isFinite(n)) n = 0;
+    n = Math.trunc(n);
+    if (n < 0) n = 0;
+    total += Number(d) * n;
+  }
+  const r = __cmdRound2(total);
+  return (r == null) ? 0 : r;
+}
+
+function __cmdCashV2ExtractCurrencyTotal(block, ccy){
+  try{
+    const b = __cmdIsObj(block) ? block : null;
+    if (!b) return 0;
+    const t = __cmdRound2(b.total);
+    if (t != null && t >= 0) return t;
+    const den = __cmdIsObj(b.denomCounts) ? b.denomCounts : (__cmdIsObj(b.counts) ? b.counts : null);
+    const ds = __CASHV2_DENOMS_CMD[String(ccy||'').trim().toUpperCase()] || [];
+    return __cmdCashV2SumDenoms(ds, den);
+  }catch(_){
+    return 0;
+  }
+}
+
+function __cmdCashV2SumMovementsByCurrency(movements, currency){
+  const ccy = String(currency || '').trim().toUpperCase();
+  const arr = Array.isArray(movements) ? movements : [];
+  let inc = 0;
+  let out = 0;
+  let adj = 0;
+
+  for (const m of arr){
+    if (!__cmdIsObj(m)) continue;
+    if (String(m.currency || '').trim().toUpperCase() !== ccy) continue;
+    const k = String(m.kind || '').trim().toUpperCase();
+    const allowNeg = (k === 'ADJUST');
+    let amt = Number(m.amount);
+    if (!Number.isFinite(amt)) amt = 0;
+    amt = Math.trunc(amt);
+    if (!allowNeg) amt = Math.abs(amt);
+
+    if (k === 'IN' || k === 'ADJUST_IN') inc += Math.abs(amt);
+    else if (k === 'OUT' || k === 'ADJUST_OUT') out += Math.abs(amt);
+    else if (k === 'ADJUST') adj += amt;
+  }
+
+  return { in: __cmdRound2(inc) || 0, out: __cmdRound2(out) || 0, adjust: __cmdRound2(adj) || 0 };
+}
+
+function __cmdIsCourtesySale(s){
+  try{ return !!(s && (s.courtesy || s.isCourtesy)); }catch(_){ return false; }
+}
+
+async function __cmdComputeCashSalesC(eventId, dayKey){
+  const db = state.db;
+  const eid = Number(eventId || 0);
+  const dk = __cmdSafeYMD(dayKey);
+  if (!db || !eid || !dk || !hasStore(db,'sales')) return null;
+
+  // Cache micro (si el conteo del día no cambió, reutilizar)
+  const cache = __cmdEnsureMap('__globalSalesCashCache');
+  const cnt = await idbCountByIndex(db,'sales','by_date', IDBKeyRange.only(dk));
+  const cntKey = (cnt == null) ? 'na' : String(cnt);
+  const k = `cashSales|${eid}|${dk}|${cntKey}`;
+  const hit = cache.get(k);
+  if (hit && (Date.now() - (hit.t||0)) < 8000) return hit.v;
+
+  let rows = await idbGetAllByIndex(db,'sales','by_date', IDBKeyRange.only(dk));
+  if (rows === null){
+    // fallback: por evento (índice) o scan controlado
+    rows = await idbGetAllByIndex(db,'sales','by_event', IDBKeyRange.only(eid));
+    if (rows === null) rows = await idbGetAll(db,'sales');
+  }
+  if (!Array.isArray(rows)) rows = [];
+  if (rows.length > SAFE_SCAN_LIMIT) return null;
+
+  let sum = 0;
+  for (const s of rows){
+    if (!__cmdIsObj(s)) continue;
+    if (Number(s.eventId) !== eid) continue;
+    if (__cmdSafeYMD(s.date || '') !== dk) continue;
+    const pay = String(s.payment || '').toLowerCase();
+    if (pay !== 'efectivo' && pay !== 'cash') continue;
+    if (__cmdIsCourtesySale(s)) continue;
+    let t = Number(s.total != null ? s.total : 0);
+    if (!Number.isFinite(t)) t = 0;
+    sum += t;
+  }
+
+  sum = Math.round(sum * 100) / 100;
+  if (!Number.isFinite(sum)) return null;
+
+  try{ cache.set(k, { t: Date.now(), v: sum }); while (cache.size > 80) cache.delete(cache.keys().next().value); }catch(_){ }
+  return sum;
+}
+
+function __cmdCashSigFromRec(rec){
+  try{
+    if (!__cmdIsObj(rec)) return '';
+    const a = Number(rec.updatedAt || 0);
+    const b = Number(rec.openTs || 0);
+    const c = Number(rec.closeTs || 0);
+    const d = Number(rec.ts || 0);
+    const st = __cmdCashV2NormStatus(rec.status || '');
+    const mv = Array.isArray(rec.movements) ? rec.movements.length : 0;
+    const iN = __cmdCashV2ExtractCurrencyTotal(rec.initial && rec.initial.NIO, 'NIO');
+    const iU = __cmdCashV2ExtractCurrencyTotal(rec.initial && rec.initial.USD, 'USD');
+    return [a,b,c,d,st,mv,iN,iU].join('|');
+  }catch(_){
+    return '';
+  }
+}
+
+async function __cmdComputeCashKpisForEvent(ev, dayKey, prevCashMeta){
+  // Devuelve objeto { enabled, tc, saldoInicial, ventasEfectivo, totalIngresos, totalEgresos, totalAjustes, saldoFinal, opDayKey }
+  // Fail-safe duro: si algo crítico no existe/tipos raros => enabled:true con valores null.
+  try{
+    const en = await resolveCashV2EnabledForEvent(ev);
+    const enabled = !!(en && en.enabled === true);
+    if (!enabled) return { enabled:false };
+
+    const eid = Number(ev && ev.id);
+    const dkToday = __cmdSafeYMD(dayKey) || __cmdSafeYMD(state.today) || todayYMD();
+
+    const db = state.db;
+    if (!db || !hasStore(db,'cashV2')){
+      const fxInfo0 = resolveEventFxInfo(ev);
+      const tc0 = (fxInfo0 && fxInfo0.fx != null) ? fxInfo0.fx : null;
+      return { enabled:true, tc: tc0 || null, saldoInicial:null, ventasEfectivo:null, totalIngresos:null, totalEgresos:null, totalAjustes:null, saldoFinal:null, opDayKey:null };
+    }
+
+    // Reusar opDayKey si ya existe y el registro no cambió (micro-cache real por updatedAt/sig).
+    if (prevCashMeta && prevCashMeta.opDayKey && prevCashMeta.sig){
+      const key = __cmdCashV2Key(eid, prevCashMeta.opDayKey);
+      if (key){
+        const rec = await idbGet(db,'cashV2', key);
+        const sigNow = __cmdCashSigFromRec(rec);
+        if (rec && sigNow && sigNow === String(prevCashMeta.sig)){
+          return prevCashMeta.kpis;
+        }
+      }
+    }
+
+    // Full resolve (canon existente)
+    const st = await computeCashV2Status(ev, dkToday);
+    const tc = (st && st.fx != null) ? fxNorm(st.fx) : null;
+    const opDayKey = __cmdSafeYMD(st && st.opDayKey) || dkToday;
+
+    // Si no hay día operativo aún
+    if (!st || st.ok !== true || !opDayKey){
+      return { enabled:true, tc: tc || null, saldoInicial:null, ventasEfectivo:null, totalIngresos:null, totalEgresos:null, totalAjustes:null, saldoFinal:null, opDayKey: opDayKey || null };
+    }
+
+    const key = __cmdCashV2Key(eid, opDayKey);
+    let rec = key ? await idbGet(db,'cashV2', key) : null;
+    if (!rec){
+      const byEvDay = await idbGetAllByIndex(db,'cashV2','by_event_day', IDBKeyRange.only([eid, opDayKey]));
+      if (Array.isArray(byEvDay) && byEvDay.length) rec = byEvDay[0];
+    }
+
+    if (!rec || !__cmdIsObj(rec)){
+      return { enabled:true, tc: tc || null, saldoInicial:null, ventasEfectivo:null, totalIngresos:null, totalEgresos:null, totalAjustes:null, saldoFinal:null, opDayKey };
+    }
+
+    // Totales iniciales
+    const init = __cmdIsObj(rec.initial) ? rec.initial : null;
+    const iN = __cmdCashV2ExtractCurrencyTotal(init && init.NIO, 'NIO');
+    const iU = __cmdCashV2ExtractCurrencyTotal(init && init.USD, 'USD');
+
+    // Movimientos
+    const movs = Array.isArray(rec.movements) ? rec.movements : [];
+    const sN = __cmdCashV2SumMovementsByCurrency(movs,'NIO');
+    const sU = __cmdCashV2SumMovementsByCurrency(movs,'USD');
+
+    // Ventas en efectivo (C$) — preferir snapshot guardado, fallback a cómputo por ventas
+    let cashSalesC = __cmdRound2(rec.cashSalesC);
+    if (cashSalesC == null) cashSalesC = await __cmdComputeCashSalesC(eid, opDayKey);
+    if (cashSalesC == null) cashSalesC = null;
+
+    // Conversión a NIO (si hay USD involucrado, tc debe existir)
+    const usdInPlay = (iU !== 0) || (sU.in !== 0) || (sU.out !== 0) || (sU.adjust !== 0);
+    if (usdInPlay && !(tc && tc > 0)){
+      return { enabled:true, tc: tc || null, saldoInicial:null, ventasEfectivo: cashSalesC, totalIngresos:null, totalEgresos:null, totalAjustes:null, saldoFinal:null, opDayKey };
+    }
+
+    const toC = (nio, usd)=>{
+      const a = __cmdRound2(nio) || 0;
+      const b = __cmdRound2(usd) || 0;
+      if (!usdInPlay) return __cmdRound2(a) || 0;
+      return __cmdRound2(a + (b * tc)) || 0;
+    };
+
+    const saldoInicial = toC(iN, iU);
+    const totalIngresos = toC(sN.in, sU.in);
+    const totalEgresos = toC(sN.out, sU.out);
+    const totalAjustes = toC(sN.adjust, sU.adjust);
+
+    let saldoFinal = null;
+    if (cashSalesC != null){
+      saldoFinal = __cmdRound2(saldoInicial + cashSalesC + totalIngresos - totalEgresos + totalAjustes);
+    }
+
+    return {
+      enabled:true,
+      tc: (tc != null) ? __cmdRound2(tc) : null,
+      saldoInicial: __cmdRound2(saldoInicial),
+      ventasEfectivo: (cashSalesC != null) ? __cmdRound2(cashSalesC) : null,
+      totalIngresos: __cmdRound2(totalIngresos),
+      totalEgresos: __cmdRound2(totalEgresos),
+      totalAjustes: __cmdRound2(totalAjustes),
+      saldoFinal: (saldoFinal != null) ? __cmdRound2(saldoFinal) : null,
+      opDayKey
+    };
+  }catch(_){
+    const fxInfo = resolveEventFxInfo(ev);
+    const tc = (fxInfo && fxInfo.fx != null) ? fxInfo.fx : null;
+    return { enabled:true, tc: tc || null, saldoInicial:null, ventasEfectivo:null, totalIngresos:null, totalEgresos:null, totalAjustes:null, saldoFinal:null, opDayKey:null };
+  }
+}
+
+function __cmdHasChecklistItemsForDay(ev, dayKey){
+  // Ítem real = texto no vacío y no placeholder.
+  try{
+    if (!__cmdIsObj(ev)) return false;
+    const dk = __cmdSafeYMD(dayKey);
+    if (!dk) return false;
+
+    const dayTextMap = buildDayChecklistTextMap(ev, dk);
+
+    const scanItems = (items)=>{
+      const arr = Array.isArray(items) ? items : [];
+      for (const it of arr){
+        if (!__cmdIsObj(it)) continue;
+        const txt = resolveTextoPendiente(it, dayTextMap);
+        if (txt && !isClearlyPlaceholderChecklistText(txt)) return true;
+      }
+      return false;
+    };
+
+    // Preferir plantilla por fases
+    const tpl = __cmdIsObj(ev.checklistTemplate) ? ev.checklistTemplate : null;
+    if (tpl){
+      const sec = getChecklistTemplateSectionsA33(ev);
+      if (sec && __cmdIsObj(sec)){
+        if (scanItems(sec.pre)) return true;
+        if (scanItems(sec.event)) return true;
+        if (scanItems(sec.close)) return true;
+      } else {
+        const flat = getChecklistTemplateFlatItemsA33(ev);
+        if (scanItems(flat)) return true;
+      }
+    }
+
+    // Fallback: evidencia por día (legacy)
+    const days = (__cmdIsObj(ev.days) ? ev.days : null);
+    const day = (days && __cmdIsObj(days[dk])) ? days[dk] : null;
+    const st = (day && __cmdIsObj(day.checklistState)) ? day.checklistState : null;
+
+    if (st && __cmdIsObj(st.textById)){
+      for (const k in st.textById){
+        if (!Object.prototype.hasOwnProperty.call(st.textById,k)) continue;
+        const txt = String(st.textById[k] || '').trim();
+        if (txt && !isClearlyPlaceholderChecklistText(txt)) return true;
+      }
+    }
+
+    if (day && Array.isArray(day.checklistItems) && scanItems(day.checklistItems)) return true;
+    if (day && Array.isArray(day.items) && scanItems(day.items)) return true;
+    if (day && Array.isArray(day.checklist) && scanItems(day.checklist)) return true;
+
+    return false;
+  }catch(_){
+    return false;
+  }
+}
+
+function __cmdAlertasPendingCount(ev, dayKey){
+  try{
+    const dk = __cmdSafeYMD(dayKey);
+    if (!dk) return { pendingCount: null };
+    const ph = buildChecklistPhasesData(ev, dk, { limit: 1 });
+    if (!ph || ph.ok === false) return { pendingCount: null };
+    const phases = (ph.phases && __cmdIsObj(ph.phases)) ? ph.phases : {};
+    const sum = (b)=>{
+      const n = Number(b && b.pendingCount);
+      return Number.isFinite(n) ? n : 0;
+    };
+    return { pendingCount: sum(phases.pre) + sum(phases.event) + sum(phases.close) };
+  }catch(_){
+    return { pendingCount: null };
+  }
+}
+
+async function __cmdVentasHoyMetric(ev, dayKey){
+  try{
+    const dk = __cmdSafeYMD(dayKey);
+    if (!dk) return null;
+
+    // Micro-cache por conteo del día (si existe índice by_date)
+    try{
+      const db = state.db;
+      const eid = Number(ev && ev.id);
+      if (db && eid && hasStore(db,'sales')){
+        const cache = __cmdEnsureMap('__globalSalesTodayCache');
+        const cnt = await idbCountByIndex(db,'sales','by_date', IDBKeyRange.only(dk));
+        const cntKey = (cnt == null) ? 'na' : String(cnt);
+        const k = `salesToday|${eid}|${dk}|${cntKey}`;
+        const hit = cache.get(k);
+        if (hit && (Date.now() - (hit.t||0)) < 8000) return hit.v;
+
+        const r = await computeSalesToday(ev, dk);
+        if (r && r.ok === true){
+          const t = __cmdRound2(r.total);
+          const v = (t == null) ? 0 : t;
+          try{ cache.set(k, { t: Date.now(), v }); while (cache.size > 80) cache.delete(cache.keys().next().value); }catch(_){ }
+          return v;
+        }
+        return null;
+      }
+    }catch(_){ }
+
+    const r = await computeSalesToday(ev, dk);
+    if (r && r.ok === true){
+      const t = __cmdRound2(r.total);
+      return (t == null) ? 0 : t;
+    }
+    return null;
+  }catch(_){
+    return null;
+  }
+}
+
+async function __cmdBuildGlobalSnapshot(ev, todayDayKey){
+  const eid = Number(ev && ev.id);
+  const dkToday = __cmdSafeYMD(todayDayKey) || __cmdSafeYMD(state.today) || todayYMD();
+
+  const chkRes = resolveChecklistDayKeyForEventA33(ev);
+  const chkDayKey = __cmdSafeYMD(chkRes && chkRes.dayKey) || dkToday;
+
+  const stamp = getChecklistStampA33(ev, chkDayKey);
+  const chkTs = (stamp && stamp.ts != null) ? String(stamp.ts) : '0';
+  const chkSig = (stamp && stamp.sig != null) ? String(stamp.sig) : '';
+
+  const cache = __cmdEnsureMap('__globalSnapshotsCache');
+  const inflight = __cmdEnsureMap('__globalSnapshotsInflight');
+  const cashMetaByEvent = __cmdEnsureMap('__globalCashMetaByEvent');
+  const key = `snap|${eid||0}|${dkToday}|${chkDayKey}|${chkTs}|${chkSig}`;
+
+  // Fail-safe: evitar colisión de cache si el id viene raro
+  if (!eid || !isFinite(eid)){
+    return {
+      eventId: null,
+      dayKey: dkToday,
+      checklistDayKey: chkDayKey,
+      checklistDayKeySource: (chkRes && chkRes.source) ? String(chkRes.source) : '',
+      alertas: { pendingCount: null },
+      efectivo: { enabled: null },
+      ventasHoy: null,
+      hasChecklistItems: false
+    };
+  }
+
+  const hit = cache.get(key);
+  if (hit && hit.snap){
+    // Respetar micro-cache: NO recalcular si no cambió firma/updatedAt.
+    // Solo refrescar métricas dinámicas cada pocos segundos (ventas/efectivo) sin tocar checklist/alertas.
+    const now = Date.now();
+    const lastDyn = Number(hit.dynT || 0) || 0;
+    if (!lastDyn || (now - lastDyn) > 5500){
+      try{ hit.snap.ventasHoy = await __cmdVentasHoyMetric(ev, dkToday); }catch(_){ }
+      try{
+        let prevCashMeta = null;
+        try{ prevCashMeta = cashMetaByEvent.get(eid) || hit.cashMeta || null; }catch(_){ prevCashMeta = hit.cashMeta || null; }
+        hit.snap.efectivo = await __cmdComputeCashKpisForEvent(ev, dkToday, prevCashMeta);
+
+        // actualizar meta cash (firma)
+        try{
+          const db = state.db;
+          const op = hit.snap.efectivo && hit.snap.efectivo.opDayKey ? String(hit.snap.efectivo.opDayKey) : '';
+          let sig = '';
+          if (db && hasStore(db,'cashV2') && op && eid){
+            const rec = await idbGet(db,'cashV2', __cmdCashV2Key(eid, op));
+            sig = __cmdCashSigFromRec(rec);
+          }
+          const meta = { opDayKey: op || null, sig: sig || '', kpis: hit.snap.efectivo };
+          try{ cashMetaByEvent.set(eid, meta); }catch(_){ }
+          hit.cashMeta = meta;
+        }catch(_){ }
+      }catch(_){ }
+      hit.dynT = now;
+    }
+
+    hit.t = now;
+    try{ cache.set(key, hit); }catch(_){ }
+    return hit.snap;
+  }
+
+  const inF = inflight.get(key);
+  if (inF) return inF;
+
+  const p = (async()=>{
+    // Base neutra
+    const snap = {
+      eventId: eid || null,
+      dayKey: dkToday,
+      checklistDayKey: chkDayKey,
+      checklistDayKeySource: (chkRes && chkRes.source) ? String(chkRes.source) : '',
+      alertas: { pendingCount: null },
+      efectivo: { enabled: null },
+      ventasHoy: null,
+      hasChecklistItems: false
+    };
+
+    // Checklist: hasItems + pendingCount (fail-safe)
+    try{ snap.hasChecklistItems = __cmdHasChecklistItemsForDay(ev, chkDayKey); }catch(_){ snap.hasChecklistItems = false; }
+    try{ snap.alertas = __cmdAlertasPendingCount(ev, chkDayKey); }catch(_){ snap.alertas = { pendingCount: null }; }
+
+    // Ventas hoy (C$) — por día actual (no por chkDayKey)
+    try{ snap.ventasHoy = await __cmdVentasHoyMetric(ev, dkToday); }catch(_){ snap.ventasHoy = null; }
+
+    // Efectivo (ON/OFF + métricas si ON)
+    let prevCashMeta = null;
+    try{ prevCashMeta = cashMetaByEvent.get(eid) || ((hit && hit.cashMeta) ? hit.cashMeta : null); }catch(_){ prevCashMeta = null; }
+    const kpis = await __cmdComputeCashKpisForEvent(ev, dkToday, prevCashMeta);
+    snap.efectivo = kpis;
+
+    // Guardar meta de cash para micro-cache por firma/updatedAt
+    try{
+      const db = state.db;
+      const op = kpis && kpis.opDayKey ? String(kpis.opDayKey) : '';
+      let sig = '';
+      if (db && hasStore(db,'cashV2') && op && eid){
+        const rec = await idbGet(db,'cashV2', __cmdCashV2Key(eid, op));
+        sig = __cmdCashSigFromRec(rec);
+      }
+      const meta = { opDayKey: op || null, sig: sig || '', kpis };
+      try{ cashMetaByEvent.set(eid, meta); }catch(_){ }
+      try{
+        cache.set(key, { t: Date.now(), dynT: Date.now(), snap, cashMeta: meta });
+        while (cache.size > 120){
+          try{ cache.delete(cache.keys().next().value); }catch(_){ break; }
+        }
+      }catch(_){ }
+    }catch(_){
+      try{
+        cache.set(key, { t: Date.now(), dynT: Date.now(), snap, cashMeta: null });
+        while (cache.size > 120){
+          try{ cache.delete(cache.keys().next().value); }catch(_){ break; }
+        }
+      }catch(_){ }
+    }
+
+    return snap;
+  })().finally(()=>{ try{ inflight.delete(key); }catch(_){ } });
+
+  inflight.set(key, p);
+  return p;
+}
+
+function __cmdPrimeGlobalSnapshots(items){
+  // No bloquear render. Dedup por firma (micro-cache) y fail-safe duro.
+  try{
+    if (!Array.isArray(items) || !items.length) return;
+    const dk = __cmdSafeYMD(state.today) || todayYMD();
+    const out = __cmdEnsureMap('__globalSnapshots');
+
+    // Concurrencia baja para iPad.
+    const queue = items.slice(0, 15);
+    const limit = 3;
+    let idx = 0;
+
+    const worker = async()=>{
+      while (idx < queue.length){
+        const cur = queue[idx++];
+        try{
+          if (!cur || cur.id == null) continue;
+          const snap = await __cmdBuildGlobalSnapshot(cur, dk);
+          try{ out.set(Number(cur.id), snap); }catch(_){ }
+          try{ __cmdUpdateGlobalCardUI(Number(cur.id), snap, cur); }catch(_){ }
+        }catch(_){
+          const fallback = { eventId: Number(cur && cur.id) || null, dayKey: dk, checklistDayKey: dk, alertas:{pendingCount:null}, efectivo:{enabled:null}, ventasHoy:null, hasChecklistItems:false };
+          try{ out.set(Number(cur && cur.id), fallback); }catch(_){ }
+          try{ __cmdUpdateGlobalCardUI(Number(cur && cur.id), fallback, cur); }catch(_){ }
+        }
+      }
+    };
+
+    // Disparar en microtask (no depender del orden de carga)
+    Promise.resolve().then(()=>{
+      for (let i=0; i<limit; i++) worker();
+    });
+  }catch(_){ }
+}
+
 function renderChecklistPhasesGridInto(containerEl, ph){
   if (!containerEl) return;
 
@@ -2383,43 +3139,244 @@ function renderChecklistPhasesGridInto(containerEl, ph){
   containerEl.appendChild(grid);
 }
 
-function renderGlobalChecklistForEvent(bodyEl, ev){
+function renderChecklistPhasesDetailedInto(containerEl, ph){
+  if (!containerEl) return;
+
+  const phases = (ph && ph.phases && typeof ph.phases === 'object') ? ph.phases : {};
+  const ok = (ph && ph.ok === false) ? false : true;
+
+  const makeCol = (label, bucket)=>{
+    const col = document.createElement('div');
+    col.className = 'cmd-chk-col';
+
+    const hdr = document.createElement('div');
+    hdr.className = 'cmd-chk-hdr';
+
+    const name = document.createElement('span');
+    name.className = 'cmd-chk-name';
+    name.textContent = label;
+
+    const prog = document.createElement('span');
+    prog.className = 'cmd-chk-prog';
+    // Detallado: sin contadores ruidosos. Mantener el layout estable.
+    prog.textContent = '';
+
+    hdr.appendChild(name);
+    hdr.appendChild(prog);
+
+    const body = document.createElement('div');
+    body.className = 'cmd-chk-body cmd-chk-body-detailed';
+
+    if (ok === false){
+      body.textContent = (ph && ph.reason) ? String(ph.reason) : 'No disponible';
+    } else {
+      const items = (bucket && Array.isArray(bucket.items)) ? bucket.items : [];
+      if (!items.length){
+        const em = document.createElement('div');
+        em.className = 'cmd-muted';
+        em.textContent = '—';
+        body.appendChild(em);
+      } else {
+        const frag = document.createDocumentFragment();
+        for (const it of items){
+          const row = document.createElement('div');
+          row.className = 'cmd-chk-row' + ((it && it.done) ? ' is-done' : '');
+
+          const mark = document.createElement('span');
+          mark.className = 'cmd-chk-mark';
+          mark.textContent = (it && it.done) ? '✓' : '•';
+
+          const tx = document.createElement('span');
+          tx.className = 'cmd-chk-text';
+          tx.textContent = (it && it.text != null) ? String(it.text) : '';
+
+          row.appendChild(mark);
+          row.appendChild(tx);
+          frag.appendChild(row);
+        }
+        body.appendChild(frag);
+      }
+    }
+
+    col.appendChild(hdr);
+    col.appendChild(body);
+    return col;
+  };
+
+  const grid = document.createElement('div');
+  grid.className = 'cmd-chk-grid cmd-chk-grid-global cmd-chk-grid-detailed';
+  grid.appendChild(makeCol('PRE-EVENTO', phases.pre || null));
+  grid.appendChild(makeCol('EVENTO', phases.event || null));
+  grid.appendChild(makeCol('CIERRE', phases.close || null));
+
+  containerEl.appendChild(grid);
+}
+
+function renderGlobalChecklistForEvent(bodyEl, ev, snap){
   if (!bodyEl) return;
   bodyEl.innerHTML = '';
 
-  const resolved = resolveChecklistDayKeyForEventA33(ev);
-  const dk = safeYMD(resolved && resolved.dayKey) || '';
+  // Condición CRÍTICA: si hasChecklistItems=false => NO mostrar NADA del checklist.
+  const has = !!(snap && snap.hasChecklistItems === true);
+  if (!has) return;
 
-  // Hint día (silencioso, útil para fail-safe)
-  const hint = document.createElement('div');
-  hint.className = 'cmd-muted';
-  if (dk){
-    hint.textContent = `Día: ${dk}`;
-  } else {
-    hint.textContent = 'Checklist: —';
-  }
-  bodyEl.appendChild(hint);
+  const dk = __cmdSafeYMD(snap && snap.checklistDayKey)
+    || __cmdSafeYMD((resolveChecklistDayKeyForEventA33(ev) || {}).dayKey)
+    || __cmdSafeYMD(state.today)
+    || todayYMD();
 
-  // Calcular solo si hay un día resoluble o si hay evidencia de plantilla (evita ruido)
   let ph = null;
   try{
-    if (dk || (ev && ev.checklistTemplate && typeof ev.checklistTemplate === 'object') || __cmdHasAnyDayEvidence(ev)){
-      ph = buildChecklistPhasesData(ev, dk || safeYMD(state.today) || todayYMD(), { limit: 3 });
-    }
+    ph = buildChecklistPhasesDetailedA33(ev, dk);
   }catch(_){
     ph = null;
   }
 
-  if (!ph){
-    // Neutro (sin crash)
+  if (!ph || ph.ok === false){
     const n = document.createElement('div');
     n.className = 'cmd-muted';
-    n.textContent = 'Sin datos de checklist.';
+    n.textContent = (ph && ph.reason) ? String(ph.reason) : 'No disponible';
     bodyEl.appendChild(n);
     return;
   }
 
-  renderChecklistPhasesGridInto(bodyEl, ph);
+  renderChecklistPhasesDetailedInto(bodyEl, ph);
+}
+
+function __cmdGlobalFmtDash(v){
+  return (v == null) ? '—' : String(v);
+}
+
+function __cmdGlobalFmtMaybeFx(v){
+  try{
+    if (typeof v === 'number' && isFinite(v)){
+      const s = String(fmtFX2(v) || '').trim();
+      return s || '—';
+    }
+  }catch(_){ }
+  return '—';
+}
+
+function __cmdGlobalFmtMaybeMoney(v){
+  try{
+    if (typeof v === 'number' && isFinite(v)) return fmtMoneyNIO(v);
+  }catch(_){ }
+  return '—';
+}
+
+function __cmdGlobalFmtSignedMoney(v, mode){
+  if (!(typeof v === 'number' && isFinite(v))) return '—';
+  const abs = Math.abs(v);
+  const m = __cmdGlobalFmtMaybeMoney(abs);
+  if (m === '—') return '—';
+  if (mode === 'out') return `-${m}`;
+  if (mode === 'in') return `+${m}`;
+  // adj
+  return (v < 0) ? `-${m}` : `+${m}`;
+}
+
+function __cmdGlobalRenderEfectivoInto(hostEl, kpis){
+  if (!hostEl) return;
+  hostEl.innerHTML = '';
+
+  const k = (kpis && typeof kpis === 'object') ? kpis : null;
+  if (!k || k.enabled == null){
+    hostEl.textContent = 'Efectivo: —';
+    return;
+  }
+  if (k.enabled === false){
+    hostEl.textContent = 'Efectivo: OFF';
+    return;
+  }
+
+  // ON: bloque compacto
+  const wrap = document.createElement('div');
+  wrap.className = 'cmd-gkpi-efc';
+
+  const h = document.createElement('div');
+  h.className = 'cmd-gkpi-efc-h';
+  h.textContent = 'Efectivo';
+
+  const lines = document.createElement('div');
+  lines.className = 'cmd-gkpi-efc-lines';
+
+  const line = (label, val)=>{
+    const d = document.createElement('div');
+    d.className = 'cmd-gkpi-efc-line';
+    d.textContent = `${label}: ${val}`;
+    return d;
+  };
+
+  const tc = __cmdGlobalFmtMaybeFx(k.tc);
+  const si = __cmdGlobalFmtMaybeMoney(k.saldoInicial);
+  const ve = __cmdGlobalFmtMaybeMoney(k.ventasEfectivo);
+  const inc = __cmdGlobalFmtSignedMoney(k.totalIngresos, 'in');
+  const eg = __cmdGlobalFmtSignedMoney(k.totalEgresos, 'out');
+  const adj = __cmdGlobalFmtSignedMoney(k.totalAjustes, 'adj');
+  const sf = __cmdGlobalFmtMaybeMoney(k.saldoFinal);
+
+  lines.appendChild(line('T/C', tc));
+  lines.appendChild(line('Saldo inicial', si));
+  lines.appendChild(line('Ventas efectivo', ve));
+
+  const mov = document.createElement('div');
+  mov.className = 'cmd-gkpi-efc-line';
+  mov.textContent = `Movimientos: ${inc} / ${eg} / ${adj}`;
+  lines.appendChild(mov);
+
+  lines.appendChild(line('Saldo final', sf));
+
+  wrap.appendChild(h);
+  wrap.appendChild(lines);
+  hostEl.appendChild(wrap);
+}
+
+function __cmdUpdateGlobalCardUI(eventId, snap, ev){
+  try{
+    if (!eventId) return;
+    if (state.focusMode !== CMD_MODE_GLOBAL) return;
+
+    const card = document.querySelector(`.cmd-global-card[data-eid="${eventId}"]`);
+    if (!card) return;
+
+    const a = card.querySelector('.cmd-gkpi[data-kpi="alertas"] .cmd-gkpi-main');
+    if (a){
+      const n = (snap && snap.alertas && typeof snap.alertas.pendingCount === 'number' && isFinite(snap.alertas.pendingCount))
+        ? String(snap.alertas.pendingCount)
+        : '—';
+      a.textContent = `Alertas: ${n}`;
+    }
+
+    const v = card.querySelector('.cmd-gkpi[data-kpi="ventas"] .cmd-gkpi-main');
+    if (v){
+      const vv = (snap && typeof snap.ventasHoy === 'number' && isFinite(snap.ventasHoy)) ? fmtMoneyNIO(snap.ventasHoy) : '—';
+      v.textContent = `Ventas hoy: ${vv}`;
+    }
+
+    const efHost = card.querySelector('.cmd-gkpi[data-kpi="efectivo"] .cmd-gkpi-main');
+    if (efHost){
+      __cmdGlobalRenderEfectivoInto(efHost, snap && snap.efectivo);
+    }
+
+    // Checklist: solo si expandido + hasChecklistItems=true
+    const expanded = !!(state.globalExpanded instanceof Set && state.globalExpanded.has(eventId));
+    const has = !!(snap && snap.hasChecklistItems === true);
+    const body = card.querySelector('.cmd-global-body');
+    if (body){
+      if (expanded && has && ev){
+        try{ body.hidden = false; }catch(_){ }
+        // Evitar recomputar si ya está renderizado con el mismo dayKey.
+        const dk = __cmdSafeYMD(snap && snap.checklistDayKey) || '';
+        if (body.dataset && body.dataset.dk !== dk){
+          try{ body.dataset.dk = dk || ''; }catch(_){ }
+          renderGlobalChecklistForEvent(body, ev, snap);
+        }
+      } else {
+        try{ body.hidden = true; }catch(_){ }
+        // Performance: NO limpiar HTML aquí; evita recalcular en expand/collapse repetido.
+      }
+    }
+  }catch(_){ }
 }
 
 function renderGlobalActivesView(){
@@ -2435,6 +3392,84 @@ function renderGlobalActivesView(){
   block.hidden = false;
 
   const items = resolveActiveEvents();
+
+  // Etapa 1: preparar snapshots (solo data). Asíncrono y fail-safe.
+  try{ __cmdPrimeGlobalSnapshots(items); }catch(_){ }
+
+  // Performance iPad/PWA: si el set/orden de eventos activos no cambió, NO reconstruir DOM.
+  const ids = [];
+  try{
+    for (const ev of (Array.isArray(items) ? items : [])){
+      const id = Number(ev && ev.id);
+      if (id && isFinite(id)) ids.push(id);
+    }
+  }catch(_){ }
+  const sig = ids.join(',');
+
+  if (sig && state.__globalListSig === sig && list.children && list.children.length){
+    let ok = true;
+    try{
+      for (const id of ids){
+        if (!list.querySelector(`.cmd-global-card[data-eid="${id}"]`)){ ok = false; break; }
+      }
+    }catch(_){ ok = false; }
+
+    if (ok){
+      if (!(state.globalExpanded instanceof Set)) state.globalExpanded = new Set();
+
+      // abrir automáticamente el 1ro (más reciente) solo una vez
+      if (!state.__globalAutoOpened && ids.length){
+        try{ state.globalExpanded.clear(); state.globalExpanded.add(Number(ids[0])); }catch(_){ }
+        state.__globalAutoOpened = true;
+      }
+
+      // eliminar cards que ya no existen (fail-safe)
+      try{
+        const keep = new Set(ids.map(String));
+        const cards = list.querySelectorAll('.cmd-global-card');
+        for (const c of cards){
+          const ce = (c && c.dataset && c.dataset.eid != null) ? String(c.dataset.eid) : '';
+          if (ce && !keep.has(ce)){
+            try{ c.remove(); }catch(_){ }
+          }
+        }
+      }catch(_){ }
+
+      // actualizar textos/KPIs sin rerender global
+      for (const ev of items){
+        try{
+          if (!ev || ev.id == null) continue;
+          const id = Number(ev.id);
+          if (!isFinite(id) || !id) continue;
+          const card = list.querySelector(`.cmd-global-card[data-eid="${id}"]`);
+          if (!card) continue;
+
+          const title = card.querySelector('.cmd-global-title');
+          if (title) title.textContent = safeStr(ev.name) || '—';
+
+          const sub = card.querySelector('.cmd-global-sub');
+          if (sub){
+            const g = safeStr(ev.groupName);
+            sub.textContent = g ? ('Grupo: ' + g) : 'Sin grupo';
+          }
+
+          // aplicar estado expand/collapse + render checklist si aplica (sin stutter)
+          try{ __cmdApplyGlobalCardExpandedState(id); }catch(_){ }
+
+          const snap = (state.__globalSnapshots && typeof state.__globalSnapshots.get === 'function')
+            ? (state.__globalSnapshots.get(id) || null)
+            : null;
+          if (snap){
+            try{ __cmdUpdateGlobalCardUI(id, snap, ev); }catch(_){ }
+          }
+        }catch(_){ }
+      }
+
+      return;
+    }
+  }
+
+  state.__globalListSig = sig || '';
 
   list.innerHTML = '';
   if (!items.length){
@@ -2463,8 +3498,13 @@ function renderGlobalActivesView(){
       if (!isFinite(id) || !id) continue;
       const expanded = state.globalExpanded.has(id);
 
+      const snap = (state.__globalSnapshots && typeof state.__globalSnapshots.get === 'function')
+        ? (state.__globalSnapshots.get(id) || null)
+        : null;
+
       const card = document.createElement('div');
       card.className = 'cmd-global-card';
+      try{ card.dataset.eid = String(id); }catch(_){ }
 
       const head = document.createElement('button');
       head.type = 'button';
@@ -2485,21 +3525,60 @@ function renderGlobalActivesView(){
       che.className = 'cmd-global-chev';
       che.textContent = expanded ? '▴' : '▾';
 
+      // KPI blocks (SIEMPRE visibles): Alertas / Efectivo / Ventas hoy
+      const kpis = document.createElement('div');
+      kpis.className = 'cmd-global-kpis';
+
+      const mkKpi = (key)=>{
+        const box = document.createElement('div');
+        box.className = 'cmd-gkpi';
+        try{ box.dataset.kpi = String(key); }catch(_){ }
+        const main = document.createElement('div');
+        main.className = 'cmd-gkpi-main';
+        box.appendChild(main);
+        kpis.appendChild(box);
+        return main;
+      };
+
+      const aMain = mkKpi('alertas');
+      const aN = (snap && snap.alertas && typeof snap.alertas.pendingCount === 'number' && isFinite(snap.alertas.pendingCount))
+        ? String(snap.alertas.pendingCount)
+        : '—';
+      aMain.textContent = `Alertas: ${aN}`;
+
+      const efMain = mkKpi('efectivo');
+      __cmdGlobalRenderEfectivoInto(efMain, snap && snap.efectivo);
+
+      const vMain = mkKpi('ventas');
+      const vV = (snap && typeof snap.ventasHoy === 'number' && isFinite(snap.ventasHoy)) ? fmtMoneyNIO(snap.ventasHoy) : '—';
+      vMain.textContent = `Ventas hoy: ${vV}`;
+
       head.appendChild(title);
       head.appendChild(sub);
       head.appendChild(che);
+      head.appendChild(kpis);
 
       const body = document.createElement('div');
       body.className = 'cmd-global-body';
-      body.hidden = !expanded;
-      if (expanded){
+      try{ if (body.dataset) body.dataset.dk = ''; }catch(_){ }
+
+      const hasChecklist = !!(snap && snap.hasChecklistItems === true);
+      // Si hasChecklistItems=false => NO mostrar nada del checklist (ni espacio reservado).
+      body.hidden = !(expanded && hasChecklist);
+      if (expanded && hasChecklist){
+        try{ if (body.dataset) body.dataset.dk = __cmdSafeYMD(snap && snap.checklistDayKey) || ''; }catch(_){ }
         // Importante: NO calcular nada cuando está colapsado.
-        try{ renderGlobalChecklistForEvent(body, ev); }catch(_){ body.innerHTML = `<div class="cmd-muted">No disponible</div>`; }
+        try{ renderGlobalChecklistForEvent(body, ev, snap); }catch(_){ body.innerHTML = `<div class="cmd-muted">No disponible</div>`; }
       }
 
       card.appendChild(head);
       card.appendChild(body);
       list.appendChild(card);
+
+      // Si el snapshot llega después, el worker lo actualizará; si ya existe, asegurarlo aquí.
+      if (snap){
+        try{ __cmdUpdateGlobalCardUI(id, snap, ev); }catch(_){ }
+      }
     }catch(_e){
       // Un evento corrupto NO debe tumbar la vista GLOBAL.
       try{
@@ -3106,6 +4185,33 @@ async function computeCashV2Status(ev, dayKey){
   const eid = Number(ev.id);
   const dk = safeYMD(dayKey);
 
+  // Micro-cache (iPad/PWA): evitar scan repetido por evento.
+  // Validación rápida: 1 lectura por key (si tenemos opDayKey+sig), sin recorrer todo el store.
+  try{
+    const cacheSt = __cmdEnsureMap('__cashV2StatusCache');
+    const kSt = `cs|${eid}|${dk}`;
+    const hitSt = cacheSt.get(kSt);
+    const nowSt = Date.now();
+    if (hitSt && hitSt.v){
+      // Muy reciente => devolver sin tocar DB
+      if ((nowSt - Number(hitSt.t||0)) < 2500){
+        return hitSt.v;
+      }
+      // Validar contra el mismo opDayKey (si existe)
+      if (hitSt.opDayKey && hitSt.sig && db && hasStore(db,'cashV2')){
+        const key0 = __cmdCashV2Key(eid, String(hitSt.opDayKey||''));
+        if (key0){
+          const rec0 = await idbGet(db,'cashV2', key0);
+          const sigNow = __cmdCashSigFromRec(rec0);
+          if (sigNow && sigNow === String(hitSt.sig)){
+            try{ hitSt.t = nowSt; cacheSt.set(kSt, hitSt); }catch(_){ }
+            return hitSt.v;
+          }
+        }
+      }
+    }
+  }catch(_){ }
+
   // Cache por evento (POS): si existe
   const fxCached = readCashV2FxCached(eid);
 
@@ -3171,7 +4277,16 @@ async function computeCashV2Status(ev, dayKey){
 
   if (!rec){
     // Activo, pero aún no hay día operativo en cashV2
-    return { ok:true, enabled:true, isOpen:false, dayState:'SIN ACTIVIDAD', opDayKey:null, fx: fxEffective || null, fxMissing, fxKnown:true, status:null, fxSource, reason:'' };
+    const out = { ok:true, enabled:true, isOpen:false, dayState:'SIN ACTIVIDAD', opDayKey:null, fx: fxEffective || null, fxMissing, fxKnown:true, status:null, fxSource, reason:'' };
+    try{
+      const cacheSt = __cmdEnsureMap('__cashV2StatusCache');
+      const kSt = `cs|${eid}|${dk}`;
+      cacheSt.set(kSt, { t: Date.now(), v: out, opDayKey: null, sig: '' });
+      while (cacheSt.size > 140){
+        try{ cacheSt.delete(cacheSt.keys().next().value); }catch(_){ break; }
+      }
+    }catch(_){ }
+    return out;
   }
 
   const st = normStatus(rec.status);
@@ -3182,7 +4297,17 @@ async function computeCashV2Status(ev, dayKey){
   let opDayKey = safeYMD(rec.dayKey || '');
   if (!opDayKey){ opDayKey = safeYMD(dk); }
 
-  return { ok:true, enabled:true, isOpen, dayState, opDayKey, fx: fxEffective || null, fxMissing, fxKnown:true, status: st || null, fxSource, reason:'' };
+  const out = { ok:true, enabled:true, isOpen, dayState, opDayKey, fx: fxEffective || null, fxMissing, fxKnown:true, status: st || null, fxSource, reason:'' };
+  try{
+    const cacheSt = __cmdEnsureMap('__cashV2StatusCache');
+    const kSt = `cs|${eid}|${dk}`;
+    const sig = __cmdCashSigFromRec(rec);
+    cacheSt.set(kSt, { t: Date.now(), v: out, opDayKey: opDayKey || null, sig: sig || '' });
+    while (cacheSt.size > 140){
+      try{ cacheSt.delete(cacheSt.keys().next().value); }catch(_){ break; }
+    }
+  }catch(_){ }
+  return out;
 }
 
 
@@ -4102,6 +5227,9 @@ if (cv2.ok && cv2.enabled === false){
 
 // --- Init
 async function init(){
+  // Layout: panel global inferior (no tapar contenido)
+  bindGlobalDockSpace();
+
   // Header: hoy
   setText('cmdToday', state.today);
 
