@@ -108,6 +108,47 @@ function readInventorySafe(){
 // --- Semáforo (acordado)
 // LÍQUIDOS: rojo <=20% (o stock<=0), amarillo 20–35%, verde >35%
 // BOTELLAS: rojo <=10, amarillo 11–20, verde >20
+function computeInvRiskCountsLight(inv){
+  try{
+    const out = { ok:true, invTotal:0, invRed:0, invYellow:0 };
+
+    // Líquidos
+    const srcL = (inv && inv.liquids && typeof inv.liquids === 'object') ? inv.liquids : {};
+    const keysL = new Set([...(INV_LIQUIDS_META.map(x=> x.id)), ...Object.keys(srcL || {})]);
+    for (const id of keysL){
+      const row = (srcL && srcL[id]) ? srcL[id] : {};
+      const stock = invNum(row.stock);
+      const max = invNum(row.max);
+
+      if (stock <= 0){
+        out.invRed++; out.invTotal++;
+        continue;
+      }
+      if (max > 0){
+        const ratio = stock / max;
+        if (ratio <= 0.20){ out.invRed++; out.invTotal++; }
+        else if (ratio <= 0.35){ out.invYellow++; out.invTotal++; }
+      }
+      // max=0 => unknown: no inventar
+    }
+
+    // Botellas
+    const srcB = (inv && inv.bottles && typeof inv.bottles === 'object') ? inv.bottles : {};
+    const keysB = new Set([...(INV_BOTTLES_META.map(x=> x.id)), ...Object.keys(srcB || {})]);
+    for (const id of keysB){
+      const row = (srcB && srcB[id]) ? srcB[id] : {};
+      const stock = invNum(row.stock);
+
+      if (stock <= 10){ out.invRed++; out.invTotal++; }
+      else if (stock <= 20){ out.invYellow++; out.invTotal++; }
+    }
+
+    return out;
+  }catch(_){
+    return { ok:false, invTotal:null, invRed:0, invYellow:0 };
+  }
+}
+
 function computeLiquidsTraffic(inv){
   const src = (inv && inv.liquids && typeof inv.liquids === 'object') ? inv.liquids : {};
   const keys = new Set([...(INV_LIQUIDS_META.map(x=> x.id)), ...Object.keys(src || {})]);
@@ -436,18 +477,39 @@ function renderInvRiskBlock(liquidsRes, bottlesRes){
 function refreshInvRiskBlock(){
   if (!$('invRiskBlock')) return;
 
-  const inv = readInventorySafe();
-  if (!inv){
-    renderInvRiskBlock(null, null);
+  // FAIL-SAFE: si inventario está incompleto/corrupto, NO romper el dock ni el CdM.
+  try{
+    const inv = readInventorySafe();
+    if (!inv){
+      renderInvRiskBlock(null, null);
+      setInvRiskUpdatedAt(new Date());
+      return;
+    }
+
+    const liq = computeLiquidsTraffic(inv);
+    const bot = computeBottlesTraffic(inv);
+
+    renderInvRiskBlock(liq, bot);
     setInvRiskUpdatedAt(new Date());
-    return;
+
+    // Mantener el dock compacto coherente (solo conteos)
+    try{
+      const invRed = ((liq && liq.red) ? liq.red.length : 0) + ((bot && bot.red) ? bot.red.length : 0);
+      const invYellow = ((liq && liq.yellow) ? liq.yellow.length : 0) + ((bot && bot.yellow) ? bot.yellow.length : 0);
+      const invTotal = invRed + invYellow;
+      const prev = (dockUI && dockUI.lastCounts) ? dockUI.lastCounts : {};
+      renderDockCompactCounts({
+        orders: (typeof prev.orders === 'number') ? prev.orders : null,
+        reminders: (typeof prev.reminders === 'number') ? prev.reminders : null,
+        invTotal,
+        invRed,
+        invYellow,
+      });
+    }catch(_){ }
+  }catch(_){
+    try{ renderInvRiskBlock(null, null); }catch(__){ }
+    try{ setInvRiskUpdatedAt(new Date()); }catch(__){ }
   }
-
-  const liq = computeLiquidsTraffic(inv);
-  const bot = computeBottlesTraffic(inv);
-
-  renderInvRiskBlock(liq, bot);
-  setInvRiskUpdatedAt(new Date());
 }
 
 
@@ -476,6 +538,10 @@ function bindGlobalDockSpace(){
       try{ window.requestAnimationFrame(update); }catch(_){ update(); }
     };
 
+    // Exponer para toggles (sin depender de ResizeObserver)
+    bindGlobalDockSpace.__update = update;
+    bindGlobalDockSpace.__rafUpdate = rafUpdate;
+
     update();
     window.addEventListener('resize', rafUpdate, { passive:true });
     window.addEventListener('orientationchange', rafUpdate, { passive:true });
@@ -488,6 +554,134 @@ function bindGlobalDockSpace(){
       }
     }catch(_){ }
   }catch(_){ }
+}
+
+// --- Dock compacto / expandido (panel inferior)
+const dockUI = {
+  expanded: false,
+  __bound: false,
+  lastCounts: { orders:null, reminders:null, invTotal:null, invRed:0, invYellow:0 },
+  // Hardening/Perf: evitar renders repetidos y reentrancias en iPad/PWA
+  __refreshToken: 0,
+  __inflight: false,
+  __lastFullAt: 0,
+  __lastFullCounts: { orders:null, reminders:null, invTotal:null, invRed:0, invYellow:0 },
+  __lastFullFlags: '',
+};
+
+function dockCountsEq(a, b){
+  // Comparación mínima para gating de render (iPad/PWA). Null/undefined tratados como iguales.
+  try{
+    const aa = a || {};
+    const bb = b || {};
+    const norm = (v)=> (v == null ? null : Number(v));
+    return (
+      norm(aa.orders) === norm(bb.orders) &&
+      norm(aa.reminders) === norm(bb.reminders) &&
+      norm(aa.invTotal) === norm(bb.invTotal) &&
+      norm(aa.invRed) === norm(bb.invRed) &&
+      norm(aa.invYellow) === norm(bb.invYellow)
+    );
+  }catch(_){
+    return false;
+  }
+}
+
+function isDockExpanded(){
+  return !!(dockUI && dockUI.expanded);
+}
+
+function applyDockState(){
+  const dock = $('globalDock');
+  if (!dock) return;
+  const expanded = isDockExpanded();
+
+  dock.classList.toggle('cmd-dock-expanded', expanded);
+  dock.classList.toggle('cmd-dock-collapsed', !expanded);
+
+  const full = $('globalDockFull');
+  if (full) full.hidden = !expanded;
+
+  const chev = $('globalDockChevron');
+  if (chev){
+    chev.textContent = expanded ? '▲' : '▼';
+    chev.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    chev.setAttribute('aria-label', expanded ? 'Colapsar panel inferior' : 'Expandir panel inferior');
+  }
+
+  try{
+    if (bindGlobalDockSpace.__rafUpdate) bindGlobalDockSpace.__rafUpdate();
+  }catch(_){ }
+}
+
+function setDockExpanded(v){
+  dockUI.expanded = !!v;
+  applyDockState();
+}
+
+function bindDockChevron(){
+  if (dockUI.__bound) return;
+  dockUI.__bound = true;
+  const btn = $('globalDockChevron');
+  if (!btn) return;
+
+  const onToggle = async ()=>{
+    try{
+      const next = !isDockExpanded();
+      setDockExpanded(next);
+      if (next){
+        // Al expandir: render completo (sin esperar un refresh global)
+        try{ await refreshDockOnly(); }catch(_){ }
+      }
+    }catch(_){ }
+  };
+
+  btn.addEventListener('click', onToggle);
+}
+
+function setDockChipHidden(id, hidden){
+  const el = $(id);
+  if (!el) return;
+  el.hidden = !!hidden;
+}
+
+function setDockText(id, text){
+  const el = $(id);
+  if (!el) return;
+  el.textContent = (text == null || text === '') ? '—' : String(text);
+}
+
+function renderDockCompactCounts(counts){
+  counts = counts || {};
+  const ordersN = (typeof counts.orders === 'number') ? counts.orders : null;
+  const remN = (typeof counts.reminders === 'number') ? counts.reminders : null;
+  const invTotal = (typeof counts.invTotal === 'number') ? counts.invTotal : null;
+  const invRed = (typeof counts.invRed === 'number') ? counts.invRed : 0;
+  const invYellow = (typeof counts.invYellow === 'number') ? counts.invYellow : 0;
+
+  try{
+    dockUI.lastCounts = { orders: ordersN, reminders: remN, invTotal, invRed, invYellow };
+  }catch(_){ }
+
+  setDockText('dockOrdersN', (ordersN == null) ? '—' : String(ordersN));
+  setDockText('dockRemindersN', (remN == null) ? '—' : String(remN));
+  setDockText('dockInvN', (invTotal == null) ? '—' : String(invTotal));
+
+  const splitEl = $('dockInvSplit');
+  if (splitEl){
+    const showSplit = (invTotal != null) && (invTotal > 0) && ((invRed > 0) || (invYellow > 0));
+    splitEl.hidden = !showSplit;
+    if (showSplit) splitEl.textContent = ` (R${invRed}/A${invYellow})`;
+    else splitEl.textContent = '';
+  }
+
+  const allNumbers = (ordersN != null) && (remN != null) && (invTotal != null);
+  const allZero = allNumbers && (ordersN === 0) && (remN === 0) && (invTotal === 0);
+
+  setDockChipHidden('dockAllGood', !allZero);
+  setDockChipHidden('dockOrdersChip', allZero);
+  setDockChipHidden('dockRemindersChip', allZero);
+  setDockChipHidden('dockInvChip', allZero);
 }
 
 function fmtHHMM(dt){
@@ -521,8 +715,8 @@ async function probeCalcRoute(){
   try{
     const ok = await checkRouteExists(CALC_ROUTE);
     calcRouteAvailable = !!ok;
-    // Rerender para mostrar/ocultar acción "Fabricar"
-    refreshInvRiskBlock();
+    // Rerender para mostrar/ocultar acción "Fabricar" (solo si el panel está expandido)
+    if (isDockExpanded()) refreshInvRiskBlock();
   }catch(_){ }
 }
 
@@ -1206,6 +1400,18 @@ function renderRemindersBlock(payload){
   // Pendientes: siempre basado en done=false (en TODO el rango)
   const pendingCount = rows.filter(r => !(r && r.done)).length;
   if (pendingEl) pendingEl.textContent = String(pendingCount);
+
+  // Reflejar el conteo también en el dock compacto (siempre visible)
+  try{
+    const prev = (dockUI && dockUI.lastCounts) ? dockUI.lastCounts : {};
+    renderDockCompactCounts({
+      orders: (typeof prev.orders === 'number') ? prev.orders : null,
+      reminders: pendingCount,
+      invTotal: (typeof prev.invTotal === 'number') ? prev.invTotal : null,
+      invRed: (typeof prev.invRed === 'number') ? prev.invRed : 0,
+      invYellow: (typeof prev.invYellow === 'number') ? prev.invYellow : 0,
+    });
+  }catch(_){ }
 
   if (!ok){
     if (emptyEl) emptyEl.hidden = false;
@@ -5097,21 +5303,82 @@ async function setFocusEvent(eventId, opts){
 
 // --- Main refresh
 async function refreshAll(){
+  // FAIL-SAFE: un evento/data corrupta NO debe romper GLOBAL ni el dock.
+  try{
   clearMetricsToDash();
   clearOrdersToDash();
-
-  // Recordatorios (solo lectura): próximos 7 días (hoy + 6) — NO escanear eventos
-  await refreshRemindersNext7();
 
   // Recomendaciones (cache Analítica)
   renderRecos();
 
-  // Inventario en riesgo (localStorage, solo lectura)
-  refreshInvRiskBlock();
+  const dockExpanded = isDockExpanded();
 
-  // Pedidos (operativo: hoy + mañana)
+  // Pedidos (operativo: hoy + mañana) — siempre computar (alertas arriba)
   const ordersCtx = computeOrdersOperative();
-  const ordersOut = renderOrdersOperative(ordersCtx);
+
+  // Recordatorios (solo lectura): próximos 7 días (hoy + 6)
+  let remNext7 = null;
+  try{
+    const start = state && state.today ? String(state.today) : todayYMD();
+    const dayKeys = [];
+    for (let i=0; i<7; i++) dayKeys.push(ymdAddDays(start, i));
+    remNext7 = await readRemindersIndexForRange(state.db, dayKeys);
+  }catch(_){
+    remNext7 = { ok:false, rows:[], reason:'No disponible', dayKeys:[] };
+  }
+
+  // Inventario en riesgo (compacto: solo conteos)
+  let invCounts = null;
+  try{
+    const inv = readInventorySafe();
+    invCounts = inv ? computeInvRiskCountsLight(inv) : { ok:false, invTotal:null, invRed:0, invYellow:0 };
+  }catch(_){
+    invCounts = { ok:false, invTotal:null, invRed:0, invYellow:0 };
+  }
+
+  const remPending = (remNext7 && remNext7.ok && Array.isArray(remNext7.rows)) ? remNext7.rows.filter(x=> !(x && x.done)).length : null;
+  const ordersPending = (ordersCtx && typeof ordersCtx.pendingCount === 'number') ? ordersCtx.pendingCount : null;
+  const invTotal = (invCounts && invCounts.ok && typeof invCounts.invTotal === 'number') ? invCounts.invTotal : null;
+  renderDockCompactCounts({
+    orders: ordersPending,
+    reminders: remPending,
+    invTotal,
+    invRed: invCounts ? invCounts.invRed : 0,
+    invYellow: invCounts ? invCounts.invYellow : 0,
+  });
+
+  // Render completo SOLO en modo expandido (performance iPad/PWA)
+  let ordersOut = { alerts:[], unavailable:[] };
+  if (dockExpanded){
+    const flagsNow = `d${remindersGetShowDone() ? 1 : 0}|l${invViewState && invViewState.liquidsExpanded ? 1 : 0}|b${invViewState && invViewState.bottlesExpanded ? 1 : 0}`;
+    const countsNow = { orders: ordersPending, reminders: remPending, invTotal, invRed: invCounts ? invCounts.invRed : 0, invYellow: invCounts ? invCounts.invYellow : 0 };
+    const canSkipFull = !!(dockUI && dockUI.__lastFullAt && ((Date.now() - Number(dockUI.__lastFullAt||0)) < 6000)
+      && dockCountsEq(dockUI.__lastFullCounts, countsNow)
+      && (dockUI.__lastFullFlags === flagsNow));
+
+    if (!canSkipFull){
+      try{ renderRemindersBlock(remNext7); }catch(_){ try{ renderRemindersBlock({ ok:false, rows:[], reason:'No disponible', dayKeys:[] }); }catch(__){ } }
+      try{ refreshInvRiskBlock(); }catch(_){ try{ renderInvRiskBlock(null, null); }catch(__){ } }
+      try{ ordersOut = renderOrdersOperative(ordersCtx); }catch(_){ ordersOut = { alerts: (ordersCtx && Array.isArray(ordersCtx.alerts)) ? ordersCtx.alerts : [], unavailable: (ordersCtx && Array.isArray(ordersCtx.unavailable)) ? ordersCtx.unavailable : [] }; }
+
+      try{
+        dockUI.__lastFullAt = Date.now();
+        dockUI.__lastFullCounts = { orders: ordersPending, reminders: remPending, invTotal, invRed: invCounts ? invCounts.invRed : 0, invYellow: invCounts ? invCounts.invYellow : 0 };
+        dockUI.__lastFullFlags = flagsNow;
+      }catch(_){ }
+    } else {
+      // Para alertas: no depende del DOM del dock
+      ordersOut = {
+        alerts: (ordersCtx && Array.isArray(ordersCtx.alerts)) ? ordersCtx.alerts : [],
+        unavailable: (ordersCtx && Array.isArray(ordersCtx.unavailable)) ? ordersCtx.unavailable : [],
+      };
+    }
+  } else {
+    ordersOut = {
+      alerts: (ordersCtx && Array.isArray(ordersCtx.alerts)) ? ordersCtx.alerts : [],
+      unavailable: (ordersCtx && Array.isArray(ordersCtx.unavailable)) ? ordersCtx.unavailable : [],
+    };
+  }
 
   const ev = state.focusEvent;
 
@@ -5223,12 +5490,97 @@ if (cv2.ok && cv2.enabled === false){
     .concat((ordersOut && Array.isArray(ordersOut.alerts)) ? ordersOut.alerts : [])
     .concat(Array.isArray(al.alerts) ? al.alerts : []));
   renderAlerts(mergedAlerts.length ? mergedAlerts : null);
+  }catch(_){
+  }finally{
+    // Si estamos en modo GLOBAL, nunca dejar la vista vacía por una excepción.
+    try{ if (state && state.focusMode === CMD_MODE_GLOBAL) renderGlobalActivesView(); }catch(__){ }
+  }
+}
+
+// Refresh SOLO del panel inferior (compacto +, si aplica, panel expandido)
+async function refreshDockOnly(){
+  // Hardening/Perf: token para cancelar renders si el usuario colapsa/expande rápido.
+  const myToken = (dockUI ? (++dockUI.__refreshToken) : Date.now());
+  try{ if (dockUI) dockUI.__inflight = true; }catch(_){ }
+  try{
+    const ordersCtx = computeOrdersOperative();
+
+    // Recordatorios próximos 7 días: conteo (y render si expandido)
+    let remNext7 = null;
+    try{
+      const start = state && state.today ? String(state.today) : todayYMD();
+      const dayKeys = [];
+      for (let i=0; i<7; i++) dayKeys.push(ymdAddDays(start, i));
+      remNext7 = await readRemindersIndexForRange(state.db, dayKeys);
+      if (remNext7 && remNext7.ok && Array.isArray(remNext7.rows) && remNext7.rows.length > SAFE_SCAN_LIMIT){
+        remNext7 = { ok:false, rows:[], reason:'No disponible', dayKeys: Array.isArray(remNext7.dayKeys) ? remNext7.dayKeys : [] };
+      }
+    }catch(_){
+      remNext7 = { ok:false, rows:[], reason:'No disponible', dayKeys:[] };
+    }
+
+    // Inventario en riesgo: conteo liviano
+    let invCounts = null;
+    try{
+      const inv = readInventorySafe();
+      invCounts = inv ? computeInvRiskCountsLight(inv) : { ok:false, invTotal:null, invRed:0, invYellow:0 };
+    }catch(_){
+      invCounts = { ok:false, invTotal:null, invRed:0, invYellow:0 };
+    }
+
+    const remPending = (remNext7 && remNext7.ok && Array.isArray(remNext7.rows)) ? remNext7.rows.filter(x=> !(x && x.done)).length : null;
+    const ordersPending = (ordersCtx && typeof ordersCtx.pendingCount === 'number') ? ordersCtx.pendingCount : null;
+    const invTotal = (invCounts && invCounts.ok && typeof invCounts.invTotal === 'number') ? invCounts.invTotal : null;
+
+    const countsNow = { orders: ordersPending, reminders: remPending, invTotal, invRed: invCounts ? invCounts.invRed : 0, invYellow: invCounts ? invCounts.invYellow : 0 };
+    renderDockCompactCounts(countsNow);
+
+    // Colapsado: SOLO conteos (sin render pesado)
+    if (!isDockExpanded()) return;
+
+    // Si el usuario cambió el estado mientras cargábamos, cancelar
+    try{ if (dockUI && dockUI.__refreshToken !== myToken) return; }catch(_){ }
+    if (!isDockExpanded()) return;
+
+    const flagsNow = `d${remindersGetShowDone() ? 1 : 0}|l${invViewState && invViewState.liquidsExpanded ? 1 : 0}|b${invViewState && invViewState.bottlesExpanded ? 1 : 0}`;
+    const canSkipFull = !!(dockUI && dockUI.__lastFullAt && ((Date.now() - Number(dockUI.__lastFullAt||0)) < 6000)
+      && dockCountsEq(dockUI.__lastFullCounts, countsNow)
+      && (dockUI.__lastFullFlags === flagsNow));
+
+    if (canSkipFull) return;
+
+    // Render por sección (fail-safe): un fallo NO rompe el resto.
+    try{ renderRemindersBlock(remNext7); }catch(_){ try{ renderRemindersBlock({ ok:false, rows:[], reason:'No disponible', dayKeys:[] }); }catch(__){ } }
+    try{ if (dockUI && dockUI.__refreshToken !== myToken) return; }catch(_){ }
+    if (!isDockExpanded()) return;
+
+    try{ refreshInvRiskBlock(); }catch(_){ try{ renderInvRiskBlock(null, null); }catch(__){ } }
+    try{ if (dockUI && dockUI.__refreshToken !== myToken) return; }catch(_){ }
+    if (!isDockExpanded()) return;
+
+    try{ renderOrdersOperative(ordersCtx); }catch(_){ try{ renderOrdersOperative({ ok:false, reason:'No disponible', unavailable: [{ key:'orders', label:'Pedidos', reason:'No disponible' }], alerts:[] }); }catch(__){ } }
+
+    try{
+      if (dockUI){
+        dockUI.__lastFullAt = Date.now();
+        dockUI.__lastFullCounts = countsNow;
+        dockUI.__lastFullFlags = flagsNow;
+      }
+    }catch(_){ }
+  }catch(_){
+  }finally{
+    try{ if (dockUI && dockUI.__refreshToken === myToken) dockUI.__inflight = false; }catch(_){ }
+  }
 }
 
 // --- Init
 async function init(){
   // Layout: panel global inferior (no tapar contenido)
   bindGlobalDockSpace();
+
+  // Panel inferior: dock compacto por defecto + toggle chevron
+  bindDockChevron();
+  setDockExpanded(false);
 
   // Header: hoy
   setText('cmdToday', state.today);
@@ -5247,29 +5599,29 @@ async function init(){
     });
   }
 
-  // Inventario en riesgo (no depende de POS/IndexedDB)
-  refreshInvRiskBlock();
+  // Dock compacto: pintar conteos lo antes posible (sin render pesado)
+  try{ refreshDockOnly(); }catch(_){ }
 
   // Inventario: toggles (se mantienen abiertos hasta que el usuario los cierre)
   const tL = $('invLiquidsToggle');
   if (tL){
     tL.addEventListener('click', ()=>{
       invViewState.liquidsExpanded = !invViewState.liquidsExpanded;
-      refreshInvRiskBlock();
+      if (isDockExpanded()) refreshInvRiskBlock();
     });
   }
   const tB = $('invBottlesToggle');
   if (tB){
     tB.addEventListener('click', ()=>{
       invViewState.bottlesExpanded = !invViewState.bottlesExpanded;
-      refreshInvRiskBlock();
+      if (isDockExpanded()) refreshInvRiskBlock();
     });
   }
 
   // Inventario: recalcular (sin recargar página)
   const recalcBtn = $('invRiskRecalcBtn');
   if (recalcBtn){
-    recalcBtn.addEventListener('click', ()=>{ refreshInvRiskBlock(); });
+    recalcBtn.addEventListener('click', ()=>{ if (isDockExpanded()) refreshInvRiskBlock(); });
   }
 
   // Detectar si existe Calculadora (si no existe, ocultar "Fabricar")

@@ -180,7 +180,22 @@
   </main>
 
   <!-- PANEL GLOBAL INFERIOR (siempre visible): Pedidos / Recordatorios / Inventario en Riesgo -->
-  <div class="cmd-global-dock" id="globalDock" aria-label="Panel global inferior">
+  <div class="cmd-global-dock cmd-dock-collapsed" id="globalDock" aria-label="Panel global inferior">
+    <!-- DOCK COMPACTO (default): solo contadores + chevron -->
+    <div class="cmd-global-dock-compact" id="globalDockCompact" aria-label="Dock compacto">
+      <div class="cmd-global-dock-compact-inner">
+        <div class="cmd-dock-mini" aria-label="Resumen del panel inferior">
+          <span class="cmd-chip cmd-chip-neutral" id="dockAllGood" hidden>Al día ✅</span>
+          <span class="cmd-chip cmd-chip-neutral" id="dockOrdersChip">Pedidos: <b id="dockOrdersN">—</b></span>
+          <span class="cmd-chip cmd-chip-neutral" id="dockRemindersChip">Recordatorios: <b id="dockRemindersN">—</b></span>
+          <span class="cmd-chip cmd-chip-neutral" id="dockInvChip">Inventario en riesgo: <b id="dockInvN">—</b><span class="cmd-dock-inv-split" id="dockInvSplit" hidden></span></span>
+        </div>
+        <button class="cmd-dock-chevron" id="globalDockChevron" type="button" aria-label="Expandir panel inferior" aria-expanded="false">▼</button>
+      </div>
+    </div>
+
+    <!-- PANEL EXPANDIDO: la info completa actual (con scroll interno) -->
+    <div class="cmd-global-dock-full" id="globalDockFull" hidden>
     <div class="cmd-global-dock-inner">
       <div class="cmd-global-dock-grid">
         <div class="cmd-global-dock-col" aria-label="Pedidos">
@@ -276,6 +291,7 @@
     </section>
         </div>
       </div>
+    </div>
     </div>
   </div>
 

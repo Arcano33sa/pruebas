@@ -1187,10 +1187,72 @@ button.cmd-pill{ cursor: pointer; }
   box-shadow: 0 -18px 40px rgba(0,0,0,0.55);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
+  display:flex;
+  flex-direction: column;
+  overflow: hidden;
+  max-height: none; /* collapsed default */
+}
+
+/* Expandido: limitar altura total para no tapar todo el tablero */
+.cmd-global-dock.cmd-dock-expanded{
+  max-height: min(60vh, 660px);
+}
+
+.cmd-global-dock-compact{
+  flex: 0 0 auto;
+}
+
+.cmd-global-dock-compact-inner{
+  max-width: 1100px;
+  margin: 0 auto;
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px 10px 14px;
+}
+
+/* En compacto, respetar safe-area inferior */
+.cmd-global-dock.cmd-dock-collapsed .cmd-global-dock-compact-inner{
+  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+}
+
+.cmd-dock-mini{
+  display:flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items:center;
+  min-width: 0;
+}
+
+.cmd-dock-inv-split{
+  margin-left: 6px;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.cmd-dock-chevron{
+  border: 1px solid rgba(221,191,100,0.22);
+  background: rgba(0,0,0,0.20);
+  color: var(--text);
+  width: 46px;
+  height: 46px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex: 0 0 auto;
+  font-size: 18px;
+  line-height: 1;
+}
+.cmd-dock-chevron:active{ transform: scale(0.98); }
+
+.cmd-global-dock-full{
+  flex: 1 1 auto;
   overflow: auto;
-  max-height: min(62vh, 660px);
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+  border-top: 1px solid rgba(221,191,100,0.10);
 }
 
 .cmd-global-dock-inner{
@@ -1233,8 +1295,8 @@ button.cmd-pill{ cursor: pointer; }
   .cmd-global-dock-grid{
     grid-template-columns: 1fr;
   }
-  .cmd-global-dock{
-    max-height: min(70vh, 760px);
+  .cmd-global-dock.cmd-dock-expanded{
+    max-height: min(60vh, 660px);
   }
 }
 
