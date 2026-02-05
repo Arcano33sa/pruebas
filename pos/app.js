@@ -8830,8 +8830,56 @@ function bindTabbarOncePOS(){
   if (bar.dataset.bound === '1') return;
   bar.dataset.bound = '1';
 
-  // Evitar doble-disparo touch -> click (iOS Safari/PWA)
-  let lastTouchTs = 0;
+  // Evitar doble-disparo (pointerup/touchend -> click) y doble setTab por mismo destino.
+  // iPad moderno reporta PointerEvent, pero a veces el primer toque no llega como pointerup;
+  // por eso siempre dejamos click como fallback y deduplicamos.
+  let lastRealTapTs = 0;  // actualizado por pointerup/touchend
+  let lastRealTapDest = '';
+  const CLICK_DEDUPE_MS = 700;
+  const NAV_DEDUPE_MS   = 650;
+  const navLockUntil = Object.create(null); // dest -> ts límite
+  let navSeq = 0; // monotónico: último request aceptado
+
+  // iPad: durante scroll/inercia o con teclado abierto, el primer toque puede
+  // solo frenar scroll o cerrar teclado y NO disparar click/pointerup.
+  let lastScrollTs = 0;
+  const SCROLL_RECENT_MS = 260;
+  const microtask = (fn)=>{
+    try{ if (typeof queueMicrotask === 'function') return queueMicrotask(fn); }catch(_){ }
+    Promise.resolve().then(fn);
+  };
+  const isEditable = (el)=>{
+    try{
+      if (!el) return false;
+      if (el.isContentEditable) return true;
+      const t = String(el.tagName||'').toUpperCase();
+      return t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT';
+    }catch(_){ return false; }
+  };
+  // Scroll listener global (evita múltiples binds si tabbar se re-renderiza)
+  try{
+    const root = document && document.documentElement;
+    if (root && root.dataset && root.dataset.a33TabbarScrollBound !== '1'){
+      root.dataset.a33TabbarScrollBound = '1';
+      try{ document.addEventListener('scroll', ()=>{ lastScrollTs = Date.now(); }, { capture:true, passive:true }); }
+      catch(_){ try{ document.addEventListener('scroll', ()=>{ lastScrollTs = Date.now(); }, true); }catch(__){} }
+    }
+  }catch(_){ }
+
+  const acceptNav = (dest, nowTs)=>{
+    try{
+      const until = navLockUntil[dest] || 0;
+      if (until && nowTs < until) return 0;
+      navLockUntil[dest] = nowTs + NAV_DEDUPE_MS;
+      navSeq = (navSeq + 1);
+      if (navSeq > 2147483647) navSeq = 1; // evita wrap raro
+      return navSeq;
+    }catch(_){
+      navSeq = (navSeq + 1);
+      if (navSeq > 2147483647) navSeq = 1;
+      return navSeq;
+    }
+  };
 
   const onTap = async (e)=>{
     // Solo botones con data-tab dentro de la barra
@@ -8841,33 +8889,95 @@ function bindTabbarOncePOS(){
     // Ignorar clicks no primarios
     if (e && e.type === 'click' && typeof e.button === 'number' && e.button !== 0) return;
 
+    // Pointer: ignorar no-primario / botones no principales (mouse)
+    if (e && e.type === 'pointerup'){
+      try{ if (typeof e.isPrimary === 'boolean' && !e.isPrimary) return; }catch(_){ }
+      try{
+        if (e.pointerType === 'mouse' && typeof e.button === 'number' && e.button !== 0) return;
+      }catch(_){ }
+    }
+
     const dest = String(btn.dataset.tab || '').trim();
     if (!dest) return;
 
-    // Dedup: si viene de touchend, el click siguiente se ignora
-    if (e && e.type === 'touchend') lastTouchTs = Date.now();
-    if (e && e.type === 'click' && lastTouchTs && (Date.now() - lastTouchTs) < 650) return;
+    const nowTs = Date.now();
+
+    // Dedup: ignorar click inmediato después de pointerup/touchend *del mismo destino*.
+    // (Si el pointerup se perdió en un tap distinto, el click debe poder entrar.)
+    if (e && (e.type === 'pointerup' || e.type === 'touchend')){ lastRealTapTs = nowTs; lastRealTapDest = dest; }
+    if (e && e.type === 'click' && lastRealTapTs && (nowTs - lastRealTapTs) < CLICK_DEDUPE_MS && lastRealTapDest === dest) return;
 
     // Fallback seguro: si no existe el tab destino, no-op limpio
     const target = document.getElementById('tab-' + dest);
     if (!target) return;
 
+    // Guardia anti duplicación por (destino + ventana de tiempo) + evita carreras async:
+    // sellamos el request ANTES de awaits, y descartamos requests viejos si llega uno nuevo.
+    const mySeq = acceptNav(dest, nowTs);
+    if (!mySeq) return;
+
     try{ if (e && e.preventDefault) e.preventDefault(); }catch(_){ }
     try{
       try{ await flushChecklistTextQueuePOS({ reason:'tabnav' }); }catch(_e){}
+      if (mySeq !== navSeq) return; // request viejo: ya hubo otro tap
       setTab(dest);
     }catch(err){ console.error('TABNAV error', err); }
+  };
+
+  const onDown = (e)=>{
+    // Solo botones con data-tab dentro de la barra
+    const btn = e && e.target ? e.target.closest('button[data-tab]') : null;
+    if (!btn || !bar.contains(btn)) return;
+
+    // Pointer: solo touch/pen (evita efectos raros en desktop)
+    try{
+      if (e && e.type === 'pointerdown' && e.pointerType && e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
+    }catch(_){ }
+
+    const dest = String(btn.dataset.tab || '').trim();
+    if (!dest) return;
+
+    const nowTs = Date.now();
+    const ae = document.activeElement;
+    const hadFocus = isEditable(ae);
+    const scrolledRecently = lastScrollTs && (nowTs - lastScrollTs) < SCROLL_RECENT_MS;
+    if (!hadFocus && !scrolledRecently) return;
+
+    // Blur best-effort (cierra teclado)
+    if (hadFocus){
+      try{ ae && ae.blur && ae.blur(); }catch(_){ }
+      try{ if (document.activeElement && isEditable(document.activeElement)) document.activeElement.blur(); }catch(_){ }
+    }
+
+    // Navegar en el mismo gesto (o microtask) usando el MISMO dedupe global
+    microtask(()=>{
+      try{
+        onTap({
+          target: btn,
+          type: 'pointerdown',
+          preventDefault: ()=>{ try{ e && e.preventDefault && e.preventDefault(); }catch(_){ } }
+        });
+      }catch(_){ }
+    });
   };
 
   // Pointer Events cuando existan; fallback a touch/click
   const hasPointer = (typeof window !== 'undefined' && 'PointerEvent' in window);
   if (hasPointer) {
+    bar.addEventListener('pointerdown', onDown, { passive:false });
+    // Fallback extra: touchstart también (dedupe evita doble)
+    bar.addEventListener('touchstart', onDown, { passive:false });
+
     bar.addEventListener('pointerup', onTap);
+    // Fallback click incluso con PointerEvent (iPad/Safari/PWA)
+    bar.addEventListener('click', onTap);
   } else {
+    bar.addEventListener('touchstart', onDown, { passive:false });
     bar.addEventListener('touchend', onTap, { passive:false });
     bar.addEventListener('click', onTap);
   }
 }
+
 
 function setTab(name){
   // Canonical tab names (Etapa 12B): "venta" es la única verdad.
