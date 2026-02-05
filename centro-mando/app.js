@@ -13,6 +13,11 @@
 // --- Constantes (descubiertas, no adivinadas)
 const POS_DB_NAME = 'a33-pos';
 const LS_FOCUS_KEY = 'a33_cmd_focusEventId';
+const LS_FOCUS_MODE_KEY = 'a33_cmd_focusMode';
+const CMD_MODE_EVENT = 'EVENTO';
+const CMD_MODE_GLOBAL = 'GLOBAL';
+const CMD_GLOBAL_LABEL = 'GLOBAL (Activos)';
+const CMD_GLOBAL_VALUE = '__GLOBAL_ACTIVOS__';
 const ORDERS_LS_KEY = 'arcano33_pedidos';
 const ORDERS_ROUTE = '../pedidos/index.html';
 const SAFE_SCAN_LIMIT = 4000; // seguridad: evitar loops gigantes
@@ -1658,25 +1663,113 @@ function hasChecklistEvidenceA33(ev, dayKey){
 
 
 
+
+function __a33TsAny(v){
+  try{
+    if (v == null) return 0;
+    if (typeof v === 'number' && isFinite(v)) return v > 0 ? v : 0;
+    if (typeof v === 'string'){
+      const s = v.trim();
+      if (!s) return 0;
+      const n = Number(s);
+      if (isFinite(n) && n > 0) return n;
+      const t = Date.parse(s);
+      if (isFinite(t)) return t;
+    }
+  }catch(_){ }
+  return 0;
+}
+
+function getChecklistStampA33(ev, dayKey){
+  const out = { ts: 0, sig: '' };
+  try{
+    const dk = String(dayKey || '').trim();
+    if (!dk || !ev || typeof ev !== 'object') return out;
+
+    let ts = 0;
+    ts = Math.max(ts, __a33TsAny(ev.updatedAt ?? ev.lastUpdatedAt ?? ev.lastModifiedAt ?? ev.modifiedAt));
+
+    const tpl = (ev.checklistTemplate && typeof ev.checklistTemplate === 'object') ? ev.checklistTemplate : null;
+    if (tpl){
+      ts = Math.max(ts, __a33TsAny(tpl.updatedAt ?? tpl.lastUpdatedAt ?? tpl.lastModifiedAt ?? tpl.modifiedAt));
+    }
+
+    const daysObj = (ev.days && typeof ev.days === 'object' && !Array.isArray(ev.days)) ? ev.days : null;
+    const day = (daysObj && dk) ? daysObj[dk] : null;
+    if (day && typeof day === 'object'){
+      ts = Math.max(ts, __a33TsAny(day.updatedAt ?? day.lastUpdatedAt ?? day.lastModifiedAt ?? day.modifiedAt));
+      ts = Math.max(ts, __a33TsAny(day.checklistUpdatedAt ?? day.checklistSavedAt ?? day.savedAt));
+
+      const st = (day.checklistState && typeof day.checklistState === 'object') ? day.checklistState : null;
+      if (st){
+        ts = Math.max(ts, __a33TsAny(st.updatedAt ?? st.lastUpdatedAt ?? st.lastModifiedAt ?? st.modifiedAt ?? st.savedAt));
+      }
+    }
+
+    const len = (x)=> Array.isArray(x) ? x.length : 0;
+    const keysLen = (o)=> (o && typeof o === 'object' && !Array.isArray(o)) ? Object.keys(o).length : 0;
+
+    const parts = [];
+    if (tpl){
+      const tplN = (
+        len(tpl.pre) + len(tpl.preEvento) + len(tpl.pre_evento) + len(tpl.preEventoItems) + len(tpl.preItems) + len(tpl.preList) + len(tpl.prelist) +
+        len(tpl.evento) + len(tpl.event) + len(tpl.eventoItems) + len(tpl.eventItems) + len(tpl.eventList) +
+        len(tpl.cierre) + len(tpl.close) + len(tpl.cierreItems) + len(tpl.closeItems) + len(tpl.post) + len(tpl.postEvento) + len(tpl.post_evento) +
+        len(tpl.items) + len(tpl.list) + len(tpl.todos) + len(tpl.tasks) + len(tpl.checklist)
+      );
+      parts.push(String(tplN));
+    } else {
+      parts.push('0');
+    }
+
+    if (day && typeof day === 'object'){
+      const st = (day.checklistState && typeof day.checklistState === 'object') ? day.checklistState : null;
+      const checkedN = (st && Array.isArray(st.checkedIds)) ? st.checkedIds.length : 0;
+
+      const legacyN = len(day.checklistItems) + len(day.items) + len(day.checklist) + (st ? (len(st.items) + len(st.list) + len(st.todos) + len(st.pending)) : 0);
+
+      const txtN = Math.max(
+        keysLen(day.checklistTextById), keysLen(day.checklistTexts), keysLen(day.checklistTextMap),
+        (st ? Math.max(keysLen(st.textById), keysLen(st.texts), keysLen(st.overrides), keysLen(st.draft)) : 0)
+      );
+
+      parts.push(String(checkedN));
+      parts.push(String(legacyN));
+      parts.push(String(txtN));
+    } else {
+      parts.push('0'); parts.push('0'); parts.push('0');
+    }
+
+    out.ts = ts || 0;
+    out.sig = parts.join('.');
+  }catch(_){ }
+  return out;
+}
+
 function buildChecklistPhasesData(ev, dayKey, opts){
   const limit = (opts && typeof opts.limit === 'number' && isFinite(opts.limit)) ? Math.max(1, Math.floor(opts.limit)) : 3;
   const mk = ()=>({ done:0, total:0, pendingTexts:[], pendingCount:0, moreCount:0 });
   const phases = { pre: mk(), event: mk(), close: mk() };
 
-  // Cache corto (evita doble cálculo en sync/refresh). TTL ~2.5s.
+  // Micro-cache (iPad/PWA): clave por (eventId, dayKey, updatedAt si existe).
+  let __cacheKey = '';
   try{
     if (typeof state === 'object' && state){
       if (!state.__chkPhaseCache || typeof state.__chkPhaseCache.get !== 'function') state.__chkPhaseCache = new Map();
       const dk0 = String(dayKey || '').trim();
       const id0 = (ev && ev.id != null) ? String(ev.id) : '0';
-      const ck = `ph|${id0}|${dk0}|${limit}`;
-      const hit = state.__chkPhaseCache.get(ck);
+      const stp = getChecklistStampA33(ev, dk0);
+      const ts = Number((stp && stp.ts) || 0) || 0;
+      const sig = String((stp && stp.sig) || '');
+      __cacheKey = `ph|${id0}|${dk0}|${limit}|${ts}|${sig}`;
+      const hit = state.__chkPhaseCache.get(__cacheKey);
       const now = Date.now();
-      if (hit && hit.v && (now - (hit.t||0)) < 2500){
+      const ttl = ts ? (10 * 60 * 1000) : 3500; // 10 min si hay updatedAt, si no: corto
+      if (hit && hit.v && (now - (hit.t||0)) < ttl){
         return hit.v;
       }
     }
-  }catch(_){ }
+  }catch(_){ __cacheKey = ''; }
 
   const res = { ok:true, phases, reason:'', limit };
 
@@ -1812,7 +1905,6 @@ function buildChecklistPhasesData(ev, dayKey, opts){
   }catch(err){
     res.ok = false;
     res.reason = 'No disponible';
-    try{ console.warn('Checklist phases: error', err); }catch(_){ }
   }
 
   // Guardar cache (best-effort)
@@ -1820,10 +1912,13 @@ function buildChecklistPhasesData(ev, dayKey, opts){
     if (typeof state === 'object' && state && state.__chkPhaseCache && typeof state.__chkPhaseCache.set === 'function'){
       const dk0 = String(dayKey || '').trim();
       const id0 = (ev && ev.id != null) ? String(ev.id) : '0';
-      const ck = `ph|${id0}|${dk0}|${limit}`;
+      const stp0 = getChecklistStampA33(ev, dk0);
+      const ts0 = Number((stp0 && stp0.ts) || 0) || 0;
+      const sig0 = String((stp0 && stp0.sig) || '');
+      const ck = __cacheKey || `ph|${id0}|${dk0}|${limit}|${ts0}|${sig0}`;
       state.__chkPhaseCache.set(ck, { t: Date.now(), v: res });
       // podar
-      while (state.__chkPhaseCache.size > 60){
+      while (state.__chkPhaseCache.size > 90){
         try{ state.__chkPhaseCache.delete(state.__chkPhaseCache.keys().next().value); }catch(_){ break; }
       }
     }
@@ -1902,6 +1997,9 @@ const state = {
   eventsById: new Map(),
   focusId: null,
   focusEvent: null,
+  focusMode: CMD_MODE_EVENT,
+  globalExpanded: new Set(),
+  __globalAutoOpened: false,
   today: todayYMD(),
   currentAlerts: [],
 };
@@ -1933,6 +2031,11 @@ function renderRadarBasics(){
 }
 
 function renderFocusHint(){
+  if (state.focusMode === CMD_MODE_GLOBAL){
+    setText('focusHint', 'GLOBAL · Activos');
+    setText('navNote', 'Modo GLOBAL: vista multi-evento (solo eventos activos).');
+    return;
+  }
   const ev = state.focusEvent;
   if (!ev){
     setText('focusHint', '—');
@@ -1953,6 +2056,460 @@ function renderEmpty(){
   // si no hay eventos, escondemos el resto para no mostrar “—” por todos lados
   setHidden('todayPanel', state.events.length === 0);
   setHidden('alerts', true);
+}
+
+// --- Focus Mode (EVENTO vs GLOBAL)
+function loadFocusMode(){
+  try{
+    const raw = localStorage.getItem(LS_FOCUS_MODE_KEY);
+    const v = (raw == null) ? '' : String(raw).trim().toUpperCase();
+    return (v === CMD_MODE_GLOBAL) ? CMD_MODE_GLOBAL : CMD_MODE_EVENT;
+  }catch(_){ return CMD_MODE_EVENT; }
+}
+
+function persistFocusMode(mode){
+  try{
+    const v = (mode === CMD_MODE_GLOBAL) ? CMD_MODE_GLOBAL : CMD_MODE_EVENT;
+    localStorage.setItem(LS_FOCUS_MODE_KEY, v);
+  }catch(_){ }
+}
+
+function applyFocusModeToDOM(){
+  try{
+    if (!document || !document.body) return;
+    if (state.focusMode === CMD_MODE_GLOBAL) document.body.classList.add('cmd-mode-global');
+    else document.body.classList.remove('cmd-mode-global');
+  }catch(_){ }
+  try{ setHidden('globalActivesBlock', state.focusMode !== CMD_MODE_GLOBAL); }catch(_){ }
+  try{ renderFocusHint(); }catch(_){ }
+  try{ if (state.focusMode === CMD_MODE_GLOBAL) renderGlobalActivesView(); }catch(_){ }
+}
+
+// --- Eventos activos (fail-safe)
+function normLower(v){
+  return safeStr(v).trim().toLowerCase();
+}
+
+function eventActiveFlag(ev){
+  // 1) flags/booleans
+  try{
+    const b = (ev && (ev.isActive ?? ev.active ?? ev.enCurso ?? ev.inProgress ?? ev.isOpen ?? ev.open));
+    if (b === true) return true;
+    const c = (ev && (ev.isClosed ?? ev.closed ?? ev.isArchived ?? ev.archived));
+    if (c === true) return false;
+  }catch(_){ }
+
+  // 2) status strings (si existen)
+  try{
+    const s = normLower(ev && (ev.status ?? ev.state ?? ev.phase ?? ev.etapa));
+    if (!s) return null;
+    if (s === 'open' || s === 'abierto' || s === 'activo' || s === 'active' || s === 'en curso' || s === 'encurso' || s === 'running') return true;
+    if (s === 'closed' || s === 'cerrado' || s === 'archived' || s === 'archivo' || s === 'finalizado' || s === 'inactivo' || s === 'inactive') return false;
+  }catch(_){ }
+  return null;
+}
+
+function eventActivityTs(ev){
+  const u = Number(ev && (ev.updatedAt ?? ev.lastUpdatedAt ?? ev.lastModifiedAt ?? ev.modifiedAt) || 0);
+  if (u) return u;
+  const c = safeStr(ev && (ev.createdAt ?? ev.created));
+  if (c){
+    const ts = Date.parse(c);
+    if (isFinite(ts)) return ts;
+  }
+  return 0;
+}
+
+function resolveActiveEvents(){
+  const all = Array.isArray(state.events) ? state.events : [];
+  const now = Date.now();
+  const cutoff = now - (14 * 24 * 60 * 60 * 1000);
+
+  const scored = [];
+  for (const ev of all){
+    if (!ev || ev.id == null) continue;
+
+    const idNum = Number(ev.id);
+    if (!isFinite(idNum) || !idNum) continue;
+
+    const flag = eventActiveFlag(ev);
+    const ts = eventActivityTs(ev) || eventSortKey(ev) || 0;
+
+    let ok = false;
+    if (flag === true) ok = true;
+    else if (flag === false) ok = false;
+    else ok = !!(ts && ts >= cutoff);
+
+    if (!ok) continue;
+    scored.push({ ev, score: ts || 0 });
+  }
+
+  scored.sort((a,b)=> Number(b.score||0) - Number(a.score||0));
+  const cap = 12; // seguridad iPad (10–15)
+  return scored.slice(0, cap).map(x=> x.ev);
+}
+
+// --- Vista GLOBAL (activos)
+function setFocusGlobal(opts){
+  opts = opts || {};
+  state.focusMode = CMD_MODE_GLOBAL;
+  if (!opts.skipPersist) persistFocusMode(CMD_MODE_GLOBAL);
+
+  // reset estado de colapsables al entrar a GLOBAL
+  state.globalExpanded = new Set();
+  state.__globalAutoOpened = false;
+
+  // UI: input
+  const input = $('eventSearch');
+  if (input) input.value = CMD_GLOBAL_LABEL;
+
+  // UI: selector
+  try{ renderEventList(''); }catch(_){ }
+  try{ hideEventList(); }catch(_){ }
+
+  applyFocusModeToDOM();
+}
+
+function toggleGlobalCard(evId){
+  const id = Number(evId || 0);
+  if (!id) return;
+  if (!(state.globalExpanded instanceof Set)) state.globalExpanded = new Set();
+  if (state.globalExpanded.has(id)) state.globalExpanded.delete(id);
+  else state.globalExpanded.add(id);
+  renderGlobalActivesView();
+}
+
+// --- GLOBAL (Activos): Checklist por fases (POR EVENTO) — solo lectura
+function __cmdTryDayKeyFromEvent(ev){
+  try{
+    if (!ev || typeof ev !== 'object') return '';
+    // 1) Si existe un “día enfocado” en el objeto del evento, úsalo (fail-safe)
+    const keys = [
+      'focusDayKey','focusedDayKey','currentDayKey','selectedDayKey',
+      'dayKey','day','currentDay','focusDay',
+      'opDayKey','operativeDayKey','lastDayKey','lastDay'
+    ];
+    for (const k of keys){
+      const v = ev[k];
+      const dk = safeYMD(v || '');
+      if (dk) return dk;
+    }
+  }catch(_){ }
+  return '';
+}
+
+function __cmdHasAnyDayEvidence(ev){
+  try{
+    const days = (ev && ev.days && typeof ev.days === 'object' && !Array.isArray(ev.days)) ? ev.days : null;
+    if (!days) return false;
+    // any key that looks like YYYY-MM-DD
+    for (const k in days){
+      if (!Object.prototype.hasOwnProperty.call(days, k)) continue;
+      if (safeYMD(k)) return true;
+    }
+  }catch(_){ }
+  return false;
+}
+function __cmdMostRecentDayKeyWithData(ev){
+  try{
+    if (!ev || typeof ev !== 'object') return '';
+    const days = (ev.days && typeof ev.days === 'object' && !Array.isArray(ev.days)) ? ev.days : null;
+    if (!days) return '';
+
+    const keys = [];
+    for (const k in days){
+      if (!Object.prototype.hasOwnProperty.call(days, k)) continue;
+      const dk = safeYMD(k);
+      if (dk) keys.push(dk);
+    }
+    if (!keys.length) return '';
+    keys.sort((a,b)=> b.localeCompare(a));
+
+    // Preferir el día más reciente con evidencia de checklist; si no, el más reciente con cualquier día.
+    const hasChkInDay = (day)=>{
+      try{
+        if (!day || typeof day !== 'object') return false;
+        if (day.checklistState && typeof day.checklistState === 'object') return true;
+        if (day.checklist && (typeof day.checklist === 'object' || Array.isArray(day.checklist))) return true;
+        if (Array.isArray(day.checklistItems) && day.checklistItems.length) return true;
+        if (Array.isArray(day.items) && day.items.length) return true;
+        if (Array.isArray(day.checklist) && day.checklist.length) return true;
+        if (day.checklistTextById && typeof day.checklistTextById === 'object' && Object.keys(day.checklistTextById).length) return true;
+        if (day.checklistTexts && typeof day.checklistTexts === 'object' && Object.keys(day.checklistTexts).length) return true;
+        if (day.checklistTextMap && typeof day.checklistTextMap === 'object' && Object.keys(day.checklistTextMap).length) return true;
+      }catch(_){ }
+      return false;
+    };
+
+    for (const dk of keys){
+      const day = days[dk];
+      if (hasChkInDay(day)) return dk;
+    }
+    return keys[0];
+  }catch(_){ }
+  return '';
+}
+
+function resolveChecklistDayKeyForEventA33(ev){
+  // Cache liviano por evento (evita recomputar en cada toggle).
+  try{
+    if (!state.__globalDayKeyCache || typeof state.__globalDayKeyCache.get !== 'function') state.__globalDayKeyCache = new Map();
+    const id = (ev && ev.id != null) ? String(ev.id) : '';
+    const hit = id ? state.__globalDayKeyCache.get(id) : null;
+    const now = Date.now();
+    if (hit && hit.dk && (now - (hit.t||0)) < 6000){
+      return { dayKey: String(hit.dk), source: String(hit.source||'cache') };
+    }
+  }catch(_){ }
+
+  let dk = '';
+  let source = '';
+
+  // 1) “día enfocado” si existe
+  dk = __cmdTryDayKeyFromEvent(ev);
+  if (dk){ source = 'focused'; }
+
+  // 2) día más reciente con data
+  if (!dk){
+    dk = __cmdMostRecentDayKeyWithData(ev);
+    if (dk) source = 'recent';
+  }
+
+  // 3) hoy
+  if (!dk){
+    dk = safeYMD((state && state.today) ? state.today : todayYMD());
+    if (dk) source = 'today';
+  }
+
+  // 4) neutro
+  if (!dk){
+    source = 'none';
+  }
+
+  // guardar cache (best-effort)
+  try{
+    if (state.__globalDayKeyCache && typeof state.__globalDayKeyCache.set === 'function'){
+      const id = (ev && ev.id != null) ? String(ev.id) : '';
+      if (id) state.__globalDayKeyCache.set(id, { t: Date.now(), dk: dk || '', source: source || '' });
+      while (state.__globalDayKeyCache.size > 40){
+        try{ state.__globalDayKeyCache.delete(state.__globalDayKeyCache.keys().next().value); }catch(_){ break; }
+      }
+    }
+  }catch(_){ }
+
+  return { dayKey: dk || '', source: source || '' };
+}
+
+function renderChecklistPhasesGridInto(containerEl, ph){
+  if (!containerEl) return;
+
+  const phases = (ph && ph.phases && typeof ph.phases === 'object') ? ph.phases : {};
+  const ok = (ph && ph.ok === false) ? false : true;
+  const lim = (ph && typeof ph.limit === 'number' && isFinite(ph.limit) && ph.limit > 0) ? Math.floor(ph.limit) : 3;
+
+  const makeCol = (label, bucket)=>{
+    const col = document.createElement('div');
+    col.className = 'cmd-chk-col';
+
+    const hdr = document.createElement('div');
+    hdr.className = 'cmd-chk-hdr';
+
+    const name = document.createElement('span');
+    name.className = 'cmd-chk-name';
+    name.textContent = label;
+
+    const prog = document.createElement('span');
+    prog.className = 'cmd-chk-prog';
+    if (ok === false){
+      prog.textContent = '—';
+    } else {
+      const done = (bucket && typeof bucket.done === 'number') ? bucket.done : Number(bucket && bucket.done) || 0;
+      const total = (bucket && typeof bucket.total === 'number') ? bucket.total : Number(bucket && bucket.total) || 0;
+      prog.textContent = `${done}/${total}`;
+    }
+
+    hdr.appendChild(name);
+    hdr.appendChild(prog);
+
+    const body = document.createElement('div');
+    body.className = 'cmd-chk-body';
+
+    if (ok === false){
+      body.textContent = (ph && ph.reason) ? String(ph.reason) : 'No disponible';
+    } else {
+      const texts = (bucket && Array.isArray(bucket.pendingTexts)) ? bucket.pendingTexts : [];
+      const pendingCount = (bucket && typeof bucket.pendingCount === 'number' && isFinite(bucket.pendingCount))
+        ? bucket.pendingCount
+        : (Array.isArray(texts) ? texts.length : 0);
+
+      if (texts && texts.length){
+        const top = texts.slice(0, lim);
+        for (const t of top){
+          const line = document.createElement('span');
+          line.className = 'cmd-chk-item';
+          line.textContent = `• ${String(t || '')}`;
+          body.appendChild(line);
+        }
+
+        const more = (bucket && typeof bucket.moreCount === 'number' && isFinite(bucket.moreCount))
+          ? bucket.moreCount
+          : Math.max(0, pendingCount - lim);
+
+        if (more > 0){
+          const moreLine = document.createElement('span');
+          moreLine.className = 'cmd-chk-item cmd-chk-more';
+          moreLine.textContent = `+${more} más`;
+          body.appendChild(moreLine);
+        }
+      } else {
+        const okLine = document.createElement('span');
+        okLine.className = 'cmd-chk-item cmd-chk-ok';
+        okLine.textContent = 'Al día ✅';
+        body.appendChild(okLine);
+      }
+    }
+
+    col.appendChild(hdr);
+    col.appendChild(body);
+    return col;
+  };
+
+  const grid = document.createElement('div');
+  grid.className = 'cmd-chk-grid cmd-chk-grid-global';
+  grid.appendChild(makeCol('PRE-EVENTO', phases.pre || null));
+  grid.appendChild(makeCol('EVENTO', phases.event || null));
+  grid.appendChild(makeCol('CIERRE', phases.close || null));
+
+  containerEl.appendChild(grid);
+}
+
+function renderGlobalChecklistForEvent(bodyEl, ev){
+  if (!bodyEl) return;
+  bodyEl.innerHTML = '';
+
+  const resolved = resolveChecklistDayKeyForEventA33(ev);
+  const dk = safeYMD(resolved && resolved.dayKey) || '';
+
+  // Hint día (silencioso, útil para fail-safe)
+  const hint = document.createElement('div');
+  hint.className = 'cmd-muted';
+  if (dk){
+    hint.textContent = `Día: ${dk}`;
+  } else {
+    hint.textContent = 'Checklist: —';
+  }
+  bodyEl.appendChild(hint);
+
+  // Calcular solo si hay un día resoluble o si hay evidencia de plantilla (evita ruido)
+  let ph = null;
+  try{
+    if (dk || (ev && ev.checklistTemplate && typeof ev.checklistTemplate === 'object') || __cmdHasAnyDayEvidence(ev)){
+      ph = buildChecklistPhasesData(ev, dk || safeYMD(state.today) || todayYMD(), { limit: 3 });
+    }
+  }catch(_){
+    ph = null;
+  }
+
+  if (!ph){
+    // Neutro (sin crash)
+    const n = document.createElement('div');
+    n.className = 'cmd-muted';
+    n.textContent = 'Sin datos de checklist.';
+    bodyEl.appendChild(n);
+    return;
+  }
+
+  renderChecklistPhasesGridInto(bodyEl, ph);
+}
+
+function renderGlobalActivesView(){
+  const block = $('globalActivesBlock');
+  const list = $('globalActivesList');
+  if (!block || !list) return;
+
+  if (state.focusMode !== CMD_MODE_GLOBAL){
+    try{ block.hidden = true; }catch(_){ }
+    return;
+  }
+
+  block.hidden = false;
+
+  const items = resolveActiveEvents();
+
+  list.innerHTML = '';
+  if (!items.length){
+    const empty = document.createElement('div');
+    empty.className = 'cmd-global-empty';
+    empty.textContent = 'No se detectaron eventos activos (según actividad reciente).';
+    list.appendChild(empty);
+    return;
+  }
+
+  if (!(state.globalExpanded instanceof Set)) state.globalExpanded = new Set();
+
+  // abrir automáticamente el 1ro (más reciente) para que se sienta vivo
+  if (!state.__globalAutoOpened){
+    try{
+      state.globalExpanded.clear();
+      state.globalExpanded.add(Number(items[0].id));
+    }catch(_){ }
+    state.__globalAutoOpened = true;
+  }
+
+  for (const ev of items){
+    try{
+      if (!ev || ev.id == null) continue;
+      const id = Number(ev.id);
+      if (!isFinite(id) || !id) continue;
+      const expanded = state.globalExpanded.has(id);
+
+      const card = document.createElement('div');
+      card.className = 'cmd-global-card';
+
+      const head = document.createElement('button');
+      head.type = 'button';
+      head.className = 'cmd-global-head';
+      head.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      head.addEventListener('click', ()=> toggleGlobalCard(id));
+
+      const title = document.createElement('div');
+      title.className = 'cmd-global-title';
+      title.textContent = safeStr(ev.name) || '—';
+
+      const sub = document.createElement('div');
+      sub.className = 'cmd-global-sub';
+      const g = safeStr(ev.groupName);
+      sub.textContent = g ? ('Grupo: ' + g) : 'Sin grupo';
+
+      const che = document.createElement('div');
+      che.className = 'cmd-global-chev';
+      che.textContent = expanded ? '▴' : '▾';
+
+      head.appendChild(title);
+      head.appendChild(sub);
+      head.appendChild(che);
+
+      const body = document.createElement('div');
+      body.className = 'cmd-global-body';
+      body.hidden = !expanded;
+      if (expanded){
+        // Importante: NO calcular nada cuando está colapsado.
+        try{ renderGlobalChecklistForEvent(body, ev); }catch(_){ body.innerHTML = `<div class="cmd-muted">No disponible</div>`; }
+      }
+
+      card.appendChild(head);
+      card.appendChild(body);
+      list.appendChild(card);
+    }catch(_e){
+      // Un evento corrupto NO debe tumbar la vista GLOBAL.
+      try{
+        const card = document.createElement('div');
+        card.className = 'cmd-global-card';
+        card.innerHTML = `<div class="cmd-global-head" aria-expanded="false"><div class="cmd-global-title">Evento (datos inválidos)</div><div class="cmd-global-sub">No disponible</div><div class="cmd-global-chev">▾</div></div>`;
+        list.appendChild(card);
+      }catch(_){ }
+    }
+  }
 }
 
 function clearMetricsToDash(){
@@ -3284,11 +3841,12 @@ async function doGlobalEventRefresh(reason){
 
     __CMD_GLOBAL_EVT_LASTID = gid;
   }catch(e){
-    console.warn('Global event refresh failed', reason, e);
   }finally{
     __CMD_GLOBAL_EVT_LASTRUN = Date.now();
     __CMD_GLOBAL_EVT_BUSY = false;
   }
+  // Si estamos en modo GLOBAL, refrescar la lista (best-effort)
+  try{ if (state.focusMode === CMD_MODE_GLOBAL) renderGlobalActivesView(); }catch(_){ }
 }
 
 function filterEvents(query){
@@ -3309,6 +3867,19 @@ function renderEventList(query){
   const items = filterEvents(query);
   list.innerHTML = '';
 
+  // GLOBAL (Activos) — siempre arriba
+  try{
+    const rowG = document.createElement('div');
+    const selectedG = (state.focusMode === CMD_MODE_GLOBAL);
+    rowG.className = 'cmd-item cmd-item-global' + (selectedG ? ' cmd-item-selected' : '');
+    rowG.innerHTML = `
+      <div class="cmd-item-title">${CMD_GLOBAL_LABEL}</div>
+      <div class="cmd-item-sub">Vista multi-evento · solo activos</div>
+    `;
+    rowG.addEventListener('click', ()=> setFocusGlobal());
+    list.appendChild(rowG);
+  }catch(_){ }
+
   if (!items.length){
     const empty = document.createElement('div');
     empty.className = 'cmd-item';
@@ -3319,7 +3890,7 @@ function renderEventList(query){
 
   for (const ev of items){
     const row = document.createElement('div');
-    const selected = state.focusId != null && Number(state.focusId) === Number(ev.id);
+    const selected = (state.focusMode !== CMD_MODE_GLOBAL) && state.focusId != null && Number(state.focusId) === Number(ev.id);
     row.className = 'cmd-item' + (selected ? ' cmd-item-selected' : '');
     const g = safeStr(ev.groupName);
     row.innerHTML = `
@@ -3343,9 +3914,17 @@ function hideEventList(){
   list.hidden = true;
 }
 
-async function setFocusEvent(eventId){
+async function setFocusEvent(eventId, opts){
+  opts = opts || {};
   const id = Number(eventId);
   if (!id) return;
+
+  // Modo: al elegir un evento normal, volver a modo EVENTO
+  if (!opts.skipMode){
+    state.focusMode = CMD_MODE_EVENT;
+    persistFocusMode(CMD_MODE_EVENT);
+    applyFocusModeToDOM();
+  }
   // Si el índice local no tiene el evento (p. ej., creado/cambiado en Resumen), recargar sin inventar
   if (!state.eventsById || !state.eventsById.has(id)){
     try{ await reloadEventsFromDB(); }catch(_){ }
@@ -3697,6 +4276,10 @@ async function init(){
     return;
   }
 
+  // Modo guardado: EVENTO vs GLOBAL
+  state.focusMode = loadFocusMode();
+  applyFocusModeToDOM();
+
   // Default focus: POS currentEventId → localStorage → más reciente
   let focusId = null;
   try{
@@ -3716,8 +4299,12 @@ async function init(){
   // Pre-render list
   try{
     if (input){
-      const fev = state.eventsById && state.eventsById.get ? state.eventsById.get(Number(focusId)) : null;
-      input.value = safeStr(fev && fev.name ? fev.name : '');
+      if (state.focusMode === CMD_MODE_GLOBAL){
+        input.value = CMD_GLOBAL_LABEL;
+      } else {
+        const fev = state.eventsById && state.eventsById.get ? state.eventsById.get(Number(focusId)) : null;
+        input.value = safeStr(fev && fev.name ? fev.name : '');
+      }
     }
   }catch(_){ }
   renderEventList('');
@@ -3737,7 +4324,15 @@ async function init(){
     }
   }catch(_){ }
 
-  await setFocusEvent(Number(focusId));
+  await setFocusEvent(Number(focusId), { skipMode: true });
+
+  if (state.focusMode === CMD_MODE_GLOBAL){
+    setFocusGlobal({ skipPersist: true });
+  } else {
+    state.focusMode = CMD_MODE_EVENT;
+    persistFocusMode(CMD_MODE_EVENT);
+    applyFocusModeToDOM();
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);

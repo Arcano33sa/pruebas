@@ -256,6 +256,12 @@ html, body{
   .cmd-chk-grid{ grid-template-columns: 1fr; }
 }
 
+/* GLOBAL (Activos): mantener 3 columnas en iPad; colapsar solo en pantallas muy angostas */
+.cmd-chk-grid.cmd-chk-grid-global{ grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 540px){
+  .cmd-chk-grid.cmd-chk-grid-global{ grid-template-columns: 1fr; }
+}
+
 .cmd-btn{
   border: 1px solid rgba(221,191,100,0.22);
   background: rgba(0,0,0,0.24);
@@ -1021,3 +1027,86 @@ button.cmd-pill{ cursor: pointer; }
 
 /* Afinar mini botones para anchors/botones sin subrayado */
 .cmd-mini-btn{ text-decoration: none; display:inline-flex; align-items:center; justify-content:center; }
+
+
+/* ---------------------------
+   GLOBAL (Activos) — CdM
+----------------------------*/
+.cmd-item-global .cmd-item-title{
+  color: var(--gold);
+}
+.cmd-item-global:hover{
+  background: rgba(221,191,100,0.14);
+}
+
+.cmd-global{ margin-top: 12px; padding: 14px; }
+.cmd-global-list{
+  display:flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+.cmd-global-card{
+  border: 1px solid rgba(221,191,100,0.18);
+  border-radius: 16px;
+  background: rgba(0,0,0,0.26);
+  overflow: hidden;
+}
+.cmd-global-head{
+  width:100%;
+  text-align:left;
+  background: transparent;
+  border: none;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  color: inherit;
+  cursor: pointer;
+}
+.cmd-global-title{
+  font-weight: 800;
+  font-size: 13.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmd-global-sub{
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmd-global-chev{
+  grid-column: 2 / 3;
+  grid-row: 1 / span 2;
+  align-self: center;
+  opacity: 0.78;
+}
+.cmd-global-body{
+  padding: 12px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+.cmd-global-empty{
+  color: var(--muted);
+  padding: 10px 2px;
+}
+
+/* En modo GLOBAL, ocultar el tablero por-evento para evitar confusión */
+.cmd-mode-global #recosBlock,
+.cmd-mode-global #alerts,
+.cmd-mode-global #emptyState,
+.cmd-mode-global #todayPanel,
+.cmd-mode-global #remindersBlock,
+.cmd-mode-global #ordersOps,
+.cmd-mode-global #invRiskBlock,
+.cmd-mode-global .cmd-quick,
+.cmd-mode-global .cmd-radar{
+  display: none !important;
+}
+.cmd-mode-global #globalActivesBlock{
+  display: block !important;
+}
