@@ -1,10 +1,15 @@
 /*
   Suite A33 — A33Auth (core)
-  Autenticación simple (1 usuario) con sesión (token) en sessionStorage.
+  Autenticación simple (1 usuario) con sesión persistente.
 
   - 1 usuario (registro único): username + password hash (PBKDF2-SHA256)
-  - Sesión: token + expiración
-  - Compat: migra PIN legacy (suite_a33_pin) a credenciales iniciales
+  - Sesión: token + timestamps
+    - lastActivityAt (ms)
+    - expiresAt (ms) = lastActivityAt + TTL_INACTIVITY
+
+  Nota iOS/PWA:
+  - sessionStorage puede limpiarse antes de tiempo. Por defecto guardamos en localStorage.
+  - Migración suave desde sesión legacy en sessionStorage.
 */
 
 (function(){
@@ -23,7 +28,9 @@
 
   const LEGACY_PIN_KEY = 'suite_a33_pin';
 
-  const DEFAULT_TTL_MS = 12 * 60 * 60 * 1000; // 12h
+  const TTL_INACTIVITY_MS = 72 * 60 * 60 * 1000; // 72h
+  const TOUCH_MIN_INTERVAL_MS = 45 * 1000; // rate-limit escrituras de actividad
+
   const PBKDF2_ITERS = 150000;
   const SALT_BYTES = 16;
 
@@ -86,6 +93,123 @@
     return LS.setJSON(PROFILE_KEY, p || { displayName: '' }, 'local');
   }
 
+  function readSessionLocal(){
+    return LS.getJSON(SESSION_KEY, null, 'local');
+  }
+  function readSessionSession(){
+    return LS.getJSON(SESSION_KEY, null, 'session');
+  }
+  function writeSessionLocal(sess){
+    return LS.setJSON(SESSION_KEY, sess, 'local');
+  }
+  function writeSessionSession(sess){
+    return LS.setJSON(SESSION_KEY, sess, 'session');
+  }
+  function clearSessionBoth(){
+    try{ LS.removeItem(SESSION_KEY, 'local'); }catch(_){ }
+    try{ LS.removeItem(SESSION_KEY, 'session'); }catch(_){ }
+  }
+
+  function isSessionShapeOk(s){
+    // Acepta sesiones legacy: token + (expiresAt o lastActivityAt).
+    if (!(s && typeof s === 'object')) return false;
+    if (!s.token) return false;
+    const hasExp = (s.expiresAt != null);
+    const hasLA = (s.lastActivityAt != null);
+    return hasExp || hasLA;
+  }
+
+  function isSessionValid(s){
+    if (!isSessionShapeOk(s)) return false;
+    const exp = Number(s.expiresAt);
+    if (!Number.isFinite(exp) || exp <= 0) return false;
+    return now() < exp;
+  }
+
+  function ensureSessionTimestamps(s, { refreshWindow=false } = {}){
+    // Regla: NO renovar ventana solo por abrir la app.
+    // Solo renovamos (sliding TTL) cuando refreshWindow=true (actividad real del usuario).
+    if (!s || typeof s !== 'object') return null;
+    const out = { ...s };
+    const n = now();
+
+    // issuedAt es informativo; no extiende la sesión.
+    const issued = Number(out.issuedAt);
+    if (!Number.isFinite(issued) || issued <= 0){ out.issuedAt = n; }
+
+    if (refreshWindow){
+      out.lastActivityAt = n;
+      out.expiresAt = n + TTL_INACTIVITY_MS;
+      return out;
+    }
+
+    const la = Number(out.lastActivityAt);
+    const exp = Number(out.expiresAt);
+    const laOk = Number.isFinite(la) && la > 0;
+    const expOk = Number.isFinite(exp) && exp > 0;
+
+    // Sesión legacy incompleta: preferimos forzar login antes que “revivir”.
+    if (!laOk && !expOk){
+      return null;
+    }
+
+    if (!laOk && expOk){
+      out.lastActivityAt = exp - TTL_INACTIVITY_MS;
+      return out;
+    }
+
+    if (laOk && !expOk){
+      out.expiresAt = la + TTL_INACTIVITY_MS;
+      return out;
+    }
+
+    // Ambos presentes: si exp quedó por detrás de lastActivityAt, corregir.
+    if (exp < la){
+      out.expiresAt = la + TTL_INACTIVITY_MS;
+      return out;
+    }
+
+    return out;
+  }
+
+  function migrateSessionFromSessionToLocalIfNeeded(){
+    // 1) Si ya hay sesión en local, asegurar timestamps mínimos.
+    const curLocal = readSessionLocal();
+    if (curLocal){
+      const fixed = ensureSessionTimestamps(curLocal);
+      if (fixed && JSON.stringify(fixed) != JSON.stringify(curLocal)){
+        writeSessionLocal(fixed);
+      }
+      // Limpieza si está expirada.
+      if (!isSessionValid(fixed || curLocal)){
+        try{ LS.removeItem(SESSION_KEY, 'local'); }catch(_){ }
+      }
+      return;
+    }
+
+    // 2) Si no hay en local, pero existe en session (legacy), migrar si aún es válida.
+    const s = readSessionSession();
+    if (!s){
+      return;
+    }
+
+    if (!isSessionValid(s)){
+      try{ LS.removeItem(SESSION_KEY, 'session'); }catch(_){ }
+      return;
+    }
+
+    const n = now();
+    const migrated = {
+      token: String(s.token),
+      issuedAt: Number(s.issuedAt) || n,
+      lastActivityAt: n,
+      expiresAt: n + TTL_INACTIVITY_MS
+    };
+
+    writeSessionLocal(migrated);
+    try{ LS.removeItem(SESSION_KEY, 'session'); }catch(_){ }
+  }
+
   // Migra PIN legacy (si existe) → username/password inicial.
   // - Si PIN estaba en JSON legacy {pin,name}, tomamos ambos.
   async function migrateLegacyPinIfNeeded(){
@@ -117,6 +241,134 @@
     await A33Auth.setup({ username, password: pin, displayName: name || '' });
     // Limpiamos la key legacy (ya no se usa)
     try{ LS.removeItem(LEGACY_PIN_KEY, 'local'); }catch(_){ }
+  }
+
+  // Estado interno (por pestaña)
+  let _lastTouchWriteAt = 0;
+
+
+  function isConfiguredInternal(){
+    const rec = readAuthRecord();
+    return !!(rec && rec.username && rec.saltB64 && rec.hashB64);
+  }
+
+  function forceLoginIfNeededOnResume(){
+    // No renueva TTL. Solo limpia expiración y fuerza login al volver a la app.
+    try{ migrateSessionFromSessionToLocalIfNeeded(); }catch(_){ }
+
+    // Si aún no hay credenciales, no forzar nada.
+    if (!isConfiguredInternal()) return;
+
+    const s0 = readSessionLocal();
+    if (!isSessionShapeOk(s0)){
+      // Si estamos en un módulo y no hay sesión, gatear.
+      try{ if (document && document.getElementById && document.getElementById('lock-overlay')) return; }catch(_){ }
+
+      const offline = (typeof navigator !== 'undefined' && navigator.onLine === false);
+      const pn = String((typeof location !== 'undefined' && location.pathname) ? location.pathname : '');
+      if (offline && (pn.indexOf('/pos/') >= 0 || pn.indexOf('pos/') >= 0)){
+        try{ location.replace('./offline.html?reason=auth'); }catch(_){ }
+        return;
+      }
+
+      try{ location.replace('../index.html'); }catch(_){ }
+      return;
+    }
+
+    const fixed = ensureSessionTimestamps(s0);
+    const s = fixed || s0;
+
+    if (!fixed){
+      clearSessionBoth();
+    }
+
+    if (!isSessionValid(s)){
+      clearSessionBoth();
+      // Home (menú) ya maneja lock overlay.
+      try{ if (document && document.getElementById && document.getElementById('lock-overlay')) return; }catch(_){ }
+
+      const offline = (typeof navigator !== 'undefined' && navigator.onLine === false);
+      const pn = String((typeof location !== 'undefined' && location.pathname) ? location.pathname : '');
+      if (offline && (pn.indexOf('/pos/') >= 0 || pn.indexOf('pos/') >= 0)){
+        try{ location.replace('./offline.html?reason=auth'); }catch(_){ }
+        return;
+      }
+      try{ location.replace('../index.html'); }catch(_){ }
+      return;
+    }
+
+    // Guardar fix solo si fue necesario (sin renovar ventana)
+    if (fixed && JSON.stringify(fixed) != JSON.stringify(s0)){
+      writeSessionLocal(fixed);
+    }
+  }
+
+
+  function touchActivityIfAuthenticatedInternal(){
+    try{ migrateSessionFromSessionToLocalIfNeeded(); }catch(_){ }
+
+    const s0 = readSessionLocal();
+    if (!isSessionShapeOk(s0)) return false;
+
+    const fixed = ensureSessionTimestamps(s0);
+    if (!fixed){
+      clearSessionBoth();
+      return false;
+    }
+
+    const s = fixed;
+    if (!isSessionValid(s)){
+      clearSessionBoth();
+      return false;
+    }
+
+    const n = now();
+
+    // Rate-limit robusto (persistente): no escribir si la última actividad guardada es reciente.
+    const prevLA = Number(s.lastActivityAt) || 0;
+    if (prevLA > 0 && (n - prevLA) < TOUCH_MIN_INTERVAL_MS) return true;
+    if ((n - _lastTouchWriteAt) < TOUCH_MIN_INTERVAL_MS) return true;
+    _lastTouchWriteAt = n;
+
+    const next = ensureSessionTimestamps({ ...s }, { refreshWindow:true });
+
+    // Guardar en local (fuente de verdad). Mantener espejo en session por compat.
+    const okLocal = writeSessionLocal(next);
+    if (!okLocal){
+      // Fallback extremo
+      writeSessionSession(next);
+    } else {
+      // No importa si falla.
+      try{ writeSessionSession(next); }catch(_){ }
+    }
+
+    return true;
+  }
+
+  function bindActivityListenersOnce(){
+    if (typeof document === 'undefined') return;
+    if (window.__A33_AUTH_ACTIVITY_BOUND) return;
+    window.__A33_AUTH_ACTIVITY_BOUND = true;
+
+    const handler = () => {
+      try{ touchActivityIfAuthenticatedInternal(); }catch(_){ }
+    };
+
+    try{ document.addEventListener('pointerdown', handler, { passive:true, capture:true }); }catch(_){ }
+    try{ document.addEventListener('click', handler, { passive:true, capture:true }); }catch(_){ }
+    try{ document.addEventListener('keydown', handler, { passive:true, capture:true }); }catch(_){ }
+
+    // “Volví a la app”: cuenta como actividad del usuario.
+    try{
+      document.addEventListener('visibilitychange', () => {
+        try{
+          if (document.visibilityState === 'visible') forceLoginIfNeededOnResume();
+        }catch(_){ }
+      }, { capture:true });
+    }catch(_){ }
+
+    try{ window.addEventListener('pageshow', () => { try{ forceLoginIfNeededOnResume(); }catch(_){ } }, { capture:true }); }catch(_){ }
+    try{ window.addEventListener('focus', () => { try{ forceLoginIfNeededOnResume(); }catch(_){ } }, { capture:true }); }catch(_){ }
   }
 
   const A33Auth = {
@@ -183,24 +435,58 @@
     async login({ username, password, ttlMs } = {}){
       const res = await this.verify({ username, password });
       if (!res.ok) throw new Error('Credenciales incorrectas.');
-      const ttl = Number(ttlMs || DEFAULT_TTL_MS);
+
+      const ttl = Number(ttlMs || TTL_INACTIVITY_MS);
+      const n = now();
       const sess = {
         token: randomB64(24),
-        issuedAt: now(),
-        expiresAt: now() + ttl
+        issuedAt: n,
+        lastActivityAt: n,
+        expiresAt: n + ttl
       };
-      LS.setJSON(SESSION_KEY, sess, 'session');
+
+      // Persistente por defecto
+      const okLocal = writeSessionLocal(sess);
+      if (!okLocal){
+        // Fallback: no romper login si local está bloqueado.
+        writeSessionSession(sess);
+      } else {
+        // Compat: espejo (no crítico)
+        try{ writeSessionSession(sess); }catch(_){ }
+      }
+
+      _lastTouchWriteAt = n;
       return sess;
     },
 
     logout(){
-      LS.removeItem(SESSION_KEY, 'session');
+      clearSessionBoth();
     },
 
     isAuthenticated(){
-      const s = LS.getJSON(SESSION_KEY, null, 'session');
-      if (!s || !s.token || !s.expiresAt) return false;
-      return now() < Number(s.expiresAt);
+      try{ migrateSessionFromSessionToLocalIfNeeded(); }catch(_){ }
+      const s0 = readSessionLocal();
+      if (!isSessionShapeOk(s0)) return false;
+
+      const fixed = ensureSessionTimestamps(s0);
+      const s = fixed || s0;
+
+      if (!isSessionValid(s)){
+        clearSessionBoth();
+        return false;
+      }
+
+      // Guardar fix solo si fue necesario (ej: lastActivityAt faltante)
+      if (fixed && JSON.stringify(fixed) != JSON.stringify(s0)){
+        writeSessionLocal(fixed);
+      }
+
+      return true;
+    },
+
+    // Expuesto: renovar sesión por actividad (sliding). Ya viene rate-limited.
+    touchActivityIfAuthenticated(){
+      return touchActivityIfAuthenticatedInternal();
     },
 
     async changePassword({ username, currentPassword, newPassword } = {}){
@@ -278,6 +564,7 @@
           return false;
         }
       }catch(_){ }
+
       // Si no está configurado, lo llevamos al Home para setup.
       try{
         const target = redirectTo || '../index.html';
@@ -293,6 +580,8 @@
     // Expuesto para index.html: corre migración si aplica.
     async ensureMigrated(){
       await migrateLegacyPinIfNeeded();
+      try{ migrateSessionFromSessionToLocalIfNeeded(); }catch(_){ }
+      try{ bindActivityListenersOnce(); }catch(_){ }
     },
 
     // Hard reset solo de credenciales (no toca datos de módulos)
@@ -302,6 +591,11 @@
       this.logout();
     }
   };
+
+  // Bind listeners ASAP (no rompe si no hay sesión)
+  try{ bindActivityListenersOnce(); }catch(_){ }
+  // Migración de sesión legacy al cargar
+  try{ migrateSessionFromSessionToLocalIfNeeded(); }catch(_){ }
 
   window.A33Auth = A33Auth;
 })();

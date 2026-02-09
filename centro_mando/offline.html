@@ -21,12 +21,29 @@
   <div class="wrap">
     <div class="card">
       <h1>Estás sin conexión</h1>
-      <p>Esta es la ruta <strong>legado</strong> (<code>centro_mando/</code>). El Centro de Mando real vive en <code>centro-mando/</code>.</p>
+      <p id="offline-msg">Esta es la ruta <strong>legado</strong> (<code>centro_mando/</code>). El Centro de Mando real vive en <code>centro-mando/</code>.</p>
       <div class="btns">
         <a class="btn primary" href="../centro-mando/index.html">Abrir Centro de Mando</a>
         <button onclick="location.reload()">Reintentar</button>
       </div>
     </div>
   </div>
+
+
+  <script>
+    (function(){
+      try{
+        var p = new URLSearchParams(location.search || '');
+        var reason = (p.get('reason') || '').toLowerCase();
+        if (reason === 'auth'){
+          var msg = document.getElementById('offline-msg');
+          if (msg){
+            msg.textContent = 'Necesitás iniciar sesión una vez (online). Luego podrás usar este módulo offline mientras no pases 72h sin actividad.';
+          }
+        }
+      }catch(_){ }
+    })();
+  </script>
+
 </body>
 </html>

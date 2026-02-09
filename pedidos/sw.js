@@ -18,7 +18,7 @@ const PRECACHE_URLS = [
   './images/logo.png',
   '/assets/js/a33-input-ux.js?v=4.20.13',
   '/assets/js/a33-storage.js?v=4.20.13',
-  '/assets/js/a33-auth.js?v=4.20.13',
+  '/assets/js/a33-auth.js?v=4.20.74',
   '/assets/css/a33-header.css?v=4.20.13'
 ];
 

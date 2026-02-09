@@ -448,19 +448,21 @@
       <div id="lock-unlock" style="display:none;">
         <h2 class="lock-title">Iniciar sesión</h2>
         <p class="lock-sub">Ingresa tus credenciales para acceder a los módulos.</p>
+        <form id="unlock-form" autocomplete="on">
         <div class="field">
           <label for="login-user">Usuario</label>
-          <input id="login-user" type="text" autocomplete="username" placeholder="Tu usuario" />
+          <input id="login-user" name="username" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Tu usuario" />
         </div>
         <div class="field">
           <label for="login-pass">Contraseña</label>
-          <input id="login-pass" type="password" autocomplete="current-password" placeholder="Tu contraseña" />
+          <input id="login-pass" name="password" type="password" autocomplete="current-password" placeholder="Tu contraseña" />
         </div>
         <div class="btn-row">
-          <button class="btn btn-primary" id="btn-login">Entrar</button>
-          <button class="btn btn-danger" id="btn-reset-credentials">Resetear acceso</button>
+          <button class="btn btn-primary" id="btn-login" type="submit">Entrar</button>
+          <button class="btn btn-danger" id="btn-reset-credentials" type="button">Resetear acceso</button>
         </div>
-        <p class="hint">La sesión vive en este navegador y expira (por defecto) en 12 horas.</p>
+                </form>
+        <p class="hint">La sesión expira tras 72 horas de inactividad.</p>
       </div>
 
       <div class="pin-mode-switch" id="pin-mode-switch" style="display:none;"></div>
@@ -647,7 +649,7 @@
 
 
   <script src="assets/js/a33-storage.js?v=4.20.13"></script>
-  <script src="assets/js/a33-auth.js?v=4.20.13"></script>
+  <script src="/assets/js/a33-auth.js?v=4.20.74"></script>
   <script>
     // --- Auth (usuario + contraseña, 1 usuario) ---
     const AUTH_DEFAULT_NAME = 'Usuario';
@@ -1459,6 +1461,14 @@
       const btnAuthSetup = document.getElementById('btn-auth-setup');
       const btnLogin = document.getElementById('btn-login');
       const btnResetCred = document.getElementById('btn-reset-credentials');
+
+      const unlockForm = document.getElementById('unlock-form');
+      if (unlockForm && btnLogin){
+        unlockForm.addEventListener('submit', (e) => {
+          try{ e.preventDefault(); }catch(_){ }
+          try{ btnLogin.click(); }catch(_){ }
+        });
+      }
 
       async function safeRun(btn, fn){
         if (btn){ btn.disabled = true; btn.classList.add('is-loading'); }

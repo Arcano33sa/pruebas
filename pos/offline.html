@@ -23,7 +23,7 @@
   <div class="wrap">
     <div class="card">
       <h1>Estás sin conexión</h1>
-      <p><strong>POS</strong> no pudo cargar desde la red. Si ya usaste este módulo antes, podés reintentar y debería abrir con el “shell” cacheado.</p>
+      <p id="offline-msg"><strong>POS</strong> no pudo cargar desde la red. Si ya usaste este módulo antes, podés reintentar y debería abrir con el “shell” cacheado.</p>
       <div class="btns">
         <button class="primary" onclick="location.reload()">Reintentar</button>
         <a class="btn" href="../index.html">Ir al menú</a>
@@ -31,5 +31,21 @@
       <p class="small">Tip: cuando vuelvas a tener internet, abrí de nuevo el módulo para que se actualice el caché <code>a33-v4.20.72-pos-r39</code>.</p>
     </div>
   </div>
+
+  <script>
+    (function(){
+      try{
+        var p = new URLSearchParams(location.search || '');
+        var reason = (p.get('reason') || '').toLowerCase();
+        if (reason === 'auth'){
+          var msg = document.getElementById('offline-msg');
+          if (msg){
+            msg.textContent = 'Necesitás iniciar sesión una vez (online). Luego podrás usar POS offline mientras no pases 72h sin actividad.';
+          }
+        }
+      }catch(_){ }
+    })();
+  </script>
+
 </body>
 </html>
