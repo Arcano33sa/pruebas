@@ -14193,7 +14193,7 @@ async function renderSummaryDailyCloseCardPOS(){
   if (noteEl){ noteEl.style.display = 'none'; noteEl.textContent = ''; }
 
   if (!ev){
-    const isGlobal = isSummaryEventGlobalPOS(selectedSummaryEventId);
+    const isGlobal = isSummaryGlobalPOS(selectedSummaryEventId);
 
     if (statusEl){
       statusEl.className = 'pill';
@@ -14982,6 +14982,41 @@ async function applyClosePeriodGatekeeperUI_POS(opts){
 
   const hintEl = document.getElementById('summary-period-hint');
 
+  // Guardar hint default para poder restaurarlo al quedar OK
+  try{
+    if (hintEl && !hintEl.dataset.defaultText){
+      hintEl.dataset.defaultText = String(hintEl.textContent || '');
+    }
+  }catch(_){ }
+
+  // Modo CONSOLIDADO (solo lectura): no permitir acciones de cierre
+  try{
+    if (typeof isSummaryConsolidatedViewActivePOS === 'function' && isSummaryConsolidatedViewActivePOS()){
+      try{ btn.disabled = true; }catch(_){ }
+      if (hintEl){
+        hintEl.textContent = 'CONSOLIDADO es solo lectura. Volvé a Archivo normal para cerrar períodos.';
+      }
+      return;
+    }
+  }catch(_){ }
+
+  // Guard obligatorio: Cerrar período SOLO desde GLOBAL (cierre consolidado)
+  let selectedSummaryEventId = null;
+  try{
+    selectedSummaryEventId = (opts && opts.selectedSummaryEventId) ? String(opts.selectedSummaryEventId) : await getSelectedSummaryEventIdPOS();
+  }catch(err){
+    selectedSummaryEventId = null;
+  }
+  if (!isSummaryGlobalPOS(selectedSummaryEventId)){
+    try{ btn.disabled = true; }catch(_){ }
+    if (hintEl){
+      hintEl.textContent = selectedSummaryEventId
+        ? 'Para cerrar período, pon Resumen en GLOBAL (consolida TODOS los eventos del mes).'
+        : 'No se pudo leer el selector de evento. Recarga y pon Resumen en GLOBAL para cerrar período.';
+    }
+    return;
+  }
+
   const pk = (opts && opts.periodKey) ? String(opts.periodKey) : getSummarySelectedPeriodKeyPOS();
   const gate = await computeClosePeriodGatekeeperPOS(pk, opts || {});
 
@@ -14996,6 +15031,13 @@ async function applyClosePeriodGatekeeperUI_POS(opts){
 
   // OK
   try{ btn.disabled = false; }catch(_){ }
+
+  // Restaurar hint por defecto (si existe)
+  try{
+    if (hintEl && hintEl.dataset && hintEl.dataset.defaultText != null){
+      hintEl.textContent = String(hintEl.dataset.defaultText || '');
+    }
+  }catch(_){ }
 }
 
 async function getArchiveByPeriodKeyPOS(periodKey){
@@ -15321,6 +15363,20 @@ async function openSummaryClosePeriodModalPOS(){
     showToast('Estás viendo un período archivado. Volvé a En vivo para cerrar períodos.', 'error', 3500);
     return;
   }
+
+  // Guard obligatorio: Cerrar período SOLO desde GLOBAL (cierre consolidado)
+  let selectedSummaryEventId = null;
+  try{
+    selectedSummaryEventId = await getSelectedSummaryEventIdPOS();
+  }catch(err){
+    showToast('No se pudo leer el selector de evento. Volvé a Resumen y elegí GLOBAL.', 'error', 4500);
+    return;
+  }
+  if (!isSummaryGlobalPOS(selectedSummaryEventId)){
+    showToast('Cierre de período solo desde GLOBAL (consolida TODOS los eventos del mes).', 'error', 4000);
+    return;
+  }
+
   if (__A33_SUMMARY_VIEW_MODE === 'all'){
     showToast('Selecciona un período para cerrar.', 'error', 3500);
     return;
@@ -15365,6 +15421,21 @@ async function confirmClosePeriodPOS(){
   }
   if (__A33_SUMMARY_MODE === 'archive'){
     showToast('Estás viendo un período archivado. Volvé a En vivo para cerrar.', 'error', 3500);
+    return;
+  }
+
+  // Guard obligatorio: Cerrar período SOLO desde GLOBAL (cierre consolidado)
+  let selectedSummaryEventId = null;
+  try{
+    selectedSummaryEventId = await getSelectedSummaryEventIdPOS();
+  }catch(err){
+    setClosePeriodErrorPOS('No se pudo leer el selector de evento. Volvé a Resumen y elegí GLOBAL.');
+    showToast('No se pudo leer el selector de evento. Volvé a Resumen y elegí GLOBAL.', 'error', 4500);
+    return;
+  }
+  if (!isSummaryGlobalPOS(selectedSummaryEventId)){
+    setClosePeriodErrorPOS('Cierre de período solo desde GLOBAL (consolida TODOS los eventos del mes).');
+    showToast('Cierre de período solo desde GLOBAL (consolida TODOS los eventos del mes).', 'error', 4000);
     return;
   }
 
@@ -15474,6 +15545,22 @@ async function manualExportClosePeriodPOS(){
     showToast('CONSOLIDADO es solo lectura. No se puede exportar desde esa vista.', 'error', 4000);
     return;
   }
+
+  // Guard obligatorio: export de cierre SOLO desde GLOBAL (mismo criterio que Cerrar período)
+  let selectedSummaryEventId = null;
+  try{
+    selectedSummaryEventId = await getSelectedSummaryEventIdPOS();
+  }catch(err){
+    setClosePeriodErrorPOS('No se pudo leer el selector de evento. Volvé a Resumen y elegí GLOBAL.');
+    showToast('No se pudo leer el selector de evento. Volvé a Resumen y elegí GLOBAL.', 'error', 4500);
+    return;
+  }
+  if (!isSummaryGlobalPOS(selectedSummaryEventId)){
+    setClosePeriodErrorPOS('Export de cierre solo desde GLOBAL (consolida TODOS los eventos del mes).');
+    showToast('Export de cierre solo desde GLOBAL (consolida TODOS los eventos del mes).', 'error', 4000);
+    return;
+  }
+
   const periodKey = getSummarySelectedPeriodKeyPOS();
   let lastSeq = 0;
   try{ lastSeq = Number(await getMeta('periodArchiveSeq') || 0) || 0; }catch(e){ lastSeq = 0; }
