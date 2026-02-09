@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.72&r=40">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.72&r=42">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.72&r=40">
+<link rel="stylesheet" href="styles.css?v=4.20.72&r=42">
   <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.72" />
 </head>
 <body>
@@ -1541,6 +1541,19 @@
   </div>
 </div>
 
+<!-- Modal Confirmación (reutilizable) — Cierres POS -->
+<div id="pos-confirm-modal" class="modal" aria-hidden="true">
+  <div class="panel panel-compact">
+    <h3 id="pos-confirm-title" style="margin-top:0">Confirmación</h3>
+    <div id="pos-confirm-message" class="pos-confirm-message"></div>
+
+    <div class="row" style="grid-template-columns:1fr 1fr; gap:10px; margin-top:14px">
+      <button id="pos-confirm-cancel" class="btn-outline btn-pill" type="button">Cancelar</button>
+      <button id="pos-confirm-confirm" class="btn-danger btn-pill" type="button">Confirmar</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true">Hecho</div>
 <footer></footer>
 <nav class="tabbar">
@@ -1564,16 +1577,16 @@
     try{      const v = '4.20.72';
       try{ window.A33_VERSION = v; }catch(_){ }
       // POS: bump revision local (solo este modulo) para forzar limpieza de caches
-      try{ window.A33_ASSET_REV = '38'; }catch(_){ }
-      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r39').toString(); }catch(_){ }
-      try{ window.A33_BUILD_TAG = (v + '-r38').toString(); }catch(_){ }
+      try{ window.A33_ASSET_REV = '42'; }catch(_){ }
+      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r42').toString(); }catch(_){ }
+      try{ window.A33_BUILD_TAG = (v + '-r42').toString(); }catch(_){ }
       const verEl = document.getElementById('a33-version-text');
       if (verEl) verEl.textContent = 'v' + v;
       const bEl = document.getElementById('pos-build-id');
       if (bEl) bEl.textContent = 'POS Build: ' + v;
       const cEl = document.getElementById('pos-sw-cache-id');
       if (cEl){
-        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r39')).toString();
+        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r42')).toString();
         cEl.textContent = 'SW Cache: ' + cn;
         cEl.title = cn;
       }
@@ -1634,7 +1647,7 @@
     })();
   })();
 </script>
-<script src="app.js?v=4.20.72&r=40"></script>
+<script src="app.js?v=4.20.72&r=42"></script>
 <script src="/assets/js/a33-input-ux.js?v=4.20.72"></script>
 <script>
   (function(){

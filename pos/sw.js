@@ -3,17 +3,17 @@
 */
 
 const SW_VERSION = '4.20.72';
-const SW_REV = '40';
+const SW_REV = '42';
 const MODULE = 'pos';
 const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}-r${SW_REV}`;
 
 const PRECACHE_URLS = [
   './',
   './index.html?v=4.20.72',
-  './index.html?v=4.20.72&r=40',
-  './styles.css?v=4.20.72&r=40',
-  './app.js?v=4.20.72&r=40',
-  './manifest.webmanifest?v=4.20.72&r=40',
+  './index.html?v=4.20.72&r=42',
+  './styles.css?v=4.20.72&r=42',
+  './app.js?v=4.20.72&r=42',
+  './manifest.webmanifest?v=4.20.72&r=42',
   './offline.html',
   './logo.png',
   './vendor/xlsx.full.min.js?v=0.18.5',

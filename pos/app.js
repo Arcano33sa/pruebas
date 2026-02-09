@@ -7,7 +7,7 @@ let db;
 const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.72';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r39');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r41');
 
 // --- Util: round2 (2 decimales) — Hotfix Ventas Etapa 1/3
 // Nota: evita NaN y errores de flotante (EPSILON). Retorna Number.
@@ -14604,10 +14604,11 @@ async function onSummaryCloseDayPOS(){
 
   clearSummaryCloseBlockerPOS();
 
-  // Confirmación clara del evento antes de ejecutar el cierre
+  // Confirmación obligatoria antes de cerrar (anti-error humano)
   {
-    const msg = 'Vas a cerrar el día de:\n\n' + (ev.name||'—') + '\n\nFecha: ' + dayKey + '\n\nEsto bloqueará ventas y operaciones para este día.\n\n¿Confirmas?';
-    if (!confirm(msg)) return;
+    const msg = `¿Estás seguro que vas a cerrar el día “${dayKey}” del evento “${(ev.name||'Evento')}”?`;
+    const ok = await showConfirmClosePOS({ title: 'Cerrar día', message: msg });
+    if (!ok) return;
   }
 
   try{
@@ -14810,6 +14811,65 @@ function closeModalPOS(modalId){
   const modal = document.getElementById(modalId);
   if (!modal) return;
   modal.style.display = 'none';
+}
+
+// Confirm modal reutilizable (iPad-friendly) para acciones destructivas en POS
+function showConfirmClosePOS({ title, message } = {}){
+  return new Promise((resolve)=>{
+    const modalId = 'pos-confirm-modal';
+    const modal = document.getElementById(modalId);
+    const elTitle = document.getElementById('pos-confirm-title');
+    const elMsg = document.getElementById('pos-confirm-message');
+    const btnCancel = document.getElementById('pos-confirm-cancel');
+    const btnConfirm = document.getElementById('pos-confirm-confirm');
+    if (!modal || !btnCancel || !btnConfirm || !elMsg){
+      console.warn('showConfirmClosePOS: modal incompleto');
+      resolve(false);
+      return;
+    }
+
+    const safeTitle = (title != null) ? String(title) : '';
+    const safeMsg = (message != null) ? String(message) : '';
+
+    if (elTitle){
+      elTitle.textContent = safeTitle || 'Confirmación';
+    }
+    elMsg.textContent = safeMsg;
+
+    let done = false;
+    const cleanup = ()=>{
+      try{ modal.onclick = null; }catch(_){ }
+      try{ btnCancel.onclick = null; }catch(_){ }
+      try{ btnConfirm.onclick = null; }catch(_){ }
+      try{ document.removeEventListener('keydown', onKey, true); }catch(_){ }
+    };
+    const finish = (v)=>{
+      if (done) return;
+      done = true;
+      cleanup();
+      try{ closeModalPOS(modalId); }catch(_){ }
+      resolve(!!v);
+    };
+    const onKey = (e)=>{
+      if (e && e.key === 'Escape'){
+        try{ e.preventDefault(); }catch(_){ }
+        finish(false);
+      }
+    };
+
+    btnCancel.onclick = ()=>finish(false);
+    btnConfirm.onclick = ()=>finish(true);
+
+    // Tap fuera cancela (patrón móvil)
+    modal.onclick = (e)=>{
+      if (e && e.target === modal) finish(false);
+    };
+
+    try{ document.addEventListener('keydown', onKey, true); }catch(_){ }
+    openModalPOS(modalId);
+    // Importante: NO auto-focus en Confirmar
+    try{ btnCancel.focus({ preventScroll: true }); }catch(_){ }
+  });
 }
 
 function setClosePeriodErrorPOS(msg){
@@ -15424,6 +15484,12 @@ async function confirmClosePeriodPOS(){
     return;
   }
 
+  if (__A33_SUMMARY_VIEW_MODE === 'all'){
+    setClosePeriodErrorPOS('Selecciona un período para cerrar.');
+    showToast('Selecciona un período para cerrar.', 'error', 3500);
+    return;
+  }
+
   // Guard obligatorio: Cerrar período SOLO desde GLOBAL (cierre consolidado)
   let selectedSummaryEventId = null;
   try{
@@ -15437,6 +15503,14 @@ async function confirmClosePeriodPOS(){
     setClosePeriodErrorPOS('Cierre de período solo desde GLOBAL (consolida TODOS los eventos del mes).');
     showToast('Cierre de período solo desde GLOBAL (consolida TODOS los eventos del mes).', 'error', 4000);
     return;
+  }
+
+  // Confirmación obligatoria antes de cerrar/archivar el período (anti-error humano)
+  {
+    const periodKey = getSummarySelectedPeriodKeyPOS();
+    const msg = `¿Estás seguro que vas a cerrar el período “${periodLabelPOS(periodKey)}”?`;
+    const ok = await showConfirmClosePOS({ title: 'Cerrar período', message: msg });
+    if (!ok) return;
   }
 
   await runWithSavingLockPOS({
@@ -15545,6 +15619,17 @@ async function manualExportClosePeriodPOS(){
     showToast('CONSOLIDADO es solo lectura. No se puede exportar desde esa vista.', 'error', 4000);
     return;
   }
+
+  if (__A33_SUMMARY_MODE === 'archive'){
+    showToast('Estás viendo un período archivado. Volvé a En vivo para exportar.', 'error', 3500);
+    return;
+  }
+  if (__A33_SUMMARY_VIEW_MODE === 'all'){
+    setClosePeriodErrorPOS('Selecciona un período para exportar.');
+    showToast('Selecciona un período para exportar.', 'error', 3500);
+    return;
+  }
+
 
   // Guard obligatorio: export de cierre SOLO desde GLOBAL (mismo criterio que Cerrar período)
   let selectedSummaryEventId = null;
@@ -17223,15 +17308,23 @@ async function closeEvent(eventId){
   if (!ev){ alert('Evento no encontrado'); return; }
   if (ev.closedAt){ alert('Este evento ya está cerrado.'); return; }
 
+  // Confirmación obligatoria antes de cerrar (anti-error humano)
+  {
+    const msg = `¿Estás seguro que vas a cerrar el evento “${(ev.name||'Evento')}”?`;
+    const ok = await showConfirmClosePOS({ title: 'Cerrar evento', message: msg });
+    if (!ok) return;
+  }
+
 
   // Corte (Excel). Si falla, permitir cerrar de todas formas.
   try{
     await generateCorteCSV(eventId);
   } catch(err){
     console.error('generateCorteCSV error', err);
-    const ok = confirm(
-      'No se pudo generar el Corte (Excel) por un error.\n\n¿Cerrar el evento de todas formas?\n(Podrás exportar después desde Eventos: “Exportar (Excel)” o “CSV Corte”.)'
-    );
+    const ok = await showConfirmClosePOS({
+      title: 'Corte falló',
+      message: 'No se pudo generar el Corte (Excel) por un error.\n\n¿Cerrar el evento de todas formas?\n(Podrás exportar después desde Eventos: “Exportar (Excel)” o “CSV Corte”.)'
+    });
     if (!ok) return;
   }
 
