@@ -176,11 +176,47 @@
 
   <script src="/assets/js/a33-storage.js?v=4.20.42"></script>
   <script src="/assets/js/a33-presentations.js?v=4.20.42"></script>
-  <script src="/assets/js/a33-auth.js?v=4.20.74"></script>
+  <script src="/assets/js/a33-auth.js?v=4.20.75"></script>
   <script>
-    if (!(A33Auth.isConfigured() && A33Auth.isAuthenticated())){
-      location.href = "../index.html";
-    }
+    (async () => {
+      // Guard robusto (mala señal / offline): evita loops y fallbacks raros.
+      try{
+        if (!window.A33Auth) return;
+
+        if (typeof A33Auth.ensureMigrated === 'function'){
+          try{ await A33Auth.ensureMigrated(); }catch(_){ }
+        }
+
+        const authed = (typeof A33Auth.isConfigured === 'function' && typeof A33Auth.isAuthenticated === 'function')
+          ? (A33Auth.isConfigured() && A33Auth.isAuthenticated())
+          : false;
+        if (authed) return;
+
+        const looksOffline = async () => {
+          try{
+            if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+            const ctrl = ('AbortController' in window) ? new AbortController() : null;
+            const t = ctrl ? setTimeout(() => { try{ ctrl.abort(); }catch(_){ } }, 2500) : null;
+            await fetch('../index.html', { method: 'HEAD', cache: 'no-store', signal: ctrl ? ctrl.signal : undefined });
+            if (t) clearTimeout(t);
+            return false;
+          }catch(_){ return true; }
+        };
+
+        if (await looksOffline()){
+          try{ location.replace('./offline.html?reason=auth'); }catch(_){ }
+          return;
+        }
+
+        if (typeof A33Auth.requireAuth === 'function'){
+          await A33Auth.requireAuth({ redirectTo: '../index.html' });
+        }else{
+          location.href = '../index.html';
+        }
+      }catch(_){
+        try{ location.replace('../index.html'); }catch(__){ }
+      }
+    })();
   </script>
   <script src="script.js?v=4.20.42"></script>
   <script src="/assets/js/a33-input-ux.js?v=4.20.42"></script>

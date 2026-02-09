@@ -281,7 +281,7 @@
   <script src="./vendor/xlsx.full.min.js?v=4.20.13"></script>
   <script src="/assets/js/a33-storage.js?v=4.20.13"></script>
   <script src="/assets/js/a33-presentations.js?v=4.20.13"></script>
-  <script src="/assets/js/a33-auth.js?v=4.20.74"></script>
+  <script src="/assets/js/a33-auth.js?v=4.20.75"></script>
     <script>
     (async () => {
       // Guard robusto (mala señal / offline): evita loops por login.
@@ -322,7 +322,7 @@
 
         if (await looksOffline()){
           // Pantalla offline dentro del módulo (no redirección al menú).
-          try{ location.replace('./offline.html'); }catch(_){ }
+          try{ location.replace('./offline.html?reason=auth'); }catch(_){ }
           return;
         }
 

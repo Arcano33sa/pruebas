@@ -1557,7 +1557,7 @@
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
 <script src="/assets/js/a33-storage.js?v=4.20.72"></script>
   <script src="/assets/js/a33-presentations.js?v=4.20.72"></script>
-<script src="/assets/js/a33-auth.js?v=4.20.74"></script>
+<script src="/assets/js/a33-auth.js?v=4.20.75"></script>
 <script src="/assets/js/a33-build.js?v=4.20.72"></script>
 <script>
   (function(){
@@ -1583,26 +1583,55 @@
 
 <script>
   (function(){
-    try{
-      const ok = (window.A33Auth && typeof A33Auth.isConfigured === 'function' && typeof A33Auth.isAuthenticated === 'function')
-        ? (A33Auth.isConfigured() && A33Auth.isAuthenticated())
-        : false;
-      if (!ok){
-        const offline = (typeof navigator !== 'undefined' && navigator.onLine === false);
-        if (offline){
-          location.replace('./offline.html?reason=auth');
-        }else{
-          location.replace('../index.html');
+    (async () => {
+      // Guard robusto (mala señal / offline): evita loops y fallbacks raros.
+      try{
+        if (!window.A33Auth) return;
+
+        // Migraciones suaves de auth (si aplica)
+        if (typeof A33Auth.ensureMigrated === 'function'){
+          try{ await A33Auth.ensureMigrated(); }catch(_){ }
         }
+
+        const authed = (typeof A33Auth.isConfigured === 'function' && typeof A33Auth.isAuthenticated === 'function')
+          ? (A33Auth.isConfigured() && A33Auth.isAuthenticated())
+          : false;
+
+        if (authed) return;
+
+        const looksOffline = async () => {
+          try{
+            if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+            const ctrl = ('AbortController' in window) ? new AbortController() : null;
+            const t = ctrl ? setTimeout(() => { try{ ctrl.abort(); }catch(_){ } }, 2500) : null;
+            await fetch('../index.html', {
+              method: 'HEAD',
+              cache: 'no-store',
+              signal: ctrl ? ctrl.signal : undefined
+            });
+            if (t) clearTimeout(t);
+            return false;
+          }catch(_){
+            return true;
+          }
+        };
+
+        if (await looksOffline()){
+          // Pantalla offline dentro del módulo (no redirección al menú).
+          try{ location.replace('./offline.html?reason=auth'); }catch(_){ }
+          return;
+        }
+
+        // Online: exigir auth (redirige al Home si no hay sesión)
+        if (typeof A33Auth.requireAuth === 'function'){
+          await A33Auth.requireAuth({ redirectTo: '../index.html' });
+        }else{
+          location.href = '../index.html';
+        }
+      }catch(_){
+        try{ location.replace('../index.html'); }catch(__){ }
       }
-    }catch(_){
-      const offline = (typeof navigator !== 'undefined' && navigator.onLine === false);
-      if (offline){
-        location.replace('./offline.html?reason=auth');
-      }else{
-        location.replace('../index.html');
-      }
-    }
+    })();
   })();
 </script>
 <script src="app.js?v=4.20.72&r=40"></script>
