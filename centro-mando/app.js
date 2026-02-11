@@ -20,6 +20,10 @@ const CMD_GLOBAL_LABEL = 'GLOBAL (Activos)';
 const CMD_GLOBAL_VALUE = '__GLOBAL_ACTIVOS__';
 const ORDERS_LS_KEY = 'arcano33_pedidos';
 const ORDERS_ROUTE = '../pedidos/index.html';
+const COMPRAS_PLAN_ROUTE = '../finanzas/index.html#tab=comprasplan';
+
+// Compras (Finanzas → Compras planificación): solo lectura (dock CdM)
+const FIN_COMPRAS_CURRENT_KEY = 'a33_finanzas_compras_current_v1';
 const SAFE_SCAN_LIMIT = 4000; // seguridad: evitar loops gigantes
 
 // Efectivo v2: cache FX por evento (misma llave que POS)
@@ -501,6 +505,7 @@ function refreshInvRiskBlock(){
       renderDockCompactCounts({
         orders: (typeof prev.orders === 'number') ? prev.orders : null,
         reminders: (typeof prev.reminders === 'number') ? prev.reminders : null,
+        purchases: (typeof prev.purchases === 'number') ? prev.purchases : null,
         invTotal,
         invRed,
         invYellow,
@@ -560,12 +565,12 @@ function bindGlobalDockSpace(){
 const dockUI = {
   expanded: false,
   __bound: false,
-  lastCounts: { orders:null, reminders:null, invTotal:null, invRed:0, invYellow:0 },
+  lastCounts: { orders:null, reminders:null, purchases:null, invTotal:null, invRed:0, invYellow:0 },
   // Hardening/Perf: evitar renders repetidos y reentrancias en iPad/PWA
   __refreshToken: 0,
   __inflight: false,
   __lastFullAt: 0,
-  __lastFullCounts: { orders:null, reminders:null, invTotal:null, invRed:0, invYellow:0 },
+  __lastFullCounts: { orders:null, reminders:null, purchases:null, invTotal:null, invRed:0, invYellow:0 },
   __lastFullFlags: '',
 };
 
@@ -578,6 +583,7 @@ function dockCountsEq(a, b){
     return (
       norm(aa.orders) === norm(bb.orders) &&
       norm(aa.reminders) === norm(bb.reminders) &&
+      norm(aa.purchases) === norm(bb.purchases) &&
       norm(aa.invTotal) === norm(bb.invTotal) &&
       norm(aa.invRed) === norm(bb.invRed) &&
       norm(aa.invYellow) === norm(bb.invYellow)
@@ -655,15 +661,17 @@ function renderDockCompactCounts(counts){
   counts = counts || {};
   const ordersN = (typeof counts.orders === 'number') ? counts.orders : null;
   const remN = (typeof counts.reminders === 'number') ? counts.reminders : null;
+  const purchasesN = (typeof counts.purchases === 'number') ? counts.purchases : null;
   const invTotal = (typeof counts.invTotal === 'number') ? counts.invTotal : null;
   const invRed = (typeof counts.invRed === 'number') ? counts.invRed : 0;
   const invYellow = (typeof counts.invYellow === 'number') ? counts.invYellow : 0;
 
   try{
-    dockUI.lastCounts = { orders: ordersN, reminders: remN, invTotal, invRed, invYellow };
+    dockUI.lastCounts = { orders: ordersN, reminders: remN, purchases: purchasesN, invTotal, invRed, invYellow };
   }catch(_){ }
 
   setDockText('dockOrdersN', (ordersN == null) ? '—' : String(ordersN));
+  setDockText('dockPurchasesN', (purchasesN == null) ? '—' : String(purchasesN));
   setDockText('dockRemindersN', (remN == null) ? '—' : String(remN));
   setDockText('dockInvN', (invTotal == null) ? '—' : String(invTotal));
 
@@ -675,11 +683,12 @@ function renderDockCompactCounts(counts){
     else splitEl.textContent = '';
   }
 
-  const allNumbers = (ordersN != null) && (remN != null) && (invTotal != null);
-  const allZero = allNumbers && (ordersN === 0) && (remN === 0) && (invTotal === 0);
+  const allNumbers = (ordersN != null) && (remN != null) && (purchasesN != null) && (invTotal != null);
+  const allZero = allNumbers && (ordersN === 0) && (remN === 0) && (purchasesN === 0) && (invTotal === 0);
 
   setDockChipHidden('dockAllGood', !allZero);
   setDockChipHidden('dockOrdersChip', allZero);
+  setDockChipHidden('dockPurchasesChip', allZero);
   setDockChipHidden('dockRemindersChip', allZero);
   setDockChipHidden('dockInvChip', allZero);
 }
@@ -888,6 +897,112 @@ function safeStr(x){
   return s.trim();
 }
 
+
+// --- Compras pendientes (Finanzas → Compras planificación) — solo lectura (DATA, sin UI)
+function finComprasNormalizePurchased(val){
+  // true: true, "true", "1", "si", "sí", "yes" (case-insensitive). Todo lo demás => false.
+  if (val === true) return true;
+  if (val === 1) return true;
+  const s = safeStr(val).toLowerCase();
+  if (!s) return false;
+  return (s === 'true' || s === '1' || s === 'si' || s === 'sí' || s === 'yes');
+}
+
+function finComprasLineHasContent(line){
+  if (!line || typeof line !== 'object') return false;
+  // Dinámica de Finanzas: cuenta como “con contenido” si tiene cualquiera de estos campos.
+  const fields = ['supplierId','supplierName','product','quantity','price'];
+  for (const k of fields){
+    try{
+      const v = line[k];
+      if (safeStr(v)) return true;
+    }catch(_){ }
+  }
+  return false;
+}
+
+function readFinComprasCurrentSafe(){
+  // Lectura robusta: si no existe/corrupto => null (sin lanzar)
+  const raw = safeLSGetJSON(FIN_COMPRAS_CURRENT_KEY, null);
+  if (!raw || typeof raw !== 'object') return null;
+
+  const sections = (raw.sections && typeof raw.sections === 'object') ? raw.sections : {};
+  const proveedores = Array.isArray(sections.proveedores) ? sections.proveedores : [];
+  const varias = Array.isArray(sections.varias) ? sections.varias : [];
+
+  // Normalizar sólo lo que necesitamos, sin forzar el resto
+  return {
+    ...raw,
+    sections: { proveedores, varias },
+  };
+}
+
+function computeFinComprasPending(){
+  // Nunca lanzar excepción. Si falla algo => ok:false, pendingCountTotal:null
+  try{
+    const pcCurrent = readFinComprasCurrentSafe();
+    if (!pcCurrent){
+      return {
+        ok:false,
+        pendingCountTotal:null,
+        pendingProveedores:[],
+        pendingVarias:[],
+        updatedAtISO:'',
+        updatedAtDisplay:'',
+        sourceKey: FIN_COMPRAS_CURRENT_KEY,
+      };
+    }
+
+    const sec = (pcCurrent.sections && typeof pcCurrent.sections === 'object') ? pcCurrent.sections : {};
+    const proveedores = Array.isArray(sec.proveedores) ? sec.proveedores : [];
+    const varias = Array.isArray(sec.varias) ? sec.varias : [];
+
+    const pendingProveedores = [];
+    const pendingVarias = [];
+
+    const addPending = (srcArr, outArr)=>{
+      for (const line of (Array.isArray(srcArr) ? srcArr : [])){
+        if (!line || typeof line !== 'object') continue;
+        if (!finComprasLineHasContent(line)) continue;
+        if (finComprasNormalizePurchased(line.purchased)) continue;
+
+        outArr.push({
+          supplierId: line.supplierId ?? '',
+          supplierName: safeStr(line.supplierName),
+          product: safeStr(line.product),
+          quantity: safeStr(line.quantity),
+          price: safeStr(line.price),
+        });
+
+        if (outArr.length >= SAFE_SCAN_LIMIT) break; // hard stop
+      }
+    };
+
+    addPending(proveedores, pendingProveedores);
+    addPending(varias, pendingVarias);
+
+    return {
+      ok:true,
+      pendingCountTotal: pendingProveedores.length + pendingVarias.length,
+      pendingProveedores,
+      pendingVarias,
+      updatedAtISO: safeStr(pcCurrent.updatedAtISO),
+      updatedAtDisplay: safeStr(pcCurrent.updatedAtDisplay),
+      sourceKey: FIN_COMPRAS_CURRENT_KEY,
+    };
+  }catch(_){
+    return {
+      ok:false,
+      pendingCountTotal:null,
+      pendingProveedores:[],
+      pendingVarias:[],
+      updatedAtISO:'',
+      updatedAtDisplay:'',
+      sourceKey: FIN_COMPRAS_CURRENT_KEY,
+    };
+  }
+}
+
 function uiProdNameCMD(name){
   try{
     if (window.A33Presentations && typeof A33Presentations.canonicalizeProductName === 'function'){
@@ -922,6 +1037,78 @@ function safeLSGetJSON(key, fallback=null){
     return JSON.parse(raw);
   }catch(_){
     return fallback;
+  }
+}
+
+function safeLSGetString(key){
+  try{
+    if (window.A33Storage && typeof A33Storage.getItem === 'function') return A33Storage.getItem(key);
+    return localStorage.getItem(key);
+  }catch(_){
+    return null;
+  }
+}
+
+function hash32FNV1a(str){
+  try{
+    const s = (str == null) ? '' : String(str);
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++){
+      h ^= s.charCodeAt(i);
+      // h *= 16777619 (con overflow 32-bit)
+      h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+    }
+    return (h >>> 0);
+  }catch(_){
+    return 0;
+  }
+}
+
+function computeFinComprasPendingCountAndStamp(){
+  // Lite: conteo + sello de cambios (para gating del dock). Nunca lanza.
+  try{
+    const pcCurrent = readFinComprasCurrentSafe();
+    if (!pcCurrent){
+      return { ok:false, pendingCountTotal:null, stamp:'x', updatedAtISO:'', updatedAtDisplay:'', sourceKey: FIN_COMPRAS_CURRENT_KEY };
+    }
+
+    const sec = (pcCurrent.sections && typeof pcCurrent.sections === 'object') ? pcCurrent.sections : {};
+    const proveedores = Array.isArray(sec.proveedores) ? sec.proveedores : [];
+    const varias = Array.isArray(sec.varias) ? sec.varias : [];
+
+    let count = 0;
+    const bump = (srcArr)=>{
+      for (const line of (Array.isArray(srcArr) ? srcArr : [])){
+        if (!line || typeof line !== 'object') continue;
+        if (!finComprasLineHasContent(line)) continue;
+        if (finComprasNormalizePurchased(line.purchased)) continue;
+        count++;
+        if (count >= SAFE_SCAN_LIMIT) break;
+      }
+    };
+    bump(proveedores);
+    if (count < SAFE_SCAN_LIMIT) bump(varias);
+
+    const uISO = safeStr(pcCurrent.updatedAtISO);
+    const uDisp = safeStr(pcCurrent.updatedAtDisplay);
+    let stamp = uISO || uDisp;
+    if (stamp){
+      stamp = 'u' + stamp;
+    } else {
+      const raw = safeLSGetString(FIN_COMPRAS_CURRENT_KEY);
+      stamp = raw ? ('h' + hash32FNV1a(raw).toString(36)) : ('c' + String(count));
+    }
+
+    return {
+      ok:true,
+      pendingCountTotal: count,
+      stamp,
+      updatedAtISO: uISO,
+      updatedAtDisplay: uDisp,
+      sourceKey: FIN_COMPRAS_CURRENT_KEY,
+    };
+  }catch(_){
+    return { ok:false, pendingCountTotal:null, stamp:'x', updatedAtISO:'', updatedAtDisplay:'', sourceKey: FIN_COMPRAS_CURRENT_KEY };
   }
 }
 
@@ -1407,6 +1594,7 @@ function renderRemindersBlock(payload){
     renderDockCompactCounts({
       orders: (typeof prev.orders === 'number') ? prev.orders : null,
       reminders: pendingCount,
+      purchases: (typeof prev.purchases === 'number') ? prev.purchases : null,
       invTotal: (typeof prev.invTotal === 'number') ? prev.invTotal : null,
       invRed: (typeof prev.invRed === 'number') ? prev.invRed : 0,
       invYellow: (typeof prev.invYellow === 'number') ? prev.invYellow : 0,
@@ -2357,6 +2545,9 @@ const state = {
   __globalAutoOpened: false,
   today: todayYMD(),
   currentAlerts: [],
+
+  // Compras pendientes (Finanzas → Compras planificación) — data lista (sin UI en Etapa 1)
+  comprasPending: null,
 };
 
 // --- UI render
@@ -4911,6 +5102,14 @@ function navigateToPedidos(){
 }
 
 
+function navigateToComprasPlan(){
+  try{
+    window.location.href = COMPRAS_PLAN_ROUTE;
+  }catch(_){ }
+}
+
+
+
 
 // POS route resolver (robusto: /pruebas/pos vs /pos, según dónde viva el Centro de Mando)
 let __A33_POS_INDEX_HREF = null;
@@ -5336,12 +5535,25 @@ async function refreshAll(){
     invCounts = { ok:false, invTotal:null, invRed:0, invYellow:0 };
   }
 
+  // Compras pendientes (Finanzas → Compras planificación): conteo liviano + sello (para gating)
+  let purchasesPending = null;
+  let purchasesStamp = 'x';
+  try{
+    const pcLite = computeFinComprasPendingCountAndStamp();
+    purchasesPending = (pcLite && pcLite.ok && typeof pcLite.pendingCountTotal === 'number') ? pcLite.pendingCountTotal : null;
+    purchasesStamp = (pcLite && typeof pcLite.stamp === 'string' && pcLite.stamp) ? pcLite.stamp : (purchasesPending == null ? 'x' : ('c' + String(purchasesPending)));
+  }catch(_){
+    purchasesPending = null;
+    purchasesStamp = 'x';
+  }
+
   const remPending = (remNext7 && remNext7.ok && Array.isArray(remNext7.rows)) ? remNext7.rows.filter(x=> !(x && x.done)).length : null;
   const ordersPending = (ordersCtx && typeof ordersCtx.pendingCount === 'number') ? ordersCtx.pendingCount : null;
   const invTotal = (invCounts && invCounts.ok && typeof invCounts.invTotal === 'number') ? invCounts.invTotal : null;
   renderDockCompactCounts({
     orders: ordersPending,
     reminders: remPending,
+    purchases: purchasesPending,
     invTotal,
     invRed: invCounts ? invCounts.invRed : 0,
     invYellow: invCounts ? invCounts.invYellow : 0,
@@ -5350,8 +5562,10 @@ async function refreshAll(){
   // Render completo SOLO en modo expandido (performance iPad/PWA)
   let ordersOut = { alerts:[], unavailable:[] };
   if (dockExpanded){
-    const flagsNow = `d${remindersGetShowDone() ? 1 : 0}|l${invViewState && invViewState.liquidsExpanded ? 1 : 0}|b${invViewState && invViewState.bottlesExpanded ? 1 : 0}`;
-    const countsNow = { orders: ordersPending, reminders: remPending, invTotal, invRed: invCounts ? invCounts.invRed : 0, invYellow: invCounts ? invCounts.invYellow : 0 };
+    const purchasesSig = (purchasesStamp && typeof purchasesStamp === 'string') ? purchasesStamp : (purchasesPending == null ? 'x' : ('c' + String(purchasesPending)));
+
+    const flagsNow = `d${remindersGetShowDone() ? 1 : 0}|l${invViewState && invViewState.liquidsExpanded ? 1 : 0}|b${invViewState && invViewState.bottlesExpanded ? 1 : 0}|p${purchasesSig}`;
+    const countsNow = { orders: ordersPending, reminders: remPending, purchases: purchasesPending, invTotal, invRed: invCounts ? invCounts.invRed : 0, invYellow: invCounts ? invCounts.invYellow : 0 };
     const canSkipFull = !!(dockUI && dockUI.__lastFullAt && ((Date.now() - Number(dockUI.__lastFullAt||0)) < 6000)
       && dockCountsEq(dockUI.__lastFullCounts, countsNow)
       && (dockUI.__lastFullFlags === flagsNow));
@@ -5360,10 +5574,18 @@ async function refreshAll(){
       try{ renderRemindersBlock(remNext7); }catch(_){ try{ renderRemindersBlock({ ok:false, rows:[], reason:'No disponible', dayKeys:[] }); }catch(__){ } }
       try{ refreshInvRiskBlock(); }catch(_){ try{ renderInvRiskBlock(null, null); }catch(__){ } }
       try{ ordersOut = renderOrdersOperative(ordersCtx); }catch(_){ ordersOut = { alerts: (ordersCtx && Array.isArray(ordersCtx.alerts)) ? ordersCtx.alerts : [], unavailable: (ordersCtx && Array.isArray(ordersCtx.unavailable)) ? ordersCtx.unavailable : [] }; }
+      // Compras: solo cuando está expandido y NO se puede saltar el render (fail-safe)
+      try{
+        const comprasCtxFull = computeFinComprasPending();
+        try{ state.comprasPending = comprasCtxFull; }catch(__){ }
+        renderPurchasesBlock(comprasCtxFull);
+      }catch(_){
+        try{ renderPurchasesBlock({ ok:false, pendingCountTotal:null, pendingProveedores:[], pendingVarias:[], updatedAtISO:'', updatedAtDisplay:'', sourceKey: FIN_COMPRAS_CURRENT_KEY }); }catch(__){ }
+      }
 
       try{
         dockUI.__lastFullAt = Date.now();
-        dockUI.__lastFullCounts = { orders: ordersPending, reminders: remPending, invTotal, invRed: invCounts ? invCounts.invRed : 0, invYellow: invCounts ? invCounts.invYellow : 0 };
+        dockUI.__lastFullCounts = { orders: ordersPending, reminders: remPending, purchases: purchasesPending, invTotal, invRed: invCounts ? invCounts.invRed : 0, invYellow: invCounts ? invCounts.invYellow : 0 };
         dockUI.__lastFullFlags = flagsNow;
       }catch(_){ }
     } else {
@@ -5497,6 +5719,196 @@ if (cv2.ok && cv2.enabled === false){
   }
 }
 
+
+
+// --- Compras (dock expandido): render tabla (Por proveedor + Compras varias)
+function parseNumberLoose(val){
+  const raw = safeStr(val);
+  if (!raw) return NaN;
+  let t = raw.replace(/[^0-9,.\-]/g, '');
+  if (!t) return NaN;
+
+  // Soportar coma como decimal (y miles en cualquiera de los dos estilos)
+  // Regla: si vienen ambos separadores, el ÚLTIMO define el decimal.
+  if (t.includes(',') && t.includes('.')){
+    const lastComma = t.lastIndexOf(',');
+    const lastDot = t.lastIndexOf('.');
+    if (lastComma > lastDot){
+      // 1.234,56  => 1234.56
+      t = t.replace(/\./g, '').replace(/,/g, '.');
+    } else {
+      // 1,234.56  => 1234.56
+      t = t.replace(/,/g, '');
+    }
+  }
+  // Si sólo viene "," => decimal
+  else if (t.includes(',') && !t.includes('.')){
+    t = t.replace(/,/g, '.');
+  }
+
+  const n = parseFloat(t);
+  return (isFinite(n) ? n : NaN);
+}
+
+function detectCurrencySymbol(priceStr){
+  const s = safeStr(priceStr);
+  if (!s) return '';
+  const low = s.toLowerCase();
+  if (low.includes('c$')) return 'C$';
+  if (low.includes('usd')) return 'USD';
+  if (s.includes('$')) return '$';
+  return '';
+}
+
+function fmtMoney2(n){
+  try{
+    if (!isFinite(n)) return '—';
+    return n.toLocaleString('es-NI', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }catch(_){
+    try{ return String(Math.round(Number(n) * 100) / 100); }catch(__){ return '—'; }
+  }
+}
+
+function renderPurchasesBlock(pc){
+  const msgEl = $('purchasesMsg');
+  const sectionsEl = $('purchasesSections');
+  const byEl = $('purchasesBySupplier');
+  const vaEl = $('purchasesVarias');
+  const moreEl = $('purchasesMore');
+  if (!msgEl || !sectionsEl || !byEl || !vaEl) return;
+
+  const clear = (el)=>{
+    try{
+      while (el.firstChild) el.removeChild(el.firstChild);
+    }catch(_){
+      try{ el.textContent = ''; }catch(__){ }
+    }
+  };
+
+  clear(byEl);
+  clear(vaEl);
+  if (moreEl){
+    moreEl.hidden = true;
+    moreEl.textContent = '';
+  }
+
+  const showMsg = (t)=>{
+    try{
+      msgEl.hidden = false;
+      msgEl.textContent = t;
+      sectionsEl.hidden = true;
+    }catch(_){ }
+  };
+
+  const showSections = ()=>{
+    try{
+      msgEl.hidden = true;
+      msgEl.textContent = '';
+      sectionsEl.hidden = false;
+    }catch(_){ }
+  };
+
+  if (!pc || pc.ok !== true || typeof pc.pendingCountTotal !== 'number'){
+    showMsg('No disponible');
+    return;
+  }
+
+  if (pc.pendingCountTotal === 0){
+    showMsg('Sin compras pendientes');
+    return;
+  }
+
+  const proveedoresAll = Array.isArray(pc.pendingProveedores) ? pc.pendingProveedores : [];
+  const variasAll = Array.isArray(pc.pendingVarias) ? pc.pendingVarias : [];
+
+  // Normalizar "Varios"
+  const variasNorm = variasAll.map((line)=>{
+    const o = (line && typeof line === 'object') ? line : {};
+    const sn = safeStr(o.supplierName);
+    return { ...o, supplierName: sn || 'Varios' };
+  });
+
+  // Límite global
+  const MAX_ROWS = 20;
+
+  // Distribución: priorizar proveedores, pero si hay "varias" y proveedores llenan 20,
+  // reservar 1 fila para "varias" para que la sección no quede vacía.
+  let takeProv = Math.min(proveedoresAll.length, MAX_ROWS);
+  let takeVar = Math.min(variasNorm.length, Math.max(0, MAX_ROWS - takeProv));
+  if (takeVar === 0 && variasNorm.length > 0 && takeProv > 0){
+    takeProv = Math.max(0, MAX_ROWS - 1);
+    takeVar = 1;
+  }
+
+  const proveedoresShow = proveedoresAll.slice(0, takeProv);
+  const variasShow = variasNorm.slice(0, takeVar);
+  const shownTotal = proveedoresShow.length + variasShow.length;
+  const more = Math.max(0, pc.pendingCountTotal - shownTotal);
+
+  const labels = ['Proveedor', 'Producto', 'Cantidad', 'Total'];
+
+  const mkRow = (cells, isHead=false)=>{
+    const row = document.createElement('div');
+    row.className = 'cmd-purchases-row' + (isHead ? ' is-head' : '');
+    for (let i=0; i<4; i++){
+      const cell = document.createElement('div');
+      cell.className = 'cmd-purchases-cell' + ((i >= 2) ? ' num' : '');
+      cell.setAttribute('data-label', labels[i]);
+      cell.textContent = (cells[i] == null || cells[i] === '') ? '—' : String(cells[i]);
+      row.appendChild(cell);
+    }
+    return row;
+  };
+
+  const renderTable = (rowsToShow, el, hasAny, defaults={})=>{
+    clear(el);
+    el.appendChild(mkRow(labels, true));
+
+    if (!hasAny){
+      el.appendChild(mkRow(['—', 'Sin pendientes', '—', '—']));
+      return;
+    }
+
+    if (!Array.isArray(rowsToShow) || rowsToShow.length === 0){
+      // Hay pendientes, pero no caben por límite (extremo). Mantener UI clara.
+      el.appendChild(mkRow(['—', 'Ver Compras', '—', '—']));
+      return;
+    }
+
+    for (const line of rowsToShow){
+      const supplier = safeStr(line && line.supplierName) || safeStr(defaults.supplier) || '—';
+      const product = uiProdNameCMD(line && line.product) || '—';
+      const qty = safeStr(line && line.quantity) || '—';
+
+      const cur = detectCurrencySymbol(line && line.price);
+      const qn = parseNumberLoose(line && line.quantity);
+      const pn = parseNumberLoose(line && line.price);
+
+      let totalStr = '—';
+      if (isFinite(qn) && isFinite(pn)){
+        const tot = qn * pn;
+        const f = fmtMoney2(tot);
+        if (cur === 'C$') totalStr = `C$${f}`;
+        else if (cur === '$') totalStr = `$${f}`;
+        else if (cur === 'USD') totalStr = `USD ${f}`;
+        else totalStr = f;
+      }
+
+      el.appendChild(mkRow([supplier, product, qty, totalStr]));
+    }
+  };
+
+  showSections();
+  renderTable(proveedoresShow, byEl, proveedoresAll.length > 0, { supplier: '—' });
+  renderTable(variasShow, vaEl, variasNorm.length > 0, { supplier: 'Varios' });
+
+  if (moreEl){
+    moreEl.hidden = !(more > 0);
+    if (more > 0) moreEl.textContent = `y ${more} más…`;
+  }
+}
+
+
 // Refresh SOLO del panel inferior (compacto +, si aplica, panel expandido)
 async function refreshDockOnly(){
   // Hardening/Perf: token para cancelar renders si el usuario colapsa/expande rápido.
@@ -5527,12 +5939,24 @@ async function refreshDockOnly(){
     }catch(_){
       invCounts = { ok:false, invTotal:null, invRed:0, invYellow:0 };
     }
+    // Compras pendientes (Finanzas → Compras planificación): conteo liviano + sello (para gating)
+    // Nota: data completa para tabla SOLO si se requiere render del expandido.
+    let purchasesPending = null;
+    let purchasesStamp = 'x';
+    try{
+      const pcLite = computeFinComprasPendingCountAndStamp();
+      purchasesPending = (pcLite && pcLite.ok && typeof pcLite.pendingCountTotal === 'number') ? pcLite.pendingCountTotal : null;
+      purchasesStamp = (pcLite && typeof pcLite.stamp === 'string' && pcLite.stamp) ? pcLite.stamp : (purchasesPending == null ? 'x' : ('c' + String(purchasesPending)));
+    }catch(_){
+      purchasesPending = null;
+      purchasesStamp = 'x';
+    }
 
     const remPending = (remNext7 && remNext7.ok && Array.isArray(remNext7.rows)) ? remNext7.rows.filter(x=> !(x && x.done)).length : null;
     const ordersPending = (ordersCtx && typeof ordersCtx.pendingCount === 'number') ? ordersCtx.pendingCount : null;
     const invTotal = (invCounts && invCounts.ok && typeof invCounts.invTotal === 'number') ? invCounts.invTotal : null;
 
-    const countsNow = { orders: ordersPending, reminders: remPending, invTotal, invRed: invCounts ? invCounts.invRed : 0, invYellow: invCounts ? invCounts.invYellow : 0 };
+    const countsNow = { orders: ordersPending, reminders: remPending, purchases: purchasesPending, invTotal, invRed: invCounts ? invCounts.invRed : 0, invYellow: invCounts ? invCounts.invYellow : 0 };
     renderDockCompactCounts(countsNow);
 
     // Colapsado: SOLO conteos (sin render pesado)
@@ -5542,7 +5966,8 @@ async function refreshDockOnly(){
     try{ if (dockUI && dockUI.__refreshToken !== myToken) return; }catch(_){ }
     if (!isDockExpanded()) return;
 
-    const flagsNow = `d${remindersGetShowDone() ? 1 : 0}|l${invViewState && invViewState.liquidsExpanded ? 1 : 0}|b${invViewState && invViewState.bottlesExpanded ? 1 : 0}`;
+    const purchasesSig = (purchasesStamp && typeof purchasesStamp === 'string') ? purchasesStamp : (purchasesPending == null ? 'x' : ('c' + String(purchasesPending)));
+    const flagsNow = `d${remindersGetShowDone() ? 1 : 0}|l${invViewState && invViewState.liquidsExpanded ? 1 : 0}|b${invViewState && invViewState.bottlesExpanded ? 1 : 0}|p${purchasesSig}`;
     const canSkipFull = !!(dockUI && dockUI.__lastFullAt && ((Date.now() - Number(dockUI.__lastFullAt||0)) < 6000)
       && dockCountsEq(dockUI.__lastFullCounts, countsNow)
       && (dockUI.__lastFullFlags === flagsNow));
@@ -5559,6 +5984,17 @@ async function refreshDockOnly(){
     if (!isDockExpanded()) return;
 
     try{ renderOrdersOperative(ordersCtx); }catch(_){ try{ renderOrdersOperative({ ok:false, reason:'No disponible', unavailable: [{ key:'orders', label:'Pedidos', reason:'No disponible' }], alerts:[] }); }catch(__){ } }
+
+    // Compras: data completa solo aquí (cuando NO se puede saltar el render)
+    let comprasCtx = null;
+    try{
+      comprasCtx = computeFinComprasPending();
+      try{ state.comprasPending = comprasCtx; }catch(__){ }
+    }catch(_){
+      comprasCtx = { ok:false, pendingCountTotal:null, pendingProveedores:[], pendingVarias:[], updatedAtISO:'', updatedAtDisplay:'', sourceKey: FIN_COMPRAS_CURRENT_KEY };
+      try{ state.comprasPending = comprasCtx; }catch(__){ }
+    }
+    try{ renderPurchasesBlock(comprasCtx); }catch(_){ try{ renderPurchasesBlock({ ok:false, pendingCountTotal:null, pendingProveedores:[], pendingVarias:[], updatedAtISO:'', updatedAtDisplay:'', sourceKey: FIN_COMPRAS_CURRENT_KEY }); }catch(__){ } }
 
     try{
       if (dockUI){
@@ -5663,6 +6099,12 @@ async function init(){
   bindPedidos('btnGoPedidosToday');
   bindPedidos('btnGoPedidosTomorrow');
 
+  // Compras: CTA
+  const comprasBtn = $('btnGoComprasPlan');
+  if (comprasBtn){
+    comprasBtn.addEventListener('click', navigateToComprasPlan);
+  }
+
   // Alertas accionables: Sincronizar (pastilla)
   const syncBtn = $('btnSyncAlerts');
   if (syncBtn){
@@ -5724,6 +6166,17 @@ async function init(){
 
   clearMetricsToDash();
   renderAlerts(null);
+
+
+// Compras pendientes (Finanzas → Compras planificación): preparar data (sin render en esta etapa)
+try{
+  state.comprasPending = computeFinComprasPending();
+  // Debug suave (opcional): útil para smoke sin UI
+  window.__A33_CMD_COMPRAS_PENDING = state.comprasPending;
+}catch(_){
+  state.comprasPending = { ok:false, pendingCountTotal:null, pendingProveedores:[], pendingVarias:[], updatedAtISO:'', updatedAtDisplay:'', sourceKey: FIN_COMPRAS_CURRENT_KEY };
+  try{ window.__A33_CMD_COMPRAS_PENDING = state.comprasPending; }catch(__){ }
+}
 
   // Open DB
   let db;

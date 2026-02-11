@@ -187,6 +187,7 @@
         <div class="cmd-dock-mini" aria-label="Resumen del panel inferior">
           <span class="cmd-chip cmd-chip-neutral" id="dockAllGood" hidden>Al día ✅</span>
           <span class="cmd-chip cmd-chip-neutral" id="dockOrdersChip">Pedidos: <b id="dockOrdersN">—</b></span>
+          <span class="cmd-chip cmd-chip-neutral" id="dockPurchasesChip">Compras: <b id="dockPurchasesN">—</b></span>
           <span class="cmd-chip cmd-chip-neutral" id="dockRemindersChip">Recordatorios: <b id="dockRemindersN">—</b></span>
           <span class="cmd-chip cmd-chip-neutral" id="dockInvChip">Inventario en riesgo: <b id="dockInvN">—</b><span class="cmd-dock-inv-split" id="dockInvSplit" hidden></span></span>
         </div>
@@ -291,6 +292,31 @@
     </section>
         </div>
       </div>
+
+      <section class="cmd-card cmd-op cmd-purchases" id="purchasesBlock" aria-label="Compras pendientes">
+        <div class="cmd-section-head">
+          <div class="cmd-section-title">Compras</div>
+          <button class="cmd-pill cmd-pill-btn" id="btnGoComprasPlan" type="button">Ver Compras</button>
+        </div>
+
+        <div class="cmd-muted" id="purchasesMsg">No disponible</div>
+
+        <div class="cmd-purchases-sections" id="purchasesSections" hidden>
+          <div class="cmd-purchases-section">
+            <div class="cmd-muted cmd-purchases-label">Por proveedor</div>
+            <div class="cmd-purchases-table" id="purchasesBySupplier" role="table" aria-label="Compras por proveedor"></div>
+          </div>
+
+          <div class="cmd-purchases-section">
+            <div class="cmd-muted cmd-purchases-label">Compras varias</div>
+            <div class="cmd-purchases-table" id="purchasesVarias" role="table" aria-label="Compras varias"></div>
+          </div>
+
+          <div class="cmd-muted cmd-purchases-more" id="purchasesMore" hidden>y — más…</div>
+        </div>
+      </section>
+
+
     </div>
     </div>
   </div>

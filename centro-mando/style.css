@@ -1219,10 +1219,19 @@ button.cmd-pill{ cursor: pointer; }
 
 .cmd-dock-mini{
   display:flex;
+  flex: 1 1 auto;
   flex-wrap: wrap;
   gap: 8px;
   align-items:center;
   min-width: 0;
+}
+
+/* Hardening: evitar desbordes por textos largos dentro del dock compacto */
+.cmd-dock-mini .cmd-chip{
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cmd-dock-inv-split{
@@ -1274,6 +1283,78 @@ button.cmd-pill{ cursor: pointer; }
   flex-direction: column;
   gap: 12px;
 }
+
+/* Compras (dock expandido) */
+.cmd-purchases{ margin-top: 12px; }
+.cmd-purchases .cmd-section-head{ align-items: center; }
+.cmd-purchases-label{ margin-top: 10px; margin-bottom: 6px; }
+.cmd-purchases-sections{ display: block; }
+
+.cmd-purchases-table{
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(0,0,0,0.18);
+}
+
+.cmd-purchases-row{
+  display: grid;
+  grid-template-columns: minmax(110px, 1.15fr) minmax(160px, 1.85fr) minmax(70px, 0.55fr) minmax(90px, 0.75fr);
+  gap: 10px;
+  padding: 10px 10px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  align-items: start;
+}
+
+.cmd-purchases-row:first-child{ border-top: 0; }
+
+.cmd-purchases-row.is-head{
+  background: rgba(255,255,255,0.04);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.cmd-purchases-cell{
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.cmd-purchases-cell.num{
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.cmd-purchases-more{ margin-top: 8px; }
+
+@media (max-width: 720px){
+  .cmd-purchases-row{
+    grid-template-columns: 1fr 1fr;
+    row-gap: 8px;
+  }
+  .cmd-purchases-row.is-head{ display: none; }
+
+  .cmd-purchases-cell{
+    position: relative;
+    padding-top: 14px;
+  }
+  .cmd-purchases-cell::before{
+    content: attr(data-label);
+    position: absolute;
+    top: 0;
+    left: 0;
+    font-size: 11px;
+    opacity: 0.74;
+    letter-spacing: 0.03em;
+  }
+  .cmd-purchases-cell.num::before{
+    left: auto;
+    right: 0;
+  }
+}
+
+
 
 /* Quitar márgenes de secciones dentro del dock */
 .cmd-global-dock .cmd-reminders,
