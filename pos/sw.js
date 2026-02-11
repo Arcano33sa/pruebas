@@ -55,7 +55,9 @@ self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
     await cache.addAll(PRECACHE_URLS.filter(Boolean));
-    try{ self.skipWaiting(); }catch(_){ }
+    // En updates: dejar en waiting; el usuario decide cuándo aplicar.
+    // En primer install (sin SW activo): activación inmediata OK.
+    try{ if (!self.registration.active) self.skipWaiting(); }catch(_){ }
 
   })());
 });
