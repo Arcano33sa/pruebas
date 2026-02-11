@@ -4,10 +4,10 @@ const DB_VER = 31; // Etapa 1/5 (Efectivo v2 Histórico): nuevos stores aislados
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.72';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.73';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r41');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r44');
 
 // --- Util: round2 (2 decimales) — Hotfix Ventas Etapa 1/3
 // Nota: evita NaN y errores de flotante (EPSILON). Retorna Number.
@@ -12158,12 +12158,399 @@ async function revertCupConsumptionFromSalePOS(sale){
 
 
 // Importar inventario desde Control de Lotes
-async function importFromLoteToInventory(){
+	// Inventario (POS): Modal "Seleccionar lote" — Etapa 1 (solo lectura)
+	function normalizeLoteNotesPOS(notas){
+	  if (notas == null) return '';
+	  if (Array.isArray(notas)){
+	    return notas.map(x=>String(x ?? '').trim()).filter(Boolean).join(' | ');
+	  }
+	  return String(notas);
+	}
+	function formatLoteDatePOS(createdAt){
+	  const s = (createdAt != null) ? String(createdAt) : '';
+	  if (!s) return '';
+	  // ISO común: YYYY-MM-DDTHH:mm:ssZ
+	  if (s.length >= 10) return s.slice(0,10);
+	  return s;
+	}
+	function loteCreatedTsPOS(l){
+	  try{
+	    if (!l) return 0;
+	    const v = (l.createdAt != null) ? l.createdAt : (l.created_at != null ? l.created_at : (l.created || null));
+	    if (v == null) return 0;
+	    if (typeof v === 'number' && isFinite(v)) return intSafePOS(v);
+	    const s = String(v).trim();
+	    if (!s) return 0;
+	    // epoch como string
+	    if (/^\d{10,13}$/.test(s)) return intSafePOS(s);
+	    const t = Date.parse(s);
+	    return isFinite(t) ? t : 0;
+	  }catch(_){ return 0; }
+	}
+	function intSafePOS(x){
+	  try{ const n = parseInt(String(x),10); return isFinite(n) ? n : 0; }catch(_){ return 0; }
+	}
+
+	// Etapa 3: Estado EXACTO (compacto) — sin textos extra
+	function loteIsClosedPOS_UI(l){
+	  if (!l) return false;
+	  const st = String(l?.status ?? '').trim().toUpperCase();
+	  if (st && (st.includes('CERR') || st === 'CERRADO' || st === 'CLOSED')) return true;
+	  if (l && (l.closedAt || l.closed_at || l.closed)) return true;
+	  return false;
+	}
+	function computeLoteEstadoPOS_UI(l){
+	  if (!l) return 'Disponible';
+	  // D) Cerrado
+	  if (loteIsClosedPOS_UI(l)) return 'Cerrado';
+	  // A) Asignado a evento
+	  const assignedId = (l && l.assignedEventId != null) ? String(l.assignedEventId).trim() : '';
+	  const assignedNm = String(l?.assignedEventName ?? '').trim();
+	  if (assignedId || assignedNm){
+	    return assignedNm || (assignedId ? ('#' + assignedId) : '');
+	  }
+	  // B) Lote hijo / sobrante (NO asignado)
+	  const lt = String(l?.loteType ?? '').trim().toUpperCase();
+	  const parentId = (l && l.parentLotId != null) ? String(l.parentLotId).trim() : '';
+	  const isChild = (lt === 'SOBRANTE') || !!parentId;
+	  if (isChild){
+	    const src = String(l?.sourceEventName ?? '').trim();
+	    return src || 'Desconocido';
+	  }
+	  // C) Disponible
+	  return 'Disponible';
+	}
+
+	function loteHasAssignedPOS(l){
+	  const id = (l && l.assignedEventId != null) ? String(l.assignedEventId).trim() : '';
+	  const nm = (l && l.assignedEventName != null) ? String(l.assignedEventName).trim() : '';
+	  return !!id || !!nm;
+	}
+	function loteIsUsablePOS(l){
+	  if (!l) return false;
+	  if (loteHasAssignedPOS(l)) return false;
+	  const raw = String(l.status || '').trim();
+	  if (!raw) return true; // lote viejo equivalente
+	  const st = normLoteStatusPOS(l.status);
+	  if (!st) return false; // status desconocido explícito
+	  return st === 'DISPONIBLE';
+	}
+
+	// Lectura FRESCA de arcano33_lotes (sin cachear en memoria)
+	function readAllLotesFromSharedPOS(){
+	  try{
+	    // 1) Directo a localStorage (más fresco posible)
+	    try{
+	      if (typeof localStorage !== 'undefined' && localStorage && typeof localStorage.getItem === 'function'){
+	        const rawLS = localStorage.getItem('arcano33_lotes');
+	        if (rawLS != null){
+	          const parsedLS = JSON.parse(rawLS);
+	          return Array.isArray(parsedLS) ? parsedLS : [];
+	        }
+	      }
+	    }catch(_){ /* fallback */ }
+
+	    // 2) Wrapper A33Storage (multi-tab)
+	    if (window.A33Storage && typeof A33Storage.sharedGet === 'function'){
+	      const arr = A33Storage.sharedGet('arcano33_lotes', [], 'local');
+	      return Array.isArray(arr) ? arr : [];
+	    }
+	    if (window.A33Storage && typeof A33Storage.getJSON === 'function'){
+	      const arr = A33Storage.getJSON('arcano33_lotes', []);
+	      return Array.isArray(arr) ? arr : [];
+	    }
+	    if (window.A33Storage && typeof A33Storage.getItem === 'function'){
+	      const raw = A33Storage.getItem('arcano33_lotes');
+	      if (!raw) return [];
+	      const parsed = JSON.parse(raw);
+	      return Array.isArray(parsed) ? parsed : [];
+	    }
+	    return [];
+	  }catch(_){
+	    return null;
+	  }
+	}
+
+	async function renderInvLoteSelectorTablePOS(evId, opts){
+	  const options = opts || {};
+	  const tbody = document.querySelector('#inv-lote-selector-table tbody');
+	  const msgEl = document.getElementById('inv-lote-selector-msg');
+	  if (!tbody) return;
+	  tbody.innerHTML = '';
+
+	  const query = (options.query != null) ? String(options.query) : '';
+	  const q = query.toLowerCase().trim();
+	  const fresh = !!options.fresh;
+	  const useCache = !!options.useCache;
+
+	  // Cache liviano para que el filtro sea instantáneo (se invalida con refresh/fresh)
+	  if (!window.__INV_LOTE_SELECTOR_CACHE) window.__INV_LOTE_SELECTOR_CACHE = null;
+	  let lotes = null;
+	  if (!fresh && useCache && Array.isArray(window.__INV_LOTE_SELECTOR_CACHE))
+	    lotes = window.__INV_LOTE_SELECTOR_CACHE;
+	  else
+	    lotes = readAllLotesFromSharedPOS();
+
+	  if (lotes === null){
+	    if (msgEl) msgEl.textContent = '';
+	    const tr = document.createElement('tr');
+	    tr.innerHTML = '<td colspan="5" class="muted">No se pudo leer arcano33_lotes.</td>';
+	    tbody.appendChild(tr);
+	    return;
+	  }
+	  window.__INV_LOTE_SELECTOR_CACHE = Array.isArray(lotes) ? lotes : [];
+	  const base = Array.isArray(lotes) ? lotes.slice() : [];
+	  if (!base.length){
+	    if (msgEl) msgEl.textContent = '';
+	    const tr = document.createElement('tr');
+	    tr.innerHTML = '<td colspan="5" class="muted">No hay lotes.</td>';
+	    tbody.appendChild(tr);
+	    return;
+	  }
+
+	  // Orden: más recientes primero (createdAt desc), con fallback seguro
+	  base.sort((a,b)=>{
+	    const ta = loteCreatedTsPOS(a);
+	    const tb = loteCreatedTsPOS(b);
+	    if (tb !== ta) return tb - ta;
+	    const ca = String(a?.codigo ?? '');
+	    const cb = String(b?.codigo ?? '');
+	    if (cb !== ca) return cb.localeCompare(ca);
+	    const ia = String(a?.id ?? '');
+	    const ib = String(b?.id ?? '');
+	    return ib.localeCompare(ia);
+	  });
+
+	  // Filtro rápido: código / notas (case-insensitive)
+	  let view = base;
+	  if (q){
+	    view = base.filter(l=>{
+	      const code = String(l?.codigo ?? '').toLowerCase();
+	      const notes = normalizeLoteNotesPOS(l?.notas).toLowerCase();
+	      return code.includes(q) || notes.includes(q);
+	    });
+	  }
+
+	  const usableView = view.reduce((acc,l)=> acc + (loteIsUsablePOS(l) ? 1 : 0), 0);
+
+	  // Mensajería clara
+	  if (msgEl){
+	    let msg = '';
+	    if (!evId) msg = 'Selecciona un evento para poder usar un lote.';
+	    else if (view.length && usableView === 0) msg = 'No hay lotes disponibles.';
+	    if (q){
+	      msg = (msg ? (msg + ' ') : '') + ('Mostrando ' + view.length + ' de ' + base.length + '.');
+	    }
+	    msgEl.textContent = msg;
+	  }
+
+	  if (!view.length){
+	    const tr = document.createElement('tr');
+	    tr.innerHTML = '<td colspan="5" class="muted">No hay lotes.</td>';
+	    tbody.appendChild(tr);
+	    return;
+	  }
+
+	  for (const l of view){
+	    const codigo = String(l?.codigo ?? '').trim();
+	    const fecha = formatLoteDatePOS(l?.createdAt);
+	    const nota = normalizeLoteNotesPOS(l?.notas);
+	    const estado = computeLoteEstadoPOS_UI(l);
+
+	    const tr = document.createElement('tr');
+	    const td1 = document.createElement('td'); td1.textContent = codigo;
+	    const td2 = document.createElement('td'); td2.textContent = fecha;
+	    const td3 = document.createElement('td');
+	    // Notas: wrap + altura controlada + ver más
+	    const wrap = document.createElement('div');
+	    wrap.className = 'note-wrap';
+	    const clamp = document.createElement('div');
+	    clamp.className = 'note-clamp';
+	    clamp.textContent = String(nota ?? '');
+	    wrap.appendChild(clamp);
+	    const noteLen = String(nota ?? '').trim().length;
+	    if (noteLen > 140){
+	      const tgl = document.createElement('button');
+	      tgl.type = 'button';
+	      tgl.className = 'note-toggle';
+	      tgl.textContent = 'Ver más';
+	      tgl.addEventListener('click', ()=>{
+	        const exp = wrap.classList.toggle('expanded');
+	        tgl.textContent = exp ? 'Ver menos' : 'Ver más';
+	      });
+	      wrap.appendChild(tgl);
+	    }
+	    td3.appendChild(wrap);
+
+	    const td4 = document.createElement('td'); td4.textContent = estado;
+	    const td5 = document.createElement('td');
+	    const btn = document.createElement('button');
+	    btn.className = 'btn-outline btn-pill btn-pill-mini';
+	    btn.type = 'button';
+	    btn.textContent = 'Usar';
+	    const canUse = !!evId && loteIsUsablePOS(l);
+	    btn.disabled = !canUse;
+	    if (!evId) btn.title = 'Selecciona un evento para poder usar un lote.';
+	    else if (!canUse) btn.title = 'Este lote no está disponible.';
+	    if (canUse){
+	      btn.addEventListener('click', ()=>{ handleUseLoteFromSelectorPOS(btn, l); });
+	    }
+	    td5.appendChild(btn);
+
+	    tr.appendChild(td1);
+	    tr.appendChild(td2);
+	    tr.appendChild(td3);
+	    tr.appendChild(td4);
+	    tr.appendChild(td5);
+	    tbody.appendChild(tr);
+	  }
+	}
+	function setupInvLoteSelectorModalPOS(){
+	  const modalId = 'inv-lote-selector-modal';
+	  const modal = document.getElementById(modalId);
+	  const btnClose = document.getElementById('inv-lote-selector-close');
+	  const btnRefresh = document.getElementById('inv-lote-selector-refresh');
+	  if (btnClose){
+	    btnClose.onclick = ()=>{ try{ closeModalPOS(modalId); }catch(_){ } };
+	  }
+	  if (btnRefresh){
+	    btnRefresh.onclick = async ()=>{
+	      try{
+	        const evSel = document.getElementById('inv-event');
+	        const evId = (evSel && evSel.value) ? parseInt(evSel.value,10) : null;
+	        const qEl = document.getElementById('inv-lote-selector-search');
+	        const q = qEl ? qEl.value : '';
+	        await renderInvLoteSelectorTablePOS(evId, { query: q, fresh: true });
+	      }catch(_){ }
+	    };
+	  }
+	  // Filtro rápido (Etapa 4)
+	  const inpSearch = document.getElementById('inv-lote-selector-search');
+	  const btnClear = document.getElementById('inv-lote-selector-clear');
+	  let tSearch = null;
+	  const runSearch = async (fresh=false)=>{
+	    try{
+	      const evSel = document.getElementById('inv-event');
+	      const evId = (evSel && evSel.value) ? parseInt(evSel.value,10) : null;
+	      const q = inpSearch ? inpSearch.value : '';
+	      await renderInvLoteSelectorTablePOS(evId, { query: q, fresh: !!fresh, useCache: !fresh });
+	    }catch(_){ }
+	  };
+	  if (inpSearch){
+	    inpSearch.addEventListener('input', ()=>{
+	      try{ if (tSearch) clearTimeout(tSearch); }catch(_){ }
+	      tSearch = setTimeout(()=>{ runSearch(false); }, 80);
+	    });
+	  }
+	  if (btnClear){
+	    btnClear.onclick = ()=>{
+	      try{ if (inpSearch) inpSearch.value = ''; }catch(_){ }
+	      runSearch(false);
+	      try{ if (inpSearch) inpSearch.focus(); }catch(_){ }
+	    };
+	  }
+
+	  if (modal){
+	    modal.addEventListener('click', (e)=>{
+	      try{ if (e && e.target === modal) closeModalPOS(modalId); }catch(_){ }
+	    });
+	  }
+	  // Escape cierra solo si está abierto
+	  try{
+	    document.addEventListener('keydown', (e)=>{
+	      if (!e || e.key !== 'Escape') return;
+	      const m = document.getElementById(modalId);
+	      if (m && m.style && m.style.display === 'flex'){
+	        try{ e.preventDefault(); }catch(_){ }
+	        try{ closeModalPOS(modalId); }catch(_){ }
+	      }
+	    }, true);
+	  }catch(_){ }
+	}
+	let __INV_LOTE_USE_BUSY = false;
+	async function openInvLoteSelectorModalPOS(){
+	  const modalId = 'inv-lote-selector-modal';
+	  const modal = document.getElementById(modalId);
+	  const tbody = document.querySelector('#inv-lote-selector-table tbody');
+	  if (!modal || !tbody){
+	    alert('No se pudo abrir el selector de lotes (UI incompleta).');
+	    return;
+	  }
+	  const evSel = document.getElementById('inv-event');
+	  const evId = (evSel && evSel.value) ? parseInt(evSel.value,10) : null;
+	  const qEl = document.getElementById('inv-lote-selector-search');
+	  const q = qEl ? qEl.value : '';
+
+	  // Lectura fresca + render inicial
+	  await renderInvLoteSelectorTablePOS(evId, { query: q, fresh: true });
+	  openModalPOS(modalId);
+	  if (!evId){
+	    try{ showToast('Selecciona un evento para poder usar un lote.', 'info', 2200); }catch(_){ }
+	  }
+	  try{ if (qEl) qEl.focus(); }catch(_){ }
+	}
+
+	async function handleUseLoteFromSelectorPOS(btn, lote){
+	  if (__INV_LOTE_USE_BUSY){
+	    try{ showToast('Carga en curso…', 'info', 1500); }catch(_){ }
+	    return;
+	  }
+	  const evSel = document.getElementById('inv-event');
+	  const evId = (evSel && evSel.value) ? parseInt(evSel.value,10) : null;
+	  if (!evId){
+	    try{ showToast('Primero selecciona un evento.', 'error', 2600); }catch(_){ }
+	    try{ if (btn) btn.disabled = true; }catch(_){ }
+	    return;
+	  }
+	  // Revalidar disponibilidad (por si cambió mientras el modal está abierto)
+	  if (!loteIsUsablePOS(lote)){
+	    try{ showToast('Este lote ya no está disponible.', 'error', 2800); }catch(_){ }
+	    try{ if (btn) btn.disabled = true; }catch(_){ }
+	    return;
+	  }
+	  __INV_LOTE_USE_BUSY = true;
+	  let ok = false;
+	  try{
+	    try{ setBtnSavingStatePOS(btn, true, 'Aplicando…'); }catch(_){ }
+	    const res = await importFromLoteToInventory({
+	      evId,
+	      loteId: (lote && lote.id != null) ? lote.id : null,
+	      loteCodigo: (lote && lote.codigo != null) ? lote.codigo : ''
+	    });
+	    ok = !!(res && res.ok);
+	    if (ok){
+	      // limpiar estado busy del botón
+	      try{ setBtnSavingStatePOS(btn, false); }catch(_){ }
+	      try{ if (btn) btn.disabled = true; }catch(_){ }
+	      // Etapa 3: refrescar tabla (estado + botones) sin cache
+	      try{ await renderInvLoteSelectorTablePOS(evId); }catch(_){ }
+	    }
+	  }catch(err){
+	    try{ showPersistFailPOS('aplicar lote', err); }catch(_){ }
+	  }finally{
+	    __INV_LOTE_USE_BUSY = false;
+	    if (!ok){
+	      try{ setBtnSavingStatePOS(btn, false); }catch(_){ }
+	      try{ if (btn) btn.disabled = false; }catch(_){ }
+	    }
+	  }
+	}
+
+async function importFromLoteToInventory(opts){
+  const o = opts || {};
   const evSel = $('#inv-event');
-  let evId = evSel && evSel.value ? parseInt(evSel.value,10) : null;
+  let evId = (o.evId != null && String(o.evId).trim() !== '') ? parseInt(o.evId,10) : (evSel && evSel.value ? parseInt(evSel.value,10) : null);
   if (!evId){
-    alert('Primero selecciona un evento.');
-    return;
+    try{ showToast('Primero selecciona un evento.', 'error', 2600); }catch(_){ }
+    return { ok:false, reason:'NO_EVENT' };
+  }
+
+  // Lote objetivo
+  const targetId = (o.loteId != null && String(o.loteId).trim() !== '') ? String(o.loteId) : '';
+  const codigoNorm = (o.loteCodigo != null) ? String(o.loteCodigo).toLowerCase().trim() : '';
+  if (!targetId && !codigoNorm){
+    try{ openInvLoteSelectorModalPOS(); }catch(_){ }
+    return { ok:false, reason:'NO_LOTE' };
   }
 
   // Evento real (para nombre)
@@ -12181,60 +12568,33 @@ async function importFromLoteToInventory(){
       if (!Array.isArray(lotes)) lotes = [];
     }
   } catch (e) {
-    alert('No se pudo leer la informacion de lotes guardada en el navegador.');
-    return;
+    try{ showToast('No se pudo leer la información de lotes.', 'error', 4200); }catch(_){ }
+    return { ok:false, reason:'READ_FAIL' };
   }
   if (!lotes.length){
-    alert('No hay lotes registrados en el Control de Lotes.');
-    return;
+    try{ showToast('No hay lotes registrados en el Control de Lotes.', 'error', 3600); }catch(_){ }
+    return { ok:false, reason:'NO_LOTES' };
   }
 
-  // Helpers de estado (compat: lotes viejos sin campos = DISPONIBLE)
-  const normStatus = (status) => {
-    const st = (status || '').toString().trim().toUpperCase();
-    if (!st) return '';
-    if (st === 'EN EVENTO') return 'EN_EVENTO';
-    if (st === 'EN_EVENTO') return 'EN_EVENTO';
-    if (st === 'DISPONIBLE') return 'DISPONIBLE';
-    if (st === 'CERRADO') return 'CERRADO';
-    return st;
+  const matchFn = (l) => {
+    if (!l) return false;
+    if (targetId && l.id != null && String(l.id) === targetId) return true;
+    if (codigoNorm) return ((l.codigo || '').toString().toLowerCase().trim() === codigoNorm);
+    return false;
   };
-  const hasAssigned = (l) => (l && l.assignedEventId != null && String(l.assignedEventId).trim() !== '');
-  const isAvailable = (l) => {
-    const st = normStatus(l?.status);
-    if (hasAssigned(l)) return false;
-    if (!st) return true; // lotes viejos
-    return st === 'DISPONIBLE';
-  };
-
-  const available = lotes.filter(isAvailable);
-  if (!available.length){
-    showToast('No hay lotes disponibles. Los lotes asignados no se pueden cargar de nuevo. Crea otro lote.', 'error', 4200);
-    return;
-  }
-
-  const listaCodigos = available
-    .map(l => (l.codigo || '').trim())
-    .filter(c => c)
-    .join(', ');
-
-  const codigo = prompt('Escribe el CÓDIGO del lote que quieres asignar a este evento (disponibles: ' + (listaCodigos || 'ninguno') + '):');
-  if (!codigo) return;
-
-  const codigoNorm = (codigo || '').toString().toLowerCase().trim();
-  const matchFn = (l) => ((l.codigo || '').toString().toLowerCase().trim() === codigoNorm);
 
   const loteAny = lotes.find(matchFn);
   if (!loteAny){
-    alert('No se encontró un lote con ese código.');
-    return;
+    try{ showToast('No se encontró el lote seleccionado.', 'error', 3200); }catch(_){ }
+    return { ok:false, reason:'NOT_FOUND' };
   }
 
-  if (!isAvailable(loteAny)){
+  // Disponibilidad
+  if (!loteIsUsablePOS(loteAny)){
     const prevEvName = (loteAny.assignedEventName || '').toString().trim();
-    const msg = 'Ese lote ya fue asignado' + (prevEvName ? (' al evento "' + prevEvName + '"') : '') + '. No se puede cargar dos veces.';
-    showToast(msg, 'error', 4300);
-    return;
+    const msg = 'Ese lote no está disponible' + (prevEvName ? (' (ya fue asignado a "' + prevEvName + '")') : '') + '.';
+    try{ showToast(msg, 'error', 4300); }catch(_){ }
+    return { ok:false, reason:'NOT_AVAILABLE' };
   }
 
   const stamp = new Date().toISOString();
@@ -12267,8 +12627,8 @@ async function importFromLoteToInventory(){
   }
 
   if (!items.length){
-    showToast('Ese lote no trae unidades para cargar (todo está en 0).', 'error', 3800);
-    return;
+    try{ showToast('Ese lote no trae unidades para cargar (todo está en 0).', 'error', 3800); }catch(_){ }
+    return { ok:false, reason:'EMPTY' };
   }
 
   // Asignación única: marcamos el lote como EN_EVENTO y lo vinculamos al evento (anti stock fantasma)
@@ -12301,8 +12661,8 @@ async function importFromLoteToInventory(){
       }
     }
   } catch (e){
-    showToast('No se pudo marcar el lote como asignado. No se aplicó la carga.', 'error', 4200);
-    return;
+    try{ showToast('No se pudo marcar el lote como asignado. No se aplicó la carga.', 'error', 4200); }catch(_){ }
+    return { ok:false, reason:'SAVE_FAIL' };
   }
 
   for (const it of items){
@@ -12318,11 +12678,12 @@ async function importFromLoteToInventory(){
 
   await renderInventario();
   await refreshSaleStockLabel();
-  showToast('Lote "' + (loteAny.codigo || '') + '" asignado a ' + (evName || 'evento') + ' (' + total + ' u.)', 'ok', 2400);
+  try{ showToast('Lote aplicado: "' + (loteAny.codigo || '') + '" (' + total + ' u.)', 'ok', 2200); }catch(_){ }
 
   // FIFO (Etapa 2): snapshot por evento/lote (entrada de lote al evento)
   try{ queueLotsUsageSyncPOS(evId); }catch(_){ }
 
+  return { ok:true, evId, loteCodigo: (loteAny.codigo || ''), total };
 }
 
 
@@ -12418,18 +12779,24 @@ async function renderLotesCargadosEvento(eventId){
 const LOTES_LS_KEY = 'arcano33_lotes';
 
 function normLoteStatusPOS(status){
-  const s = String(status || '').trim().toUpperCase();
+  const sRaw = String(status || '').trim().toUpperCase();
+  if (!sRaw) return '';
+  const s = (sRaw === 'EN EVENTO') ? 'EN_EVENTO' : sRaw;
   if (s === 'DISPONIBLE' || s === 'EN_EVENTO' || s === 'CERRADO') return s;
   return '';
 }
 
+
 function effectiveLoteStatusPOS(lote){
   const st = normLoteStatusPOS(lote && lote.status);
   if (st === 'CERRADO') return 'CERRADO';
-  const hasAssigned = (lote && (lote.assignedEventId != null || lote.assignedEventName));
+  const assignedId = (lote && lote.assignedEventId != null) ? String(lote.assignedEventId).trim() : '';
+  const assignedName = (lote && lote.assignedEventName != null) ? String(lote.assignedEventName).trim() : '';
+  const hasAssigned = !!assignedId || !!assignedName;
   if (st) return st;
   return hasAssigned ? 'EN_EVENTO' : 'DISPONIBLE';
 }
+
 
 function readLotesLS_POS(){
   try{
@@ -17996,7 +18363,8 @@ async function exportEventosExcel(){
   $('#btn-inv-ref').addEventListener('click', renderInventario);
   $('#btn-inv-csv').addEventListener('click', async()=>{ const id = parseInt($('#inv-event').value||'0',10); if (!id) return alert('Selecciona un evento'); await generateInventoryCSV(id); });
   const btnFromLote = document.getElementById('btn-inv-from-lote');
-  if (btnFromLote) btnFromLote.addEventListener('click', importFromLoteToInventory);
+	  try{ setupInvLoteSelectorModalPOS(); }catch(_){ }
+	  if (btnFromLote) btnFromLote.addEventListener('click', openInvLoteSelectorModalPOS);
 
   // Sobrantes → Lote hijo (Control de Lotes)
   const btnSobrante = document.getElementById('btn-create-sobrante');

@@ -581,6 +581,29 @@ small.muted{color:var(--muted)}
 .modal table{max-width:100%}
 .modal .scroll{max-height:40vh;overflow:auto;border:1px solid #2a2a2a;border-radius:10px;padding:6px}
 
+	/* Modal Inventario: Selector de lotes (Etapa 1: solo lectura) */
+	#inv-lote-selector-table{width:100%;table-layout:fixed}
+	#inv-lote-selector-table th,
+	#inv-lote-selector-table td{vertical-align:top}
+	#inv-lote-selector-table th:nth-child(1),
+	#inv-lote-selector-table td:nth-child(1){width:16%;word-break:break-word}
+	#inv-lote-selector-table th:nth-child(2),
+	#inv-lote-selector-table td:nth-child(2){width:13%}
+	#inv-lote-selector-table th:nth-child(3),
+	#inv-lote-selector-table td:nth-child(3){width:37%;white-space:normal;word-break:break-word}
+	#inv-lote-selector-table th:nth-child(4),
+	#inv-lote-selector-table td:nth-child(4){width:20%;white-space:normal;word-break:break-word}
+	#inv-lote-selector-table th:nth-child(5),
+	#inv-lote-selector-table td:nth-child(5){width:14%}
+
+	/* Inventario: Selector de lotes — toolbar + notas (Etapa 4) */
+	#inv-lote-selector-modal .inv-lote-toolbar input{width:100%;min-width:0}
+	#inv-lote-selector-modal .note-wrap{display:flex;flex-direction:column;gap:4px}
+	#inv-lote-selector-modal .note-clamp{max-height:3.2em;overflow:hidden}
+	#inv-lote-selector-modal .note-wrap.expanded .note-clamp{max-height:none}
+	#inv-lote-selector-modal .note-toggle{padding:0;border:0;background:none;text-align:left;cursor:pointer;font-size:12px;text-decoration:underline;opacity:.85}
+	#inv-lote-selector-modal .note-toggle:active{opacity:1}
+
 /* Modal confirmación reutilizable (cierres) */
 .pos-confirm-message{
   margin-top:8px;

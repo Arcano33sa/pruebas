@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.72&r=42">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.73&r=45">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.72&r=42">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.72" />
+<link rel="stylesheet" href="styles.css?v=4.20.73&r=45">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.73" />
 </head>
 <body>
   <header class="a33-header" role="banner">
@@ -1541,6 +1541,41 @@
   </div>
 </div>
 
+	<!-- Modal Inventario: Seleccionar lote (solo lectura) -->
+	<div id="inv-lote-selector-modal" class="modal" aria-hidden="true">
+	  <div class="panel" style="max-width:1100px">
+	    <div class="row" style="grid-template-columns:1fr auto auto; align-items:center; gap:10px">
+	      <h3 style="margin:0">Seleccionar lote</h3>
+	      <button id="inv-lote-selector-refresh" class="btn-outline btn-pill btn-pill-mini" type="button" title="Actualizar">Actualizar</button>
+	      <button id="inv-lote-selector-close" class="btn-secondary btn-pill btn-pill-mini" type="button">Cerrar</button>
+	    </div>
+	
+	    
+		<div class="row inv-lote-toolbar" style="grid-template-columns:1fr auto; gap:10px; margin-top:10px; align-items:center">
+		  <input id="inv-lote-selector-search" placeholder="Buscar por código o notas…" autocomplete="off" inputmode="search">
+		  <button id="inv-lote-selector-clear" class="btn-outline btn-pill btn-pill-mini" type="button">Limpiar</button>
+		</div>
+		<div id="inv-lote-selector-msg" class="muted" style="margin-top:6px"></div>
+
+<div class="scroll" style="max-height:65vh; margin-top:10px">
+	      <table id="inv-lote-selector-table" class="compact">
+	        <thead>
+	          <tr>
+	            <th>Lote</th>
+	            <th>Fecha</th>
+	            <th>Nota</th>
+	            <th>Estado</th>
+	            <th>Acción</th>
+	          </tr>
+	        </thead>
+	        <tbody></tbody>
+	      </table>
+	    </div>
+	
+	    <small class="muted" style="display:block; margin-top:10px">Selecciona un evento y luego toca “Usar” para aplicar un lote DISPONIBLE a ese evento.</small>
+	  </div>
+	</div>
+
 <!-- Modal Confirmación (reutilizable) — Cierres POS -->
 <div id="pos-confirm-modal" class="modal" aria-hidden="true">
   <div class="panel panel-compact">
@@ -1568,25 +1603,25 @@
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
-<script src="/assets/js/a33-storage.js?v=4.20.72"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.72"></script>
+<script src="/assets/js/a33-storage.js?v=4.20.73"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.73"></script>
 <script src="/assets/js/a33-auth.js?v=4.20.75"></script>
-<script src="/assets/js/a33-build.js?v=4.20.72"></script>
+<script src="/assets/js/a33-build.js?v=4.20.73"></script>
 <script>
   (function(){
-    try{      const v = '4.20.72';
+    try{      const v = '4.20.73';
       try{ window.A33_VERSION = v; }catch(_){ }
       // POS: bump revision local (solo este modulo) para forzar limpieza de caches
-      try{ window.A33_ASSET_REV = '42'; }catch(_){ }
-      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r42').toString(); }catch(_){ }
-      try{ window.A33_BUILD_TAG = (v + '-r42').toString(); }catch(_){ }
+	      try{ window.A33_ASSET_REV = '44'; }catch(_){ }
+	      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r44').toString(); }catch(_){ }
+	      try{ window.A33_BUILD_TAG = (v + '-r44').toString(); }catch(_){ }
       const verEl = document.getElementById('a33-version-text');
       if (verEl) verEl.textContent = 'v' + v;
       const bEl = document.getElementById('pos-build-id');
       if (bEl) bEl.textContent = 'POS Build: ' + v;
       const cEl = document.getElementById('pos-sw-cache-id');
       if (cEl){
-        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r42')).toString();
+	        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r44')).toString();
         cEl.textContent = 'SW Cache: ' + cn;
         cEl.title = cn;
       }
@@ -1647,11 +1682,11 @@
     })();
   })();
 </script>
-<script src="app.js?v=4.20.72&r=42"></script>
-<script src="/assets/js/a33-input-ux.js?v=4.20.72"></script>
+<script src="app.js?v=4.20.73&r=45"></script>
+<script src="/assets/js/a33-input-ux.js?v=4.20.73"></script>
 <script>
   (function(){
-    const BUILD = (window.A33_VERSION || '4.20.72').toString();
+    const BUILD = (window.A33_VERSION || '4.20.73').toString();
     const REV = (window.A33_ASSET_REV || '10').toString();
     const SW_URL = './sw.js?v=' + encodeURIComponent(BUILD) + '&r=' + encodeURIComponent(REV);
     const btn = document.getElementById('btn-update');
