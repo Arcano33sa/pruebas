@@ -4,10 +4,10 @@ const DB_VER = 31; // Etapa 1/5 (Efectivo v2 Histórico): nuevos stores aislados
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.73';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.74';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r44');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r46');
 
 // --- Util: round2 (2 decimales) — Hotfix Ventas Etapa 1/3
 // Nota: evita NaN y errores de flotante (EPSILON). Retorna Number.
@@ -12337,7 +12337,9 @@ async function revertCupConsumptionFromSalePOS(sale){
 	  if (msgEl){
 	    let msg = '';
 	    if (!evId) msg = 'Selecciona un evento para poder usar un lote.';
-	    else if (view.length && usableView === 0) msg = 'No hay lotes disponibles.';
+	    // "No hay lotes disponibles" solo aplica como estado vacío.
+	    // Si hay filas, NO se muestra este mensaje (aunque estén deshabilitadas).
+	    else if (!view.length) msg = 'No hay lotes disponibles.';
 	    if (q){
 	      msg = (msg ? (msg + ' ') : '') + ('Mostrando ' + view.length + ' de ' + base.length + '.');
 	    }
@@ -12368,18 +12370,6 @@ async function revertCupConsumptionFromSalePOS(sale){
 	    clamp.className = 'note-clamp';
 	    clamp.textContent = String(nota ?? '');
 	    wrap.appendChild(clamp);
-	    const noteLen = String(nota ?? '').trim().length;
-	    if (noteLen > 140){
-	      const tgl = document.createElement('button');
-	      tgl.type = 'button';
-	      tgl.className = 'note-toggle';
-	      tgl.textContent = 'Ver más';
-	      tgl.addEventListener('click', ()=>{
-	        const exp = wrap.classList.toggle('expanded');
-	        tgl.textContent = exp ? 'Ver menos' : 'Ver más';
-	      });
-	      wrap.appendChild(tgl);
-	    }
 	    td3.appendChild(wrap);
 
 	    const td4 = document.createElement('td'); td4.textContent = estado;
