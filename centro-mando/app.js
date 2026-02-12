@@ -2751,8 +2751,9 @@ function __cmdApplyGlobalCardExpandedState(eventId){
     const head = card.querySelector('.cmd-global-head');
     if (head) head.setAttribute('aria-expanded', expanded ? 'true' : 'false');
 
+    // Chevron: se mantiene el mismo glifo; la rotación/estado lo maneja CSS vía aria-expanded.
     const chev = card.querySelector('.cmd-global-chev');
-    if (chev) chev.textContent = expanded ? '▴' : '▾';
+    if (chev) chev.textContent = '▾';
 
     const body = card.querySelector('.cmd-global-body');
     if (!body) return;
@@ -3925,7 +3926,8 @@ function renderGlobalActivesView(){
 
       const che = document.createElement('div');
       che.className = 'cmd-global-chev';
-      che.textContent = expanded ? '▴' : '▾';
+      // Chevron: glifo fijo; la rotación/estado lo maneja CSS vía aria-expanded.
+      che.textContent = '▾';
 
       // KPI blocks (SIEMPRE visibles): Alertas / Efectivo / Ventas hoy
       const kpis = document.createElement('div');

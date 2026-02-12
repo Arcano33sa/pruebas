@@ -1089,8 +1089,36 @@ button.cmd-pill{ cursor: pointer; }
   grid-column: 2 / 3;
   grid-row: 1 / span 2;
   align-self: center;
-  opacity: 0.78;
+  /* Más visible + dedo-friendly (hit-area ~40px) sin empujar layout */
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1;
+  opacity: 0.92;
+  user-select: none;
+  -webkit-user-select: none;
+  border: 1px solid rgba(221,191,100,0.22);
+  background: rgba(0,0,0,0.22);
+  border-radius: 12px;
+  transform: rotate(0deg);
+  transform-origin: center;
+  transition: transform 140ms ease, background 140ms ease, border-color 140ms ease, opacity 140ms ease;
 }
+
+/* Estado expand/collapse claro sin mover texto: rotamos el chevron */
+.cmd-global-head[aria-expanded="true"] .cmd-global-chev{
+  transform: rotate(180deg);
+  opacity: 1;
+  background: rgba(221,191,100,0.10);
+  border-color: rgba(221,191,100,0.38);
+}
+.cmd-global-head:active .cmd-global-chev{ transform: scale(0.97) rotate(var(--_cmdChevRot, 0deg)); }
+.cmd-global-head[aria-expanded="true"]{ --_cmdChevRot: 180deg; }
+.cmd-global-head{ touch-action: manipulation; }
 
 .cmd-global-kpis{
   grid-column: 1 / -1;
