@@ -831,8 +831,9 @@ function applyDiaryPreset(preset) {
 
 
 function fmtCurrency(v) {
-  const n = Number(v || 0);
-  return n.toLocaleString('es-NI', {
+  const n = Number(v ?? 0);
+  const safe = Number.isFinite(n) ? n : 0;
+  return safe.toLocaleString('es-NI', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   });
@@ -2713,6 +2714,9 @@ function updateSupplierSelects(data) {
     if (prev && Array.from(compraSel.options).some(o => o.value === prev)) {
       compraSel.value = prev;
     }
+
+    // Producto asistido: mantener coherencia al refrescar proveedores
+    try { compraUpdateProductoSelect(data); } catch (_) { /* noop */ }
   }
 
   const repSel = document.getElementById('compras-proveedor');
@@ -3919,14 +3923,23 @@ function renderProveedores(data) {
   }
 
   for (const s of suppliers) {
+    const idSafe = escapeHtml(String((s && s.id) ?? ''));
+    const nombreRaw = (s && s.nombre != null) ? String(s.nombre) : '';
+    const telRaw = (s && s.telefono != null) ? String(s.telefono) : '';
+    const notaRaw = (s && s.nota != null) ? String(s.nota) : '';
+
+    const nombre = escapeHtml(nombreRaw.trim());
+    const telefono = escapeHtml((telRaw || '—').toString().trim()) || '—';
+    const nota = escapeHtml((notaRaw || '—').toString().trim()) || '—';
+
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${(s.nombre || '').toString()}</td>
-      <td>${(s.telefono || '').toString() || '—'}</td>
-      <td>${(s.nota || '').toString() || '—'}</td>
+      <td title="${nombre}">${nombre || '—'}</td>
+      <td title="${telefono}">${telefono}</td>
+      <td title="${nota}">${nota}</td>
       <td class="fin-actions-cell">
-        <button type="button" class="btn-small prov-editar" data-id="${s.id}">Editar</button>
-        <button type="button" class="btn-danger prov-borrar" data-id="${s.id}">Eliminar</button>
+        <button type="button" class="btn-small prov-editar" data-id="${idSafe}">Editar</button>
+        <button type="button" class="btn-danger prov-borrar" data-id="${idSafe}">Eliminar</button>
       </td>
     `;
     tbody.appendChild(tr);
@@ -4688,6 +4701,113 @@ function setupCatalogoUI() {
 
 /* ---------- Compras pagadas a proveedor (wizard) ---------- */
 
+function compraGetSelectedSupplierId() {
+  const supplierIdStr = document.getElementById('compra-proveedor')?.value || '';
+  const sid = Number(supplierIdStr);
+  return (Number.isFinite(sid) && sid > 0) ? sid : null;
+}
+
+function compraGetSupplierProducts(data, supplierId) {
+  if (!data || !data.suppliersMap || supplierId == null) return [];
+  const s = data.suppliersMap.get(Number(supplierId));
+  const arr = Array.isArray(s?.productos) ? s.productos : [];
+  // Ya vienen normalizados en getAllFinData, pero re-normalizamos suave por seguridad.
+  return arr.map(normalizeSupplierProduct);
+}
+
+function compraGetSelectedProduct(data) {
+  const sid = compraGetSelectedSupplierId();
+  if (!sid) return null;
+  const pid = String(document.getElementById('compra-producto')?.value || '').trim();
+  if (!pid) return null;
+  const prods = compraGetSupplierProducts(data, sid);
+  return prods.find(p => String(p.id) === pid) || null;
+}
+
+function compraRenderProductoHint(data) {
+  const hint = document.getElementById('compra-producto-hint');
+  if (!hint) return;
+
+  const p = compraGetSelectedProduct(data);
+  if (!p) {
+    hint.textContent = '';
+    return;
+  }
+
+  const tipo = (p.tipo || 'UNIDADES').toString().toUpperCase();
+  const tipoLabel = (tipo === 'CAJAS') ? 'CAJAS' : 'UNIDADES';
+  const precio = Number.isFinite(Number(p.precio)) ? Number(p.precio) : 0;
+  hint.textContent = `Tipo: ${tipoLabel} · Precio ref: C$ ${fmtCurrency(precio)}`;
+}
+
+function compraUpdateProductoSelect(data) {
+  const row = document.getElementById('compra-producto-row');
+  const sel = document.getElementById('compra-producto');
+  const hint = document.getElementById('compra-producto-hint');
+  if (!row || !sel) return;
+
+  const sid = compraGetSelectedSupplierId();
+  if (!sid) {
+    row.classList.add('hidden');
+    sel.innerHTML = '';
+    sel.value = '';
+    sel.disabled = true;
+    if (hint) hint.textContent = '';
+    return;
+  }
+
+  row.classList.remove('hidden');
+
+  const productos = compraGetSupplierProducts(data, sid)
+    .slice()
+    .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '', 'es'));
+
+  const prev = String(sel.value || '').trim();
+  sel.innerHTML = '';
+
+  if (!productos.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'Sin productos';
+    sel.appendChild(opt);
+    sel.value = '';
+    sel.disabled = true;
+    if (hint) hint.textContent = '';
+    return;
+  }
+
+  const opt0 = document.createElement('option');
+  opt0.value = '';
+  opt0.textContent = '— Seleccione (opcional) —';
+  sel.appendChild(opt0);
+
+  for (const p of productos) {
+    const opt = document.createElement('option');
+    opt.value = String(p.id || '');
+    opt.textContent = p.nombre || '—';
+    sel.appendChild(opt);
+  }
+
+  sel.disabled = false;
+  if (prev && Array.from(sel.options).some(o => o.value === prev)) {
+    sel.value = prev;
+  } else {
+    sel.value = '';
+  }
+
+  compraRenderProductoHint(data);
+}
+
+function compraTryPrefillDescripcionFromProducto(data) {
+  const p = compraGetSelectedProduct(data);
+  if (!p) return;
+  const descEl = document.getElementById('compra-descripcion');
+  if (!descEl) return;
+  const cur = String(descEl.value || '').trim();
+  if (cur) return; // NO sobrescribir
+  if (p.nombre) descEl.value = p.nombre;
+}
+
 function findAccountByCode(data, code) {
   if (!data || !Array.isArray(data.accounts)) return null;
   return data.accounts.find(a => String(a.code) === String(code)) || null;
@@ -4783,6 +4903,26 @@ async function guardarCompraProveedor() {
   const desc = (document.getElementById('compra-descripcion')?.value || '').trim();
   const ref = (document.getElementById('compra-referencia')?.value || '').trim();
 
+  // Producto asistido (opcional)
+  const productId = String(document.getElementById('compra-producto')?.value || '').trim();
+  let productSnapshot = null;
+  if (productId) {
+    try {
+      const prods = compraGetSupplierProducts(finCachedData, supplierIdStr);
+      const p = prods.find(x => String(x.id || '') === productId) || null;
+      if (p) {
+        productSnapshot = {
+          id: String(p.id || ''),
+          nombre: String(p.nombre || ''),
+          tipo: String((p.tipo || 'UNIDADES')).toUpperCase(),
+          precio: normNumNonNeg(p.precio)
+        };
+      }
+    } catch (_) {
+      productSnapshot = null;
+    }
+  }
+
   const monto = parseFloat(montoRaw.replace(',', '.'));
 
   if (!supplierIdStr) {
@@ -4826,7 +4966,13 @@ async function guardarCompraProveedor() {
     supplierId,
     supplierName,
     paymentMethod: pm,
-    reference: ref
+    reference: ref,
+
+    // Producto asistido (opcional) - snapshot para robustez (si luego se borra del proveedor)
+    supplierProductId: productSnapshot ? productSnapshot.id : null,
+    supplierProductName: productSnapshot ? productSnapshot.nombre : null,
+    supplierProductType: productSnapshot ? productSnapshot.tipo : null,
+    supplierProductPriceRef: productSnapshot ? productSnapshot.precio : null
   };
   // Guardado atómico: o se guarda TODO (asiento + líneas) o no se guarda NADA.
   try {
@@ -4844,9 +4990,13 @@ async function guardarCompraProveedor() {
   const montoEl = document.getElementById('compra-monto');
   const descEl = document.getElementById('compra-descripcion');
   const refEl = document.getElementById('compra-referencia');
+  const prodEl = document.getElementById('compra-producto');
+  const prodHint = document.getElementById('compra-producto-hint');
   if (montoEl) montoEl.value = '';
   if (descEl) descEl.value = '';
   if (refEl) refEl.value = '';
+  if (prodEl) prodEl.value = '';
+  if (prodHint) prodHint.textContent = '';
 
   showToast('Compra guardada');
   await refreshAllFin();
@@ -4981,6 +5131,23 @@ function setupComprasUI() {
         console.error('Error guardando compra proveedor', err);
         alert('No se pudo guardar la compra.');
       });
+    });
+  }
+
+  // Producto asistido por proveedor
+  const provSel = document.getElementById('compra-proveedor');
+  if (provSel) {
+    provSel.addEventListener('change', () => {
+      if (finCachedData) compraUpdateProductoSelect(finCachedData);
+    });
+  }
+
+  const prodSel = document.getElementById('compra-producto');
+  if (prodSel) {
+    prodSel.addEventListener('change', () => {
+      if (!finCachedData) return;
+      compraRenderProductoHint(finCachedData);
+      compraTryPrefillDescripcionFromProducto(finCachedData);
     });
   }
 

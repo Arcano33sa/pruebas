@@ -429,6 +429,14 @@ body.fin-body {
   color: var(--fin-muted);
 }
 
+/* Hint compacto (formularios) */
+.fin-hint {
+  margin-top: 6px;
+  font-size: 0.76rem;
+  line-height: 1.25;
+  color: var(--fin-muted);
+}
+
 /* --- Proveedores: productos del proveedor (UI compacta, sin tablas anchas) --- */
 
 .fin-cardbox{
@@ -1235,7 +1243,8 @@ body.fin-body {
   font-size: 0.95rem;
 }
 
-@media (max-width: 520px){
+/* Evita scroll horizontal en pantallas medianas (móviles grandes / tablets pequeñas) */
+@media (max-width: 760px){
   .purchase-grid-header{
     display:none;
   }
