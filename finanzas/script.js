@@ -3660,6 +3660,225 @@ async function guardarMovimientoManual() {
 
 let currentSupplierEditId = null; // mantiene modo edición para UX de productos
 
+// Modal (base): Productos por proveedor (Etapa 1/3)
+let provProductsModalSupplierId = null;
+
+// Token simple para evitar renders tardíos sobre un modal ya cerrado/reabierto.
+let provProductsModalRenderToken = null;
+
+async function provResolveSupplierForProductsModal(supplierId) {
+  const sid = Number(supplierId || 0);
+  if (!Number.isFinite(sid) || sid <= 0) return null;
+
+  // 1) Cache (rápido)
+  const cached = provGetSupplierFromCache(sid);
+  if (cached) return normalizeSupplier(cached);
+
+  // 2) DB (fallback)
+  try {
+    await openFinDB();
+    const fromDb = await finGet('suppliers', sid);
+    return fromDb ? normalizeSupplier(fromDb) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function provMakeProductsModalEmpty(text) {
+  const div = document.createElement('div');
+  div.className = 'fin-empty';
+  div.textContent = text;
+  return div;
+}
+
+async function provRenderProductsModalReadOnly() {
+  const modal = document.getElementById('prov-prod-modal');
+  const bodyEl = document.getElementById('prov-prod-modal-body');
+  const titleEl = document.getElementById('prov-prod-modal-title');
+  const subEl = document.getElementById('prov-prod-modal-sub');
+  const sid = provProductsModalSupplierId;
+  if (!modal || !bodyEl) return;
+
+  if (!sid) {
+    bodyEl.innerHTML = '';
+    bodyEl.appendChild(provMakeProductsModalEmpty('Proveedor inválido.'));
+    if (titleEl) titleEl.textContent = 'Productos';
+    if (subEl) subEl.textContent = '';
+    return;
+  }
+
+  const token = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  provProductsModalRenderToken = token;
+
+  bodyEl.innerHTML = '';
+  bodyEl.appendChild(provMakeProductsModalEmpty('Cargando productos…'));
+
+  const supplier = await provResolveSupplierForProductsModal(sid);
+  if (provProductsModalRenderToken !== token) return; // modal ya cambió
+
+  if (!supplier) {
+    bodyEl.innerHTML = '';
+    bodyEl.appendChild(provMakeProductsModalEmpty('Proveedor eliminado o no encontrado.'));
+    if (titleEl) titleEl.textContent = 'Productos';
+    if (subEl) subEl.textContent = '';
+    return;
+  }
+
+  // Re-hidrata header con data vigente (por si se editó mientras el modal estaba abierto).
+  try {
+    const rawName = (supplier && supplier.nombre != null) ? String(supplier.nombre) : '';
+    const name = uiTextFIN(rawName).trim() || rawName.trim() || 'Proveedor';
+    if (titleEl) titleEl.textContent = `Productos de ${name}`;
+
+    if (subEl) {
+      const tel = (supplier && supplier.telefono != null) ? String(supplier.telefono).trim() : '';
+      const note = (supplier && supplier.nota != null) ? String(supplier.nota).trim() : '';
+      const parts = [];
+      if (tel) parts.push(`Tel: ${tel}`);
+      if (note) parts.push(note);
+      subEl.textContent = parts.join(' · ');
+    }
+  } catch (_) {
+    if (titleEl) titleEl.textContent = 'Productos';
+    if (subEl) subEl.textContent = '';
+  }
+
+  const productosRaw = Array.isArray(supplier.productos) ? supplier.productos : [];
+  const productos = productosRaw.map(normalizeSupplierProduct);
+
+  if (!productos.length) {
+    bodyEl.innerHTML = '';
+    bodyEl.appendChild(provMakeProductsModalEmpty('Sin productos.'));
+    return;
+  }
+
+  // Orden por nombre (más legible)
+  productos.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '', 'es', { sensitivity: 'base' }));
+
+  // Render: pseudo-tabla responsiva (sin overflow-x)
+  bodyEl.innerHTML = '';
+
+  const wrap = document.createElement('div');
+  wrap.className = 'prov-prod-modal-wrap';
+
+  const head = document.createElement('div');
+  head.className = 'prov-prod-modal-head';
+  head.innerHTML = `
+    <div>Nombre</div>
+    <div>Tipo</div>
+    <div class="num">Precio</div>
+    <div class="num">Unidades/caja</div>
+  `;
+  wrap.appendChild(head);
+
+  const list = document.createElement('div');
+  list.className = 'prov-prod-modal-list';
+
+  for (const p of productos) {
+    const row = document.createElement('div');
+    row.className = 'prov-prod-modal-row';
+
+    const nameRaw = uiTextFIN(p.nombre || '').trim() || '—';
+
+    // Hardening: solo admitir tipos esperados; cualquier cosa rara → “—”
+    const tipoRaw = (p.tipo != null) ? String(p.tipo).trim() : '';
+    const tipoUpper = tipoRaw ? tipoRaw.toUpperCase() : '';
+    const tipo = (tipoUpper === 'CAJAS' || tipoUpper === 'UNIDADES') ? tipoUpper : '—';
+
+    // Hardening: 0 si es inválido
+    const precio = normNumNonNeg(p.precio);
+    const unidades = (tipo === 'CAJAS') ? normNumNonNeg(p.unidadesPorCaja) : 0;
+
+    row.innerHTML = `
+      <div class="prov-prod-modal-cell name" data-label="Nombre">
+        <span class="prov-prod-modal-val" title="${escapeHtml(nameRaw)}">${escapeHtml(nameRaw || '—')}</span>
+      </div>
+      <div class="prov-prod-modal-cell tipo" data-label="Tipo">
+        <span class="prov-prod-modal-val" title="${escapeHtml(tipo)}">${escapeHtml(tipo)}</span>
+      </div>
+      <div class="prov-prod-modal-cell num" data-label="Precio">
+        <span class="prov-prod-modal-val" title="C$ ${escapeHtml(fmtCurrency(precio))}">C$ ${escapeHtml(fmtCurrency(precio))}</span>
+      </div>
+      <div class="prov-prod-modal-cell num" data-label="Unidades por caja">
+        <span class="prov-prod-modal-val" title="${escapeHtml(String(unidades))}">${escapeHtml(String(unidades))}</span>
+      </div>
+    `;
+    list.appendChild(row);
+  }
+
+  wrap.appendChild(list);
+  bodyEl.appendChild(wrap);
+}
+
+function provOpenProductsModal(supplier) {
+  const modal = document.getElementById('prov-prod-modal');
+  if (!modal) return;
+
+  const titleEl = document.getElementById('prov-prod-modal-title');
+  const subEl = document.getElementById('prov-prod-modal-sub');
+  const bodyEl = document.getElementById('prov-prod-modal-body');
+
+  const sid = Number(supplier?.id || 0);
+  provProductsModalSupplierId = (Number.isFinite(sid) && sid > 0) ? sid : null;
+
+  const rawName = (supplier && supplier.nombre != null) ? String(supplier.nombre) : '';
+  const name = uiTextFIN(rawName).trim() || rawName.trim() || 'Proveedor';
+
+  if (titleEl) titleEl.textContent = `Productos de ${name}`;
+
+  if (subEl) {
+    const tel = (supplier && supplier.telefono != null) ? String(supplier.telefono).trim() : '';
+    const note = (supplier && supplier.nota != null) ? String(supplier.nota).trim() : '';
+    const parts = [];
+    if (tel) parts.push(`Tel: ${tel}`);
+    if (note) parts.push(note);
+    subEl.textContent = parts.join(' · ');
+  }
+
+  if (bodyEl) {
+    bodyEl.innerHTML = '';
+    bodyEl.appendChild(provMakeProductsModalEmpty('Cargando productos…'));
+  }
+
+  modal.classList.add('open');
+  modal.setAttribute('aria-hidden', 'false');
+
+  // Render read-only (Etapa 2/3)
+  provRenderProductsModalReadOnly().catch(err => {
+    console.error('Error renderizando modal productos proveedor', err);
+    const b = document.getElementById('prov-prod-modal-body');
+    if (b) {
+      b.innerHTML = '';
+      b.appendChild(provMakeProductsModalEmpty('No se pudieron cargar los productos.'));
+    }
+  });
+}
+
+function provCloseProductsModal() {
+  const modal = document.getElementById('prov-prod-modal');
+  if (!modal) return;
+  modal.classList.remove('open');
+  modal.setAttribute('aria-hidden', 'true');
+  provProductsModalSupplierId = null;
+  provProductsModalRenderToken = null;
+}
+
+// Si el modal está abierto, refrescarlo luego de un refreshAllFin (cambios/borra/edición).
+function provSyncOpenProductsModal() {
+  const modal = document.getElementById('prov-prod-modal');
+  if (!modal || !modal.classList.contains('open')) return;
+  // Si está abierto pero no hay supplierId válido, solo re-renderiza el mensaje.
+  provRenderProductsModalReadOnly().catch(err => {
+    console.error('Error refrescando modal productos proveedor', err);
+    const b = document.getElementById('prov-prod-modal-body');
+    if (b) {
+      b.innerHTML = '';
+      b.appendChild(provMakeProductsModalEmpty('No se pudieron cargar los productos.'));
+    }
+  });
+}
+
+
 function provHideProductsUI() {
   const sec = document.getElementById('prov-products-section');
   if (sec) sec.classList.add('hidden');
@@ -3938,8 +4157,11 @@ function renderProveedores(data) {
       <td title="${telefono}">${telefono}</td>
       <td title="${nota}">${nota}</td>
       <td class="fin-actions-cell">
-        <button type="button" class="btn-small prov-editar" data-id="${idSafe}">Editar</button>
-        <button type="button" class="btn-danger prov-borrar" data-id="${idSafe}">Eliminar</button>
+        <div class="fin-actions-inline fin-actions-inline--prov">
+          <button type="button" class="btn-small prov-productos" data-id="${idSafe}">Productos</button>
+          <button type="button" class="btn-small prov-editar" data-id="${idSafe}">Editar</button>
+          <button type="button" class="btn-danger prov-borrar" data-id="${idSafe}">Eliminar</button>
+        </div>
       </td>
     `;
     tbody.appendChild(tr);
@@ -4014,6 +4236,10 @@ async function eliminarProveedor(id) {
 
   await openFinDB();
   await finDelete('suppliers', Number(id));
+  // Si el modal de productos estaba mostrando este proveedor, cerrarlo de forma segura.
+  if (provProductsModalSupplierId && Number(provProductsModalSupplierId) === Number(id)) {
+    provCloseProductsModal();
+  }
   showToast('Proveedor eliminado');
   await refreshAllFin();
 }
@@ -4029,6 +4255,17 @@ function setupProveedoresUI() {
   const prodCancel = document.getElementById('prov-prod-cancelar');
   const prodList = document.getElementById('prov-products-list');
   const prodTipo = document.getElementById('prov-prod-tipo');
+
+
+  // Modal base: Productos (open/close)
+  const prodModal = document.getElementById('prov-prod-modal');
+  const prodModalClose = document.getElementById('prov-prod-modal-close');
+  if (prodModalClose) prodModalClose.addEventListener('click', provCloseProductsModal);
+  if (prodModal) {
+    prodModal.addEventListener('click', (e) => {
+      if (e.target === prodModal) provCloseProductsModal();
+    });
+  }
 
   if (btnGuardar) {
     btnGuardar.addEventListener('click', () => {
@@ -4108,6 +4345,18 @@ function setupProveedoresUI() {
     tbody.addEventListener('click', (e) => {
       const editBtn = e.target.closest('.prov-editar');
       const delBtn = e.target.closest('.prov-borrar');
+      const prodBtn = e.target.closest('.prov-productos');
+
+      if (prodBtn) {
+        const id = Number(prodBtn.dataset.id || '0');
+        if (!Number.isFinite(id) || id <= 0) return;
+        const s = finCachedData && Array.isArray(finCachedData.suppliers)
+          ? finCachedData.suppliers.find(x => Number(x.id) === id)
+          : null;
+        provOpenProductsModal(s || { id, nombre: 'Proveedor', telefono: '', nota: '' });
+        return;
+      }
+
 
       if (editBtn && finCachedData) {
         const id = Number(editBtn.dataset.id || '0');
@@ -7765,6 +8014,8 @@ async function refreshAllFin() {
   renderProveedores(data);
   // Proveedores: si veníamos editando, restaurar modo edición y UI de productos.
   provApplyEditStateFromCache();
+  // Proveedores: si el modal de productos está abierto, mantenerlo coherente (ediciones/borrados).
+  provSyncOpenProductsModal();
   renderCatalogoCuentas(data);
   renderEstadoResultados(data);
   renderBalanceGeneral(data);

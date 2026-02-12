@@ -959,7 +959,144 @@ body.fin-body {
 }
 
 
-.fin-actions-cell { white-space: nowrap; }
+.fin-table td.fin-actions-cell {
+  /* Acciones: permitir wrap (evita recorte y scroll horizontal en pantallas angostas) */
+  white-space: normal;
+  overflow: visible;
+  text-overflow: initial;
+}
+
+.fin-actions-inline--prov{
+  justify-content:flex-start;
+}
+
+/* Botones de Proveedores: tap-area consistente (sin forzar overflow-x) */
+#view-proveedores .fin-actions-inline--prov button{
+  min-height: 36px;
+}
+
+#view-proveedores .fin-table td:nth-child(1),
+#view-proveedores .fin-table td:nth-child(3){
+  white-space: normal;
+  line-height: 1.15;
+}
+
+@media (max-width: 520px){
+  #view-proveedores .fin-actions-inline--prov button{
+    padding: 5px 8px;
+    font-size: 0.74rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.1;
+  }
+  #view-proveedores .fin-table th,
+  #view-proveedores .fin-table td{
+    padding: 6px 6px;
+  }
+}
+
+/* --- Modal: Productos del proveedor (read-only) --- */
+
+.prov-prod-modal-wrap{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.prov-prod-modal-head,
+.prov-prod-modal-row{
+  display: grid;
+  grid-template-columns: minmax(0, 2.1fr) minmax(0, 0.9fr) minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.prov-prod-modal-head{
+  padding: 0 6px;
+  font-size: 0.72rem;
+  color: var(--fin-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.prov-prod-modal-head .num{
+  text-align: right;
+}
+
+.prov-prod-modal-list{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.prov-prod-modal-row{
+  padding: 10px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(10,12,20,0.88);
+}
+
+.prov-prod-modal-cell{
+  min-width: 0;
+}
+
+.prov-prod-modal-cell.num{
+  text-align: right;
+}
+
+.prov-prod-modal-val{
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prov-prod-modal-cell.name .prov-prod-modal-val{
+  font-weight: 700;
+}
+
+.prov-prod-modal-cell.tipo .prov-prod-modal-val{
+  text-transform: uppercase;
+}
+
+@media (max-width: 560px){
+  .prov-prod-modal-head{ display: none; }
+  .prov-prod-modal-row{
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .prov-prod-modal-cell{
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .prov-prod-modal-cell::before{
+    content: attr(data-label);
+    color: var(--fin-muted);
+    font-size: 0.72rem;
+    flex: 0 0 auto;
+  }
+  .prov-prod-modal-val{
+    text-align: right;
+  }
+  .prov-prod-modal-cell.name .prov-prod-modal-val{
+    text-align: left;
+  }
+}
+
+#prov-prod-modal .btn-close{
+  width: 44px;
+  height: 44px;
+  font-size: 1.25rem;
+}
+
+/* Modal Productos: nunca habilitar scroll horizontal */
+#prov-prod-modal .fin-modal-body{
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
 
 /* Toast */
 
