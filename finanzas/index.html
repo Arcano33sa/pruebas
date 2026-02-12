@@ -649,6 +649,59 @@
     </p>
   </form>
 
+  <!-- Productos del proveedor (solo en modo editar) -->
+  <section id="prov-products-section" class="fin-cardbox hidden" aria-label="Productos del proveedor">
+    <header class="fin-section-header fin-section-header--sub">
+      <h3>Productos del proveedor</h3>
+      <p>Catálogo rápido para registrar qué te vende este proveedor (referencias y unidades por caja).</p>
+    </header>
+
+    <div class="fin-inline-group" style="justify-content:space-between; flex-wrap:wrap;">
+      <div id="prov-products-hint" class="fin-muted">Selecciona un proveedor para ver/editar sus productos.</div>
+      <button type="button" id="prov-prod-add" class="btn-small">+ Agregar producto</button>
+    </div>
+
+    <div id="prov-products-empty" class="fin-empty hidden">Sin productos.</div>
+    <div id="prov-products-list" class="prov-prod-list"></div>
+
+    <div id="prov-prod-editor" class="prov-prod-editor hidden">
+      <input type="hidden" id="prov-prod-editid" value="">
+
+      <div class="fin-form-row">
+        <label class="fin-form-grow">
+          Nombre (obligatorio)
+          <input type="text" id="prov-prod-nombre" placeholder="Ej: Botella 750 ml" autocomplete="off">
+        </label>
+
+        <label>
+          Tipo
+          <select id="prov-prod-tipo">
+            <option value="">Seleccionar…</option>
+            <option value="CAJAS">CAJAS</option>
+            <option value="UNIDADES">UNIDADES</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="fin-form-row">
+        <label>
+          Precio ref (C$)
+          <input type="number" id="prov-prod-precio" min="0" step="0.01" value="0">
+        </label>
+
+        <label>
+          Unidades por caja
+          <input type="number" id="prov-prod-unidades" min="0" step="1" value="0">
+        </label>
+
+        <div class="fin-actions">
+          <button type="button" id="prov-prod-guardar" class="btn-primary">Guardar producto</button>
+          <button type="button" id="prov-prod-cancelar" class="btn-ghost">Cancelar</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <div class="fin-table-wrapper">
     <table class="fin-table">
       <thead>

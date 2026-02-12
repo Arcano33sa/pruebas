@@ -1244,6 +1244,49 @@ function normalizeEventForPurchases() {
   return CENTRAL_EVENT;
 }
 
+/* ---------- Proveedores: normalización (modelo productos por proveedor) ---------- */
+
+function normNumNonNeg(v) {
+  const n = typeof v === 'number' ? v : parseFloat(String(v ?? '').replace(',', '.'));
+  return (Number.isFinite(n) && n >= 0) ? n : 0;
+}
+
+function normStr(v, maxLen = 120) {
+  const s = (v == null) ? '' : String(v);
+  const out = s.trim();
+  return out.length > maxLen ? out.slice(0, maxLen) : out;
+}
+
+function normalizeProductType(v) {
+  const t = normStr(v, 24).toUpperCase();
+  return t || 'UNIDADES';
+}
+
+function normalizeSupplierProduct(raw) {
+  const obj = (raw && typeof raw === 'object') ? raw : {};
+  return {
+    id: normStr(obj.id, 80),
+    nombre: normStr(obj.nombre, 120),
+    tipo: normalizeProductType(obj.tipo),
+    precio: normNumNonNeg(obj.precio),
+    unidadesPorCaja: normNumNonNeg(obj.unidadesPorCaja)
+  };
+}
+
+function normalizeSupplier(raw) {
+  const obj = (raw && typeof raw === 'object') ? raw : {};
+  const productosRaw = Array.isArray(obj.productos) ? obj.productos : [];
+  const productos = productosRaw.map(normalizeSupplierProduct);
+  return {
+    ...obj,
+    id: obj.id,
+    nombre: normStr(obj.nombre, 120),
+    telefono: normStr(obj.telefono, 80),
+    nota: normStr(obj.nota, 220),
+    productos
+  };
+}
+
 function getSupplierLabelFromEntry(entry, data) {
   if (!entry) return '—';
   const name = (entry.supplierName || '').toString().trim();
@@ -1321,7 +1364,10 @@ async function getAllFinData() {
     suppliers = [];
   }
 
-const accountsMap = new Map();
+  // Normalización suave: soporta proveedores sin `productos` y evita crashes.
+  suppliers = (Array.isArray(suppliers) ? suppliers : []).map(normalizeSupplier);
+
+  const accountsMap = new Map();
   for (const acc of accounts) {
     accountsMap.set(String(acc.code), acc);
   }
@@ -3608,6 +3654,249 @@ async function guardarMovimientoManual() {
 
 /* ---------- Proveedores (CRUD) ---------- */
 
+let currentSupplierEditId = null; // mantiene modo edición para UX de productos
+
+function provHideProductsUI() {
+  const sec = document.getElementById('prov-products-section');
+  if (sec) sec.classList.add('hidden');
+  const empty = document.getElementById('prov-products-empty');
+  const list = document.getElementById('prov-products-list');
+  const hint = document.getElementById('prov-products-hint');
+  const editor = document.getElementById('prov-prod-editor');
+  if (empty) empty.classList.add('hidden');
+  if (list) list.innerHTML = '';
+  if (hint) hint.textContent = 'Selecciona un proveedor para ver/editar sus productos.';
+  if (editor) editor.classList.add('hidden');
+  const eid = document.getElementById('prov-prod-editid');
+  if (eid) eid.value = '';
+}
+
+function provShowProductsUI() {
+  const sec = document.getElementById('prov-products-section');
+  if (sec) sec.classList.remove('hidden');
+}
+
+function provGetSupplierFromCache(id) {
+  if (!finCachedData || !Array.isArray(finCachedData.suppliers)) return null;
+  const nid = Number(id || 0);
+  return finCachedData.suppliers.find(x => Number(x.id) === nid) || null;
+}
+
+function provGenProductId() {
+  const t = Date.now().toString(36);
+  const r = Math.random().toString(36).slice(2, 10);
+  return `p_${t}_${r}`;
+}
+
+function provEditorSetEnabledByTipo() {
+  const tipoEl = document.getElementById('prov-prod-tipo');
+  const uEl = document.getElementById('prov-prod-unidades');
+  if (!tipoEl || !uEl) return;
+  const t = String(tipoEl.value || '').toUpperCase();
+  if (t === 'CAJAS') {
+    uEl.disabled = false;
+  } else {
+    uEl.value = '0';
+    uEl.disabled = true;
+  }
+}
+
+function provOpenProductEditor(product) {
+  const editor = document.getElementById('prov-prod-editor');
+  if (!editor) return;
+
+  const eid = document.getElementById('prov-prod-editid');
+  const nombreEl = document.getElementById('prov-prod-nombre');
+  const tipoEl = document.getElementById('prov-prod-tipo');
+  const precioEl = document.getElementById('prov-prod-precio');
+  const uEl = document.getElementById('prov-prod-unidades');
+
+  if (eid) eid.value = product && product.id ? String(product.id) : '';
+  if (nombreEl) nombreEl.value = product && product.nombre ? String(product.nombre) : '';
+  if (tipoEl) tipoEl.value = product && product.tipo ? String(product.tipo).toUpperCase() : '';
+  if (precioEl) precioEl.value = String(product && product.precio != null ? normNumNonNeg(product.precio) : 0);
+  if (uEl) uEl.value = String(product && product.unidadesPorCaja != null ? normNumNonNeg(product.unidadesPorCaja) : 0);
+
+  editor.classList.remove('hidden');
+  provEditorSetEnabledByTipo();
+  if (nombreEl) nombreEl.focus();
+}
+
+function provCloseProductEditor() {
+  const editor = document.getElementById('prov-prod-editor');
+  if (editor) editor.classList.add('hidden');
+  const eid = document.getElementById('prov-prod-editid');
+  if (eid) eid.value = '';
+}
+
+function provRenderProductsList(supplier) {
+  const list = document.getElementById('prov-products-list');
+  const empty = document.getElementById('prov-products-empty');
+  const hint = document.getElementById('prov-products-hint');
+  if (!list || !empty) return;
+
+  const productos = Array.isArray(supplier?.productos) ? supplier.productos : [];
+  list.innerHTML = '';
+
+  if (hint) {
+    const name = (supplier && supplier.nombre) ? String(supplier.nombre) : '';
+    hint.textContent = name ? `Proveedor: ${name}` : 'Proveedor seleccionado.';
+  }
+
+  if (!productos.length) {
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+
+  for (const pRaw of productos) {
+    const p = normalizeSupplierProduct(pRaw);
+    const div = document.createElement('div');
+    div.className = 'prov-prod-item';
+    div.dataset.pid = p.id;
+
+    const tipo = (p.tipo || '').toUpperCase();
+    const tipoLabel = tipo === 'CAJAS' ? 'CAJAS' : 'UNIDADES';
+
+    div.innerHTML = `
+      <div class="prov-prod-main">
+        <div class="prov-prod-title" title="${escapeHtml(p.nombre || '')}">${escapeHtml(p.nombre || '—')}</div>
+        <div class="prov-prod-meta">
+          <span class="prov-prod-chip">${escapeHtml(tipoLabel)}</span>
+          <span>Precio: C$ ${fmtCurrency(p.precio)}</span>
+          <span>${escapeHtml(tipo === 'CAJAS' ? `U/Caja: ${String(normNumNonNeg(p.unidadesPorCaja))}` : 'U/Caja: 0')}</span>
+        </div>
+      </div>
+      <div class="prov-prod-actions">
+        <button type="button" class="btn-small prov-prod-edit" data-pid="${escapeHtml(p.id)}">Editar</button>
+        <button type="button" class="btn-danger prov-prod-del" data-pid="${escapeHtml(p.id)}">Eliminar</button>
+      </div>
+    `;
+    list.appendChild(div);
+  }
+}
+
+function provApplyEditStateFromCache() {
+  if (!currentSupplierEditId) {
+    provHideProductsUI();
+    return;
+  }
+  const s = provGetSupplierFromCache(currentSupplierEditId);
+  if (!s) {
+    currentSupplierEditId = null;
+    provHideProductsUI();
+    return;
+  }
+
+  // Rehidrata el formulario (por si refrescamos la data)
+  const idEl = document.getElementById('prov-id');
+  const nombreEl = document.getElementById('prov-nombre');
+  const telEl = document.getElementById('prov-telefono');
+  const notaEl = document.getElementById('prov-nota');
+  const cancelar = document.getElementById('prov-cancelar');
+  if (idEl) idEl.value = String(s.id);
+  if (nombreEl) nombreEl.value = s.nombre || '';
+  if (telEl) telEl.value = s.telefono || '';
+  if (notaEl) notaEl.value = s.nota || '';
+  if (cancelar) cancelar.classList.remove('hidden');
+
+  provShowProductsUI();
+  provRenderProductsList(s);
+}
+
+async function provSaveProductFromEditor() {
+  if (!currentSupplierEditId) {
+    alert('Primero selecciona un proveedor (Editar).');
+    return;
+  }
+
+  const nombreEl = document.getElementById('prov-prod-nombre');
+  const tipoEl = document.getElementById('prov-prod-tipo');
+  const precioEl = document.getElementById('prov-prod-precio');
+  const uEl = document.getElementById('prov-prod-unidades');
+  const eidEl = document.getElementById('prov-prod-editid');
+
+  const nombre = (nombreEl?.value || '').trim();
+  const tipo = String(tipoEl?.value || '').trim().toUpperCase();
+  const precio = normNumNonNeg(precioEl?.value);
+  const unidadesPorCaja = normNumNonNeg(uEl?.value);
+  const editId = (eidEl?.value || '').trim();
+
+  if (!nombre) {
+    alert('El nombre del producto es obligatorio.');
+    return;
+  }
+  if (!(tipo === 'CAJAS' || tipo === 'UNIDADES')) {
+    alert('Selecciona el tipo (CAJAS o UNIDADES).');
+    return;
+  }
+
+  const productId = editId || provGenProductId();
+  const payload = {
+    id: productId,
+    nombre,
+    tipo,
+    precio,
+    unidadesPorCaja: (tipo === 'CAJAS') ? unidadesPorCaja : 0
+  };
+
+  const sid = Number(currentSupplierEditId);
+  if (!Number.isFinite(sid) || sid <= 0) {
+    alert('Proveedor inválido.');
+    return;
+  }
+
+  await openFinDB();
+  const existing = await finGet('suppliers', sid);
+  if (!existing) {
+    alert('No se encontró el proveedor en la base de datos.');
+    return;
+  }
+
+  const arr = Array.isArray(existing.productos) ? existing.productos : [];
+  let found = false;
+  const updated = arr.map(p => {
+    const pid = (p && typeof p === 'object') ? String(p.id || '') : '';
+    if (pid && pid === productId) {
+      found = true;
+      return { ...p, ...payload };
+    }
+    return p;
+  });
+  if (!found) updated.push(payload);
+
+  await finPut('suppliers', { ...existing, productos: updated });
+  showToast(editId ? 'Producto actualizado' : 'Producto agregado');
+  provCloseProductEditor();
+  await refreshAllFin();
+}
+
+async function provDeleteProduct(productId) {
+  if (!currentSupplierEditId) return;
+  const pid = String(productId || '').trim();
+  if (!pid) return;
+
+  const ok = confirm('¿Eliminar este producto del proveedor?');
+  if (!ok) return;
+
+  const sid = Number(currentSupplierEditId);
+  if (!Number.isFinite(sid) || sid <= 0) return;
+
+  await openFinDB();
+  const existing = await finGet('suppliers', sid);
+  if (!existing) {
+    alert('No se encontró el proveedor en la base de datos.');
+    return;
+  }
+
+  const arr = Array.isArray(existing.productos) ? existing.productos : [];
+  const updated = arr.filter(p => String((p && p.id) || '') !== pid);
+  await finPut('suppliers', { ...existing, productos: updated });
+  showToast('Producto eliminado');
+  provCloseProductEditor();
+  await refreshAllFin();
+}
+
 function renderProveedores(data) {
   const tbody = document.getElementById('proveedores-tbody');
   if (!tbody) return;
@@ -3656,6 +3945,9 @@ function resetProveedorForm() {
   if (tel) tel.value = '';
   if (nota) nota.value = '';
   if (cancelar) cancelar.classList.add('hidden');
+
+  currentSupplierEditId = null;
+  provHideProductsUI();
 }
 
 async function guardarProveedor() {
@@ -3679,10 +3971,22 @@ async function guardarProveedor() {
   await openFinDB();
 
   if (id) {
-    await finPut('suppliers', { id, nombre, telefono, nota });
+    // Anti-pisado: preservar campos desconocidos (por ejemplo `productos`).
+    let existing = null;
+    try {
+      existing = await finGet('suppliers', id);
+    } catch (_) {
+      existing = null;
+    }
+
+    if (existing && typeof existing === 'object') {
+      await finPut('suppliers', { ...existing, nombre, telefono, nota });
+    } else {
+      await finPut('suppliers', { id, nombre, telefono, nota });
+    }
     showToast('Proveedor actualizado');
   } else {
-    await finAdd('suppliers', { nombre, telefono, nota });
+    await finAdd('suppliers', { nombre, telefono, nota, productos: [] });
     showToast('Proveedor creado');
   }
 
@@ -3706,6 +4010,13 @@ function setupProveedoresUI() {
   const btnCancelar = document.getElementById('prov-cancelar');
   const tbody = document.getElementById('proveedores-tbody');
 
+  // Productos del proveedor
+  const prodAdd = document.getElementById('prov-prod-add');
+  const prodSave = document.getElementById('prov-prod-guardar');
+  const prodCancel = document.getElementById('prov-prod-cancelar');
+  const prodList = document.getElementById('prov-products-list');
+  const prodTipo = document.getElementById('prov-prod-tipo');
+
   if (btnGuardar) {
     btnGuardar.addEventListener('click', () => {
       guardarProveedor().catch(err => {
@@ -3721,6 +4032,65 @@ function setupProveedoresUI() {
     });
   }
 
+  if (prodAdd) {
+    prodAdd.addEventListener('click', () => {
+      if (!currentSupplierEditId) {
+        alert('Primero selecciona un proveedor (Editar).');
+        return;
+      }
+      provOpenProductEditor(null);
+    });
+  }
+
+  if (prodCancel) {
+    prodCancel.addEventListener('click', () => {
+      provCloseProductEditor();
+    });
+  }
+
+  if (prodSave) {
+    prodSave.addEventListener('click', () => {
+      provSaveProductFromEditor().catch(err => {
+        console.error('Error guardando producto proveedor', err);
+        alert('No se pudo guardar el producto.');
+      });
+    });
+  }
+
+  if (prodTipo) {
+    prodTipo.addEventListener('change', () => {
+      provEditorSetEnabledByTipo();
+    });
+  }
+
+  if (prodList) {
+    prodList.addEventListener('click', (e) => {
+      const editBtn = e.target.closest('.prov-prod-edit');
+      const delBtn = e.target.closest('.prov-prod-del');
+      if (!currentSupplierEditId || !finCachedData) return;
+
+      const sid = Number(currentSupplierEditId);
+      const s = finCachedData.suppliers.find(x => Number(x.id) === sid);
+      if (!s) return;
+
+      if (editBtn) {
+        const pid = String(editBtn.dataset.pid || '').trim();
+        const p = (Array.isArray(s.productos) ? s.productos : []).find(x => String((x && x.id) || '') === pid);
+        if (!p) return;
+        provOpenProductEditor(p);
+        return;
+      }
+
+      if (delBtn) {
+        const pid = String(delBtn.dataset.pid || '').trim();
+        provDeleteProduct(pid).catch(err => {
+          console.error('Error eliminando producto proveedor', err);
+          alert('No se pudo eliminar el producto.');
+        });
+      }
+    });
+  }
+
   if (tbody) {
     tbody.addEventListener('click', (e) => {
       const editBtn = e.target.closest('.prov-editar');
@@ -3731,17 +4101,26 @@ function setupProveedoresUI() {
         const s = finCachedData.suppliers.find(x => Number(x.id) === id);
         if (!s) return;
 
+        currentSupplierEditId = id;
+
         document.getElementById('prov-id').value = String(s.id);
         document.getElementById('prov-nombre').value = s.nombre || '';
         document.getElementById('prov-telefono').value = s.telefono || '';
         document.getElementById('prov-nota').value = s.nota || '';
         const cancelar = document.getElementById('prov-cancelar');
         if (cancelar) cancelar.classList.remove('hidden');
+
+        provShowProductsUI();
+        provCloseProductEditor();
+        provRenderProductsList(s);
         return;
       }
 
       if (delBtn) {
         const id = Number(delBtn.dataset.id || '0');
+        if (currentSupplierEditId && Number(currentSupplierEditId) === id) {
+          resetProveedorForm();
+        }
         eliminarProveedor(id).catch(err => {
           console.error('Error eliminando proveedor', err);
           alert('No se pudo eliminar el proveedor.');
@@ -4660,6 +5039,7 @@ function pcBuildEmptyLine() {
     id: pcNewId('l'),
     supplierId: '',
     supplierName: '',
+    productId: '',
     product: '',
     type: 'UNIDADES',
     quantity: '',
@@ -4697,6 +5077,7 @@ function pcNormalizeLine(src) {
     id: src.id ? String(src.id) : base.id,
     supplierId: src.supplierId == null ? '' : String(src.supplierId),
     supplierName: src.supplierName ? String(src.supplierName) : '',
+    productId: src.productId == null ? '' : String(src.productId),
     product: src.product ? String(src.product) : '',
     type: (String(src.type || '').toUpperCase() === 'CAJAS') ? 'CAJAS' : 'UNIDADES',
     quantity: (src.quantity == null) ? '' : String(src.quantity),
@@ -4940,6 +5321,79 @@ function pcBuildSupplierSelect(currentId, currentName) {
   return sel;
 }
 
+function pcTruncLabel(s, maxLen = 34) {
+  const t = String(s ?? '').trim();
+  if (!t) return '—';
+  return t.length > maxLen ? (t.slice(0, Math.max(1, maxLen - 1)) + '…') : t;
+}
+
+function pcGetSupplierCatalogById(supplierId) {
+  const sid = Number(supplierId || 0);
+  if (!Number.isFinite(sid) || sid <= 0) return [];
+  const s = (finCachedData && finCachedData.suppliersMap) ? finCachedData.suppliersMap.get(sid) : null;
+  const arr = Array.isArray(s && s.productos) ? s.productos : [];
+  // `s.productos` ya viene normalizado, pero igual protegemos por si acaso.
+  return arr.map(normalizeSupplierProduct).filter(p => p && p.id);
+}
+
+function pcFindProductInCatalogByName(catalog, name) {
+  const needle = normStr(name || '', 160);
+  if (!needle) return null;
+  const n = normStr(needle, 160).toLowerCase();
+  for (const p of (Array.isArray(catalog) ? catalog : [])) {
+    const nm = normStr(p && p.nombre, 160).toLowerCase();
+    if (nm && nm === n) return p;
+  }
+  return null;
+}
+
+function pcBuildProductSelect(catalog, currentProductId, currentProductName) {
+  const sel = document.createElement('select');
+
+  const optEmpty = document.createElement('option');
+  optEmpty.value = '';
+  optEmpty.textContent = '— Seleccionar —';
+  sel.appendChild(optEmpty);
+
+  const arr = (Array.isArray(catalog) ? [...catalog] : []);
+  arr.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '', 'es'));
+
+  const idStr = currentProductId ? String(currentProductId) : '';
+  let found = false;
+
+  for (const p of arr) {
+    const opt = document.createElement('option');
+    opt.value = String(p.id || '');
+    opt.textContent = pcTruncLabel(p.nombre || '—', 38);
+    if (idStr && opt.value === idStr) found = true;
+    sel.appendChild(opt);
+  }
+
+  // Producto guardado pero ya no existe en el catálogo del proveedor.
+  if (idStr && !found) {
+    const opt = document.createElement('option');
+    opt.value = idStr;
+    opt.textContent = `${pcTruncLabel(currentProductName || 'Producto', 34)} (no existe)`;
+    sel.insertBefore(opt, sel.children[1]);
+    sel.value = idStr;
+    return sel;
+  }
+
+  // Producto manual (texto) sin productId: lo mostramos como opción informativa.
+  const manualName = (currentProductName || '').toString().trim();
+  if (!idStr && manualName) {
+    const opt = document.createElement('option');
+    opt.value = '__manual__';
+    opt.textContent = `${pcTruncLabel(manualName, 34)} (manual)`;
+    sel.insertBefore(opt, sel.children[1]);
+    sel.value = '__manual__';
+    return sel;
+  }
+
+  sel.value = idStr;
+  return sel;
+}
+
 function pcRenderSection(sectionKey) {
   if (!pcCurrent) return;
 
@@ -4982,14 +5436,26 @@ function pcRenderSection(sectionKey) {
     cSupplier.className = 'purchase-cell cell-supplier';
     const selSupplier = pcBuildSupplierSelect(line.supplierId, line.supplierName);
     selSupplier.addEventListener('change', () => {
-      line.supplierId = selSupplier.value || '';
-      if (!line.supplierId) {
+      const prev = line.supplierId || '';
+      const next = selSupplier.value || '';
+      line.supplierId = next;
+      if (!next) {
         line.supplierName = '';
       } else {
-        const sid = Number(line.supplierId);
+        const sid = Number(next);
         const obj = finCachedData && finCachedData.suppliersMap ? finCachedData.suppliersMap.get(sid) : null;
         line.supplierName = obj ? (obj.nombre || '') : (line.supplierName || '');
       }
+
+      // Si cambió el proveedor, evitamos inconsistencias: se re-elige producto y se re-autofill.
+      if (next !== prev) {
+        line.productId = '';
+        line.product = '';
+        line.type = 'UNIDADES';
+        line.price = '';
+      }
+
+      pcRenderSection(sectionKey);
       pcUpdateComputedUI();
     });
     cSupplier.appendChild(selSupplier);
@@ -4997,16 +5463,71 @@ function pcRenderSection(sectionKey) {
     // Producto
     const cProd = document.createElement('div');
     cProd.className = 'purchase-cell cell-product';
-    const inpProd = document.createElement('input');
-    inpProd.type = 'text';
-    inpProd.placeholder = 'Producto';
-    inpProd.value = line.product || '';
-    inpProd.addEventListener('input', () => {
-      line.product = inpProd.value;
-      pcUpdateComputedUI();
-    });
-    pcAttachSelectAllOnFocus(inpProd);
-    cProd.appendChild(inpProd);
+    const catalog = pcGetSupplierCatalogById(line.supplierId);
+    const hasCatalog = Array.isArray(catalog) && catalog.length > 0;
+
+    // Si venía texto sin productId y coincide por nombre, lo enlazamos para que el select quede consistente.
+    if (hasCatalog && !line.productId && (line.product || '').trim()) {
+      const m = pcFindProductInCatalogByName(catalog, line.product);
+      if (m && m.id) line.productId = String(m.id);
+    }
+
+    let prodControl = null;
+    if (hasCatalog) {
+      const selProd = pcBuildProductSelect(catalog, line.productId, line.product);
+      selProd.addEventListener('change', () => {
+        const v = selProd.value || '';
+
+        // Opción informativa de "manual": no toca nada.
+        if (v === '__manual__') {
+          pcUpdateComputedUI();
+          return;
+        }
+
+        if (!v) {
+          line.productId = '';
+          line.product = '';
+          pcUpdateComputedUI();
+          return;
+        }
+
+        const pid = String(v);
+        const p = catalog.find(x => String(x && x.id) === pid) || null;
+        line.productId = pid;
+
+        if (p) {
+          line.product = (p.nombre || '').toString();
+          const tipo = String(p.tipo || '').toUpperCase();
+          line.type = (tipo === 'CAJAS') ? 'CAJAS' : 'UNIDADES';
+          line.price = String(Math.round(normNumNonNeg(p.precio) * 100) / 100);
+
+          // Autofill UI (sin pelearse: solo ocurre al seleccionar).
+          try { if (selTipo) selTipo.value = line.type; } catch (_) {}
+          try { if (inpPrice) inpPrice.value = line.price; } catch (_) {}
+          try { totalEl.textContent = `C$ ${fmtCurrency(pcGetLineTotal(line))}`; } catch (_) {}
+        } else {
+          // No existe en catálogo: mantenemos texto actual y evitamos crash.
+          line.product = (line.product || '').toString();
+        }
+
+        pcUpdateComputedUI();
+      });
+      prodControl = selProd;
+    } else {
+      const inpProd = document.createElement('input');
+      inpProd.type = 'text';
+      inpProd.placeholder = 'Producto';
+      inpProd.value = line.product || '';
+      inpProd.addEventListener('input', () => {
+        line.productId = '';
+        line.product = inpProd.value;
+        pcUpdateComputedUI();
+      });
+      pcAttachSelectAllOnFocus(inpProd);
+      prodControl = inpProd;
+    }
+
+    if (prodControl) cProd.appendChild(prodControl);
 
     // Tipo
     const cTipo = document.createElement('div');
@@ -7075,6 +7596,8 @@ async function refreshAllFin() {
   renderDiario(data);
   renderComprasPorProveedor(data);
   renderProveedores(data);
+  // Proveedores: si veníamos editando, restaurar modo edición y UI de productos.
+  provApplyEditStateFromCache();
   renderCatalogoCuentas(data);
   renderEstadoResultados(data);
   renderBalanceGeneral(data);

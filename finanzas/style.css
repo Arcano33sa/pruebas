@@ -429,6 +429,106 @@ body.fin-body {
   color: var(--fin-muted);
 }
 
+/* --- Proveedores: productos del proveedor (UI compacta, sin tablas anchas) --- */
+
+.fin-cardbox{
+  margin-top: 14px;
+  padding: 12px 12px 10px;
+  border-radius: 14px;
+  background: var(--fin-card);
+  border: 1px solid rgba(255,255,255,0.05);
+}
+
+.fin-section-header--sub h3{
+  margin: 0;
+  font-size: 1rem;
+}
+
+.fin-section-header--sub p{
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  color: var(--fin-muted);
+}
+
+.fin-empty{
+  margin: 10px 0 0;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px dashed rgba(255,255,255,0.12);
+  background: rgba(8,10,18,0.55);
+  color: var(--fin-muted);
+  font-size: 0.85rem;
+}
+
+.prov-prod-list{
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.prov-prod-item{
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(10,12,20,0.88);
+}
+
+.prov-prod-main{
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.prov-prod-title{
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prov-prod-meta{
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: var(--fin-muted);
+}
+
+.prov-prod-chip{
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(212,175,55,0.35);
+  background: rgba(212,175,55,0.08);
+  color: #ffe7a6;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+}
+
+.prov-prod-actions{
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.prov-prod-editor{
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+
+@media (max-width: 520px){
+  .prov-prod-item{ flex-direction: column; }
+  .prov-prod-actions{ justify-content: flex-end; width: 100%; }
+}
+
 /* Tablas */
 
 .fin-table-wrapper {
@@ -1007,6 +1107,9 @@ body.fin-body {
   color: var(--fin-text);
   font-size: 0.82rem;
   outline: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .purchase-grid input:not([type="checkbox"]):focus,
