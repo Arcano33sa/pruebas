@@ -696,12 +696,13 @@
       <div class="fin-form-row">
         <label>
           Precio ref (C$)
-          <input type="number" id="prov-prod-precio" min="0" step="0.01" value="0">
+          <!-- Input tipo text + inputmode para permitir select-all fiable en iPad/Safari (sin mostrar 0 por defecto) -->
+          <input type="text" id="prov-prod-precio" inputmode="decimal" autocomplete="off">
         </label>
 
         <label>
           Unidades por caja
-          <input type="number" id="prov-prod-unidades" min="0" step="1" value="0">
+          <input type="text" id="prov-prod-unidades" inputmode="numeric" autocomplete="off">
         </label>
 
         <div class="fin-actions">
@@ -717,7 +718,6 @@
       <thead>
         <tr>
           <th>Nombre</th>
-          <th>Teléfono</th>
           <th>Nota</th>
           <th>Acciones</th>
         </tr>

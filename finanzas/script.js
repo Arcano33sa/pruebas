@@ -3964,10 +3964,46 @@ function provEditorSetEnabledByTipo() {
   const t = String(tipoEl.value || '').toUpperCase();
   if (t === 'CAJAS') {
     uEl.disabled = false;
+    // Si veníamos de UNIDADES, restaurar lo último que el usuario escribió (si aplica)
+    const last = (uEl.dataset && typeof uEl.dataset.a33LastUnits === 'string') ? uEl.dataset.a33LastUnits : '';
+    if ((!uEl.value || String(uEl.value).trim() === '') && last) {
+      uEl.value = last;
+    }
   } else {
-    uEl.value = '0';
+    // Mantener vacío en pantalla (no mostrar 0) pero sin perder lo que el usuario pudo haber escrito
+    const cur = (uEl.value != null) ? String(uEl.value).trim() : '';
+    if (cur) {
+      try { uEl.dataset.a33LastUnits = cur; } catch (_) {}
+    }
+    uEl.value = '';
     uEl.disabled = true;
   }
+}
+
+// iPad/Safari: select-all confiable (defer al siguiente tick)
+function a33SelectAllOnFocus(el) {
+  if (!el) return;
+  try {
+    if (el.dataset && el.dataset.a33SelectAll === '1') return;
+    if (el.dataset) el.dataset.a33SelectAll = '1';
+  } catch (_) {}
+
+  const doSelect = () => {
+    const v = (el.value != null) ? String(el.value) : '';
+    if (!v) return;
+    setTimeout(() => {
+      try { el.select(); } catch (_) {}
+      try { el.setSelectionRange(0, String(el.value || '').length); } catch (_) {}
+    }, 0);
+  };
+
+  el.addEventListener('focus', doSelect);
+  // En iOS, a veces el foco ya está y un tap no re-dispara focus.
+  el.addEventListener('click', () => {
+    try {
+      if (document.activeElement === el) doSelect();
+    } catch (_) {}
+  });
 }
 
 function provOpenProductEditor(product) {
@@ -3986,8 +4022,30 @@ function provOpenProductEditor(product) {
     const t = product && product.tipo ? String(product.tipo).toUpperCase() : '';
     tipoEl.value = (t === 'CAJAS' || t === 'UNIDADES') ? t : '';
   }
-  if (precioEl) precioEl.value = String(product && product.precio != null ? normNumNonNeg(product.precio) : 0);
-  if (uEl) uEl.value = String(product && product.unidadesPorCaja != null ? normNumNonNeg(product.unidadesPorCaja) : 0);
+  // Inputs limpios: en alta de producto (product=null) iniciar VACÍO (no 0 en pantalla)
+  if (precioEl) {
+    const has = product && product.precio != null;
+    precioEl.value = has ? String(normNumNonNeg(product.precio)) : '';
+  }
+  if (uEl) {
+    const tipoUpper = (product && product.tipo != null) ? String(product.tipo).toUpperCase() : '';
+    const has = product && product.unidadesPorCaja != null;
+    const val = has ? String(normNumNonNeg(product.unidadesPorCaja)) : '';
+
+    // Guardar lastUnits para permitir toggle UNIDADES↔CAJAS sin perder el valor
+    try { uEl.dataset.a33LastUnits = val; } catch (_) {}
+
+    // Si NO es CAJAS, mantener vacío en pantalla (aunque internamente sea 0 al guardar)
+    if (tipoUpper && tipoUpper !== 'CAJAS') {
+      uEl.value = '';
+    } else {
+      uEl.value = val;
+    }
+  }
+
+  // Auto select-all en focus (solo si tiene contenido)
+  a33SelectAllOnFocus(precioEl);
+  a33SelectAllOnFocus(uEl);
 
   editor.classList.remove('hidden');
   provEditorSetEnabledByTipo();
@@ -4185,7 +4243,7 @@ function renderProveedores(data) {
 
   if (!suppliers.length) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td colspan="4">Sin proveedores. Crea el primero arriba.</td>`;
+    tr.innerHTML = `<td colspan="3">Sin proveedores. Crea el primero arriba.</td>`;
     tbody.appendChild(tr);
     return;
   }
@@ -4193,17 +4251,14 @@ function renderProveedores(data) {
   for (const s of suppliers) {
     const idSafe = escapeHtml(String((s && s.id) ?? ''));
     const nombreRaw = (s && s.nombre != null) ? String(s.nombre) : '';
-    const telRaw = (s && s.telefono != null) ? String(s.telefono) : '';
     const notaRaw = (s && s.nota != null) ? String(s.nota) : '';
 
     const nombre = escapeHtml(nombreRaw.trim());
-    const telefono = escapeHtml((telRaw || '—').toString().trim()) || '—';
     const nota = escapeHtml((notaRaw || '—').toString().trim()) || '—';
 
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td title="${nombre}">${nombre || '—'}</td>
-      <td title="${telefono}">${telefono}</td>
       <td title="${nota}">${nota}</td>
       <td class="fin-actions-cell">
         <div class="fin-actions-inline fin-actions-inline--prov">

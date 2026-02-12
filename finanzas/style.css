@@ -1008,7 +1008,7 @@ body.fin-body {
 }
 
 #view-proveedores .fin-table td:nth-child(1),
-#view-proveedores .fin-table td:nth-child(3){
+#view-proveedores .fin-table td:nth-child(2){
   white-space: normal;
   line-height: 1.15;
 }
@@ -1471,6 +1471,20 @@ body.fin-body {
   gap:6px;
   flex-wrap:wrap;
   justify-content:flex-end;
+}
+
+/* Proveedores: mantener 3 botones en 1 línea en pantallas medianas+ (sin overflow-x) */
+#view-proveedores .fin-actions-inline.fin-actions-inline--prov{
+  flex-wrap: nowrap;
+}
+
+#view-proveedores .fin-table td.fin-actions-cell{
+  white-space: nowrap;
+}
+
+@media (max-width: 520px){
+  #view-proveedores .fin-actions-inline.fin-actions-inline--prov{ flex-wrap: wrap; }
+  #view-proveedores .fin-table td.fin-actions-cell{ white-space: normal; }
 }
 
 .fin-receipts-filters{
