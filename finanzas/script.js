@@ -1260,7 +1260,8 @@ function normStr(v, maxLen = 120) {
 
 function normalizeProductType(v) {
   const t = normStr(v, 24).toUpperCase();
-  return t || 'UNIDADES';
+  if (!t) return '—';
+  return (t === 'CAJAS' || t === 'UNIDADES') ? t : '—';
 }
 
 function normalizeSupplierProduct(raw) {
@@ -3899,10 +3900,55 @@ function provShowProductsUI() {
   if (sec) sec.classList.remove('hidden');
 }
 
+function provStartQuickAddProductsFlow() {
+  const sec = document.getElementById('prov-products-section');
+  if (sec) {
+    sec.classList.remove('hidden');
+    try {
+      if (typeof sec.scrollIntoView === 'function') sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (_) {
+      try { sec.scrollIntoView(true); } catch (__ ) {}
+    }
+  }
+
+  // Abrir editor inline y enfocar el primer campo (flujo alta rápida)
+  setTimeout(() => {
+    try {
+      provOpenProductEditor(null);
+    } catch (_) {}
+  }, 120);
+
+  try {
+    showToast('Agrega los productos que vende este proveedor');
+  } catch (_) {}
+}
+
+
 function provGetSupplierFromCache(id) {
   if (!finCachedData || !Array.isArray(finCachedData.suppliers)) return null;
   const nid = Number(id || 0);
   return finCachedData.suppliers.find(x => Number(x.id) === nid) || null;
+}
+
+function provExitEditStateBecauseSupplierMissing(message) {
+  const msg = String(message || 'El proveedor ya no existe. Se cerró el editor.');
+  const sid = Number(currentSupplierEditId || 0);
+
+  // Si el modal visor estaba abierto sobre este proveedor, cerrarlo para evitar estado colgado.
+  try {
+    if (sid > 0 && provProductsModalSupplierId && Number(provProductsModalSupplierId) === sid) {
+      provCloseProductsModal();
+    }
+  } catch (_) {}
+
+  try { showToast(msg); } catch (_) {}
+  try { alert(msg); } catch (_) {}
+
+  // Limpieza fuerte de estado/UI (evita crashes en siguientes clicks)
+  try { resetProveedorForm(); } catch (_) {
+    currentSupplierEditId = null;
+    try { provHideProductsUI(); } catch (__ ) {}
+  }
 }
 
 function provGenProductId() {
@@ -3936,7 +3982,10 @@ function provOpenProductEditor(product) {
 
   if (eid) eid.value = product && product.id ? String(product.id) : '';
   if (nombreEl) nombreEl.value = product && product.nombre ? String(product.nombre) : '';
-  if (tipoEl) tipoEl.value = product && product.tipo ? String(product.tipo).toUpperCase() : '';
+  if (tipoEl) {
+    const t = product && product.tipo ? String(product.tipo).toUpperCase() : '';
+    tipoEl.value = (t === 'CAJAS' || t === 'UNIDADES') ? t : '';
+  }
   if (precioEl) precioEl.value = String(product && product.precio != null ? normNumNonNeg(product.precio) : 0);
   if (uEl) uEl.value = String(product && product.unidadesPorCaja != null ? normNumNonNeg(product.unidadesPorCaja) : 0);
 
@@ -3979,14 +4028,14 @@ function provRenderProductsList(supplier) {
     div.dataset.pid = p.id;
 
     const tipo = (p.tipo || '').toUpperCase();
-    const tipoLabel = tipo === 'CAJAS' ? 'CAJAS' : 'UNIDADES';
+    const tipoLabel = (tipo === 'CAJAS' || tipo === 'UNIDADES') ? tipo : '—';
 
     div.innerHTML = `
       <div class="prov-prod-main">
         <div class="prov-prod-title" title="${escapeHtml(p.nombre || '')}">${escapeHtml(p.nombre || '—')}</div>
         <div class="prov-prod-meta">
           <span class="prov-prod-chip">${escapeHtml(tipoLabel)}</span>
-          <span>Precio: C$ ${fmtCurrency(p.precio)}</span>
+          <span>Precio: C$ ${escapeHtml(fmtCurrency(p.precio))}</span>
           <span>${escapeHtml(tipo === 'CAJAS' ? `U/Caja: ${String(normNumNonNeg(p.unidadesPorCaja))}` : 'U/Caja: 0')}</span>
         </div>
       </div>
@@ -4072,7 +4121,7 @@ async function provSaveProductFromEditor() {
   await openFinDB();
   const existing = await finGet('suppliers', sid);
   if (!existing) {
-    alert('No se encontró el proveedor en la base de datos.');
+    provExitEditStateBecauseSupplierMissing('Este proveedor fue eliminado o no existe. Se cerró el editor de productos.');
     return;
   }
 
@@ -4108,7 +4157,7 @@ async function provDeleteProduct(productId) {
   await openFinDB();
   const existing = await finGet('suppliers', sid);
   if (!existing) {
-    alert('No se encontró el proveedor en la base de datos.');
+    provExitEditStateBecauseSupplierMissing('Este proveedor fue eliminado o no existe. Se cerró el editor de productos.');
     return;
   }
 
@@ -4185,8 +4234,10 @@ function resetProveedorForm() {
   provHideProductsUI();
 }
 
-async function guardarProveedor() {
+async function guardarProveedor(opts) {
   if (!finCachedData) await refreshAllFin();
+
+  const quickAdd = !!(opts && opts.quickAdd);
 
   const idEl = document.getElementById('prov-id');
   const nombreEl = document.getElementById('prov-nombre');
@@ -4215,18 +4266,37 @@ async function guardarProveedor() {
     }
 
     if (existing && typeof existing === 'object') {
-      await finPut('suppliers', { ...existing, nombre, telefono, nota });
+      const productos = Array.isArray(existing.productos) ? existing.productos : [];
+      await finPut('suppliers', { ...existing, nombre, telefono, nota, productos });
     } else {
-      await finPut('suppliers', { id, nombre, telefono, nota });
+      await finPut('suppliers', { id, nombre, telefono, nota, productos: [] });
     }
     showToast('Proveedor actualizado');
+    // Mantener proveedor activo (equivalente a modo Editar) para que productos siga disponible.
+    currentSupplierEditId = Number(id);
+    const cancelar = document.getElementById('prov-cancelar');
+    if (cancelar) cancelar.classList.remove('hidden');
   } else {
-    await finAdd('suppliers', { nombre, telefono, nota, productos: [] });
+    const newId = await finAdd('suppliers', { nombre, telefono, nota, productos: [] });
     showToast('Proveedor creado');
+
+    // Auto-selección: dejar el proveedor recién creado activo para agregar productos sin tocar “Editar”.
+    currentSupplierEditId = Number(newId);
+    if (idEl && newId != null) idEl.value = String(newId);
+    const cancelar = document.getElementById('prov-cancelar');
+    if (cancelar) cancelar.classList.remove('hidden');
+
+    // UI inmediata (antes de refreshAllFin): habilitar sección de productos en el mismo flujo.
+    provShowProductsUI();
+    provCloseProductEditor();
+    provRenderProductsList({ id: newId, nombre, telefono, nota, productos: [] });
   }
 
-  resetProveedorForm();
   await refreshAllFin();
+
+  if (quickAdd) {
+    provStartQuickAddProductsFlow();
+  }
 }
 
 async function eliminarProveedor(id) {
@@ -4246,6 +4316,7 @@ async function eliminarProveedor(id) {
 
 function setupProveedoresUI() {
   const btnGuardar = document.getElementById('prov-guardar');
+  const btnGuardarAddProd = document.getElementById('prov-guardar-addprod');
   const btnCancelar = document.getElementById('prov-cancelar');
   const tbody = document.getElementById('proveedores-tbody');
 
@@ -4266,11 +4337,19 @@ function setupProveedoresUI() {
       if (e.target === prodModal) provCloseProductsModal();
     });
   }
-
   if (btnGuardar) {
     btnGuardar.addEventListener('click', () => {
       guardarProveedor().catch(err => {
         console.error('Error guardando proveedor', err);
+        alert('No se pudo guardar el proveedor.');
+      });
+    });
+  }
+
+  if (btnGuardarAddProd) {
+    btnGuardarAddProd.addEventListener('click', () => {
+      guardarProveedor({ quickAdd: true }).catch(err => {
+        console.error('Error guardando proveedor (alta rápida)', err);
         alert('No se pudo guardar el proveedor.');
       });
     });
@@ -4286,6 +4365,12 @@ function setupProveedoresUI() {
     prodAdd.addEventListener('click', () => {
       if (!currentSupplierEditId) {
         alert('Primero selecciona un proveedor (Editar).');
+        return;
+      }
+      // Hardening: si el proveedor ya no existe (por borrado externo), salir limpio.
+      const sx = provGetSupplierFromCache(currentSupplierEditId);
+      if (!sx) {
+        provExitEditStateBecauseSupplierMissing('El proveedor seleccionado ya no existe.');
         return;
       }
       provOpenProductEditor(null);
@@ -4321,7 +4406,10 @@ function setupProveedoresUI() {
 
       const sid = Number(currentSupplierEditId);
       const s = finCachedData.suppliers.find(x => Number(x.id) === sid);
-      if (!s) return;
+      if (!s) {
+        provExitEditStateBecauseSupplierMissing('El proveedor seleccionado ya no existe.');
+        return;
+      }
 
       if (editBtn) {
         const pid = String(editBtn.dataset.pid || '').trim();
@@ -4983,9 +5071,9 @@ function compraRenderProductoHint(data) {
     return;
   }
 
-  const tipo = (p.tipo || 'UNIDADES').toString().toUpperCase();
-  const tipoLabel = (tipo === 'CAJAS') ? 'CAJAS' : 'UNIDADES';
-  const precio = Number.isFinite(Number(p.precio)) ? Number(p.precio) : 0;
+  const tipo = String(p.tipo || '').toUpperCase().trim();
+  const tipoLabel = (tipo === 'CAJAS' || tipo === 'UNIDADES') ? tipo : '—';
+  const precio = normNumNonNeg(p.precio);
   hint.textContent = `Tipo: ${tipoLabel} · Precio ref: C$ ${fmtCurrency(precio)}`;
 }
 

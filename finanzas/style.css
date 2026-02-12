@@ -349,6 +349,38 @@ body.fin-body {
   background: linear-gradient(135deg, #df3a3a, #a12028);
   box-shadow: 0 8px 18px rgba(0,0,0,0.6);
 }
+
+
+/* Variante dorada (A33) para acciones destacadas */
+.btn-primary--gold {
+  background: linear-gradient(135deg, var(--fin-gold), #b78d1e);
+  color: #140f07;
+  border-color: rgba(0,0,0,0.18);
+}
+
+.btn-primary--gold:hover {
+  background: linear-gradient(135deg, #e2c15a, #c49a2a);
+  box-shadow: 0 8px 18px rgba(0,0,0,0.55);
+}
+
+/* Proveedores: acciones de formulario con 2 botones (sin romper grid, dedo-friendly) */
+#view-proveedores .fin-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+#view-proveedores .fin-actions .btn-primary,
+#view-proveedores .fin-actions .btn-ghost {
+  margin-left: 0;
+  min-height: 44px;
+}
+
+#view-proveedores #prov-guardar,
+#view-proveedores #prov-guardar-addprod {
+  white-space: normal;
+  text-align: center;
+  line-height: 1.15;
+}
 .btn-ghost {
   padding: 8px 14px;
   border-radius: 999px;
