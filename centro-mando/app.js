@@ -972,6 +972,7 @@ function computeFinComprasPending(){
           product: safeStr(line.product),
           quantity: safeStr(line.quantity),
           price: safeStr(line.price),
+          total: safeStr(line.total),
         });
 
         if (outArr.length >= SAFE_SCAN_LIMIT) break; // hard stop
@@ -1091,13 +1092,17 @@ function computeFinComprasPendingCountAndStamp(){
 
     const uISO = safeStr(pcCurrent.updatedAtISO);
     const uDisp = safeStr(pcCurrent.updatedAtDisplay);
-    let stamp = uISO || uDisp;
-    if (stamp){
-      stamp = 'u' + stamp;
-    } else {
-      const raw = safeLSGetString(FIN_COMPRAS_CURRENT_KEY);
-      stamp = raw ? ('h' + hash32FNV1a(raw).toString(36)) : ('c' + String(count));
-    }
+
+    // Sello de cambios robusto:
+    // - Preferir updatedAt* si existe, PERO siempre adjuntar hash del raw cuando esté disponible
+    //   para cubrir casos donde updatedAt no se refresca aunque el usuario edite montos.
+    const raw = safeLSGetString(FIN_COMPRAS_CURRENT_KEY);
+    const h = raw ? ('h' + hash32FNV1a(raw).toString(36)) : '';
+
+    let stamp = '';
+    if (uISO || uDisp) stamp = 'u' + (uISO || uDisp);
+    if (h) stamp = stamp ? (stamp + '|' + h) : h;
+    if (!stamp) stamp = 'c' + String(count);
 
     return {
       ok:true,
@@ -5775,7 +5780,13 @@ function renderPurchasesBlock(pc){
   const byEl = $('purchasesBySupplier');
   const vaEl = $('purchasesVarias');
   const moreEl = $('purchasesMore');
+  const totalEl = $('purchasesTotalLabel');
   if (!msgEl || !sectionsEl || !byEl || !vaEl) return;
+
+  const setHeaderTotal = (txt)=>{
+    if (!totalEl) return;
+    try{ totalEl.textContent = String(txt || 'Total: C$ —'); }catch(_){ }
+  };
 
   const clear = (el)=>{
     try{
@@ -5809,11 +5820,13 @@ function renderPurchasesBlock(pc){
   };
 
   if (!pc || pc.ok !== true || typeof pc.pendingCountTotal !== 'number'){
+    setHeaderTotal('Total: C$ —');
     showMsg('No disponible');
     return;
   }
 
   if (pc.pendingCountTotal === 0){
+    setHeaderTotal(`Total: C$${fmtMoney2(0)}`);
     showMsg('Sin compras pendientes');
     return;
   }
@@ -5827,6 +5840,29 @@ function renderPurchasesBlock(pc){
     const sn = safeStr(o.supplierName);
     return { ...o, supplierName: sn || 'Varios' };
   });
+
+  // Total general (C$) — suma robusta (usa line.total si existe; si no, qty*price)
+  try{
+    let sum = 0;
+    let parsedAny = false;
+    const all = proveedoresAll.concat(variasNorm);
+    for (const line of all){
+      if (!line || typeof line !== 'object') continue;
+      let t = parseNumberLoose(line.total);
+      if (!isFinite(t)){
+        const qn = parseNumberLoose(line.quantity);
+        const pn = parseNumberLoose(line.price);
+        if (isFinite(qn) && isFinite(pn)) t = qn * pn;
+      }
+      if (isFinite(t)){
+        sum += t;
+        parsedAny = true;
+      }
+    }
+    setHeaderTotal(parsedAny ? (`Total: C$${fmtMoney2(sum)}`) : 'Total: C$ —');
+  }catch(_){
+    setHeaderTotal('Total: C$ —');
+  }
 
   // Límite global
   const MAX_ROWS = 20;
@@ -5880,13 +5916,16 @@ function renderPurchasesBlock(pc){
       const product = uiProdNameCMD(line && line.product) || '—';
       const qty = safeStr(line && line.quantity) || '—';
 
-      const cur = detectCurrencySymbol(line && line.price);
+      const cur = detectCurrencySymbol(line && line.total) || detectCurrencySymbol(line && line.price);
+      const tn = parseNumberLoose(line && line.total);
       const qn = parseNumberLoose(line && line.quantity);
       const pn = parseNumberLoose(line && line.price);
 
       let totalStr = '—';
-      if (isFinite(qn) && isFinite(pn)){
-        const tot = qn * pn;
+      let tot = NaN;
+      if (isFinite(tn)) tot = tn;
+      else if (isFinite(qn) && isFinite(pn)) tot = qn * pn;
+      if (isFinite(tot)){
         const f = fmtMoney2(tot);
         if (cur === 'C$') totalStr = `C$${f}`;
         else if (cur === '$') totalStr = `$${f}`;

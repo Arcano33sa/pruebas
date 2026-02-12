@@ -1286,9 +1286,31 @@ button.cmd-pill{ cursor: pointer; }
 
 /* Compras (dock expandido) */
 .cmd-purchases{ margin-top: 12px; }
-.cmd-purchases .cmd-section-head{ align-items: center; }
+.cmd-purchases .cmd-section-head{
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+.cmd-purchases-total{
+  min-width: 0;
+  text-align: center;
+  font-weight: 820;
+  font-size: 13.5px;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.92;
+  font-variant-numeric: tabular-nums;
+}
+.cmd-purchases-total b{ font-weight: 860; }
 .cmd-purchases-label{ margin-top: 10px; margin-bottom: 6px; }
 .cmd-purchases-sections{ display: block; }
+
+@media (max-width: 420px){
+  .cmd-purchases-total{ font-size: 12.5px; }
+}
 
 .cmd-purchases-table{
   border: 1px solid rgba(255,255,255,0.08);
