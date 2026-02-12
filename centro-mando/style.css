@@ -1166,6 +1166,119 @@ button.cmd-pill{ cursor: pointer; }
   border-top: 1px solid rgba(255,255,255,0.08);
 }
 
+/* Secciones compactas (GLOBAL cards expandido) — Etapa 2/5 */
+.cmd-global-sections{
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+@media (max-width: 700px){
+  .cmd-global-sections{
+    grid-template-columns: 1fr;
+  }
+}
+
+.cmd-gsec{
+  min-width: 0;
+  padding: 10px 10px 9px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(0,0,0,0.18);
+  overflow: hidden;
+}
+.cmd-gsec-h{
+  font-weight: 900;
+  font-size: 11px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--gold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.cmd-gsec-v{
+  margin-top: 6px;
+  font-weight: 900;
+  font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmd-gsec-hint{
+  margin-top: 2px;
+  font-size: 11.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmd-gsec-body{
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.2;
+  color: rgba(255,255,255,0.86);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+
+/* GLOBAL: listas compactas dentro de secciones (Alertas/Recomendaciones) */
+.cmd-gsec-body.is-list{
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  min-width: 0;
+}
+.cmd-gsec-item{
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  min-width: 0;
+}
+.cmd-gsec-item-ic{
+  flex: 0 0 auto;
+  width: 16px;
+  text-align: center;
+  opacity: 0.95;
+  margin-top: 1px;
+}
+.cmd-gsec-item-main{
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.cmd-gsec-item-title{
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.cmd-gsec-item-sub{
+  margin-top: 2px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.72);
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.cmd-global-checklist{
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  min-width: 0;
+}
+
 /* Checklist detallado (GLOBAL cards) */
 .cmd-chk-grid-detailed .cmd-chk-body{
   margin-top: 6px;
