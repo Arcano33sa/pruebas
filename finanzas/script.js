@@ -1258,6 +1258,13 @@ function normStr(v, maxLen = 120) {
   return out.length > maxLen ? out.slice(0, maxLen) : out;
 }
 
+function normBool01(v) {
+  if (v === true) return true;
+  if (v === false || v == null) return false;
+  const s = String(v).trim().toLowerCase();
+  return (s === 'true' || s === '1' || s === 'si' || s === 'sí' || s === 'yes');
+}
+
 function normalizeProductType(v) {
   const t = normStr(v, 24).toUpperCase();
   if (!t) return '—';
@@ -1266,11 +1273,21 @@ function normalizeProductType(v) {
 
 function normalizeSupplierProduct(raw) {
   const obj = (raw && typeof raw === 'object') ? raw : {};
+
+  // Importante: distinguir "precio vacío" (no set) vs "precio=0" real.
+  // - Nuevos registros guardan precioSet.
+  // - Históricos sin precioSet: si precio es 0 asumimos "no set" (evita 0 fantasma en UI).
+  const precioRaw = obj.precio;
+  const precioStr = (precioRaw == null) ? '' : String(precioRaw).trim();
+  const hasFlag = Object.prototype.hasOwnProperty.call(obj, 'precioSet');
+  const precioSet = hasFlag ? normBool01(obj.precioSet) : ((precioStr !== '') && (normNumNonNeg(precioRaw) !== 0));
+
   return {
     id: normStr(obj.id, 80),
     nombre: normStr(obj.nombre, 120),
     tipo: normalizeProductType(obj.tipo),
     precio: normNumNonNeg(obj.precio),
+    precioSet,
     unidadesPorCaja: normNumNonNeg(obj.unidadesPorCaja)
   };
 }
@@ -3445,6 +3462,11 @@ function openDetalleModal(entryId) {
   const isInconsistent = lines.length === 0;
   const inconsLine = isInconsistent ? `<p>${makePill('Inconsistente: asiento sin líneas', 'red')} <span class="fin-muted">No se borró nada. Esto suele pasar por cortes/crash antiguos durante guardado.</span></p>` : '';
 
+  const isPurchase = (entry && entry.entryType === 'purchase');
+  const editCompraBtn = isPurchase
+    ? `<p><button type="button" class="btn btn-small btn-edit-compra" data-entry-id="${entry.id}">Editar en Compras</button></p>`
+    : '';
+
   meta.innerHTML = `
     <p><strong>Fecha:</strong> ${escapeHtml(entry.fecha || entry.date || '')}</p>
     <p><strong>Descripción:</strong> ${escapeHtml(uiTextFIN(getDisplayDescription(entry) || ''))}</p>
@@ -3453,6 +3475,7 @@ function openDetalleModal(entryId) {
     <p><strong>Proveedor:</strong> ${escapeHtml(supplierLabel)}</p>
     <p><strong>Pago:</strong> ${escapeHtml(pmLabel)}</p>
     <p><strong>Referencia:</strong> ${ref ? escapeHtml(ref) : '—'}</p>
+    ${editCompraBtn}
     ${closureLine}
     ${costsLine}
     ${mismatchLine}
@@ -4024,8 +4047,9 @@ function provOpenProductEditor(product) {
   }
   // Inputs limpios: en alta de producto (product=null) iniciar VACÍO (no 0 en pantalla)
   if (precioEl) {
-    const has = product && product.precio != null;
-    precioEl.value = has ? String(normNumNonNeg(product.precio)) : '';
+    const hasFlag = (product && typeof product.precioSet === 'boolean');
+    const show = product ? (hasFlag ? !!product.precioSet : (product.precio != null && Number(product.precio) !== 0)) : false;
+    precioEl.value = show ? String(normNumNonNeg(product.precio)) : '';
   }
   if (uEl) {
     const tipoUpper = (product && product.tipo != null) ? String(product.tipo).toUpperCase() : '';
@@ -4148,7 +4172,9 @@ async function provSaveProductFromEditor() {
 
   const nombre = (nombreEl?.value || '').trim();
   const tipo = String(tipoEl?.value || '').trim().toUpperCase();
-  const precio = normNumNonNeg(precioEl?.value);
+  const precioRawStr = (precioEl && precioEl.value != null) ? String(precioEl.value).trim() : '';
+  const precioSet = (precioRawStr !== '');
+  const precio = normNumNonNeg(precioRawStr);
   const unidadesPorCaja = normNumNonNeg(uEl?.value);
   const editId = (eidEl?.value || '').trim();
 
@@ -4167,6 +4193,7 @@ async function provSaveProductFromEditor() {
     nombre,
     tipo,
     precio,
+    precioSet,
     unidadesPorCaja: (tipo === 'CAJAS') ? unidadesPorCaja : 0
   };
 
@@ -5072,6 +5099,22 @@ function setupCatalogoUI() {
     });
   }
 
+  // "Editar en Compras" desde el detalle (compras a proveedor)
+  const detalleMeta = $('#detalle-meta');
+  if (detalleMeta) {
+    detalleMeta.addEventListener('click', (e) => {
+      const btn = e.target.closest('.btn-edit-compra');
+      if (!btn) return;
+      const id = Number(btn.dataset.entryId || '0');
+      if (!id || !finCachedData) return;
+      closeDetalleModal();
+      try { compraStartEditFromEntryId(id); } catch (err) {
+        console.error('No se pudo cargar compra para editar', err);
+        alert('No se pudo abrir la compra para editar.');
+      }
+    });
+  }
+
   if (rootEl) {
     rootEl.addEventListener('change', () => {
       catAutoRootType = false;
@@ -5093,6 +5136,298 @@ function setupCatalogoUI() {
 
 /* ---------- Compras pagadas a proveedor (wizard) ---------- */
 
+let compraMontoAuto = true; // controla auto-sinc visual hacia "Monto" (sin cambiar persistencia)
+let compraMontoAutoValue = null; // último valor auto aplicado (para no pelear con el usuario)
+
+// Etapa 2: modo edición (actualiza un asiento existente) + snapshot para productos borrados
+let compraEditingEntryId = null;
+// { supplierId, id, nombre, tipo, precioRef }
+let compraMissingProductSnapshot = null;
+
+function compraSetMontoAuto(enabled) {
+  compraMontoAuto = !!enabled;
+  if (!compraMontoAuto) compraMontoAutoValue = null;
+}
+
+function compraParseNumMaybe(v) {
+  const s = String(v ?? '').trim().replace(',', '.');
+  if (!s) return NaN;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function compraClearCalcFields(opts = {}) {
+  const tipoEl = document.getElementById('compra-prod-tipo');
+  const priceEl = document.getElementById('compra-precio-unit');
+  const qtyEl = document.getElementById('compra-cantidad');
+  const totalEl = document.getElementById('compra-total');
+
+  if (tipoEl) tipoEl.value = '';
+  if (priceEl && !opts.keepPrice) priceEl.value = '';
+  if (qtyEl && !opts.keepQty) qtyEl.value = '';
+  if (totalEl) totalEl.value = '';
+
+  if (opts.resetMontoAuto) compraSetMontoAuto(false);
+  if (opts.clearMissingSnapshot) compraMissingProductSnapshot = null;
+}
+
+function compraMaybeSyncMonto(total) {
+  const montoEl = document.getElementById('compra-monto');
+  if (!montoEl) return;
+  if (!compraMontoAuto) return;
+  if (!Number.isFinite(total)) return;
+
+  const curStr = String(montoEl.value ?? '').trim();
+  const cur = compraParseNumMaybe(curStr);
+
+  // Si está vacío o venía de auto, podemos actualizar.
+  const canOverwrite = (curStr === '') || (Number.isFinite(cur) && compraMontoAutoValue != null && Math.abs(cur - compraMontoAutoValue) < 1e-9);
+
+  if (canOverwrite) {
+    montoEl.value = total.toFixed(2);
+    compraMontoAutoValue = total;
+    return;
+  }
+
+  // Si el usuario ya lo igualó al total, mantener auto sin tocar.
+  if (Number.isFinite(cur) && Math.abs(cur - total) < 1e-9) {
+    compraMontoAutoValue = total;
+    return;
+  }
+
+  // Si diverge, asumimos que el usuario mandó manual.
+  compraSetMontoAuto(false);
+}
+
+function compraRenderTotalCalc() {
+  const priceEl = document.getElementById('compra-precio-unit');
+  const qtyEl = document.getElementById('compra-cantidad');
+  const totalEl = document.getElementById('compra-total');
+  if (!priceEl || !qtyEl || !totalEl) return;
+
+  const price = compraParseNumMaybe(priceEl.value);
+  const qty = compraParseNumMaybe(qtyEl.value);
+
+  const valid = Number.isFinite(price) && price >= 0 && Number.isFinite(qty) && qty >= 0;
+  if (!valid) {
+    totalEl.value = '';
+    return;
+  }
+
+  const total = Math.max(0, price) * Math.max(0, qty);
+  totalEl.value = `C$ ${fmtCurrency(total)}`;
+  compraMaybeSyncMonto(total);
+}
+
+function compraProductHasPriceRef(p) {
+  if (!p || typeof p !== 'object') return false;
+  if (typeof p.precioSet === 'boolean') return !!p.precioSet;
+  const n = normNumNonNeg(p.precio);
+  return n !== 0;
+}
+
+function compraAutofillFieldsFromSelectedProduct(data, opts = {}) {
+  const tipoEl = document.getElementById('compra-prod-tipo');
+  const priceEl = document.getElementById('compra-precio-unit');
+  const qtyEl = document.getElementById('compra-cantidad');
+  const totalEl = document.getElementById('compra-total');
+
+  const p = compraGetSelectedProduct(data);
+  if (!p) {
+    compraClearCalcFields({ resetMontoAuto: opts.resetMontoAuto });
+    return;
+  }
+
+  if (tipoEl) tipoEl.value = String(p.tipo || '').toUpperCase().trim();
+
+  // Precio unitario: auto solo si está vacío o si se fuerza (al seleccionar producto)
+  const pref = normNumNonNeg(p.precio);
+  const hasPriceRef = compraProductHasPriceRef(p);
+  if (priceEl) {
+    const cur = String(priceEl.value ?? '').trim();
+    if (opts.forcePrice || !cur) {
+      priceEl.value = hasPriceRef ? pref.toFixed(2) : '';
+    }
+  }
+
+  if (qtyEl && opts.resetQty) qtyEl.value = '';
+  if (totalEl && opts.resetTotal) totalEl.value = '';
+
+  if (opts.enableMontoAuto) {
+    compraMontoAutoValue = null;
+    compraSetMontoAuto(true);
+  }
+
+  compraRenderTotalCalc();
+}
+
+function compraFocusCantidad() {
+  const qtyEl = document.getElementById('compra-cantidad');
+  if (!qtyEl || qtyEl.disabled) return;
+
+  // iPad/Safari: diferir al siguiente tick para evitar focus perdido.
+  requestAnimationFrame(() => {
+    setTimeout(() => {
+      try { qtyEl.focus(); } catch (_) {}
+      try { if (qtyEl.select) qtyEl.select(); } catch (_) {}
+    }, 0);
+  });
+}
+
+function compraUpdateEditUI() {
+  const btnGuardar = document.getElementById('compra-guardar');
+  if (btnGuardar) btnGuardar.textContent = compraEditingEntryId ? 'Actualizar compra' : 'Guardar compra';
+  const btnCancel = document.getElementById('compra-cancel-edit');
+  if (btnCancel) btnCancel.classList.toggle('hidden', !compraEditingEntryId);
+}
+
+function compraEnsureOption(selectEl, value, label) {
+  if (!selectEl) return;
+  const v = String(value);
+  if (!v) return;
+  const exists = Array.from(selectEl.options).some(o => String(o.value) === v);
+  if (exists) return;
+  const opt = document.createElement('option');
+  opt.value = v;
+  opt.textContent = label || v;
+  // Insertar al inicio (después del placeholder si existe)
+  const first = selectEl.options[0];
+  if (first) {
+    selectEl.insertBefore(opt, first.nextSibling);
+  } else {
+    selectEl.appendChild(opt);
+  }
+}
+
+function compraCancelEditMode() {
+  compraEditingEntryId = null;
+  compraMissingProductSnapshot = null;
+
+  // Reset form (sin mostrar "0" por defecto)
+  try { document.getElementById('compra-proveedor').value = ''; } catch (_) {}
+  try { document.getElementById('compra-fecha').value = todayStr(); } catch (_) {}
+  try { document.getElementById('compra-tipo').value = 'inventory'; } catch (_) {}
+  try { document.getElementById('compra-medio').value = 'cash'; } catch (_) {}
+  try { document.getElementById('compra-descripcion').value = ''; } catch (_) {}
+  try { document.getElementById('compra-referencia').value = ''; } catch (_) {}
+  try { document.getElementById('compra-monto').value = ''; } catch (_) {}
+  try { document.getElementById('compra-producto').value = ''; } catch (_) {}
+  try { if (finCachedData) { fillCompraCuentaDebe(finCachedData); fillCompraCuentaHaber(finCachedData); } } catch (_) {}
+  try { compraClearCalcFields({ resetMontoAuto: true, clearMissingSnapshot: true }); } catch (_) {}
+  try { compraRenderProductoHint(finCachedData || null); } catch (_) {}
+  try { compraRenderTotalCalc(); } catch (_) {}
+
+  compraUpdateEditUI();
+}
+
+function compraStartEditFromEntryId(entryId) {
+  if (!finCachedData) return;
+  const id = Number(entryId);
+  if (!Number.isFinite(id) || id <= 0) return;
+  const entry = finCachedData.entries.find(e => Number(e.id) === id);
+  if (!entry) return;
+
+  // Ir a pestaña Compras
+  try { setActiveFinView('compras'); } catch (_) {}
+
+  compraEditingEntryId = id;
+
+  const provSel = document.getElementById('compra-proveedor');
+  const sid = Number(entry.supplierId || 0);
+  const sName = getSupplierLabelFromEntry(entry, finCachedData);
+  if (provSel && sid) {
+    compraEnsureOption(provSel, sid, `⚠ ${sName}`);
+    provSel.value = String(sid);
+  }
+
+  const fechaEl = document.getElementById('compra-fecha');
+  if (fechaEl) fechaEl.value = String(entry.fecha || entry.date || todayStr());
+
+  const tipoEl = document.getElementById('compra-tipo');
+  if (tipoEl) tipoEl.value = String(entry.purchaseKind || 'inventory');
+
+  const pmEl = document.getElementById('compra-medio');
+  if (pmEl) pmEl.value = String(entry.paymentMethod || 'cash');
+
+  // Asegurar listas de cuentas coherentes con tipo/medio antes de setear valores
+  try { fillCompraCuentaDebe(finCachedData); } catch (_) {}
+  try { fillCompraCuentaHaber(finCachedData); } catch (_) {}
+
+  const descEl = document.getElementById('compra-descripcion');
+  if (descEl) descEl.value = String(entry.descripcion || entry.description || '');
+
+  const refEl = document.getElementById('compra-referencia');
+  if (refEl) refEl.value = String(entry.reference || '').trim();
+
+  const montoEl = document.getElementById('compra-monto');
+  const amount = n2(entry.totalDebe != null ? entry.totalDebe : (entry.total || 0));
+  if (montoEl) montoEl.value = amount > 0 ? amount.toFixed(2) : '';
+
+  // Cuentas desde líneas
+  const lines = finCachedData.linesByEntry?.get(id) || [];
+  const lDebe = lines.find(ln => n2(ln.debe) > 0) || null;
+  const lHaber = lines.find(ln => n2(ln.haber) > 0) || null;
+  const debeSel = document.getElementById('compra-cuenta-debe');
+  const haberSel = document.getElementById('compra-cuenta-haber');
+  if (debeSel && lDebe?.accountCode) {
+    const code = String(lDebe.accountCode);
+    const acc = findAccountByCode(finCachedData, code);
+    compraEnsureOption(debeSel, code, acc ? `${code} – ${(acc.nombre || acc.name || 'Cuenta')}` : code);
+    debeSel.value = code;
+  }
+  if (haberSel && lHaber?.accountCode) {
+    const code = String(lHaber.accountCode);
+    const acc = findAccountByCode(finCachedData, code);
+    compraEnsureOption(haberSel, code, acc ? `${code} – ${(acc.nombre || acc.name || 'Cuenta')}` : code);
+    haberSel.value = code;
+  }
+
+  // Producto (live o snapshot)
+  const pid = String(entry.productoId || entry.supplierProductId || '').trim();
+  if (sid && pid) {
+    compraMissingProductSnapshot = {
+      supplierId: sid,
+      id: pid,
+      nombre: entry.supplierProductName || null,
+      tipo: entry.tipo || entry.supplierProductType || null,
+      precioRef: (entry.supplierProductPriceRef != null) ? entry.supplierProductPriceRef : null
+    };
+  } else {
+    compraMissingProductSnapshot = null;
+  }
+
+  try { compraUpdateProductoSelect(finCachedData); } catch (_) {}
+  const prodSel = document.getElementById('compra-producto');
+  if (prodSel) {
+    if (pid) {
+      compraEnsureOption(prodSel, pid, `⚠ ${compraMissingProductSnapshot?.nombre || 'Producto no disponible'}`);
+      prodSel.value = pid;
+    } else {
+      prodSel.value = '';
+    }
+  }
+
+  const tipoProdEl = document.getElementById('compra-prod-tipo');
+  if (tipoProdEl) tipoProdEl.value = String(entry.tipo || entry.supplierProductType || '').trim();
+
+  const priceEl = document.getElementById('compra-precio-unit');
+  const price = n2(entry.precioUnit);
+  if (priceEl) priceEl.value = price > 0 ? price.toFixed(2) : '';
+
+  const qtyEl = document.getElementById('compra-cantidad');
+  const qty = n2(entry.cantidad);
+  if (qtyEl) qtyEl.value = qty > 0 ? String(qty) : '';
+
+  // No pelear con el usuario al abrir
+  compraSetMontoAuto(false);
+  compraRenderProductoHint(finCachedData);
+  compraRenderTotalCalc();
+
+  compraUpdateEditUI();
+  compraFocusCantidad();
+}
+
+
 function compraGetSelectedSupplierId() {
   const supplierIdStr = document.getElementById('compra-proveedor')?.value || '';
   const sid = Number(supplierIdStr);
@@ -5113,7 +5448,21 @@ function compraGetSelectedProduct(data) {
   const pid = String(document.getElementById('compra-producto')?.value || '').trim();
   if (!pid) return null;
   const prods = compraGetSupplierProducts(data, sid);
-  return prods.find(p => String(p.id) === pid) || null;
+  const live = prods.find(p => String(p.id) === pid) || null;
+  if (live) return live;
+
+  // Producto ya no existe en el catálogo: usar snapshot si coincide (Etapa 2 hardening)
+  const snap = compraMissingProductSnapshot;
+  if (snap && String(snap.id) === pid && Number(snap.supplierId) === Number(sid)) {
+    return normalizeSupplierProduct({
+      id: snap.id,
+      nombre: snap.nombre || 'Producto no disponible',
+      tipo: snap.tipo || '',
+      precio: snap.precioRef,
+      precioSet: (snap.precioRef != null)
+    });
+  }
+  return null;
 }
 
 function compraRenderProductoHint(data) {
@@ -5128,8 +5477,11 @@ function compraRenderProductoHint(data) {
 
   const tipo = String(p.tipo || '').toUpperCase().trim();
   const tipoLabel = (tipo === 'CAJAS' || tipo === 'UNIDADES') ? tipo : '—';
+  const hasPriceRef = compraProductHasPriceRef(p);
   const precio = normNumNonNeg(p.precio);
-  hint.textContent = `Tipo: ${tipoLabel} · Precio ref: C$ ${fmtCurrency(precio)}`;
+  hint.textContent = hasPriceRef
+    ? `Tipo: ${tipoLabel} · Precio ref: C$ ${fmtCurrency(precio)}`
+    : `Tipo: ${tipoLabel} · Precio ref: —`;
 }
 
 function compraUpdateProductoSelect(data) {
@@ -5145,6 +5497,8 @@ function compraUpdateProductoSelect(data) {
     sel.value = '';
     sel.disabled = true;
     if (hint) hint.textContent = '';
+    // Hardening: limpiar UI de Cantidad/Precio/Total al quedar sin proveedor
+    try { compraClearCalcFields({ resetMontoAuto: true, clearMissingSnapshot: true }); } catch (_) {}
     return;
   }
 
@@ -5154,10 +5508,31 @@ function compraUpdateProductoSelect(data) {
     .slice()
     .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '', 'es'));
 
+  const snap = (compraMissingProductSnapshot && Number(compraMissingProductSnapshot.supplierId) === Number(sid)) ? compraMissingProductSnapshot : null;
+
   const prev = String(sel.value || '').trim();
   sel.innerHTML = '';
 
   if (!productos.length) {
+    if (snap && snap.id != null) {
+      // Hardening: proveedor sin catálogo pero la compra tiene producto snapshot
+      const opt0 = document.createElement('option');
+      opt0.value = '';
+      opt0.textContent = '— Seleccione (opcional) —';
+      sel.appendChild(opt0);
+
+      const optS = document.createElement('option');
+      optS.value = String(snap.id);
+      const name = snap.nombre ? String(snap.nombre) : 'Producto no disponible';
+      optS.textContent = `⚠ ${name}`;
+      sel.appendChild(optS);
+
+      sel.disabled = false;
+      sel.value = prev === String(snap.id) ? prev : String(snap.id);
+      compraRenderProductoHint(data);
+      return;
+    }
+
     const opt = document.createElement('option');
     opt.value = '';
     opt.textContent = 'Sin productos';
@@ -5165,6 +5540,8 @@ function compraUpdateProductoSelect(data) {
     sel.value = '';
     sel.disabled = true;
     if (hint) hint.textContent = '';
+    // Si no hay catálogo, mantener campos vacíos (sin crashes)
+    try { compraClearCalcFields({ resetMontoAuto: true, clearMissingSnapshot: true }); } catch (_) {}
     return;
   }
 
@@ -5180,14 +5557,26 @@ function compraUpdateProductoSelect(data) {
     sel.appendChild(opt);
   }
 
-  sel.disabled = false;
-  if (prev && Array.from(sel.options).some(o => o.value === prev)) {
-    sel.value = prev;
-  } else {
-    sel.value = '';
+  // Si el producto seleccionado ya no existe, agregar opción snapshot (sin romper selección)
+  if (snap && snap.id != null) {
+    const sidValue = String(snap.id);
+    const exists = Array.from(sel.options).some(o => o.value === sidValue);
+    if (!exists) {
+      const optS = document.createElement('option');
+      optS.value = sidValue;
+      const name = snap.nombre ? String(snap.nombre) : 'Producto no disponible';
+      optS.textContent = `⚠ ${name}`;
+      sel.appendChild(optS);
+    }
   }
 
+  sel.disabled = false;
+  if (prev && Array.from(sel.options).some(o => o.value === prev)) sel.value = prev;
+  else sel.value = '';
+
   compraRenderProductoHint(data);
+  // Mantener Tipo/Precio/Total coherentes si hay producto seleccionado (sin pisar precio manual)
+  try { compraAutofillFieldsFromSelectedProduct(data, { forcePrice: false, resetQty: false, resetTotal: false, enableMontoAuto: false }); } catch (_) {}
 }
 
 function compraTryPrefillDescripcionFromProducto(data) {
@@ -5289,33 +5678,20 @@ async function guardarCompraProveedor() {
   const fecha = document.getElementById('compra-fecha')?.value || todayStr();
   const tipoCompra = document.getElementById('compra-tipo')?.value || 'inventory';
   const pm = document.getElementById('compra-medio')?.value || 'cash';
-  const montoRaw = document.getElementById('compra-monto')?.value || '0';
+  const montoRaw = document.getElementById('compra-monto')?.value || '';
   const debeCode = document.getElementById('compra-cuenta-debe')?.value || '';
   const haberCode = document.getElementById('compra-cuenta-haber')?.value || '';
   const desc = (document.getElementById('compra-descripcion')?.value || '').trim();
   const ref = (document.getElementById('compra-referencia')?.value || '').trim();
 
-  // Producto asistido (opcional)
-  const productId = String(document.getElementById('compra-producto')?.value || '').trim();
-  let productSnapshot = null;
-  if (productId) {
-    try {
-      const prods = compraGetSupplierProducts(finCachedData, supplierIdStr);
-      const p = prods.find(x => String(x.id || '') === productId) || null;
-      if (p) {
-        productSnapshot = {
-          id: String(p.id || ''),
-          nombre: String(p.nombre || ''),
-          tipo: String((p.tipo || 'UNIDADES')).toUpperCase(),
-          precio: normNumNonNeg(p.precio)
-        };
-      }
-    } catch (_) {
-      productSnapshot = null;
-    }
-  }
-
-  const monto = parseFloat(montoRaw.replace(',', '.'));
+  // Cálculo robusto: Total = (cantidad*precioUnit) si es válido; si no, usar Monto como fallback (compatibilidad)
+  const priceN = compraParseNumMaybe(document.getElementById('compra-precio-unit')?.value || '');
+  const qtyN = compraParseNumMaybe(document.getElementById('compra-cantidad')?.value || '');
+  const calcValid = Number.isFinite(priceN) && priceN >= 0 && Number.isFinite(qtyN) && qtyN >= 0;
+  const calcTotal = calcValid ? (Math.max(0, priceN) * Math.max(0, qtyN)) : NaN;
+  const montoFallback = compraParseNumMaybe(montoRaw);
+  const total = Number.isFinite(calcTotal) ? calcTotal : ((Number.isFinite(montoFallback) && montoFallback >= 0) ? montoFallback : 0);
+  const monto = total;
 
   if (!supplierIdStr) {
     alert('Selecciona un proveedor.');
@@ -5330,7 +5706,7 @@ async function guardarCompraProveedor() {
     return;
   }
   if (!(monto > 0)) {
-    alert('El monto debe ser mayor que cero.');
+    alert('El total debe ser mayor que cero.');
     return;
   }
   if (!debeCode) {
@@ -5342,7 +5718,66 @@ async function guardarCompraProveedor() {
     return;
   }
 
+  // Producto asistido (opcional) + snapshot robusto (si luego se borra del proveedor)
+  const productId = String(document.getElementById('compra-producto')?.value || '').trim();
+  let productSnapshot = null;
+  if (productId) {
+    try {
+      const p = compraGetSelectedProduct(finCachedData);
+      if (p) {
+        const hasPriceRef = compraProductHasPriceRef(p);
+        productSnapshot = {
+          id: String(p.id || ''),
+          nombre: String(p.nombre || ''),
+          tipo: String((p.tipo || 'UNIDADES')).toUpperCase(),
+          precio: hasPriceRef ? normNumNonNeg(p.precio) : null,
+          precioSet: hasPriceRef
+        };
+      }
+    } catch (_) {
+      productSnapshot = null;
+    }
+  }
+
+  const prodSelEl = document.getElementById('compra-producto');
+  const prodOptLabelRaw = prodSelEl ? String(prodSelEl.selectedOptions?.[0]?.textContent || '') : '';
+  const prodOptLabel = prodOptLabelRaw.replace(/^⚠\s*/, '').trim();
+
+  // Snapshots desde UI (por si el producto fue eliminado y no hay catálogo live)
+  const tipoSnapUI = String(document.getElementById('compra-prod-tipo')?.value || '').trim().toUpperCase();
+  const tipoSnap = (tipoSnapUI === 'CAJAS' || tipoSnapUI === 'UNIDADES') ? tipoSnapUI : (productSnapshot ? String(productSnapshot.tipo || '').toUpperCase() : '—');
+  const precioUnit = (Number.isFinite(priceN) && priceN >= 0) ? priceN : 0;
+  const cantidad = (Number.isFinite(qtyN) && qtyN >= 0) ? qtyN : 0;
+
+  // Si el producto no existe en catálogo pero sí está seleccionado, guardar snapshot para no crashear al reabrir.
+  if (productId && !productSnapshot) {
+    compraMissingProductSnapshot = {
+      supplierId,
+      id: productId,
+      nombre: desc || null,
+      tipo: tipoSnapUI || null,
+      precioRef: null
+    };
+  } else if (productSnapshot) {
+    compraMissingProductSnapshot = {
+      supplierId,
+      id: productSnapshot.id,
+      nombre: productSnapshot.nombre,
+      tipo: productSnapshot.tipo,
+      precioRef: productSnapshot.precio
+    };
+  }
+
+  const isEdit = (compraEditingEntryId != null);
+  const existing = (isEdit && finCachedData && Array.isArray(finCachedData.entries))
+    ? (finCachedData.entries.find(e => Number(e.id) === Number(compraEditingEntryId)) || null)
+    : null;
+
+  const entryBase = existing ? { ...existing } : {};
+
   const entry = {
+    ...entryBase,
+    ...(isEdit ? { id: Number(compraEditingEntryId) } : null),
     fecha,
     descripcion: desc || `Compra a proveedor: ${supplierName}`,
     tipoMovimiento: 'egreso',
@@ -5361,17 +5796,30 @@ async function guardarCompraProveedor() {
     reference: ref,
 
     // Producto asistido (opcional) - snapshot para robustez (si luego se borra del proveedor)
-    supplierProductId: productSnapshot ? productSnapshot.id : null,
-    supplierProductName: productSnapshot ? productSnapshot.nombre : null,
-    supplierProductType: productSnapshot ? productSnapshot.tipo : null,
-    supplierProductPriceRef: productSnapshot ? productSnapshot.precio : null
+    supplierProductId: productSnapshot ? productSnapshot.id : (productId || null),
+    supplierProductName: productSnapshot ? productSnapshot.nombre : ((prodOptLabel || null) || (entryBase.supplierProductName || null)),
+    supplierProductType: productSnapshot ? productSnapshot.tipo : (tipoSnap || entryBase.tipo || entryBase.supplierProductType || null),
+    supplierProductPriceRef: productSnapshot ? productSnapshot.precio : (entryBase.supplierProductPriceRef || null),
+
+    // Etapa 2: campos persistidos del flujo Cantidad/PrecioUnit/Total (compatibles con registros viejos)
+    productoId: productId || null,
+    tipo: tipoSnap || entryBase.tipo || entryBase.supplierProductType || null,
+    precioUnit,
+    cantidad,
+    total
   };
   // Guardado atómico: o se guarda TODO (asiento + líneas) o no se guarda NADA.
   try {
-    await createJournalEntryWithLinesAtomic(entry, [
+    const lines = [
       { accountCode: String(debeCode), debe: monto, haber: 0 },
       { accountCode: String(haberCode), debe: 0, haber: monto }
-    ]);
+    ];
+
+    if (isEdit) {
+      await updateJournalEntryWithLinesAtomic(Number(compraEditingEntryId), entry, lines);
+    } else {
+      await createJournalEntryWithLinesAtomic(entry, lines);
+    }
   } catch (err) {
     console.error('Error en guardado atómico de compra', err);
     alert('No se pudo guardar la compra (guardado atómico falló).');
@@ -5390,7 +5838,14 @@ async function guardarCompraProveedor() {
   if (prodEl) prodEl.value = '';
   if (prodHint) prodHint.textContent = '';
 
-  showToast('Compra guardada');
+  // Limpiar UI de Cantidad/Precio/Total (Etapa 1)
+  try { compraClearCalcFields({ resetMontoAuto: true, clearMissingSnapshot: true }); } catch (_) {}
+
+  // Salir de modo edición
+  compraEditingEntryId = null;
+  compraUpdateEditUI();
+
+  showToast(isEdit ? 'Compra actualizada' : 'Compra guardada');
   await refreshAllFin();
 }
 
@@ -5526,10 +5981,31 @@ function setupComprasUI() {
     });
   }
 
+  // Botón cancelar edición (se inserta al lado del Guardar si no existe)
+  if (btnGuardar) {
+    let btnCancel = document.getElementById('compra-cancel-edit');
+    if (!btnCancel) {
+      btnCancel = document.createElement('button');
+      btnCancel.type = 'button';
+      btnCancel.id = 'compra-cancel-edit';
+      btnCancel.className = 'btn btn-ghost hidden';
+      btnCancel.textContent = 'Cancelar edición';
+      btnGuardar.insertAdjacentElement('afterend', btnCancel);
+    }
+    btnCancel.addEventListener('click', () => {
+      try { compraCancelEditMode(); } catch (err) {
+        console.error('Error cancelando edición', err);
+      }
+    });
+    compraUpdateEditUI();
+  }
+
   // Producto asistido por proveedor
   const provSel = document.getElementById('compra-proveedor');
   if (provSel) {
     provSel.addEventListener('change', () => {
+      // Hardening: al cambiar proveedor, limpiar campos calculados
+      try { compraClearCalcFields({ resetMontoAuto: true, clearMissingSnapshot: true }); } catch (_) {}
       if (finCachedData) compraUpdateProductoSelect(finCachedData);
     });
   }
@@ -5540,7 +6016,49 @@ function setupComprasUI() {
       if (!finCachedData) return;
       compraRenderProductoHint(finCachedData);
       compraTryPrefillDescripcionFromProducto(finCachedData);
+
+      // Autofill Tipo/Precio + reset qty/total y foco a Cantidad (Etapa 1)
+      try {
+        compraAutofillFieldsFromSelectedProduct(finCachedData, {
+          forcePrice: true,
+          resetQty: true,
+          resetTotal: true,
+          enableMontoAuto: true,
+          resetMontoAuto: false
+        });
+      } catch (_) {}
+
+      const chosen = String(prodSel.value || '').trim();
+      if (chosen) {
+        try { compraFocusCantidad(); } catch (_) {}
+      }
     });
+  }
+
+  // Recalculo en vivo: Cantidad x Precio unitario = Total
+  const priceEl = document.getElementById('compra-precio-unit');
+  const qtyEl = document.getElementById('compra-cantidad');
+
+  // iPad/Safari: tap/focus con auto select-all (solo si hay contenido)
+  a33SelectAllOnFocus(priceEl);
+  a33SelectAllOnFocus(qtyEl);
+
+  if (priceEl) {
+    const onPrice = () => { try { compraRenderTotalCalc(); } catch (_) {} };
+    priceEl.addEventListener('input', onPrice);
+    priceEl.addEventListener('change', onPrice);
+  }
+  if (qtyEl) {
+    const onQty = () => { try { compraRenderTotalCalc(); } catch (_) {} };
+    qtyEl.addEventListener('input', onQty);
+    qtyEl.addEventListener('change', onQty);
+  }
+
+  // Si el usuario toca Monto manualmente, desactivar auto-sync visual
+  const montoEl = document.getElementById('compra-monto');
+  if (montoEl) {
+    const onMonto = () => { try { compraSetMontoAuto(false); } catch (_) {} };
+    montoEl.addEventListener('input', onMonto);
   }
 
   // Change handlers for accounts
@@ -8383,6 +8901,59 @@ async function createJournalEntryWithLinesAtomic(entry, lines) {
     };
 
     tx.oncomplete = () => resolve(entryId);
+    tx.onabort = () => reject(tx.error || new Error('Transacción abortada'));
+    tx.onerror = () => { /* onabort maneja */ };
+  });
+}
+
+// Etapa 2: actualización atómica de un asiento y sus líneas (sin migraciones destructivas).
+// Nota: journalLines no tiene índice por idEntry, así que se borra por cursor (acotado a pocas líneas).
+async function updateJournalEntryWithLinesAtomic(entryId, entry, lines) {
+  await openFinDB();
+  return new Promise((resolve, reject) => {
+    const id = Number(entryId);
+    if (!Number.isFinite(id) || id <= 0) {
+      reject(new Error('entryId inválido para updateJournalEntryWithLinesAtomic'));
+      return;
+    }
+
+    let tx;
+    try {
+      tx = finDB.transaction(['journalEntries', 'journalLines'], 'readwrite');
+    } catch (err) {
+      reject(err);
+      return;
+    }
+
+    const stE = tx.objectStore('journalEntries');
+    const stL = tx.objectStore('journalLines');
+
+    try {
+      stE.put({ ...(entry || {}), id });
+    } catch (err) {
+      try { tx.abort(); } catch (_) {}
+      reject(err);
+      return;
+    }
+
+    const reqCur = stL.openCursor();
+    reqCur.onsuccess = (e) => {
+      const cursor = e.target.result;
+      if (!cursor) {
+        for (const ln of (Array.isArray(lines) ? lines : [])) {
+          if (!ln) continue;
+          stL.add({ ...ln, idEntry: id });
+        }
+        return;
+      }
+      const v = cursor.value;
+      if (v && Number(v.idEntry) === id) {
+        try { cursor.delete(); } catch (_) {}
+      }
+      cursor.continue();
+    };
+
+    tx.oncomplete = () => resolve(id);
     tx.onabort = () => reject(tx.error || new Error('Transacción abortada'));
     tx.onerror = () => { /* onabort maneja */ };
   });

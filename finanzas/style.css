@@ -333,6 +333,10 @@ body.fin-body {
   flex: 1 1 220px;
 }
 
+.fin-form-mini {
+  flex: 0 1 160px;
+}
+
 .btn-primary {
   padding: 8px 14px;
   border-radius: 999px;
