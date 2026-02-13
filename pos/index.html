@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.74&r=46">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.77&r=1">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.74&r=46">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.74" />
+<link rel="stylesheet" href="styles.css?v=4.20.77&r=1">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.77&r=1" />
 </head>
 <body>
   <header class="a33-header" role="banner">
@@ -19,7 +19,7 @@
     <div class="a33-title">POS · Eventos</div>
     <div class="a33-right">
       <button id="a33-update-indicator" class="a33-update-indicator is-idle" type="button" aria-label="Sin update disponible" title="Sin update disponible">↻<span class="a33-update-badge" aria-hidden="true"></span></button>
-      <div class="a33-version" id="a33-version-text">v...</div>
+      <div class="a33-version" id="a33-version-text" data-a33-version="1" data-a33-fallback="v4.20.77">v...</div>
       <div id="a33-update-tip" class="a33-update-tip" role="status" aria-live="polite" aria-atomic="true" style="display:none"></div>
     </div>
   </header>
@@ -1604,25 +1604,31 @@
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
-<script src="/assets/js/a33-storage.js?v=4.20.74"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.74"></script>
-<script src="/assets/js/a33-auth.js?v=4.20.75"></script>
-<script src="/assets/js/a33-build.js?v=4.20.74"></script>
+  <script src="/assets/js/a33-release.js?v=4.20.77&r=1"></script>
+
+<script src="/assets/js/a33-storage.js?v=4.20.77&r=1"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.77&r=1"></script>
+<script src="/assets/js/a33-auth.js?v=4.20.77&r=1"></script>
+<script src="/assets/js/a33-build.js?v=4.20.77&r=1"></script>
 <script>
   (function(){
-    try{      const v = '4.20.74';
+    try{
+      const relObj = (window.A33_RELEASE || {});
+      const v = (relObj && relObj.suiteVersion) ? String(relObj.suiteVersion) : '4.20.77';
+      const rev = (relObj && relObj.rev != null) ? String(relObj.rev) : '1';
       try{ window.A33_VERSION = v; }catch(_){ }
-      // POS: bump revision local (solo este modulo) para forzar limpieza de caches
-	      try{ window.A33_ASSET_REV = '46'; }catch(_){ }
-	      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r46').toString(); }catch(_){ }
-	      try{ window.A33_BUILD_TAG = (v + '-r46').toString(); }catch(_){ }
+      try{ window.A33_ASSET_REV = rev; }catch(_){ }
+      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r'+rev).toString(); }catch(_){ }
+      try{ window.A33_BUILD_TAG = (v + '-r' + rev).toString(); }catch(_){ }
       const verEl = document.getElementById('a33-version-text');
-      if (verEl) verEl.textContent = 'v' + v;
+      const rel = (window.A33_RELEASE && window.A33_RELEASE.label) ? String(window.A33_RELEASE.label) : '';
+      const shown = rel ? ('v' + rel) : ('v' + v);
+      if (verEl) verEl.textContent = shown;
       const bEl = document.getElementById('pos-build-id');
       if (bEl) bEl.textContent = 'POS Build: ' + v;
       const cEl = document.getElementById('pos-sw-cache-id');
       if (cEl){
-	        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r46')).toString();
+	        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r'+rev)).toString();
         cEl.textContent = 'SW Cache: ' + cn;
         cEl.title = cn;
       }
@@ -1683,12 +1689,12 @@
     })();
   })();
 </script>
-<script src="app.js?v=4.20.74&r=46"></script>
-<script src="/assets/js/a33-input-ux.js?v=4.20.74"></script>
+<script src="app.js?v=4.20.77&r=1"></script>
+<script src="/assets/js/a33-input-ux.js?v=4.20.77&r=1"></script>
 <script>
   (function(){
-    const BUILD = (window.A33_VERSION || '4.20.74').toString();
-    const REV = (window.A33_ASSET_REV || '10').toString();
+    const BUILD = (window.A33_VERSION || '4.20.77').toString();
+    const REV = (window.A33_ASSET_REV || '1').toString();
     const SW_URL = './sw.js?v=' + encodeURIComponent(BUILD) + '&r=' + encodeURIComponent(REV);
 
     const btn = document.getElementById('a33-update-indicator');
