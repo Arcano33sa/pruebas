@@ -186,6 +186,41 @@
     .btn-secondary:hover {
       background: #2c2c2c;
     }
+    .a33-main-actions {
+      margin-top: 1rem;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .a33-main-actions .a33-main-action {
+      min-width: 150px;
+      margin-top: 0;
+      width: auto;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+    }
+    .a33-main-actions .btn-main,
+    .a33-main-actions .btn-secondary {
+      padding: 0.7rem 1.1rem;
+      border-radius: 999px;
+      font-size: 0.9rem;
+      font-weight: 700;
+    }
+    .a33-main-actions .btn-secondary {
+      border-color: rgba(221,191,100,0.42);
+      background: #1e1e1e;
+    }
+    .a33-main-actions .a33-main-action:disabled,
+    .btn-secondary:disabled,
+    .btn-main:disabled,
+    .btn-pill:disabled {
+      cursor: not-allowed;
+      opacity: 0.48;
+      filter: grayscale(0.15);
+      box-shadow: none;
+    }
     .inline-input-btn {
       display: flex;
       gap: 0.4rem;
@@ -346,6 +381,46 @@
     }
     .a33-btn-primary-pill:hover { filter: brightness(1.05); }
 
+    .a33-history-list {
+      display: grid;
+      gap: 0.75rem;
+      margin-top: 0.75rem;
+    }
+    .a33-history-card {
+      border: 1px solid #383838;
+      border-radius: 12px;
+      background: #171717;
+      padding: 0.85rem;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+    }
+    .a33-history-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    .a33-history-title {
+      font-weight: 700;
+      color: #f5f5f5;
+      word-break: break-word;
+    }
+    .a33-history-meta, .a33-history-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      margin-top: 0.55rem;
+    }
+    .a33-history-body {
+      margin-top: 0.6rem;
+      font-size: 0.83rem;
+      color: #d4d4d4;
+      line-height: 1.45;
+    }
+    .a33-history-empty {
+      margin-top: 0.4rem;
+    }
+
   </style>
   <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.77&r=2" />
 </head>
@@ -368,15 +443,15 @@
 
     <div class="a33-ipad-grid">
     <div class="section">
-      <h2>0. Datos del lote</h2>
+      <h2>0. Datos temporales del cálculo</h2>
       <p class="hint">
-        Escribe el nombre o código del lote y la fecha de producción. La fecha de caducidad se calcula 2 meses después.
+        Escribe una referencia temporal interna y la fecha base del cálculo. La fecha de caducidad se calcula 2 meses después solo como apoyo visual.
       </p>
       <div class="fechas-row">
         <div>
-          <label for="lote">Código de lote</label>
+          <label for="lote">Código temporal interno</label>
           <div class="inline-input-btn">
-            <input type="text" id="lote" placeholder="Ej: A330XX119TEV5786" autocomplete="off" />
+            <input type="text" id="lote" placeholder="Ej: A330XX119TEV5786" autocomplete="off" aria-describedby="hint-codigo-temporal" />
             <span id="pill-codigo-estado" class="a33-pill-code a33-pill-sugerido">SUGERIDO</span>
             <button type="button" id="btn-regenerar-codigo" class="btn-pill">Regenerar</button>
           </div>
@@ -386,14 +461,15 @@
           <input type="date" id="fecha-produccion" />
         </div>
       </div>
-      <div class="a33-fechas-badges flex-row" aria-label="Fechas del lote">
+      <p class="hint" id="hint-codigo-temporal" style="margin-top:0.35rem;">Referencia interna temporal. Sirve para organizar este módulo y no crea lotes oficiales.</p>
+      <div class="a33-fechas-badges flex-row" aria-label="Fechas del cálculo temporal">
         <div class="badge" id="badge-caducidad">Caducidad: Calcula para ver…</div>
         <div class="badge" id="badge-hebreo">Hebreo: Calcula para ver…</div>
       </div>
       <p class="hint a33-fechas-legacy" id="texto-caducidad">Fecha de caducidad: —</p>
       <p class="hint a33-fechas-legacy" id="texto-fecha-hebreo">Fecha hebrea (producción): —</p>
 
-      <h3>Notas del lote</h3>
+      <h3>Notas del cálculo temporal</h3>
       <textarea id="notas" placeholder="Ej: Pedido para evento, sabor clásico, entrega sábado por la tarde..."></textarea>
     </div>
 
@@ -425,9 +501,9 @@
     </div>
 
     <div class="section">
-      <h2>2. Plan de producción (unidades a preparar)</h2>
+      <h2>2. Plan temporal (unidades a preparar)</h2>
       <p class="hint">
-        Escribe cuántas unidades harás de cada presentación. Deja en blanco lo que no vayas a hacer.
+        Escribe cuántas unidades quieres simular o preparar de cada presentación. Deja en blanco lo que no vayas a usar en este cálculo temporal.
       </p>
       <div class="a33-table-wrap a33-table-wrap--plan">
         <table id="plan-table">
@@ -443,26 +519,33 @@
       </div>
     </div>
 
-    <button id="btn-calcular" class="btn-main">Calcular totales de materia prima</button>
-    <p id="hint-resultados" class="hint">Resultados: calcula para ver el resumen (materia prima, caducidad y costos).</p>
+    <div class="a33-main-actions" role="group" aria-label="Acciones principales de la Calculadora Temporal">
+      <button id="btn-calcular" class="btn-main a33-main-action">CALCULAR</button>
+      <button id="btn-guardar-lote" class="btn-secondary a33-main-action" disabled aria-disabled="true">GUARDAR</button>
+    </div>
+    <p id="hint-resultados" class="hint" style="text-align:center;">Calcula para revisar el resumen y luego guarda el cálculo confirmado dentro de la Temporal.</p>
 
     <div id="resultados" class="results" style="display:none;">
-      <div class="results-title">3. Totales de materia prima necesaria</div>
+      <div class="results-title">3. Totales de materia prima necesaria (temporal)</div>
       <div id="resumen-lote"></div>
       <div id="resumen-fechas"></div>
       <div id="totales-ingredientes"></div>
       <div id="resumen-costos"></div>
 
-      <div class="results-title" style="margin-top:0.8rem;">Resumen de volumen final</div>
+      <div class="results-title" style="margin-top:0.8rem;">Resumen temporal de volumen final</div>
       <div id="resumen-volumen"></div>
 
-      <button id="btn-guardar-lote" class="btn-secondary">Guardar en Temporal</button>
-      <p class="hint">Guardará este cálculo solo dentro de la Calculadora Temporal. No entra al Control de Lotes real.</p>
-      <button id="btn-exportar" class="btn-secondary" hidden aria-hidden="true">Exportar información del lote (TXT)</button>
-      <p class="hint">La exportación del módulo Temporal se definirá en etapas posteriores.</p>
+      <p class="hint">Este resumen pertenece solo a la Calculadora Temporal. GUARDAR confirma el cálculo dentro de este módulo y no crea un lote oficial.</p>
     </div>
 
     <button id="btn-limpiar" class="btn-secondary">Limpiar cantidades (no borra recetas)</button>
+
+    <div class="section">
+      <h2>4. Historial temporal guardado</h2>
+      <p class="hint">Los cálculos guardados aquí viven solo dentro de esta Calculadora Temporal. No crean registros oficiales ni aparecen en Producción.</p>
+      <div id="temporal-history-empty" class="hint a33-history-empty">Todavía no hay cálculos guardados en este navegador.</div>
+      <div id="temporal-history-list" class="a33-history-list" aria-live="polite"></div>
+    </div>
   </div>
 
   <!-- Modal: código duplicado (Etapa 3) -->
@@ -492,11 +575,12 @@
       { id: "galon",  nombre: "Galón 3750 ml", volumenMl: 3750 }
     ];
     const STORAGE_RECETAS_KEY = "arcano33_temporal_recetas_v1";
-    const STORAGE_TEMP_LOTES_KEY = "arcano33_temporal_lotes_v1";
-    const STORAGE_LOTE_KEY = "arcano33_temporal_lote_actual";
+    const STORAGE_REGISTROS_KEY = "arcano33_temporal_registros_v2";
+    const STORAGE_WORKSPACE_KEY = "arcano33_temporal_workspace_v2";
+    const STORAGE_LOTE_KEY = "arcano33_temporal_codigo_sugerido";
     const STORAGE_FECHA_PROD_KEY = "arcano33_temporal_fecha_produccion";
-    const STORAGE_NOTAS_KEY = "arcano33_temporal_notas_lote";
-    const STORAGE_KEY_INVENTARIO = "arcano33_temporal_inventario_virtual";
+    const STORAGE_NOTAS_KEY = "arcano33_temporal_notas";
+    const LEGACY_STORAGE_REGISTROS_KEY = "arcano33_temporal_lotes_v1";
 
     // Etapa 2: Código de lote AUTO (editable) con X=eco + fecha hebrea
     const STORAGE_LOTE_CODE_MODE_KEY = "arcano33_temporal_codigo_mode"; // AUTO | MANUAL
@@ -638,159 +722,486 @@
       const day = String(d.getDate()).padStart(2, '0');
       return `${y}-${m}-${day}`;
     }
-
-
-    function invParseNumber(value) {
-      const n = parseFloat(String(value).replace(",", "."));
-      return Number.isNaN(n) ? 0 : n;
+    function safeNumber(value) {
+      const n = parseFloat(String(value ?? "").replace(",", "."));
+      return Number.isFinite(n) ? n : 0;
     }
 
-    function invDefault() {
-      return {
-        liquids: {
-          vino:   { stock: 0, max: 0 },
-          vodka:  { stock: 0, max: 0 },
-          jugo:   { stock: 0, max: 0 },
-          sirope: { stock: 0, max: 0 },
-          agua:   { stock: 0, max: 0 }
-        },
-        bottles: {
-          pulso: { stock: 0 },
-          media: { stock: 0 },
-          djeba: { stock: 0 },
-          litro: { stock: 0 },
-          galon: { stock: 0 }
-        },
-        finished: {
-          pulso: { stock: 0 },
-          media: { stock: 0 },
-          djeba: { stock: 0 },
-          litro: { stock: 0 },
-          galon: { stock: 0 }
-        },
-        // Tapas (Auto) — Etapa 2/3
-        caps: {
-          gallon: { stock: 0, min: 0 },
-          pulsoLitro: { stock: 0, min: 0 },
-          djebaMedia: { stock: 0, min: 0 }
+    function readTemporalData(key, fallback) {
+      try {
+        if (window.A33Storage && typeof A33Storage.sharedRead === 'function') {
+          const rr = A33Storage.sharedRead(key, fallback);
+          const data = rr && Object.prototype.hasOwnProperty.call(rr, 'data') ? rr.data : rr;
+          return data == null ? fallback : data;
         }
+        const raw = A33Storage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+      } catch (e) {
+        return fallback;
+      }
+    }
+
+    function readTemporalDataWithMeta(key, fallback) {
+      try {
+        if (window.A33Storage && typeof A33Storage.sharedRead === 'function') {
+          const rr = A33Storage.sharedRead(key, fallback);
+          return {
+            data: rr && Object.prototype.hasOwnProperty.call(rr, 'data') ? rr.data : fallback,
+            meta: (rr && rr.meta) ? rr.meta : { rev: null }
+          };
+        }
+        const raw = A33Storage.getItem(key);
+        return { data: raw ? JSON.parse(raw) : fallback, meta: { rev: null } };
+      } catch (e) {
+        return { data: fallback, meta: { rev: null } };
+      }
+    }
+
+    function writeTemporalData(key, value, extraOpts) {
+      if (window.A33Storage && typeof A33Storage.sharedSet === 'function') {
+        const opts = Object.assign({ source: 'calculadora_temporal' }, extraOpts || {});
+        const r = A33Storage.sharedSet(key, value, opts);
+        if (r && r.ok === false) throw new Error(r.message || 'No se pudo guardar.');
+        return r;
+      }
+      A33Storage.setItem(key, JSON.stringify(value));
+      return { ok: true };
+    }
+
+    function capturarPlanTemporal() {
+      const plan = {};
+      PRESENTACIONES.forEach(p => {
+        plan[p.id] = normQtyInt(getNumberValue('plan-' + p.id));
+      });
+      return plan;
+    }
+
+    function capturarPayloadRecetasDesdeUI() {
+      const recetas = {};
+      const costosPresentacion = {};
+      PRESENTACIONES.forEach(p => {
+        recetas[p.id] = {};
+        INGREDIENTES.forEach(ing => {
+          const val = getNumberValue('receta-' + p.id + '-' + ing, { emptyAsNull: true });
+          if (typeof val === 'number') recetas[p.id][ing] = val;
+        });
+        const costoUnit = getNumberValue('costo-unit-' + p.id, { emptyAsNull: true });
+        const info = { id: p.id, nombre: p.nombre };
+        if (typeof costoUnit === 'number') info.costoUnidad = costoUnit;
+        costosPresentacion[p.id] = info;
+      });
+      return { version: 2, recetas, costosPresentacion };
+    }
+
+    function aplicarPayloadRecetasEnUI(payload) {
+      const data = payload && payload.recetas ? payload.recetas : payload;
+      const costosPresentacion = payload && payload.costosPresentacion ? payload.costosPresentacion : null;
+      PRESENTACIONES.forEach(p => {
+        const rec = (data && data[p.id]) ? data[p.id] : null;
+        INGREDIENTES.forEach(ing => {
+          const input = document.getElementById('receta-' + p.id + '-' + ing);
+          if (!input) return;
+          const val = rec ? rec[ing] : undefined;
+          input.value = (val === null || val === undefined || val === '') ? '' : String(val);
+        });
+        const costoInput = document.getElementById('costo-unit-' + p.id);
+        if (costoInput) {
+          const costo = costosPresentacion && costosPresentacion[p.id] ? costosPresentacion[p.id].costoUnidad : undefined;
+          costoInput.value = (costo === null || costo === undefined || costo === '') ? '' : String(costo);
+        }
+      });
+    }
+
+    function aplicarPlanTemporal(plan) {
+      PRESENTACIONES.forEach(p => {
+        const input = document.getElementById('plan-' + p.id);
+        if (!input) return;
+        const val = plan && Object.prototype.hasOwnProperty.call(plan, p.id) ? normQtyInt(plan[p.id]) : 0;
+        input.value = val > 0 ? String(val) : '';
+      });
+    }
+
+    function serializarDatosCalculo(datos) {
+      const fechaProdStr = String((datos && datos.fechaProdStr) || '').trim();
+      let fechaCadStr = '';
+      if (datos && datos.fechaCad instanceof Date && !Number.isNaN(datos.fechaCad.getTime())) {
+        fechaCadStr = datos.fechaCad.toISOString().slice(0, 10);
+      } else if (datos && typeof datos.fechaCadStr === 'string') {
+        fechaCadStr = datos.fechaCadStr.trim();
+      } else {
+        const cad = calcularCaducidad(fechaProdStr);
+        fechaCadStr = cad ? cad.toISOString().slice(0, 10) : '';
+      }
+      return {
+        totalesIngredientes: Object.assign({ vino: 0, vodka: 0, jugo: 0, sirope: 0, agua: 0 }, (datos && datos.totalesIngredientes) || {}),
+        totalVolumenFinalMl: safeNumber(datos && datos.totalVolumenFinalMl),
+        unidadesPorPresentacion: Array.isArray(datos && datos.unidadesPorPresentacion)
+          ? datos.unidadesPorPresentacion.map(item => ({ id: item.id, nombre: item.nombre, unidades: normQtyInt(item.unidades) })).filter(item => item.unidades > 0)
+          : [],
+        loteNombre: String((datos && datos.loteNombre) || '').trim(),
+        fechaProdStr,
+        fechaCadStr,
+        notas: String((datos && datos.notas) || '')
       };
     }
 
-    function invLoad() {
-      try {
-        // Contrato compartido (anti-pisadas + data vieja segura)
-        if (window.A33Storage && typeof A33Storage.sharedGet === 'function'){
-          const data = A33Storage.sharedGet(STORAGE_KEY_INVENTARIO, invDefault());
-          if (data && typeof data === 'object') return data;
-          return invDefault();
-        }
-
-        // Fallback legacy
-        const raw = A33Storage.getItem(STORAGE_KEY_INVENTARIO);
-        let data = raw ? JSON.parse(raw) : null;
-        if (!data || typeof data !== "object") data = invDefault();
-        if (!data.liquids) data.liquids = {};
-        if (!data.bottles) data.bottles = {};
-        if (!data.finished) data.finished = {};
-        if (!data.caps || typeof data.caps !== 'object') data.caps = {};
-        const d = invDefault();
-        Object.keys(d.liquids).forEach((k) => {
-          if (!data.liquids[k]) data.liquids[k] = { stock: 0, max: 0 };
-          data.liquids[k].stock = invParseNumber(data.liquids[k].stock || 0);
-          data.liquids[k].max = invParseNumber(data.liquids[k].max || 0);
-        });
-        Object.keys(d.bottles).forEach((k) => {
-          if (!data.bottles[k]) data.bottles[k] = { stock: 0 };
-          data.bottles[k].stock = invParseNumber(data.bottles[k].stock || 0);
-        });
-        Object.keys(d.finished || {}).forEach((k) => {
-          if (!data.finished[k]) data.finished[k] = { stock: 0 };
-          data.finished[k].stock = invParseNumber(data.finished[k].stock || 0);
-        });
-
-        // Tapas (Auto): compatibilidad y números seguros
-        Object.keys(d.caps || {}).forEach((k) => {
-          if (!data.caps[k] || typeof data.caps[k] !== 'object') data.caps[k] = { stock: 0, min: 0 };
-          data.caps[k].stock = Math.trunc(invParseNumber(data.caps[k].stock || 0));
-          data.caps[k].min = Math.max(0, Math.trunc(invParseNumber(data.caps[k].min || 0)));
-        });
-        return data;
-      } catch (e) {
-        console.warn("No se pudo leer inventario, usando valores por defecto.", e);
-        return invDefault();
-      }
+    function tieneCalculoTemporalValido(datosLike) {
+      const datos = serializarDatosCalculo(datosLike || calcularDatosLote());
+      if (!datos.unidadesPorPresentacion.length) return false;
+      if (!String(datos.fechaProdStr || '').trim()) return false;
+      const loteInput = document.getElementById('lote');
+      const codigo = (loteInput && loteInput.value) ? loteInput.value : datos.loteNombre;
+      const v = validarCodigoLoteFuerte(codigo || '');
+      return !!(v && v.ok);
     }
 
-    function invSave(inv) {
-      try {
-        if (window.A33Storage && typeof A33Storage.sharedSet === 'function'){
-          const r = A33Storage.sharedSet(STORAGE_KEY_INVENTARIO, inv, { source: 'calculadora_temporal' });
-          if (r && r.ok === false && r.message){
-            try{ alert(r.message); }catch(_){ }
-          }
+    function actualizarEstadoBotonGuardar(datosLike) {
+      const btn = document.getElementById('btn-guardar-lote');
+      if (!btn) return false;
+      const canSave = !!A33HasCalculoPrevio && tieneCalculoTemporalValido(datosLike);
+      btn.disabled = !canSave;
+      btn.setAttribute('aria-disabled', canSave ? 'false' : 'true');
+      return canSave;
+    }
+
+    function construirResumenCostos(datos) {
+      let costoTotal = 0;
+      const filas = [];
+      (datos.unidadesPorPresentacion || []).forEach(item => {
+        const costoUnit = getNumberValue('costo-unit-' + item.id);
+        if (costoUnit > 0 && item.unidades > 0) {
+          const subtotal = costoUnit * item.unidades;
+          costoTotal += subtotal;
+          filas.push({ nombre: item.nombre, unidades: item.unidades, costoUnidad: costoUnit, subtotal });
+        }
+      });
+      let costoPorLitro = 0;
+      if (costoTotal > 0 && datos.totalVolumenFinalMl > 0) {
+        costoPorLitro = costoTotal / (datos.totalVolumenFinalMl / 1000);
+      }
+      return { filas, costoTotal, costoPorLitro };
+    }
+
+    function resumenPlanTexto(plan) {
+      return PRESENTACIONES.map(p => {
+        const val = plan && plan[p.id] ? normQtyInt(plan[p.id]) : 0;
+        return val > 0 ? (p.nombre + ': ' + val) : '';
+      }).filter(Boolean).join(' · ');
+    }
+
+    function normalizarRegistroLegacy(item) {
+      if (!item || typeof item !== 'object') return null;
+      const codigo = normalizarCodigoLote(item.codigo || item.batchCode || item.code || item.lote || '');
+      if (!codigo) return null;
+      const fechaProduccion = String(item.fecha || item.fechaProdStr || '').trim();
+      const fechaCaducidad = String(item.caducidad || '').trim() || (() => {
+        const cad = calcularCaducidad(fechaProduccion);
+        return cad ? cad.toISOString().slice(0, 10) : '';
+      })();
+      const plan = {
+        pulso: normQtyInt(item.pulso),
+        media: normQtyInt(item.media),
+        djeba: normQtyInt(item.djeba),
+        litro: normQtyInt(item.litro),
+        galon: normQtyInt(item.galon)
+      };
+      const unidadesPorPresentacion = PRESENTACIONES.map(p => ({ id: p.id, nombre: p.nombre, unidades: plan[p.id] || 0 })).filter(x => x.unidades > 0);
+      return {
+        id: String(item.id || item.loteId || ('temporal_' + codigo)).trim(),
+        codigo,
+        fechaProduccion,
+        fechaCaducidad,
+        notas: String(item.notas || ''),
+        plan,
+        resultados: {
+          totalesIngredientes: {
+            vino: safeNumber(item.volVino),
+            vodka: safeNumber(item.volVodka),
+            jugo: safeNumber(item.volJugo),
+            sirope: safeNumber(item.volSirope),
+            agua: safeNumber(item.volAgua)
+          },
+          totalVolumenFinalMl: safeNumber(item.volTotal),
+          unidadesPorPresentacion,
+          loteNombre: codigo,
+          fechaProdStr: fechaProduccion,
+          fechaCadStr: fechaCaducidad,
+          notas: String(item.notas || '')
+        },
+        recipeSnapshot: null,
+        createdAt: String(item.createdAt || new Date().toISOString()),
+        updatedAt: String(item.updatedAt || item.createdAt || new Date().toISOString())
+      };
+    }
+
+    function normalizarRegistroTemporal(item) {
+      if (!item || typeof item !== 'object') return null;
+      if (!item.resultados && (item.volTotal != null || item.batchCode || item.loteId)) {
+        return normalizarRegistroLegacy(item);
+      }
+      const codigo = normalizarCodigoLote(item.codigo || (item.resultados && item.resultados.loteNombre) || '');
+      if (!codigo) return null;
+      const plan = {};
+      PRESENTACIONES.forEach(p => { plan[p.id] = normQtyInt(item.plan && item.plan[p.id]); });
+      const resultados = serializarDatosCalculo(Object.assign({}, item.resultados || {}, {
+        loteNombre: codigo,
+        fechaProdStr: item.fechaProduccion || (item.resultados && item.resultados.fechaProdStr) || '',
+        fechaCadStr: item.fechaCaducidad || (item.resultados && item.resultados.fechaCadStr) || '',
+        notas: item.notas || (item.resultados && item.resultados.notas) || ''
+      }));
+      return {
+        id: String(item.id || ('temporal_' + codigo)).trim(),
+        codigo,
+        fechaProduccion: String(item.fechaProduccion || resultados.fechaProdStr || ''),
+        fechaCaducidad: String(item.fechaCaducidad || resultados.fechaCadStr || ''),
+        notas: String(item.notas || resultados.notas || ''),
+        plan,
+        resultados,
+        recipeSnapshot: item.recipeSnapshot || null,
+        createdAt: String(item.createdAt || new Date().toISOString()),
+        updatedAt: String(item.updatedAt || item.createdAt || new Date().toISOString())
+      };
+    }
+
+    function dedupeRegistrosTemporales(registros) {
+      const map = new Map();
+      (Array.isArray(registros) ? registros : []).forEach(item => {
+        const reg = normalizarRegistroTemporal(item);
+        if (!reg) return;
+        const key = reg.id || reg.codigo;
+        const prev = map.get(key);
+        if (!prev) {
+          map.set(key, reg);
           return;
         }
-        A33Storage.setItem(STORAGE_KEY_INVENTARIO, JSON.stringify(inv));
-      } catch (e) {
-        console.warn("No se pudo guardar el inventario.", e);
+        const prevTime = Date.parse(prev.updatedAt || prev.createdAt || 0) || 0;
+        const curTime = Date.parse(reg.updatedAt || reg.createdAt || 0) || 0;
+        map.set(key, curTime >= prevTime ? reg : prev);
+      });
+      return Array.from(map.values()).sort((a, b) => (Date.parse(b.updatedAt || b.createdAt || 0) || 0) - (Date.parse(a.updatedAt || a.createdAt || 0) || 0));
+    }
+
+    function readTemporalRecordsWithMeta() {
+      const current = readTemporalDataWithMeta(STORAGE_REGISTROS_KEY, []);
+      let registros = Array.isArray(current.data) ? current.data : [];
+      if (!registros.length) {
+        const legacy = readTemporalData(LEGACY_STORAGE_REGISTROS_KEY, []);
+        if (Array.isArray(legacy) && legacy.length) {
+          registros = dedupeRegistrosTemporales(legacy);
+          try { writeTemporalData(STORAGE_REGISTROS_KEY, registros); } catch (e) {}
+        }
+      }
+      registros = dedupeRegistrosTemporales(registros);
+      return { data: registros, meta: current.meta || { rev: null } };
+    }
+
+    function persistTemporalWorkspace(resultData) {
+      const prev = readTemporalData(STORAGE_WORKSPACE_KEY, null) || {};
+      const payload = {
+        version: 2,
+        codigo: ((document.getElementById('lote') && document.getElementById('lote').value) || '').trim(),
+        codigoMode: A33CodigoLoteMode,
+        autoSeq: A33AutoSeq || '',
+        suggestedCode: A33SuggestedCode || '',
+        fechaProduccion: ((document.getElementById('fecha-produccion') && document.getElementById('fecha-produccion').value) || '').trim(),
+        notas: ((document.getElementById('notas') && document.getElementById('notas').value) || ''),
+        plan: capturarPlanTemporal(),
+        result: resultData === undefined ? (prev.result || null) : resultData,
+        updatedAt: new Date().toISOString()
+      };
+      try { writeTemporalData(STORAGE_WORKSPACE_KEY, payload); } catch (e) { console.warn('No se pudo guardar el borrador temporal.', e); }
+      try { A33Storage.setItem(STORAGE_LOTE_KEY, payload.codigo || ''); } catch (e) {}
+      try { A33Storage.setItem(STORAGE_FECHA_PROD_KEY, payload.fechaProduccion || ''); } catch (e) {}
+      try { A33Storage.setItem(STORAGE_NOTAS_KEY, payload.notas || ''); } catch (e) {}
+    }
+
+    function limpiarResultadosVisuales() {
+      const resultadosDiv = document.getElementById('resultados');
+      if (resultadosDiv) resultadosDiv.style.display = 'none';
+      const hintRes = document.getElementById('hint-resultados');
+      if (hintRes) hintRes.style.display = 'block';
+      A33HasCalculoPrevio = false;
+      actualizarEstadoBotonGuardar(null);
+    }
+
+    function renderResultadosDesdeDatos(datosSerializados) {
+      const datos = serializarDatosCalculo(datosSerializados || {});
+      const resultadosDiv = document.getElementById('resultados');
+      const totalesDiv = document.getElementById('totales-ingredientes');
+      const resumenVolumenDiv = document.getElementById('resumen-volumen');
+      const resumenLoteDiv = document.getElementById('resumen-lote');
+      const resumenFechasDiv = document.getElementById('resumen-fechas');
+      const resumenCostosDiv = document.getElementById('resumen-costos');
+      let htmlLote = '';
+      if (datos.loteNombre) {
+        htmlLote = "<div class='flex-row'><div class='badge'>Lote: <strong>" + escapeHtml(datos.loteNombre) + "</strong></div></div>";
+      } else {
+        htmlLote = "<div class='flex-row'><div class='badge'>Lote sin nombre</div></div>";
+      }
+      resumenLoteDiv.innerHTML = htmlLote;
+      const fechaProd = datos.fechaProdStr ? parseISODateLocal(datos.fechaProdStr) : null;
+      const fechaCad = datos.fechaCadStr ? parseISODateLocal(datos.fechaCadStr) : null;
+      let htmlFechas = "<div class='flex-row'>";
+      htmlFechas += fechaProd ? "<div class='badge'>Producción: <strong>" + formatearFechaBonita(fechaProd) + "</strong></div>" : "<div class='badge'>Producción: —</div>";
+      htmlFechas += fechaCad ? "<div class='badge'>Caducidad: <strong>" + formatearFechaBonita(fechaCad) + "</strong></div>" : "<div class='badge'>Caducidad: —</div>";
+      if (datos.notas) htmlFechas += "<div class='badge'>Notas: " + escapeHtml(datos.notas.substring(0, 60)) + (datos.notas.length > 60 ? '...' : '') + "</div>";
+      htmlFechas += '</div>';
+      resumenFechasDiv.innerHTML = htmlFechas;
+      let htmlTotales = "<table><thead><tr><th>Ingrediente</th><th>Total (ml)</th><th>Equivalente (L)</th></tr></thead><tbody>";
+      htmlTotales += "<tr><td style='text-align:left;'>Vino</td><td>" + formatMl(datos.totalesIngredientes.vino) + "</td><td>" + formatLitros(datos.totalesIngredientes.vino) + "</td></tr>";
+      htmlTotales += "<tr><td style='text-align:left;'>Vodka</td><td>" + formatMl(datos.totalesIngredientes.vodka) + "</td><td>" + formatLitros(datos.totalesIngredientes.vodka) + "</td></tr>";
+      htmlTotales += "<tr><td style='text-align:left;'>Jugo</td><td>" + formatMl(datos.totalesIngredientes.jugo) + "</td><td>" + formatLitros(datos.totalesIngredientes.jugo) + "</td></tr>";
+      htmlTotales += "<tr><td style='text-align:left;'>Sirope</td><td>" + formatMl(datos.totalesIngredientes.sirope) + "</td><td>" + formatLitros(datos.totalesIngredientes.sirope) + "</td></tr>";
+      htmlTotales += "<tr><td style='text-align:left;'>Agua pura</td><td>" + formatMl(datos.totalesIngredientes.agua) + "</td><td>" + formatLitros(datos.totalesIngredientes.agua) + "</td></tr>";
+      htmlTotales += '</tbody></table>';
+      totalesDiv.innerHTML = htmlTotales;
+      const costos = construirResumenCostos(datos);
+      if (costos.filas.length) {
+        let htmlCostos = "<div class='flex-row'>";
+        htmlCostos += "<div class='badge'>Costo total estimado del lote: <strong>C$ " + costos.costoTotal.toFixed(2) + "</strong></div>";
+        if (costos.costoPorLitro > 0) htmlCostos += "<div class='badge'>Costo aprox. por litro: <strong>C$ " + costos.costoPorLitro.toFixed(2) + "</strong></div>";
+        htmlCostos += '</div>';
+        htmlCostos += "<table><thead><tr><th>Presentación</th><th>Unidades</th><th>Costo unitario (C$)</th><th>Subtotal (C$)</th></tr></thead><tbody>";
+        costos.filas.forEach(f => {
+          htmlCostos += '<tr>';
+          htmlCostos += "<td style='text-align:left;'>" + escapeHtml(f.nombre) + '</td>';
+          htmlCostos += '<td>' + f.unidades + '</td>';
+          htmlCostos += '<td>' + f.costoUnidad.toFixed(2) + '</td>';
+          htmlCostos += '<td>' + f.subtotal.toFixed(2) + '</td>';
+          htmlCostos += '</tr>';
+        });
+        htmlCostos += '</tbody></table>';
+        resumenCostosDiv.innerHTML = htmlCostos;
+      } else {
+        resumenCostosDiv.innerHTML = "<p class='hint'>Para ver costos, llena la columna de costo unitario y el plan de producción.</p>";
+      }
+      resumenVolumenDiv.innerHTML = "<div class='flex-row'><div class='badge'>Volumen final teórico: <strong>" + formatLitros(datos.totalVolumenFinalMl) + "</strong></div></div>";
+      resultadosDiv.style.display = 'block';
+      const hintRes = document.getElementById('hint-resultados');
+      if (hintRes) hintRes.style.display = 'none';
+      A33HasCalculoPrevio = true;
+      actualizarEstadoBotonGuardar(datos);
+      persistTemporalWorkspace(datos);
+    }
+
+    function restoreTemporalWorkspace() {
+      const workspace = readTemporalData(STORAGE_WORKSPACE_KEY, null);
+      if (!workspace || typeof workspace !== 'object') {
+        const fechaProdInput = document.getElementById('fecha-produccion');
+        if (fechaProdInput && !fechaProdInput.value) fechaProdInput.value = hoyLocalISO();
+        actualizarTextoCaducidad();
+        return;
+      }
+      const loteInput = document.getElementById('lote');
+      const fechaProdInput = document.getElementById('fecha-produccion');
+      const notasInput = document.getElementById('notas');
+      if (loteInput) setCodigoLoteValue(workspace.codigo || '');
+      if (fechaProdInput) fechaProdInput.value = workspace.fechaProduccion || hoyLocalISO();
+      if (notasInput) notasInput.value = workspace.notas || '';
+      aplicarPlanTemporal(workspace.plan || {});
+      A33CodigoLoteMode = workspace.codigoMode === 'MANUAL' ? 'MANUAL' : 'AUTO';
+      A33AutoSeq = /^\d{4}$/.test(String(workspace.autoSeq || '')) ? String(workspace.autoSeq) : '';
+      A33SuggestedCode = String(workspace.suggestedCode || workspace.codigo || '');
+      setPillEstadoCodigo(A33CodigoLoteMode === 'MANUAL' ? 'EDITADO' : 'SUGERIDO');
+      actualizarTextoCaducidad();
+      actualizarFechaHebrea();
+      if (workspace.result) {
+        renderResultadosDesdeDatos(workspace.result);
+      } else {
+        limpiarResultadosVisuales();
       }
     }
 
-    function invBuildAlertLines(inv) {
-      const lines = [];
-      // Líquidos por debajo de 20 %
-      Object.entries(inv.liquids || {}).forEach(([id, info]) => {
-        const stock = invParseNumber(info.stock);
-        const max = invParseNumber(info.max);
-        if (max > 0) {
-          const pct = (stock / max) * 100;
-          if (pct <= 20) {
-            let nombre = id;
-            if (id === "vino") nombre = "Vino";
-            if (id === "vodka") nombre = "Vodka";
-            if (id === "jugo") nombre = "Jugo";
-            if (id === "sirope") nombre = "Sirope";
-            if (id === "agua") nombre = "Agua pura";
-            lines.push("• " + nombre + ": " + stock.toFixed(0) + " ml (" + pct.toFixed(1) + "% restante)");
-          }
-        }
-      });
-      // Botellas con 10 o menos unidades
-      Object.entries(inv.bottles || {}).forEach(([id, info]) => {
-        const stock = invParseNumber(info.stock);
-        if (stock <= 10) {
-          let nombre = id;
-          if (id === "pulso") nombre = "Pulso 250 ml";
-          if (id === "media") nombre = "Media 375 ml";
-          if (id === "djeba") nombre = "Djeba 750 ml";
-          if (id === "litro") nombre = "Litro 1000 ml";
-          if (id === "galon") nombre = "Galón 3750 ml";
-          lines.push("• " + nombre + ": " + stock.toFixed(0) + " botellas");
-        }
-      });
-      // Producto terminado con 10 o menos unidades
-      Object.entries(inv.finished || {}).forEach(([id, info]) => {
-        const stock = invParseNumber(info.stock);
-        if (stock <= 10) {
-          let nombre = id;
-          if (id === "pulso") nombre = "Pulso 250 ml listo";
-          if (id === "media") nombre = "Media 375 ml lista";
-          if (id === "djeba") nombre = "Djeba 750 ml lista";
-          if (id === "litro") nombre = "Litro 1000 ml listo";
-          if (id === "galon") nombre = "Galón 3750 ml listo";
-          lines.push("• " + nombre + ": " + stock.toFixed(0) + " botellas listas");
-        }
-      });
-      return lines;
+    function formatDateTimeShort(value) {
+      if (!value) return '—';
+      const dt = new Date(value);
+      if (Number.isNaN(dt.getTime())) return '—';
+      return dt.toLocaleString('es-NI', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
     }
 
-    function aplicarConsumoInventarioDesdeLote(datos, mapUnits) {
-      // Calculadora Temporal: esta etapa no toca Inventario real ni inventario virtual operativo.
-      return true;
+    function renderTemporalHistory() {
+      const wrap = document.getElementById('temporal-history-list');
+      const empty = document.getElementById('temporal-history-empty');
+      if (!wrap || !empty) return;
+      const registros = readTemporalRecordsWithMeta().data || [];
+      wrap.innerHTML = '';
+      if (!registros.length) {
+        empty.style.display = 'block';
+        return;
+      }
+      empty.style.display = 'none';
+      registros.forEach(reg => {
+        const card = document.createElement('div');
+        card.className = 'a33-history-card';
+        const planText = resumenPlanTexto(reg.plan);
+        const fechaProd = reg.fechaProduccion ? parseISODateLocal(reg.fechaProduccion) : null;
+        const fechaCad = reg.fechaCaducidad ? parseISODateLocal(reg.fechaCaducidad) : null;
+        const notas = String(reg.notas || '');
+        card.innerHTML = '' +
+          "<div class='a33-history-head'>" +
+            "<div>" +
+              "<div class='a33-history-title'>" + escapeHtml(reg.codigo) + "</div>" +
+              "<div class='hint'>Guardado: " + escapeHtml(formatDateTimeShort(reg.updatedAt || reg.createdAt)) + "</div>" +
+            "</div>" +
+            "<div class='a33-history-meta'>" +
+              "<div class='badge'>Producción: <strong>" + escapeHtml(fechaProd ? formatearFechaBonita(fechaProd) : '—') + "</strong></div>" +
+              "<div class='badge'>Caducidad: <strong>" + escapeHtml(fechaCad ? formatearFechaBonita(fechaCad) : '—') + "</strong></div>" +
+              "<div class='badge'>Volumen: <strong>" + escapeHtml(formatLitros(safeNumber(reg.resultados && reg.resultados.totalVolumenFinalMl))) + "</strong></div>" +
+            "</div>" +
+          "</div>" +
+          "<div class='a33-history-body'>" +
+            (planText ? ("<div><strong>Plan:</strong> " + escapeHtml(planText) + "</div>") : "<div><strong>Plan:</strong> Sin unidades guardadas</div>") +
+            (notas ? ("<div style='margin-top:0.35rem;'><strong>Notas:</strong> " + escapeHtml(notas.length > 160 ? (notas.slice(0, 160) + '...') : notas) + "</div>") : '') +
+          "</div>" +
+          "<div class='a33-history-actions'>" +
+            "<button type='button' class='btn-pill a33-btn-primary-pill' data-a33-load='" + escapeHtml(reg.id) + "'>Cargar</button>" +
+            "<button type='button' class='btn-pill' data-a33-delete='" + escapeHtml(reg.id) + "'>Eliminar</button>" +
+          "</div>";
+        wrap.appendChild(card);
+      });
+      wrap.querySelectorAll('[data-a33-load]').forEach(btn => {
+        btn.addEventListener('click', () => cargarRegistroTemporal(btn.getAttribute('data-a33-load')));
+      });
+      wrap.querySelectorAll('[data-a33-delete]').forEach(btn => {
+        btn.addEventListener('click', () => eliminarRegistroTemporal(btn.getAttribute('data-a33-delete')));
+      });
     }
 
+    function cargarRegistroTemporal(id) {
+      const registros = readTemporalRecordsWithMeta().data || [];
+      const reg = registros.find(item => item.id === id);
+      if (!reg) {
+        alert('No se encontró ese cálculo temporal.');
+        return;
+      }
+      if (reg.recipeSnapshot) aplicarPayloadRecetasEnUI(reg.recipeSnapshot);
+      aplicarPlanTemporal(reg.plan || {});
+      setCodigoLoteValue(reg.codigo || '');
+      const fechaProdInput = document.getElementById('fecha-produccion');
+      const notasInput = document.getElementById('notas');
+      if (fechaProdInput) fechaProdInput.value = reg.fechaProduccion || hoyLocalISO();
+      if (notasInput) notasInput.value = reg.notas || '';
+      A33CodigoLoteMode = 'MANUAL';
+      A33AutoSeq = /^\d{4}$/.test(String(extraerSeqDeCodigo(reg.codigo) || '')) ? pad4(extraerSeqDeCodigo(reg.codigo)).slice(-4) : '';
+      A33SuggestedCode = reg.codigo || '';
+      setPillEstadoCodigo('EDITADO');
+      actualizarTextoCaducidad();
+      actualizarFechaHebrea();
+      renderResultadosDesdeDatos(reg.resultados || {});
+    }
 
+    function eliminarRegistroTemporal(id) {
+      if (!confirm('¿Eliminar este cálculo del historial temporal? Esta acción solo afecta este módulo.')) return;
+      const info = readTemporalRecordsWithMeta();
+      const next = (info.data || []).filter(item => item.id !== id);
+      try {
+        writeTemporalData(STORAGE_REGISTROS_KEY, next, { baseRev: info.meta && typeof info.meta.rev === 'number' ? info.meta.rev : null, conflictPolicy: 'block' });
+      } catch (e) {
+        alert((e && e.message) ? e.message : 'No se pudo eliminar el cálculo temporal.');
+        return;
+      }
+      renderTemporalHistory();
+    }
 
     function getNumberValue(id, opts) {
       const options = opts || {};
@@ -1152,9 +1563,7 @@
     function obtenerMaxSeqDesdeLotes() {
       let max = 0;
       try {
-        const arr = (window.A33Storage && typeof A33Storage.sharedGet === 'function')
-          ? A33Storage.sharedGet(STORAGE_TEMP_LOTES_KEY, [])
-          : (() => { const raw = A33Storage.getItem(STORAGE_TEMP_LOTES_KEY); return raw ? JSON.parse(raw) : []; })();
+        const arr = readTemporalRecordsWithMeta().data || [];
         if (!Array.isArray(arr)) return 0;
         arr.forEach(l => {
           const c = l && (l.codigo || l.code || l.lote || "");
@@ -1168,9 +1577,7 @@
     function obtenerUsedSeqSetDesdeLotes() {
       const set = new Set();
       try {
-        const arr = (window.A33Storage && typeof A33Storage.sharedGet === 'function')
-          ? A33Storage.sharedGet(STORAGE_TEMP_LOTES_KEY, [])
-          : (() => { const raw = A33Storage.getItem(STORAGE_TEMP_LOTES_KEY); return raw ? JSON.parse(raw) : []; })();
+        const arr = readTemporalRecordsWithMeta().data || [];
         if (!Array.isArray(arr)) return set;
         arr.forEach(l => {
           const c = l && (l.codigo || l.code || l.lote || "");
@@ -1287,6 +1694,7 @@ async function recalcularCodigoLoteAuto(opts) {
 
       // Persistimos el valor actual del input (compatibilidad), pero NO el consecutivo.
       try { A33Storage.setItem(STORAGE_LOTE_KEY, code); } catch (e) {}
+      try { persistTemporalWorkspace(readTemporalData(STORAGE_WORKSPACE_KEY, null)?.result || null); } catch (e) {}
     }
 
 
@@ -1406,102 +1814,20 @@ function a33WireNumericInput(el, mode) {
       });
     }
     function guardarRecetas() {
-      const recetas = {};
-      const costosPresentacion = {};
-      PRESENTACIONES.forEach(p => {
-        recetas[p.id] = {};
-        INGREDIENTES.forEach(ing => {
-          const val = getNumberValue("receta-" + p.id + "-" + ing, { emptyAsNull: true });
-          if (typeof val === "number") {
-            recetas[p.id][ing] = val;
-          } else {
-            // vacío se queda vacío (no persistir 0)
-            delete recetas[p.id][ing];
-          }
-        });
-        const costoUnit = getNumberValue("costo-unit-" + p.id, { emptyAsNull: true });
-        const info = { id: p.id, nombre: p.nombre };
-        if (typeof costoUnit === "number") {
-          info.costoUnidad = costoUnit;
-        }
-        costosPresentacion[p.id] = info;
-      });
-      const payload = {
-        version: 2,
-        recetas,
-        costosPresentacion
-      };
-      try{
-        if (window.A33Storage && typeof A33Storage.sharedSet === 'function'){
-          const r = A33Storage.sharedSet(STORAGE_RECETAS_KEY, payload, { source: 'calculadora_temporal' });
-          if (r && r.ok === false && r.message){
-            alert(r.message);
-            return;
-          }
-        } else {
-          A33Storage.setItem(STORAGE_RECETAS_KEY, JSON.stringify(payload));
-        }
-      }catch(e){
+      const payload = capturarPayloadRecetasDesdeUI();
+      try {
+        writeTemporalData(STORAGE_RECETAS_KEY, payload);
+      } catch (e) {
         console.warn('No se pudo guardar recetas:', e);
       }
       alert("Recetas y costos guardados en este navegador ✅");
     }
 
     function cargarRecetas() {
-      // Contrato compartido (anti-pisadas + data vieja segura)
       try {
-        let data = null;
-        if (window.A33Storage && typeof A33Storage.sharedGet === 'function'){
-          data = A33Storage.sharedGet(STORAGE_RECETAS_KEY, null);
-        } else {
-          const raw = A33Storage.getItem(STORAGE_RECETAS_KEY);
-          data = raw ? JSON.parse(raw) : null;
-        }
+        const data = readTemporalData(STORAGE_RECETAS_KEY, null);
         if (!data) return;
-        const recetas = data && data.recetas ? data.recetas : data;
-        const costosPresentacion = data && data.costosPresentacion ? data.costosPresentacion : null;
-
-        // cargar recetas (ml)
-        PRESENTACIONES.forEach(p => {
-          const rec = (recetas && recetas[p.id]) ? recetas[p.id] : null;
-          INGREDIENTES.forEach(ing => {
-            const input = document.getElementById("receta-" + p.id + "-" + ing);
-            if (!input) return;
-            const val = rec ? rec[ing] : undefined;
-            if (val === null || val === undefined || val === "") {
-              input.value = "";
-            } else if (typeof val === "number") {
-              input.value = String(val);
-            } else if (typeof val === "string") {
-              const t = val.trim();
-              input.value = t === "" ? "" : t;
-            } else {
-              input.value = "";
-            }
-          });
-        });
-
-        // cargar costos por presentación si existen
-        if (costosPresentacion) {
-          PRESENTACIONES.forEach(p => {
-            const info = costosPresentacion[p.id];
-            if (!info) return;
-            const inputCosto = document.getElementById("costo-unit-" + p.id);
-            if (inputCosto) {
-              const v = info ? info.costoUnidad : undefined;
-              if (v === null || v === undefined || v === "") {
-                inputCosto.value = "";
-              } else if (typeof v === "number") {
-                inputCosto.value = String(v);
-              } else if (typeof v === "string") {
-                const t = v.trim();
-                inputCosto.value = t === "" ? "" : t;
-              } else {
-                inputCosto.value = "";
-              }
-            }
-          });
-        }
+        aplicarPayloadRecetasEnUI(data);
       } catch (e) {
         console.warn("Error cargando recetas:", e);
       }
@@ -1510,48 +1836,29 @@ function a33WireNumericInput(el, mode) {
     function resetNotasAlEntrar() {
       const notasInput = document.getElementById("notas");
       if (!notasInput) return;
-      // UI + estado interno: siempre vacío al entrar (incluye BFCache/pageshow).
-      notasInput.value = "";
-      try { A33Storage.removeItem(STORAGE_NOTAS_KEY); } catch (e) {}
+      notasInput.value = notasInput.value || "";
     }
 
-    function guardarMetaLote() {
-      const loteInput = document.getElementById("lote");
-      const fechaProdInput = document.getElementById("fecha-produccion");
-      if (loteInput) {
-        A33Storage.setItem(STORAGE_LOTE_KEY, loteInput.value || "");
-      }
-      // Persistimos solo el modo (AUTO/MANUAL). El consecutivo se compromete únicamente al guardar lote.
+    function guardarMetaLote(resultData) {
       try { A33Storage.setItem(STORAGE_LOTE_CODE_MODE_KEY, A33CodigoLoteMode); } catch (e) {}
-      if (fechaProdInput) {
-        // En Calculadora no se editan registros existentes: no persistimos la fecha entre sesiones.
-        A33Storage.removeItem(STORAGE_FECHA_PROD_KEY);
-      }
-      // Notas NO se persisten entre sesiones.
-      try { A33Storage.removeItem(STORAGE_NOTAS_KEY); } catch (e) {}
       actualizarTextoCaducidad();
+      persistTemporalWorkspace(resultData);
     }
     function cargarMetaLote() {
-      const fechaProdInput = document.getElementById("fecha-produccion");
-      if (fechaProdInput) {
-        // Compatibilidad: si quedó una fecha vieja guardada, la limpiamos.
-        A33Storage.removeItem(STORAGE_FECHA_PROD_KEY);
-        fechaProdInput.value = hoyLocalISO();
-      }
-      // Al entrar a Calculadora, Notas siempre empieza vacía (sin tocar otros campos).
-      resetNotasAlEntrar();
       A33HasCalculoPrevio = false;
       const hintRes = document.getElementById("hint-resultados");
       if (hintRes) hintRes.style.display = "block";
-      actualizarTextoCaducidad();
-
-      // Nuevo lote / nueva corrida: AUTO genera código sugerido (preview), sin quemar consecutivo.
+      actualizarEstadoBotonGuardar(null);
       A33CodigoLoteMode = "AUTO";
       A33AutoSeq = "";
       try { A33Storage.setItem(STORAGE_LOTE_CODE_MODE_KEY, "AUTO"); } catch (e) {}
       setCodigoLoteValue("");
       setPillEstadoCodigo("SUGERIDO");
-      recalcularCodigoLoteAuto({ consumeNewSeq: false });
+      restoreTemporalWorkspace();
+      const loteInput = document.getElementById('lote');
+      if (!loteInput || !String(loteInput.value || '').trim()) {
+        recalcularCodigoLoteAuto({ consumeNewSeq: false });
+      }
     }
     function calcularDatosLote() {
       const totalesIngredientes = { vino: 0, vodka: 0, jugo: 0, sirope: 0, agua: 0 };
@@ -1586,420 +1893,165 @@ function a33WireNumericInput(el, mode) {
       };
     }
     function calcularTotales() {
-      const datos = calcularDatosLote();
-      const resultadosDiv = document.getElementById("resultados");
-      const totalesDiv = document.getElementById("totales-ingredientes");
-      const resumenVolumenDiv = document.getElementById("resumen-volumen");
-      const resumenLoteDiv = document.getElementById("resumen-lote");
-      const resumenFechasDiv = document.getElementById("resumen-fechas");
-
-      const loteNombre = datos.loteNombre;
-      let htmlLote = "";
-      if (loteNombre) {
-        htmlLote = "<div class='flex-row'><div class='badge'>Lote: <strong>" +
-          escapeHtml(loteNombre) +
-          "</strong></div></div>";
-      } else {
-        htmlLote = "<div class='flex-row'><div class='badge'>Lote sin nombre</div></div>";
-      }
-      resumenLoteDiv.innerHTML = htmlLote;
-
-      let htmlFechas = "<div class='flex-row'>";
-      if (datos.fechaProd) {
-        htmlFechas += "<div class='badge'>Producción: <strong>" + formatearFechaBonita(datos.fechaProd) + "</strong></div>";
-      } else {
-        htmlFechas += "<div class='badge'>Producción: —</div>";
-      }
-      if (datos.fechaCad) {
-        htmlFechas += "<div class='badge'>Caducidad: <strong>" + formatearFechaBonita(datos.fechaCad) + "</strong></div>";
-      } else {
-        htmlFechas += "<div class='badge'>Caducidad: —</div>";
-      }
-      if (datos.notas) {
-        htmlFechas += "<div class='badge'>Notas: " + escapeHtml(datos.notas.substring(0, 60)) + (datos.notas.length > 60 ? "..." : "") + "</div>";
-      }
-      htmlFechas += "</div>";
-      resumenFechasDiv.innerHTML = htmlFechas;
-
-      let htmlTotales = "<table><thead><tr><th>Ingrediente</th><th>Total (ml)</th><th>Equivalente (L)</th></tr></thead><tbody>";
-      htmlTotales += "<tr><td style='text-align:left;'>Vino</td><td>" + formatMl(datos.totalesIngredientes.vino) + "</td><td>" + formatLitros(datos.totalesIngredientes.vino) + "</td></tr>";
-      htmlTotales += "<tr><td style='text-align:left;'>Vodka</td><td>" + formatMl(datos.totalesIngredientes.vodka) + "</td><td>" + formatLitros(datos.totalesIngredientes.vodka) + "</td></tr>";
-      htmlTotales += "<tr><td style='text-align:left;'>Jugo</td><td>" + formatMl(datos.totalesIngredientes.jugo) + "</td><td>" + formatLitros(datos.totalesIngredientes.jugo) + "</td></tr>";
-      htmlTotales += "<tr><td style='text-align:left;'>Sirope</td><td>" + formatMl(datos.totalesIngredientes.sirope) + "</td><td>" + formatLitros(datos.totalesIngredientes.sirope) + "</td></tr>";
-      htmlTotales += "<tr><td style='text-align:left;'>Agua pura</td><td>" + formatMl(datos.totalesIngredientes.agua) + "</td><td>" + formatLitros(datos.totalesIngredientes.agua) + "</td></tr>";
-      htmlTotales += "</tbody></table>";
-      totalesDiv.innerHTML = htmlTotales;
-
-
-      const resumenCostosDiv = document.getElementById("resumen-costos");
-      if (resumenCostosDiv) {
-        let costoTotal = 0;
-        const filas = [];
-        datos.unidadesPorPresentacion.forEach(item => {
-          const costoUnit = getNumberValue("costo-unit-" + item.id);
-          if (costoUnit > 0 && item.unidades > 0) {
-            const subtotal = costoUnit * item.unidades;
-            costoTotal += subtotal;
-            filas.push({
-              nombre: item.nombre,
-              unidades: item.unidades,
-              costoUnidad: costoUnit,
-              subtotal
-            });
-          }
-        });
-
-        let htmlCostos = "";
-        if (filas.length) {
-          htmlCostos += "<div class='flex-row'>";
-          htmlCostos += "<div class='badge'>Costo total estimado del lote: <strong>C$ " + costoTotal.toFixed(2) + "</strong></div>";
-          if (datos.totalVolumenFinalMl > 0) {
-            const costoPorLitro = costoTotal / (datos.totalVolumenFinalMl / 1000);
-            htmlCostos += "<div class='badge'>Costo aprox. por litro: <strong>C$ " + costoPorLitro.toFixed(2) + "</strong></div>";
-          }
-          htmlCostos += "</div>";
-
-          htmlCostos += "<table><thead><tr><th>Presentación</th><th>Unidades</th><th>Costo unitario (C$)</th><th>Subtotal (C$)</th></tr></thead><tbody>";
-          filas.forEach(f => {
-            htmlCostos += "<tr>";
-            htmlCostos += "<td style='text-align:left;'>" + escapeHtml(f.nombre) + "</td>";
-            htmlCostos += "<td>" + f.unidades + "</td>";
-            htmlCostos += "<td>" + f.costoUnidad.toFixed(2) + "</td>";
-            htmlCostos += "<td>" + f.subtotal.toFixed(2) + "</td>";
-            htmlCostos += "</tr>";
-          });
-          htmlCostos += "</tbody></table>";
-        } else {
-          htmlCostos = "<p class='hint'>Para ver costos, llena la columna de costo unitario y el plan de producción.</p>";
-        }
-
-        resumenCostosDiv.innerHTML = htmlCostos;
-      }
-
-      let htmlResumen = "<div class='flex-row'><div class='badge'>Volumen final teórico: <strong>" +
-        formatLitros(datos.totalVolumenFinalMl) +
-        "</strong></div></div>";
-      resumenVolumenDiv.innerHTML = htmlResumen;
-
-      A33HasCalculoPrevio = true;
-      resultadosDiv.style.display = "block";
-      const hintRes = document.getElementById("hint-resultados");
-      if (hintRes) hintRes.style.display = "none";
-      guardarMetaLote();
-    }
-    function exportarLote() {
-      alert("La exportación de la Calculadora Temporal se habilitará en etapas posteriores.");
+      const datos = serializarDatosCalculo(calcularDatosLote());
+      renderResultadosDesdeDatos(datos);
+      guardarMetaLote(datos);
     }
     function limpiarCantidades() {
       PRESENTACIONES.forEach(p => {
         const el = document.getElementById("plan-" + p.id);
         if (el) el.value = "";
       });
-      document.getElementById("resultados").style.display = "none";
-      const hintRes = document.getElementById("hint-resultados");
-      if (hintRes) hintRes.style.display = "block";
-      A33HasCalculoPrevio = false;
+      limpiarResultadosVisuales();
+      persistTemporalWorkspace(null);
     }
 
     async function guardarCalculoComoLote() {
-      const datos = calcularDatosLote();
+      const datos = serializarDatosCalculo(calcularDatosLote());
 
-      // Bloqueante: solo se permite guardar si hubo cálculo previo
       if (!A33HasCalculoPrevio) {
-        alert("Primero calcula totales de materia prima antes de guardar el lote.");
+        alert("Primero usa CALCULAR para confirmar el resumen temporal antes de guardar.");
+        actualizarEstadoBotonGuardar(datos);
         return;
       }
 
-      // Plan vacío: confirmación (comportamiento existente)
       if (!datos.unidadesPorPresentacion.length) {
-        if (!confirm("No hay unidades indicadas en el plan de producción. ¿Guardar de todas formas?")) {
-          return;
-        }
+        alert("No se puede guardar un cálculo vacío. Indica unidades en el plan y vuelve a calcular.");
+        actualizarEstadoBotonGuardar(datos);
+        return;
       }
 
-      let lotes = [];
-      try {
-        if (window.A33Storage && typeof A33Storage.sharedRead === 'function'){
-          const rr = A33Storage.sharedRead(STORAGE_TEMP_LOTES_KEY, []);
-          lotes = Array.isArray(rr && rr.data) ? rr.data : [];
-        } else {
-          const raw = A33Storage.getItem(STORAGE_TEMP_LOTES_KEY);
-          if (raw) lotes = JSON.parse(raw) || [];
-          if (!Array.isArray(lotes)) lotes = [];
-        }
-      } catch (e) {
-        lotes = [];
+      if (!actualizarEstadoBotonGuardar(datos)) {
+        alert("GUARDAR solo se habilita cuando existe un cálculo temporal válido.");
+        return;
       }
 
-const loteInput = document.getElementById("lote");
-      const rawCodigo = loteInput ? loteInput.value : "";
+      const info = readTemporalRecordsWithMeta();
+      let registros = Array.isArray(info.data) ? info.data.slice() : [];
+      const baseRevRegistros = (info.meta && typeof info.meta.rev === 'number') ? info.meta.rev : null;
+
+      const loteInput = document.getElementById('lote');
+      const rawCodigo = loteInput ? loteInput.value : '';
       let v = validarCodigoLoteFuerte(rawCodigo);
       if (!v.ok) {
-        alert(v.msg || "Código inválido.");
+        alert(v.msg || 'Código inválido.');
         return;
       }
 
-      // Normalizamos a MAYÚSCULAS (evita "duplicados" por casing)
-      if (loteInput) {
-        A33SuppressCodigoInput = true;
-        loteInput.value = v.code;
-        setTimeout(() => { A33SuppressCodigoInput = false; }, 0);
-      }
+      if (loteInput) setCodigoLoteValue(v.code);
 
       let codigoFinal = v.code;
       let seqFinal = v.seq;
 
-      // Duplicado/colisión: si ya se usó entre preview y guardar, ofrecer aplicar el siguiente disponible (1 toque)
       const checkDuplicado = () => {
         const last = obtenerUltimoConsecutivoNumerico();
-        const suggestedUpper = normalizarCodigoLote(A33SuggestedCode || "");
+        const suggestedUpper = normalizarCodigoLote(A33SuggestedCode || '');
         const isSuggested = (normalizarCodigoLote(codigoFinal) === suggestedUpper);
-
-        const yaExiste = existeCodigoEnLotes(lotes, codigoFinal);
-        const quedoAtras = (typeof seqFinal === "number" && seqFinal <= last && isSuggested);
+        const yaExiste = registros.some(reg => normalizarCodigoLote(reg && reg.codigo) === normalizarCodigoLote(codigoFinal));
+        const quedoAtras = (typeof seqFinal === 'number' && seqFinal <= last && isSuggested);
         return { yaExiste, quedoAtras };
       };
 
       let dup = checkDuplicado();
       if (dup.yaExiste || dup.quedoAtras) {
-        const nextCode = proponerSiguienteCodigoDisponible(codigoFinal, lotes);
+        const nextCode = proponerSiguienteCodigoDisponible(codigoFinal, registros);
         const aplicar = await A33ModalDuplicadoCodigo(nextCode);
         if (!aplicar) return;
-
-        // Aplicar
         codigoFinal = nextCode;
         v = validarCodigoLoteFuerte(codigoFinal);
         if (!v.ok) {
-          alert("No se pudo asignar un código libre. Reintentá.");
+          alert('No se pudo asignar un código libre. Reintentá.');
           return;
         }
         seqFinal = v.seq;
-
         if (loteInput) setCodigoLoteValue(codigoFinal);
-        A33CodigoLoteMode = "AUTO";
+        A33CodigoLoteMode = 'AUTO';
         A33AutoSeq = pad4(extraerSeqDeCodigo(codigoFinal) || 0).slice(-4);
         A33SuggestedCode = codigoFinal;
-        setPillEstadoCodigo("SUGERIDO");
-        try { A33Storage.setItem(STORAGE_LOTE_CODE_MODE_KEY, "AUTO"); } catch (e) {}
-
-        // Reintentar una sola vez (sin otro modal) con datos frescos
-        try {
-          const raw2 = A33Storage.getItem(STORAGE_TEMP_LOTES_KEY);
-          lotes = raw2 ? (JSON.parse(raw2) || []) : [];
-          if (!Array.isArray(lotes)) lotes = [];
-        } catch (e) {
-          lotes = [];
-        }
-
+        setPillEstadoCodigo('SUGERIDO');
+        try { A33Storage.setItem(STORAGE_LOTE_CODE_MODE_KEY, 'AUTO'); } catch (e) {}
+        registros = readTemporalRecordsWithMeta().data || [];
         dup = checkDuplicado();
         if (dup.yaExiste || dup.quedoAtras) {
-          alert("No se pudo asignar un código libre. Reintentá.");
+          alert('No se pudo asignar un código libre. Reintentá.');
           return;
         }
       }
 
-      // Regla del consecutivo si el usuario editó el código:
-      // - hacia atrás / reutilización => bloquear
       const lastNow = obtenerUltimoConsecutivoNumerico();
-      const suggestedNow = normalizarCodigoLote(A33SuggestedCode || "");
+      const suggestedNow = normalizarCodigoLote(A33SuggestedCode || '');
       const isSuggestedNow = (normalizarCodigoLote(codigoFinal) === suggestedNow);
-
-      if (A33CodigoLoteMode === "MANUAL" && !isSuggestedNow && typeof seqFinal === "number" && seqFinal <= lastNow) {
-        alert("Código no permitido: va hacia atrás o implica reutilización del consecutivo. Usa el sugerido o uno más adelante.");
+      if (A33CodigoLoteMode === 'MANUAL' && !isSuggestedNow && typeof seqFinal === 'number' && seqFinal <= lastNow) {
+        alert('Código no permitido: va hacia atrás o implica reutilización del consecutivo. Usa el sugerido o uno más adelante.');
         return;
       }
 
-      const mapUnits = { pulso: 0, media: 0, djeba: 0, litro: 0, galon: 0 };
-      datos.unidadesPorPresentacion.forEach((item) => {
-        if (!item || !item.id) return;
-        if (item.id === "pulso") mapUnits.pulso = item.unidades;
-        if (item.id === "media") mapUnits.media = item.unidades;
-        if (item.id === "djeba") mapUnits.djeba = item.unidades;
-        if (item.id === "litro") mapUnits.litro = item.unidades;
-        if (item.id === "galon") mapUnits.galon = item.unidades;
+      const plan = capturarPlanTemporal();
+      const recipeSnapshot = capturarPayloadRecetasDesdeUI();
+      const nowIso = new Date().toISOString();
+      const registro = normalizarRegistroTemporal({
+        id: 'temporal_' + normalizarCodigoLote(codigoFinal),
+        codigo: codigoFinal,
+        fechaProduccion: datos.fechaProdStr || hoyLocalISO(),
+        fechaCaducidad: datos.fechaCadStr || '',
+        notas: datos.notas || '',
+        plan,
+        resultados: Object.assign({}, datos, { loteNombre: codigoFinal }),
+        recipeSnapshot,
+        createdAt: nowIso,
+        updatedAt: nowIso
       });
 
-      const fechaProdIso = datos.fechaProdStr || hoyLocalISO();
-      let caducidadIso = "";
+      const idx = registros.findIndex(item => item.id === registro.id || normalizarCodigoLote(item.codigo) === normalizarCodigoLote(registro.codigo));
+      if (idx >= 0) {
+        alert('Ese código ya existe dentro del historial temporal. Usa el siguiente sugerido o elimina el registro anterior si ya no lo necesitas.');
+        setPillEstadoCodigo(A33CodigoLoteMode === 'MANUAL' ? 'EDITADO' : 'SUGERIDO');
+        return;
+      }
+      registros.unshift(registro);
+      registros = dedupeRegistrosTemporales(registros);
+
       try {
-        const cad = calcularCaducidad(fechaProdIso);
-        if (cad) caducidadIso = cad.toISOString().slice(0, 10);
+        writeTemporalData(STORAGE_REGISTROS_KEY, registros, { baseRev: baseRevRegistros, conflictPolicy: 'block' });
       } catch (e) {
-        caducidadIso = "";
-      }
-
-      // Releer lotes justo antes de persistir (anti-pisadas)
-      let lotesInfo = { data: lotes, meta: { rev: null } };
-      try {
-        if (window.A33Storage && typeof A33Storage.sharedRead === 'function'){
-          lotesInfo = A33Storage.sharedRead(STORAGE_TEMP_LOTES_KEY, []);
-        } else {
-          const raw = A33Storage.getItem(STORAGE_TEMP_LOTES_KEY);
-          lotesInfo = { data: raw ? (JSON.parse(raw) || []) : [], meta: { rev: null } };
-        }
-      } catch (e) {
-        lotesInfo = { data: [], meta: { rev: null } };
-      }
-
-      let lotesActual = Array.isArray(lotesInfo.data) ? lotesInfo.data : [];
-      const baseRevLotes = (lotesInfo.meta && typeof lotesInfo.meta.rev === "number") ? lotesInfo.meta.rev : null;
-
-      const batchCode = normalizarCodigoLote(codigoFinal);
-      const stableId = "batch_" + batchCode;
-      const notasTrim = String(datos.notas || "").trim();
-
-      const nuevoLote = {
-        // Identidad estable (compat Lotes): batch_{BATCHCODE}
-        loteId: stableId,
-        batchCode: batchCode,
-        id: stableId,
-
-        fecha: fechaProdIso,
-        codigo: batchCode,
-        caducidad: caducidadIso || fechaProdIso,
-        volTotal: Math.round(datos.totalVolumenFinalMl || 0).toString(),
-        volVino: Math.round(datos.totalesIngredientes.vino || 0).toString(),
-        volVodka: Math.round(datos.totalesIngredientes.vodka || 0).toString(),
-        volJugo: Math.round(datos.totalesIngredientes.jugo || 0).toString(),
-        volSirope: Math.round(datos.totalesIngredientes.sirope || 0).toString(),
-        volAgua: Math.round(datos.totalesIngredientes.agua || 0).toString(),
-        pulso: (mapUnits.pulso || 0).toString(),
-        media: (mapUnits.media || 0).toString(),
-        djeba: (mapUnits.djeba || 0).toString(),
-        litro: (mapUnits.litro || 0).toString(),
-        galon: (mapUnits.galon || 0).toString(),
-        // Notas: no pisar notas existentes si aquí vienen vacías
-        ...(notasTrim ? { notas: notasTrim } : {}),
-        createdAt: new Date().toISOString()
-      };
-
-      const isBlank = (v) => v == null || String(v).trim() === "";
-      const codeCanon = (l) => normalizarCodigoLote(l && (l.codigo || l.batchCode || l.code || l.lote || ""));
-      const loteSig = (l) => {
-        const x = l || {};
-        const pick = (k) => (x[k] == null ? "" : String(x[k]).trim());
-        return [
-          codeCanon(x),
-          pick("fecha"),
-          pick("caducidad"),
-          pick("volTotal"),
-          pick("volVino"),
-          pick("volVodka"),
-          pick("volJugo"),
-          pick("volSirope"),
-          pick("volAgua"),
-          pick("pulso"),
-          pick("media"),
-          pick("djeba"),
-          pick("litro"),
-          pick("galon"),
-        ].join("|");
-      };
-
-      // Insert/update por identidad (batchCode) con dedupe conservador
-      const matchIdx = [];
-      for (let i = 0; i < lotesActual.length; i++) {
-        if (codeCanon(lotesActual[i]) === batchCode) matchIdx.push(i);
-      }
-
-      if (matchIdx.length > 0) {
-        // Idempotencia: solo "update" si es el mismo lote (misma firma). Si difiere, bloquear.
-        const sig0 = loteSig(lotesActual[matchIdx[0]]);
-        const sigN = loteSig(nuevoLote);
-        const allSame = matchIdx.every((i) => loteSig(lotesActual[i]) === sig0);
-
-        if (!allSame) {
-          alert("Conflicto detectado: hay múltiples registros con el mismo código de lote. No se guardó para evitar corromper data. Revisá la lista temporal de este módulo.");
-          setPillEstadoCodigo(A33CodigoLoteMode === "MANUAL" ? "EDITADO" : "SUGERIDO");
-          return;
-        }
-        if (sig0 !== sigN) {
-          alert("Conflicto detectado: ya existe un lote con ese código y datos distintos. No se sobrescribió.");
-          setPillEstadoCodigo(A33CodigoLoteMode === "MANUAL" ? "EDITADO" : "SUGERIDO");
-          return;
-        }
-
-        // Merge conservador: preservar campos extra (eventUsage/status/etc.) y notas/createdAt previos
-        const existing = lotesActual[matchIdx[0]] || {};
-        const merged = { ...existing, ...nuevoLote };
-
-        if (!isBlank(existing.id)) merged.id = existing.id;
-        if (!isBlank(existing.loteId)) merged.loteId = existing.loteId;
-        if (!isBlank(existing.batchCode)) merged.batchCode = existing.batchCode;
-
-        if (!isBlank(existing.createdAt)) merged.createdAt = existing.createdAt;
-        if (!isBlank(existing.notas) && isBlank(notasTrim)) merged.notas = existing.notas;
-
-        lotesActual[matchIdx[0]] = merged;
-
-        // Remover duplicados idénticos extra (si existían)
-        for (let j = matchIdx.length - 1; j >= 1; j--) {
-          lotesActual.splice(matchIdx[j], 1);
-        }
-      } else {
-        lotesActual.push(nuevoLote);
-      }
-
-      // Persistencia segura: bloquear si la data cambió entre lectura y escritura
-      try {
-        if (window.A33Storage && typeof A33Storage.sharedSet === 'function' && typeof A33Storage.sharedRead === 'function') {
-          const r = A33Storage.sharedSet(STORAGE_TEMP_LOTES_KEY, lotesActual, { source: 'calculadora_temporal', baseRev: baseRevLotes, conflictPolicy: 'block' });
-          if (r && r.ok === false) throw new Error(r.message || "No se pudo guardar el lote.");
-        } else {
-          A33Storage.setItem(STORAGE_TEMP_LOTES_KEY, JSON.stringify(lotesActual));
-        }
-      } catch (e) {
-        alert((e && e.message) ? e.message : "No se pudo guardar el lote en el navegador.");
-        setPillEstadoCodigo(A33CodigoLoteMode === "MANUAL" ? "EDITADO" : "SUGERIDO");
+        alert((e && e.message) ? e.message : 'No se pudo guardar el cálculo temporal en el navegador.');
+        setPillEstadoCodigo(A33CodigoLoteMode === 'MANUAL' ? 'EDITADO' : 'SUGERIDO');
         return;
       }
 
-      // Señal UI: OK (guardado confirmado)
-      setPillEstadoCodigo("OK");
+      setPillEstadoCodigo('OK');
 
-      // Side-effects SOLO después de guardar OK
-      let seq4 = "";
+      let seq4 = '';
       try {
         seq4 = commitConsecutivoDespuesDeGuardar(codigoFinal, seqFinal);
-        if (/^\d{4}$/.test(String(seq4 || ""))) A33AutoSeq = seq4;
+        if (/^\d{4}$/.test(String(seq4 || ''))) A33AutoSeq = seq4;
       } catch (e) {}
 
-      let invOk = true;
-      try {
-        aplicarConsumoInventarioDesdeLote(datos, mapUnits);
-      } catch (e) {
-        invOk = false;
-        console.warn('Calculadora Temporal: consumo a Inventario omitido en esta etapa.', e);
-      }
-
-      alert(invOk
-        ? "Cálculo guardado en el espacio temporal de este módulo."
-        : "Cálculo temporal guardado. Esta etapa no aplica consumos a Inventario.");
-
-      // Evitar doble-guardado accidental del mismo cálculo
+      alert('Cálculo temporal guardado correctamente en el historial propio de este módulo. No se creó ningún lote oficial.');
       A33HasCalculoPrevio = false;
+      actualizarEstadoBotonGuardar(null);
+      renderTemporalHistory();
+      persistTemporalWorkspace(Object.assign({}, registro.resultados, { loteNombre: registro.codigo }));
 
-      // Preparar siguiente sugerido (preview) sin colisiones
-      A33CodigoLoteMode = "AUTO";
-      try { A33Storage.setItem(STORAGE_LOTE_CODE_MODE_KEY, "AUTO"); } catch (e) {}
-      setPillEstadoCodigo("SUGERIDO");
-      A33AutoSeq = "";
+      A33CodigoLoteMode = 'AUTO';
+      try { A33Storage.setItem(STORAGE_LOTE_CODE_MODE_KEY, 'AUTO'); } catch (e) {}
+      setPillEstadoCodigo('SUGERIDO');
+      A33AutoSeq = '';
       recalcularCodigoLoteAuto({ consumeNewSeq: false });
-      guardarMetaLote();
+      guardarMetaLote(Object.assign({}, registro.resultados, { loteNombre: registro.codigo }));
     }
 function init() {
       construirTablaRecetas();
       construirTablaPlan();
       cargarRecetas();
       cargarMetaLote();
+      renderTemporalHistory();
       resetNotasAlEntrar();
       document.getElementById("btn-guardar-receta").addEventListener("click", guardarRecetas);
       document.getElementById("btn-calcular").addEventListener("click", calcularTotales);
       document.getElementById("btn-limpiar").addEventListener("click", limpiarCantidades);
       const btnGuardarLote = document.getElementById("btn-guardar-lote");
       if (btnGuardarLote) btnGuardarLote.addEventListener("click", guardarCalculoComoLote);
-      const btnExportar = document.getElementById("btn-exportar");
-      if (btnExportar) btnExportar.addEventListener("click", exportarLote);
       const loteInput = document.getElementById("lote");
       const fechaProdInput = document.getElementById("fecha-produccion");
       const notasInput = document.getElementById("notas");
@@ -2018,6 +2070,7 @@ function init() {
           if (A33SuppressCodigoInput) return;
           marcarCodigoComoManual();
           guardarMetaLote();
+          actualizarEstadoBotonGuardar(readTemporalData(STORAGE_WORKSPACE_KEY, null)?.result || null);
         };
         loteInput.addEventListener("input", onManual);
         loteInput.addEventListener("change", onManual);
@@ -2036,16 +2089,47 @@ function init() {
             // MANUAL: solo actualizamos el hint de fecha hebrea
             actualizarFechaHebrea();
           }
+          actualizarEstadoBotonGuardar(readTemporalData(STORAGE_WORKSPACE_KEY, null)?.result || null);
         };
         fechaProdInput.addEventListener("change", onFecha);
         fechaProdInput.addEventListener("keyup", onFecha);
       }
 
       if (notasInput) {
-        // Notas no se persisten; pero seguimos limpiando key por compatibilidad del flujo
-        notasInput.addEventListener("change", guardarMetaLote);
-        notasInput.addEventListener("keyup", guardarMetaLote);
+        const onNotas = () => {
+          const currentResult = readTemporalData(STORAGE_WORKSPACE_KEY, null)?.result || null;
+          guardarMetaLote(currentResult);
+          actualizarEstadoBotonGuardar(currentResult);
+        };
+        notasInput.addEventListener("change", onNotas);
+        notasInput.addEventListener("keyup", onNotas);
       }
+
+      PRESENTACIONES.forEach(p => {
+        const planInput = document.getElementById('plan-' + p.id);
+        if (planInput) {
+          const onPlan = () => { persistTemporalWorkspace(null); limpiarResultadosVisuales(); };
+          planInput.addEventListener('change', onPlan);
+          planInput.addEventListener('keyup', onPlan);
+        }
+        const costoInput = document.getElementById('costo-unit-' + p.id);
+        if (costoInput) {
+          const onCosto = () => {
+            const currentResult = readTemporalData(STORAGE_WORKSPACE_KEY, null)?.result || null;
+            persistTemporalWorkspace(currentResult);
+            actualizarEstadoBotonGuardar(currentResult);
+          };
+          costoInput.addEventListener('change', onCosto);
+          costoInput.addEventListener('keyup', onCosto);
+        }
+        INGREDIENTES.forEach(ing => {
+          const recetaInput = document.getElementById('receta-' + p.id + '-' + ing);
+          if (!recetaInput) return;
+          const onReceta = () => { persistTemporalWorkspace(null); limpiarResultadosVisuales(); };
+          recetaInput.addEventListener('change', onReceta);
+          recetaInput.addEventListener('keyup', onReceta);
+        });
+      });
 
       actualizarTextoCaducidad();
       actualizarFechaHebrea();
@@ -2053,10 +2137,9 @@ function init() {
 
     document.addEventListener("DOMContentLoaded", init);
 
-    // iOS/Safari puede restaurar el formulario desde BFCache al volver al módulo.
-    // Esto garantiza que Notas se limpie cada vez que 're-entras' a Calculadora.
     window.addEventListener("pageshow", () => {
-      try { resetNotasAlEntrar(); } catch (e) {}
+      try { restoreTemporalWorkspace(); } catch (e) {}
+      try { renderTemporalHistory(); } catch (e) {}
     });
   </script>
   <script src="/assets/js/a33-input-ux.js?v=4.20.77&r=2"></script>
