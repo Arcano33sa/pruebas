@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Arcano 33 · Agenda</title>
+  <meta name="description" content="Agenda de Suite A33: reuniones, tareas y próximos pedidos opcionales en un módulo aislado y listo para crecer por etapas." />
+  <meta name="theme-color" content="#7b1818" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.77&r=2" />
+  <link rel="stylesheet" href="style.css?v=4.20.77&r=2" />
+</head>
+<body>
+  <header class="a33-header" role="banner">
+    <a class="a33-btn-menu" href="../index.html" aria-label="Volver al Menú principal">← Menú principal</a>
+    <div class="a33-title">Agenda</div>
+    <div class="a33-version" data-a33-version="1" data-a33-fallback="v4.20.77">v...</div>
+  </header>
+
+  <main class="agenda-main" role="main">
+    <section class="agenda-hero agenda-card" aria-labelledby="agenda-title">
+      <div class="agenda-hero-copy">
+        <span class="agenda-kicker">Núcleo A33</span>
+        <h1 id="agenda-title">Agenda</h1>
+        <p class="agenda-lead">Centro aislado para reuniones, tareas y evolución futura de pedidos opcionales. Esta etapa deja la estructura real montada, navegable y lista para crecer sin tocar Producción, Calculadora Temporal ni otros módulos.</p>
+      </div>
+      <div class="agenda-hero-side">
+        <div class="agenda-mini-stat">
+          <span class="agenda-mini-label">Estado</span>
+          <strong>Base operativa</strong>
+        </div>
+        <div class="agenda-mini-stat">
+          <span class="agenda-mini-label">Hoy</span>
+          <strong id="agendaToday">—</strong>
+        </div>
+      </div>
+    </section>
+
+    <section class="agenda-grid" aria-label="Mapa base del módulo Agenda">
+      <article class="agenda-card agenda-panel">
+        <div class="agenda-panel-head">
+          <div>
+            <p class="agenda-eyebrow">Preparado para crecer</p>
+            <h2>Áreas núcleo</h2>
+          </div>
+          <span class="agenda-badge">Etapa 1/8</span>
+        </div>
+        <div class="agenda-block-grid">
+          <article class="agenda-block">
+            <div class="agenda-block-icon" aria-hidden="true">📅</div>
+            <h3>Reuniones</h3>
+            <p>Espacio reservado para citas, seguimientos y encuentros comerciales.</p>
+            <span class="agenda-chip">Base lista</span>
+          </article>
+          <article class="agenda-block">
+            <div class="agenda-block-icon" aria-hidden="true">✅</div>
+            <h3>Tareas</h3>
+            <p>Estructura lista para pendientes con fecha, estado y notas en etapas futuras.</p>
+            <span class="agenda-chip">Base lista</span>
+          </article>
+          <article class="agenda-block">
+            <div class="agenda-block-icon" aria-hidden="true">📦</div>
+            <h3>Pedidos opcionales</h3>
+            <p>Reservado para activación controlada más adelante, sin mezclar lógica por ahora.</p>
+            <span class="agenda-chip">Pendiente de evolución</span>
+          </article>
+        </div>
+      </article>
+
+      <article class="agenda-card agenda-panel">
+        <div class="agenda-panel-head">
+          <div>
+            <p class="agenda-eyebrow">Aislamiento real</p>
+            <h2>Base técnica de Agenda</h2>
+          </div>
+        </div>
+        <ul class="agenda-list">
+          <li>Entry point propio en <code>agenda/index.html</code>.</li>
+          <li>Estilos y bootstrap propios en archivos separados del resto de módulos.</li>
+          <li>Ids, nombres y helpers con prefijo <code>agenda-</code> para evitar cruces.</li>
+          <li>Sin storage compartido ni dependencias operativas falsas en esta etapa.</li>
+          <li>Navegación premium de ida y vuelta al HOME ya funcional.</li>
+        </ul>
+      </article>
+
+      <article class="agenda-card agenda-panel">
+        <div class="agenda-panel-head">
+          <div>
+            <p class="agenda-eyebrow">Hoja de ruta</p>
+            <h2>Qué sigue después</h2>
+          </div>
+        </div>
+        <ol class="agenda-roadmap">
+          <li>Alta de estructura visual interna por áreas.</li>
+          <li>Modelo real de reuniones y tareas.</li>
+          <li>Activación opcional de pedidos cuando toque.</li>
+          <li>Persistencia propia sin contaminar otros módulos.</li>
+        </ol>
+        <p class="agenda-note">Aquí no se simula un CRUD. Solo se deja un módulo real, limpio y listo para las siguientes etapas.</p>
+      </article>
+    </section>
+  </main>
+
+  <script src="/assets/js/a33-release.js?v=4.20.77&r=2"></script>
+  <script src="script.js?v=4.20.77&r=2"></script>
+</body>
+</html>
