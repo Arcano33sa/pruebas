@@ -1220,6 +1220,177 @@
     }
   }
 
+
+  function formatMoneyForCalendar(value){
+    if (value == null || !Number.isFinite(Number(value))) return '';
+    return 'C$ ' + Number(value).toFixed(2);
+  }
+
+  function slugifyFilePart(value, fallback){
+    const base = String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .replace(/_+/g, '_');
+    return base || String(fallback || 'item');
+  }
+
+  function icsEscape(value){
+    return String(value || '')
+      .replace(/\\/g, '\\\\')
+      .replace(/\r?\n/g, '\\n')
+      .replace(/,/g, '\\,')
+      .replace(/;/g, '\\;');
+  }
+
+  function foldIcsLine(line){
+    const source = String(line || '');
+    if (source.length <= 74) return source;
+    const chunks = [];
+    for (let index = 0; index < source.length; index += 74) {
+      chunks.push((index ? ' ' : '') + source.slice(index, index + 74));
+    }
+    return chunks.join('\r\n');
+  }
+
+  function formatIcsDate(date){
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    return '' + yyyy + mm + dd;
+  }
+
+  function formatIcsLocalDateTime(date){
+    const hh = String(date.getHours()).padStart(2, '0');
+    const mm = String(date.getMinutes()).padStart(2, '0');
+    const ss = String(date.getSeconds()).padStart(2, '0');
+    return formatIcsDate(date) + 'T' + hh + mm + ss;
+  }
+
+  function formatIcsUtcStamp(date){
+    const yyyy = date.getUTCFullYear();
+    const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(date.getUTCDate()).padStart(2, '0');
+    const hh = String(date.getUTCHours()).padStart(2, '0');
+    const mi = String(date.getUTCMinutes()).padStart(2, '0');
+    const ss = String(date.getUTCSeconds()).padStart(2, '0');
+    return '' + yyyy + mm + dd + 'T' + hh + mi + ss + 'Z';
+  }
+
+  function buildAgendaCalendarDescription(record){
+    const lines = [];
+    lines.push('Tipo: ' + TYPE_LABELS[record.type]);
+    if (record.client) lines.push('Cliente: ' + record.client);
+    lines.push('Estado: ' + STATUS_LABELS[record.status]);
+    if (record.type === 'reunion') {
+      lines.push('Modalidad: ' + MODALITY_LABELS[normalizeModality(record.modality)]);
+    }
+    lines.push('Fecha de Agenda: ' + formatDate(record.date, record.date || '—'));
+    if (record.time) lines.push('Hora: ' + formatTime(record.time, record.time));
+    if (record.notes) lines.push('Notas: ' + record.notes.replace(/\r?\n/g, ' '));
+
+    if (record.pedido && record.pedido.enabled) {
+      lines.push('');
+      lines.push('Pedido activo: Sí');
+      if (record.pedido.product) lines.push('Producto: ' + record.pedido.product);
+      if (record.pedido.price != null) lines.push('Precio: ' + formatMoneyForCalendar(record.pedido.price));
+      if (record.pedido.quantity != null) lines.push('Cantidad: ' + formatNumberPlain(record.pedido.quantity));
+      if (record.pedido.total != null) lines.push('Total: ' + formatMoneyForCalendar(record.pedido.total));
+      if (record.pedido.delivery) lines.push('Fecha de entrega: ' + formatDate(record.pedido.delivery, record.pedido.delivery));
+    }
+
+    return lines.join('\n');
+  }
+
+  function buildCalendarActionLabel(record){
+    const safeRecord = record && typeof record === 'object' ? record : {};
+    const subject = String(safeRecord.subject || '').trim();
+    const typeLabel = TYPE_LABELS[normalizeType(safeRecord.type)] || 'Registro';
+    return 'Añadir ' + (subject ? '"' + subject + '"' : typeLabel) + ' al calendario';
+  }
+
+  function buildAgendaCalendarEvent(record){
+    const date = normalizeDate(record && record.date);
+    if (!date) return null;
+
+    const hasTime = Boolean(normalizeTime(record.time));
+    let startValue = '';
+    let endValue = '';
+    let startProp = '';
+    let endProp = '';
+
+    if (hasTime) {
+      const start = new Date(date + 'T' + normalizeTime(record.time) + ':00');
+      if (Number.isNaN(start.getTime())) return null;
+      const end = new Date(start.getTime() + (60 * 60 * 1000));
+      startProp = 'DTSTART';
+      endProp = 'DTEND';
+      startValue = formatIcsLocalDateTime(start);
+      endValue = formatIcsLocalDateTime(end);
+    } else {
+      const start = new Date(date + 'T12:00:00');
+      if (Number.isNaN(start.getTime())) return null;
+      const end = new Date(start.getTime());
+      end.setDate(end.getDate() + 1);
+      startProp = 'DTSTART;VALUE=DATE';
+      endProp = 'DTEND;VALUE=DATE';
+      startValue = formatIcsDate(start);
+      endValue = formatIcsDate(end);
+    }
+
+    const summary = 'Agenda A33 — ' + TYPE_LABELS[record.type] + ' — ' + (record.subject || 'Sin asunto');
+    const description = buildAgendaCalendarDescription(record);
+    const now = new Date();
+    const uid = String(record.id || ('agenda-' + startValue)) + '@arcano33';
+
+    const lines = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Arcano 33//Agenda//ES',
+      'CALSCALE:GREGORIAN',
+      'BEGIN:VEVENT',
+      'UID:' + icsEscape(uid),
+      'DTSTAMP:' + formatIcsUtcStamp(now),
+      'SUMMARY:' + icsEscape(summary),
+      'DESCRIPTION:' + icsEscape(description),
+      startProp + ':' + startValue,
+      endProp + ':' + endValue,
+      'END:VEVENT',
+      'END:VCALENDAR'
+    ];
+
+    return lines.map(foldIcsLine).join('\r\n');
+  }
+
+  function exportRecordToCalendar(record){
+    if (!record) return;
+
+    const ics = buildAgendaCalendarEvent(record);
+    if (!ics) {
+      window.alert('No se pudo generar el evento de calendario. Revisá que el registro tenga una fecha válida.');
+      return;
+    }
+
+    const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const safeType = slugifyFilePart(TYPE_LABELS[normalizeType(record.type)] || 'agenda', 'agenda');
+    const safeSubject = slugifyFilePart(record.subject, 'registro');
+    const safeDate = normalizeDate(record.date) || todayIso();
+
+    link.href = url;
+    link.download = 'agenda_' + safeType + '_' + safeSubject + '_' + safeDate + '.ics';
+
+    document.body.appendChild(link);
+    link.click();
+    setTimeout(function(){
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }, 0);
+  }
+
   function truncateText(value, max){
     const text = String(value || '').trim();
     if (!text || text.length <= max) return text;
@@ -1623,11 +1794,14 @@
     renderList();
   }
 
-  function createActionButton(label, className, handler){
+  function createActionButton(label, className, handler, options){
+    const settings = options || {};
     const button = document.createElement('button');
     button.type = 'button';
     button.className = className;
     button.textContent = label;
+    if (settings.title) button.title = settings.title;
+    if (settings.ariaLabel) button.setAttribute('aria-label', settings.ariaLabel);
     button.addEventListener('click', function(event){
       event.stopPropagation();
       handler();
@@ -1694,6 +1868,12 @@
       createActionButton('Abrir', 'agenda-inline-btn', function(){
         fillForm(record);
         renderList();
+      }),
+      createActionButton('📅', 'agenda-inline-btn agenda-inline-btn--calendar', function(){
+        exportRecordToCalendar(record);
+      }, {
+        title: buildCalendarActionLabel(record),
+        ariaLabel: buildCalendarActionLabel(record)
       })
     );
 
