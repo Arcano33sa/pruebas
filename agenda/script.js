@@ -5,7 +5,6 @@
     module: 'Agenda',
     storageNamespace: 'a33_agenda_',
     storageKey: 'a33_agenda_records_v1',
-    stage: '8/8',
     isolated: true,
     schemaVersion: 6
   });
@@ -1331,7 +1330,7 @@
   function getFormTitleBase(){
     const currentType = getTypeValue();
     const label = TYPE_LABELS[currentType];
-    return state.currentId ? 'Editar ' + label.toLowerCase() : 'Nueva ' + label.toLowerCase();
+    return state.currentId ? 'Editar ' + label : 'Nueva ' + label;
   }
 
   function syncFormTitle(){
