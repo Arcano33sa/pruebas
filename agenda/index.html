@@ -12,7 +12,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
 
   <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.77&r=6" />
-  <link rel="stylesheet" href="style.css?v=4.20.77&r=8" />
+  <link rel="stylesheet" href="style.css?v=4.20.77&r=9" />
 </head>
 <body>
   <header class="a33-header" role="banner">
@@ -204,6 +204,11 @@
           <span class="agenda-badge agenda-badge--soft" id="agendaListBadge">0 elementos</span>
         </div>
 
+        <div class="agenda-sync-note" id="agendaSyncNote" data-tone="local" aria-live="polite">
+          <strong id="agendaSyncBadge">Modo local</strong>
+          <span id="agendaSyncText">Agenda sigue usando almacenamiento local mientras se enlaza la nube.</span>
+        </div>
+
         <div class="agenda-toolbar">
           <div class="agenda-toolbar-copy">
             <strong id="agendaToolbarTitle">Pendientes primero</strong>
@@ -236,8 +241,13 @@
 
   </main>
 
-  <script src="/assets/js/a33-release.js?v=4.20.77&r=4"></script>
+  <script src="/assets/js/a33-release.js?v=4.20.77&r=6"></script>
+  <script src="/assets/js/a33-firebase-config.js?v=4.20.77&r=7"></script>
+  <script src="/assets/js/a33-firebase-core.js?v=4.20.77&r=8"></script>
+  <script src="/assets/js/a33-firebase-auth.js?v=4.20.77&r=8"></script>
+  <script src="/assets/js/a33-firebase-access.js?v=4.20.77&r=9"></script>
+  <script src="/assets/js/a33-module-access.js?v=4.20.77&r=1"></script>
   <script src="/assets/js/a33-storage.js?v=4.20.77&r=7"></script>
-  <script src="script.js?v=4.20.77&r=8"></script>
+  <script src="script.js?v=4.20.77&r=9"></script>
 </body>
 </html>

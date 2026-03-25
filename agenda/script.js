@@ -74,6 +74,22 @@
 
   const refs = {};
 
+  const cloud = {
+    unsub: null,
+    queryKey: '',
+    workspaceId: '',
+    localSeedRecords: [],
+    initialSnapshotHandled: false,
+    snapshotFromCache: false,
+    snapshotPendingWrites: false,
+    migrationImported: 0,
+    migrationSkipped: 0,
+    mode: 'local',
+    detail: 'Agenda sigue usando almacenamiento local mientras se enlaza la nube.',
+    lastError: '',
+    listenersAttached: false
+  };
+
   function getStorage(){
     return window.localStorage;
   }
@@ -84,6 +100,26 @@
     } catch (_) {
       return null;
     }
+  }
+
+  function safeString(value){
+    return String(value == null ? '' : value).trim();
+  }
+
+  function isoToMs(value, fallback){
+    const stamp = new Date(String(value || '')).getTime();
+    if (Number.isFinite(stamp) && stamp > 0) return Math.round(stamp);
+    return Number.isFinite(Number(fallback)) && Number(fallback) > 0 ? Math.round(Number(fallback)) : Date.now();
+  }
+
+  function msToIso(value, fallback){
+    const stamp = Number(value);
+    if (Number.isFinite(stamp) && stamp > 0) {
+      try {
+        return new Date(stamp).toISOString();
+      } catch (_) {}
+    }
+    return safeString(fallback || new Date().toISOString());
   }
 
   function createId(){
@@ -1043,7 +1079,11 @@
     });
   }
 
-  function loadRecords(){
+  function cloneRecords(list){
+    return sortRecords((Array.isArray(list) ? list : []).map(normalizeRecord));
+  }
+
+  function readLocalRecords(){
     let raw = null;
     try {
       raw = getStorage().getItem(AGENDA_BOOT.storageKey);
@@ -1052,17 +1092,366 @@
     }
 
     const parsed = raw ? safeParse(raw) : null;
-    state.records = sortRecords(normalizeStore(parsed));
+    return sortRecords(normalizeStore(parsed));
   }
 
-  function saveRecords(){
+  function writeLocalRecords(records){
     const payload = {
       schemaVersion: AGENDA_BOOT.schemaVersion,
       updatedAt: new Date().toISOString(),
-      records: state.records.map(normalizeRecord)
+      records: cloneRecords(records)
     };
 
-    getStorage().setItem(AGENDA_BOOT.storageKey, JSON.stringify(payload));
+    try {
+      getStorage().setItem(AGENDA_BOOT.storageKey, JSON.stringify(payload));
+    } catch (_) {}
+  }
+
+  function loadRecords(){
+    state.records = readLocalRecords();
+  }
+
+  function saveRecords(){
+    writeLocalRecords(state.records);
+  }
+
+  function getFirebaseState(){
+    return window.A33Firebase && typeof window.A33Firebase.getState === 'function'
+      ? window.A33Firebase.getState()
+      : null;
+  }
+
+  function getAccessState(){
+    return window.A33Access && typeof window.A33Access.getState === 'function'
+      ? window.A33Access.getState()
+      : null;
+  }
+
+  function getFirestoreDb(){
+    return window.A33Firebase && typeof window.A33Firebase._unsafeGetDb === 'function'
+      ? window.A33Firebase._unsafeGetDb()
+      : null;
+  }
+
+  function getCloudContext(){
+    const firebaseState = getFirebaseState();
+    const accessState = getAccessState();
+    const db = getFirestoreDb();
+    const workspaceId = safeString(accessState && accessState.workspaceId);
+    const permissions = Array.isArray(accessState && accessState.permissions) ? accessState.permissions : [];
+    const canUseAgenda = permissions.indexOf('agenda.use') !== -1;
+    const activeStatus = safeString(accessState && accessState.status).toLowerCase();
+
+    if (!firebaseState || !firebaseState.firestoreReady || !db || !accessState || !accessState.user || !workspaceId) return null;
+    if (activeStatus !== 'active' || !canUseAgenda) return null;
+
+    return {
+      db,
+      workspaceId,
+      user: accessState.user,
+      key: workspaceId + '::' + safeString(accessState.user.uid)
+    };
+  }
+
+  function isCloudMode(){
+    return !!(cloud.unsub && getCloudContext());
+  }
+
+  function setSyncStatus(mode, detail){
+    cloud.mode = mode || 'local';
+    cloud.detail = detail || '';
+    updateSyncUI();
+  }
+
+  function getSyncBadgeText(){
+    if (cloud.mode === 'connecting') return 'Conectando';
+    if (cloud.mode === 'migrating') return 'Migrando';
+    if (cloud.mode === 'syncing') return 'Guardando';
+    if (cloud.mode === 'live') return 'Compartida';
+    if (cloud.mode === 'offline') return 'Sin conexión';
+    if (cloud.mode === 'warning' || cloud.mode === 'error') return 'Revisión';
+    return 'Modo local';
+  }
+
+  function getSyncTone(){
+    if (cloud.mode === 'live') return 'live';
+    if (cloud.mode === 'offline') return 'offline';
+    if (cloud.mode === 'connecting' || cloud.mode === 'migrating' || cloud.mode === 'syncing') return 'syncing';
+    if (cloud.mode === 'warning' || cloud.mode === 'error') return 'warn';
+    return 'local';
+  }
+
+  function updateSyncUI(){
+    if (!refs.syncNote) return;
+    refs.syncNote.dataset.tone = getSyncTone();
+    if (refs.syncBadge) refs.syncBadge.textContent = getSyncBadgeText();
+    if (refs.syncText) refs.syncText.textContent = cloud.detail || 'Agenda sigue usando almacenamiento local mientras se enlaza la nube.';
+  }
+
+  function setMutationBusy(flag, label){
+    const busy = flag === true;
+    state.isMutating = busy;
+    if (refs.saveBtn) refs.saveBtn.disabled = busy;
+    if (refs.deleteBtn) refs.deleteBtn.disabled = busy;
+    if (refs.newBtn) refs.newBtn.disabled = busy;
+    if (busy) {
+      if (refs.saveBtn && label) refs.saveBtn.textContent = label;
+      setSyncStatus('syncing', label || 'Guardando cambios en Agenda compartida…');
+      return;
+    }
+    setModeLabels();
+    refreshCloudPresentation();
+  }
+
+  function workspaceAgendaCollection(ctx){
+    return ctx.db.collection('workspaces').doc(ctx.workspaceId).collection('agendaRecords');
+  }
+
+  function buildFirestoreRecordPayload(record, ctx){
+    const normalized = normalizeRecord(record);
+    const actorUid = safeString(ctx && ctx.user && ctx.user.uid);
+    const createdAtMs = isoToMs(normalized.createdAt, Date.now());
+    const updatedAtMs = isoToMs(normalized.updatedAt, createdAtMs);
+    return {
+      ...normalized,
+      workspaceId: ctx.workspaceId,
+      schemaVersion: AGENDA_BOOT.schemaVersion,
+      createdAtMs,
+      updatedAtMs,
+      createdBy: actorUid,
+      updatedBy: actorUid
+    };
+  }
+
+  function recordFromFirestoreDoc(doc){
+    const source = doc && typeof doc.data === 'function' ? (doc.data() || {}) : {};
+    const createdAt = safeString(source.createdAt || msToIso(source.createdAtMs));
+    const updatedAt = safeString(source.updatedAt || msToIso(source.updatedAtMs, createdAt));
+    return normalizeRecord({
+      ...source,
+      id: safeString(source.id || (doc && doc.id)),
+      createdAt,
+      updatedAt
+    });
+  }
+
+  function buildMigrationPlan(localRecords, remoteRecords){
+    const remoteById = new Map();
+    cloneRecords(remoteRecords).forEach(function(record){
+      remoteById.set(record.id, record);
+    });
+
+    const plan = {
+      toImport: [],
+      skipped: 0
+    };
+
+    cloneRecords(localRecords).forEach(function(record){
+      const remote = remoteById.get(record.id);
+      if (!remote) {
+        plan.toImport.push(record);
+        return;
+      }
+      if (JSON.stringify(normalizeRecord(remote)) !== JSON.stringify(normalizeRecord(record))) {
+        plan.skipped += 1;
+      }
+    });
+
+    return plan;
+  }
+
+  function mergeRecordsById(primary, extra){
+    const merged = new Map();
+    cloneRecords(primary).forEach(function(record){
+      merged.set(record.id, record);
+    });
+    cloneRecords(extra).forEach(function(record){
+      if (!merged.has(record.id)) merged.set(record.id, record);
+    });
+    return sortRecords(Array.from(merged.values()));
+  }
+
+  function applyRecords(records){
+    const nextRecords = cloneRecords(records);
+    state.records = nextRecords;
+    saveRecords();
+
+    if (state.currentId) {
+      const current = nextRecords.find(function(record){
+        return record.id === state.currentId;
+      });
+      if (current) {
+        fillForm(current, { focus: false });
+      } else {
+        resetForm({ focus: false });
+      }
+    } else {
+      setModeLabels();
+    }
+
+    renderList();
+  }
+
+  async function importLocalRecordsToCloud(ctx, records){
+    const list = cloneRecords(records);
+    if (!list.length) return 0;
+
+    const batchSize = 400;
+    for (let i = 0; i < list.length; i += batchSize) {
+      const chunk = list.slice(i, i + batchSize);
+      const batch = ctx.db.batch();
+      chunk.forEach(function(record){
+        batch.set(workspaceAgendaCollection(ctx).doc(record.id), buildFirestoreRecordPayload(record, ctx), { merge: true });
+      });
+      await batch.commit();
+    }
+
+    return list.length;
+  }
+
+  async function persistRecordToCloud(record){
+    const ctx = getCloudContext();
+    if (!ctx) return false;
+    await workspaceAgendaCollection(ctx).doc(record.id).set(buildFirestoreRecordPayload(record, ctx), { merge: true });
+    return true;
+  }
+
+  async function deleteRecordFromCloud(id){
+    const ctx = getCloudContext();
+    if (!ctx) return false;
+    await workspaceAgendaCollection(ctx).doc(id).delete();
+    return true;
+  }
+
+  function refreshCloudPresentation(){
+    if (!cloud.unsub) {
+      setSyncStatus('local', 'Agenda sigue usando almacenamiento local mientras Firebase/Auth no estén listos para compartirla.');
+      return;
+    }
+
+    let mode = 'live';
+    let detail = 'Agenda ya está compartida en Firestore para usuarios autorizados de este workspace.';
+
+    if (cloud.snapshotPendingWrites) {
+      mode = 'syncing';
+      detail = 'Hay cambios pendientes de confirmar en Firestore. La caché/offline los reintentará sin romper la Agenda.';
+    } else if (cloud.snapshotFromCache && !navigator.onLine) {
+      mode = 'offline';
+      detail = 'Sin conexión: estás trabajando desde caché local de Firestore y la sincronización seguirá al volver la red.';
+    } else if (cloud.snapshotFromCache) {
+      mode = 'offline';
+      detail = 'Mostrando caché local de Firestore mientras la red termina de responder.';
+    }
+
+    if (cloud.migrationImported > 0) {
+      detail += ' Se importaron ' + cloud.migrationImported + ' registro' + (cloud.migrationImported === 1 ? '' : 's') + ' local' + (cloud.migrationImported === 1 ? '' : 'es') + ' en la transición.';
+    }
+    if (cloud.migrationSkipped > 0) {
+      detail += ' ' + cloud.migrationSkipped + ' coincidencia' + (cloud.migrationSkipped === 1 ? '' : 's') + ' ya existía' + (cloud.migrationSkipped === 1 ? '' : 'n') + ' en nube y se dejó intacta.';
+    }
+    if (cloud.lastError) {
+      detail += ' ' + cloud.lastError;
+    }
+
+    setSyncStatus(mode, detail);
+  }
+
+  function detachCloudSync(options){
+    const settings = options || {};
+    if (cloud.unsub) {
+      try { cloud.unsub(); } catch (_) {}
+    }
+    cloud.unsub = null;
+    cloud.queryKey = '';
+    cloud.workspaceId = '';
+    cloud.initialSnapshotHandled = false;
+    cloud.snapshotFromCache = false;
+    cloud.snapshotPendingWrites = false;
+    cloud.localSeedRecords = [];
+    cloud.migrationImported = 0;
+    cloud.migrationSkipped = 0;
+    if (!settings.keepError) cloud.lastError = '';
+    if (!settings.silent) refreshCloudPresentation();
+  }
+
+  function handleCloudError(error){
+    const message = error && error.message ? String(error.message) : 'La sincronización Firestore no respondió.';
+    cloud.lastError = message;
+    detachCloudSync({ silent: true, keepError: true });
+    setSyncStatus('warning', 'Firestore falló y Agenda quedó trabajando en local para no soltar la data. ' + message);
+  }
+
+  function handleCloudSnapshot(ctx, snapshot){
+    cloud.snapshotFromCache = !!(snapshot && snapshot.metadata && snapshot.metadata.fromCache);
+    cloud.snapshotPendingWrites = !!(snapshot && snapshot.metadata && snapshot.metadata.hasPendingWrites);
+
+    const remoteRecords = Array.isArray(snapshot && snapshot.docs)
+      ? snapshot.docs.map(recordFromFirestoreDoc)
+      : [];
+
+    if (!cloud.initialSnapshotHandled) {
+      cloud.initialSnapshotHandled = true;
+      const plan = buildMigrationPlan(cloud.localSeedRecords, remoteRecords);
+      cloud.migrationSkipped = plan.skipped;
+      if (plan.toImport.length) {
+        applyRecords(mergeRecordsById(remoteRecords, plan.toImport));
+        setSyncStatus('migrating', 'Importando ' + plan.toImport.length + ' registro' + (plan.toImport.length === 1 ? '' : 's') + ' local' + (plan.toImport.length === 1 ? '' : 'es') + ' a Firestore…');
+        importLocalRecordsToCloud(ctx, plan.toImport).then(function(count){
+          cloud.migrationImported = count;
+          refreshCloudPresentation();
+        }).catch(function(error){
+          cloud.lastError = error && error.message ? String(error.message) : 'No se pudo completar la migración inicial.';
+          setSyncStatus('warning', 'No se pudo completar la migración local → Firestore. La data local quedó intacta y visible. ' + cloud.lastError);
+        });
+        return;
+      }
+    }
+
+    applyRecords(remoteRecords);
+    refreshCloudPresentation();
+  }
+
+  function ensureCloudSync(){
+    const ctx = getCloudContext();
+    if (!ctx) {
+      detachCloudSync({ silent: true });
+      refreshCloudPresentation();
+      return;
+    }
+
+    if (cloud.queryKey === ctx.key && cloud.unsub) {
+      refreshCloudPresentation();
+      return;
+    }
+
+    detachCloudSync({ silent: true });
+    cloud.queryKey = ctx.key;
+    cloud.workspaceId = ctx.workspaceId;
+    cloud.localSeedRecords = readLocalRecords();
+    cloud.initialSnapshotHandled = false;
+    cloud.snapshotFromCache = false;
+    cloud.snapshotPendingWrites = false;
+    cloud.migrationImported = 0;
+    cloud.migrationSkipped = 0;
+    cloud.lastError = '';
+    setSyncStatus('connecting', 'Conectando Agenda compartida en Firestore…');
+
+    const query = workspaceAgendaCollection(ctx).orderBy('updatedAtMs', 'desc');
+    cloud.unsub = query.onSnapshot({ includeMetadataChanges: true }, function(snapshot){
+      handleCloudSnapshot(ctx, snapshot);
+    }, function(error){
+      handleCloudError(error);
+    });
+  }
+
+  function bindCloudRuntime(){
+    if (cloud.listenersAttached) return;
+    cloud.listenersAttached = true;
+    ['a33:firebase-status', 'a33:auth-state', 'a33:access-state'].forEach(function(eventName){
+      window.addEventListener(eventName, ensureCloudSync);
+    });
+    window.addEventListener('online', refreshCloudPresentation);
+    window.addEventListener('offline', refreshCloudPresentation);
   }
 
   function priorityRank(value){
@@ -1439,6 +1828,9 @@
     refs.emptyTitle = document.getElementById('agendaEmptyTitle');
     refs.emptyText = document.getElementById('agendaEmptyText');
     refs.listBadge = document.getElementById('agendaListBadge');
+    refs.syncNote = document.getElementById('agendaSyncNote');
+    refs.syncBadge = document.getElementById('agendaSyncBadge');
+    refs.syncText = document.getElementById('agendaSyncText');
     refs.countLabel = document.getElementById('agendaCountLabel');
     refs.modeLabel = document.getElementById('agendaModeLabel');
     refs.lastUpdate = document.getElementById('agendaLastUpdate');
@@ -1766,13 +2158,14 @@
     return chip;
   }
 
-  function updateRecordStatus(id, status){
+  async function updateRecordStatus(id, status){
     const targetStatus = normalizeStatus(status);
     const existing = state.records.find(function(record){
       return record.id === id;
     });
     if (!existing || existing.status === targetStatus) return;
 
+    const previousRecords = cloneRecords(state.records);
     const updated = normalizeRecord({
       ...existing,
       status: targetStatus,
@@ -1792,6 +2185,28 @@
     }
 
     renderList();
+
+    if (!isCloudMode()) return;
+
+    try {
+      setMutationBusy(true, 'Actualizando estado…');
+      await persistRecordToCloud(updated);
+    } catch (error) {
+      state.records = previousRecords;
+      saveRecords();
+      const previous = previousRecords.find(function(record){
+        return record.id === id;
+      });
+      if (previous) {
+        fillForm(previous, { focus: false });
+      } else {
+        resetForm({ focus: false });
+      }
+      renderList();
+      window.alert('No se pudo actualizar el estado en Firestore. Se restauró el último dato confirmado.');
+    } finally {
+      setMutationBusy(false);
+    }
   }
 
   function createActionButton(label, className, handler, options){
@@ -1804,7 +2219,11 @@
     if (settings.ariaLabel) button.setAttribute('aria-label', settings.ariaLabel);
     button.addEventListener('click', function(event){
       event.stopPropagation();
-      handler();
+      Promise.resolve().then(function(){
+        return handler();
+      }).catch(function(error){
+        console.warn('[Agenda A33] Acción no completada.', error);
+      });
     });
     return button;
   }
@@ -2076,41 +2495,65 @@
     return true;
   }
 
-  function upsertRecord(data){
+  async function upsertRecord(data){
     const now = new Date().toISOString();
     const existing = getCurrentRecord();
+    const previousRecords = cloneRecords(state.records);
+
+    let nextRecord = null;
 
     if (existing) {
-      const updated = normalizeRecord({
+      nextRecord = normalizeRecord({
         ...existing,
         ...data,
         updatedAt: now
       });
 
       state.records = state.records.map(function(record){
-        return record.id === updated.id ? updated : record;
+        return record.id === nextRecord.id ? nextRecord : record;
       });
       state.records = sortRecords(state.records);
-      saveRecords();
-      fillForm(updated, { focus: false });
-      renderList();
-      return;
+    } else {
+      nextRecord = normalizeRecord({
+        id: createId(),
+        ...data,
+        createdAt: now,
+        updatedAt: now
+      });
+
+      state.records = sortRecords([nextRecord].concat(state.records));
     }
 
-    const created = normalizeRecord({
-      id: createId(),
-      ...data,
-      createdAt: now,
-      updatedAt: now
-    });
-
-    state.records = sortRecords([created].concat(state.records));
     saveRecords();
-    fillForm(created, { focus: false });
+    fillForm(nextRecord, { focus: false });
     renderList();
+
+    if (!isCloudMode()) return;
+
+    try {
+      setMutationBusy(true, existing ? 'Actualizando…' : 'Guardando…');
+      await persistRecordToCloud(nextRecord);
+    } catch (error) {
+      state.records = previousRecords;
+      saveRecords();
+      const fallback = existing ? previousRecords.find(function(record){
+        return record.id === existing.id;
+      }) : null;
+      if (fallback) {
+        fillForm(fallback, { focus: false });
+      } else {
+        resetForm({ focus: false });
+      }
+      renderList();
+      window.alert(existing
+        ? 'No se pudo actualizar este ítem en Firestore. Se restauró el último dato confirmado.'
+        : 'No se pudo crear este ítem en Firestore. Se revirtió la creación para evitar divergencias.');
+    } finally {
+      setMutationBusy(false);
+    }
   }
 
-  function removeRecord(id){
+  async function removeRecord(id){
     const record = state.records.find(function(item){
       return item.id === id;
     });
@@ -2118,6 +2561,8 @@
 
     const ok = window.confirm('¿Eliminar este ítem de Agenda? Esta acción no se puede deshacer.');
     if (!ok) return;
+
+    const previousRecords = cloneRecords(state.records);
 
     state.records = state.records.filter(function(item){
       return item.id !== id;
@@ -2131,6 +2576,21 @@
     }
 
     renderList();
+
+    if (!isCloudMode()) return;
+
+    try {
+      setMutationBusy(true, 'Eliminando…');
+      await deleteRecordFromCloud(id);
+    } catch (error) {
+      state.records = previousRecords;
+      saveRecords();
+      fillForm(record, { focus: false });
+      renderList();
+      window.alert('No se pudo eliminar este ítem en Firestore. Se restauró el último dato confirmado.');
+    } finally {
+      setMutationBusy(false);
+    }
   }
 
   function setFilter(filter){
@@ -2140,7 +2600,7 @@
   }
 
   function bindEvents(){
-    refs.form.addEventListener('submit', function(event){
+    refs.form.addEventListener('submit', async function(event){
       event.preventDefault();
 
       const clientSelection = finalizeClientSelection();
@@ -2162,16 +2622,16 @@
       data.clientId = clientSelection.id;
 
       if (!validateForm(data)) return;
-      upsertRecord(data);
+      await upsertRecord(data);
     });
 
     refs.newBtn.addEventListener('click', function(){
       resetForm();
     });
 
-    refs.deleteBtn.addEventListener('click', function(){
+    refs.deleteBtn.addEventListener('click', async function(){
       if (!state.currentId) return;
-      removeRecord(state.currentId);
+      await removeRecord(state.currentId);
     });
 
     refs.typeInputs.forEach(function(input){
@@ -2219,10 +2679,13 @@
           currentId: state.currentId,
           activeFilter: state.activeFilter,
           clientCatalogSource: state.clientCatalogSource,
+          syncMode: cloud.mode,
+          workspaceId: cloud.workspaceId,
           records: state.records.slice()
         };
       },
-      normalizeRecord: normalizeRecord
+      normalizeRecord: normalizeRecord,
+      refreshCloudSync: ensureCloudSync
     };
   }
 
@@ -2231,8 +2694,11 @@
     loadRecords();
     loadClientCatalog();
     bindEvents();
+    bindCloudRuntime();
+    refreshCloudPresentation();
     resetForm({ focus: false });
     renderList();
+    ensureCloudSync();
     loadProductCatalog().finally(function(){
       const current = getCurrentRecord();
       if (current && current.pedido && current.pedido.enabled) {

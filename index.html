@@ -445,12 +445,12 @@
         <h2 class="menu-title">NÚCLEO A33</h2>
         <div class="grid support-grid" id="support-grid">
 
-          <article class="card" id="card-backup-hub">
+          <article class="card" id="card-backup-hub" data-link="configuracion/index.html">
             <div class="pill"><span>🗄️</span><span>Configuración</span></div>
             <h2>Configuración</h2>
-            <p>Gestiona el respaldo local de la Suite: exporta o importa un JSON con los datos de este navegador.</p>
+            <p>Centraliza ajustes internos de la Suite. Ahora el respaldo JSON vive dentro de su sección propia llamada “Respaldo”.</p>
             <div class="footer-row">
-              <span>Respaldo local</span>
+              <span>Respaldo interno + orden real.</span>
               <button class="link-btn secondary"><span>Abrir</span> →</button>
             </div>
           </article>
@@ -513,7 +513,12 @@
   <input id="calc-only-file-input" type="file" accept="application/json" style="display:none;">
   <div id="a33-toast" class="a33-toast" aria-live="polite"></div>
 
-  <script src="/assets/js/a33-release.js?v=4.20.77&r=2"></script>
+  <script src="/assets/js/a33-release.js?v=4.20.77&r=6"></script>
+  <script src="/assets/js/a33-firebase-config.js?v=4.20.77&r=7"></script>
+  <script src="/assets/js/a33-firebase-core.js?v=4.20.77&r=8"></script>
+  <script src="/assets/js/a33-firebase-auth.js?v=4.20.77&r=8"></script>
+  <script src="/assets/js/a33-firebase-access.js?v=4.20.77&r=9"></script>
+  <script src="/assets/js/a33-module-access.js?v=4.20.77&r=1"></script>
   <script src="assets/js/a33-storage.js?v=4.20.77&r=2"></script>
   <script>
     // --- Home libre de acceso ---
@@ -1419,7 +1424,7 @@
 
       // Card: Respaldo (hub)
       const backupHubCard = document.getElementById('card-backup-hub');
-      if (backupHubCard){
+      if (backupHubCard && !backupHubCard.dataset.link){
         backupHubCard.addEventListener('click', () => {
           showModal({
             title: 'Configuración',

@@ -886,3 +886,55 @@ code{
     grid-template-columns:1fr;
   }
 }
+
+
+.agenda-sync-note{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  flex-wrap:wrap;
+  padding:12px 14px;
+  margin:0 0 14px;
+  border-radius:18px;
+  border:1px solid rgba(255,255,255,0.08);
+  background:rgba(255,255,255,0.04);
+}
+
+.agenda-sync-note strong{
+  font-size:0.84rem;
+  letter-spacing:0.04em;
+  text-transform:uppercase;
+}
+
+.agenda-sync-note span{
+  flex:1 1 260px;
+  color:var(--agenda-muted);
+  font-size:0.88rem;
+  line-height:1.45;
+}
+
+.agenda-sync-note[data-tone="local"]{
+  border-color:rgba(221,191,100,0.18);
+  background:rgba(221,191,100,0.08);
+}
+
+.agenda-sync-note[data-tone="live"]{
+  border-color:rgba(92,176,116,0.22);
+  background:rgba(92,176,116,0.08);
+}
+
+.agenda-sync-note[data-tone="offline"]{
+  border-color:rgba(123,24,24,0.26);
+  background:rgba(123,24,24,0.10);
+}
+
+.agenda-sync-note[data-tone="syncing"]{
+  border-color:rgba(92,122,176,0.24);
+  background:rgba(92,122,176,0.10);
+}
+
+.agenda-sync-note[data-tone="warn"]{
+  border-color:rgba(210,160,60,0.26);
+  background:rgba(210,160,60,0.11);
+}
