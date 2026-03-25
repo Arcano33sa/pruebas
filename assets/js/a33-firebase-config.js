@@ -13,12 +13,12 @@
   ]);
 
   const embeddedConfig = {
-    apiKey: '',
-    authDomain: '',
-    projectId: '',
-    appId: '',
-    storageBucket: '',
-    messagingSenderId: '',
+    apiKey: 'AIzaSyCbiU5jGGisITn-4psmYviruVUliyatFuw',
+    authDomain: 'suitea33sa.firebaseapp.com',
+    projectId: 'suitea33sa',
+    appId: '1:915133802465:web:8c132017bd4009bd17d4a0',
+    storageBucket: 'suitea33sa.firebasestorage.app',
+    messagingSenderId: '915133802465',
     measurementId: '',
     functionsRegion: 'us-central1'
   };
