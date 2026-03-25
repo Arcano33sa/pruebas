@@ -446,11 +446,11 @@
         <div class="grid support-grid" id="support-grid">
 
           <article class="card" id="card-backup-hub">
-            <div class="pill"><span>🗄️</span><span>Respaldo</span></div>
-            <h2>Respaldo</h2>
-            <p>Exporta o importa un JSON con todos los datos locales (IndexedDB + localStorage) de esta Suite.</p>
+            <div class="pill"><span>🗄️</span><span>Configuración</span></div>
+            <h2>Configuración</h2>
+            <p>Gestiona el respaldo local de la Suite: exporta o importa un JSON con los datos de este navegador.</p>
             <div class="footer-row">
-              <span>Exportar / Importar</span>
+              <span>Respaldo local</span>
               <button class="link-btn secondary"><span>Abrir</span> →</button>
             </div>
           </article>
@@ -499,7 +499,7 @@
 
   <div class="modal-overlay" id="backup-modal" style="display:none;">
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="backup-modal-title">
-      <h2 class="modal-title" id="backup-modal-title">Respaldo</h2>
+      <h2 class="modal-title" id="backup-modal-title">Configuración</h2>
       <div class="modal-body" id="backup-modal-body"></div>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="backup-modal-cancel">Cancelar</button>
@@ -902,7 +902,7 @@
       const btnPrimary = document.getElementById('backup-modal-primary');
       const btnSecondary = document.getElementById('backup-modal-secondary');
 
-      titleEl.textContent = title || 'Respaldo';
+      titleEl.textContent = title || 'Configuración';
       bodyEl.innerHTML = bodyHtml || '';
 
       btnPrimary.textContent = primaryText || 'OK';
@@ -1422,7 +1422,7 @@
       if (backupHubCard){
         backupHubCard.addEventListener('click', () => {
           showModal({
-            title: 'Respaldo',
+            title: 'Configuración',
             bodyHtml: `
               <div>Elegí una acción. Esto trabaja <b>solo en este dispositivo</b> (no hay sync).</div>
               <div class="small-note">Tip: exportá antes de importar, por si acaso.</div>
