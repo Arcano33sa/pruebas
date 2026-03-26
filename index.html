@@ -2708,6 +2708,15 @@
       };
     }
 
+
+    function getAuthInlineStatusClass(status){
+      const code = String(status?.code || '').trim().toLowerCase();
+      if ((status && status.error) || code === 'error' || code === 'firebase-error' || code === 'firebase-missing') return 'error';
+      if (code === 'authenticated' || code === 'ready') return 'success';
+      if (code === 'signing-in' || code === 'signing-out' || code === 'awaiting-context' || code === 'syncing' || code === 'boot-needed' || code === 'needs-config') return 'pending';
+      return '';
+    }
+
     function getAuthAccessBadge(status){
       const code = String(status?.code || 'signed-out');
       if (code === 'authenticated') return 'Sesión activa';
