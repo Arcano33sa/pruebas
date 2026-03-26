@@ -7,6 +7,7 @@
   <meta name="theme-color" content="#000000">
   <link rel="icon" type="image/png" sizes="192x192" href="icon-a33-192.png">
   <link rel="apple-touch-icon" href="icon-a33-192.png">
+  <script>document.documentElement.classList.add('a33-guard-pending');</script>
   <style>
     :root{
       --bg:#000000;
@@ -322,6 +323,731 @@
       color:var(--accent);
       margin-top:0.35rem;
     }
+    .config-shell{
+      display:grid;
+      gap:0.95rem;
+    }
+    .config-module-head{
+      display:grid;
+      gap:0.7rem;
+      border:1px solid rgba(221,191,100,0.24);
+      border-radius:18px;
+      padding:0.95rem 1rem;
+      background:linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+      box-shadow:inset 0 1px 0 rgba(255,255,255,0.04);
+    }
+    .config-module-title-row{
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:0.75rem;
+      flex-wrap:wrap;
+    }
+    .config-module-title{
+      margin:0;
+      font-size:1.08rem;
+    }
+    .config-module-copy{
+      color:var(--text);
+    }
+    .config-module-stats{
+      display:grid;
+      grid-template-columns:repeat(3,minmax(0,1fr));
+      gap:0.55rem;
+    }
+    .config-stat{
+      display:grid;
+      gap:0.18rem;
+      padding:0.7rem 0.8rem;
+      border-radius:14px;
+      border:1px solid rgba(221,191,100,0.16);
+      background:rgba(0,0,0,0.18);
+      min-width:0;
+    }
+    .config-stat-value{
+      font-size:0.98rem;
+      font-weight:700;
+      color:var(--accent);
+    }
+    .config-stat-label{
+      font-size:0.74rem;
+      color:var(--muted);
+      letter-spacing:0.03em;
+      text-transform:uppercase;
+    }
+    .config-nav{
+      display:flex;
+      gap:0.55rem;
+      flex-wrap:wrap;
+    }
+    .config-nav-btn{
+      display:inline-flex;
+      align-items:center;
+      gap:0.45rem;
+      min-height:42px;
+      padding:0.72rem 0.9rem;
+      border-radius:999px;
+      border:1px solid rgba(221,191,100,0.24);
+      background:rgba(255,255,255,0.03);
+      color:var(--text);
+      cursor:pointer;
+      font:inherit;
+      font-weight:600;
+    }
+    .config-nav-btn:hover{
+      border-color:rgba(221,191,100,0.48);
+      background:rgba(221,191,100,0.08);
+    }
+    .config-nav-btn.active{
+      border-color:rgba(221,191,100,0.62);
+      background:rgba(221,191,100,0.14);
+      box-shadow:0 0 0 1px rgba(221,191,100,0.08) inset;
+    }
+    .config-nav-meta{
+      font-size:0.72rem;
+      color:var(--muted);
+      font-weight:500;
+    }
+    .config-panel{
+      border:1px solid rgba(221,191,100,0.24);
+      border-radius:18px;
+      padding:0.95rem 1rem;
+      background:rgba(255,255,255,0.03);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,0.04);
+      display:grid;
+      gap:0.85rem;
+    }
+    .config-panel-header{
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:0.75rem;
+      flex-wrap:wrap;
+    }
+    .config-section-kicker{
+      font-size:0.72rem;
+      letter-spacing:0.12em;
+      text-transform:uppercase;
+      color:var(--muted);
+      margin:0 0 0.25rem;
+    }
+    .config-panel-title{
+      margin:0;
+      font-size:1rem;
+    }
+    .config-panel-copy,
+    .config-panel p{
+      margin:0;
+    }
+    .config-grid{
+      display:grid;
+      grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:0.7rem;
+    }
+    .config-card{
+      border:1px solid rgba(221,191,100,0.16);
+      border-radius:16px;
+      padding:0.85rem;
+      background:rgba(0,0,0,0.16);
+      display:grid;
+      gap:0.55rem;
+      min-width:0;
+    }
+    .config-card-top{
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:0.6rem;
+      flex-wrap:wrap;
+    }
+    .config-card h4{
+      margin:0;
+      font-size:0.95rem;
+    }
+    .config-card p{
+      color:var(--text);
+    }
+    .config-chip{
+      display:inline-flex;
+      align-items:center;
+      gap:0.3rem;
+      padding:0.2rem 0.55rem;
+      border-radius:999px;
+      border:1px solid rgba(221,191,100,0.3);
+      background:rgba(221,191,100,0.08);
+      color:var(--accent);
+      font-size:0.72rem;
+      white-space:nowrap;
+    }
+    .config-card-actions,
+    .config-section-actions{
+      display:flex;
+      gap:0.55rem;
+      flex-wrap:wrap;
+      margin-top:0.1rem;
+    }
+    .config-inline-btn{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:0.4rem;
+      padding:0.72rem 0.95rem;
+      min-height:44px;
+      border-radius:999px;
+      border:1px solid rgba(221,191,100,0.45);
+      background:rgba(221,191,100,0.08);
+      color:var(--text);
+      font-weight:600;
+      cursor:pointer;
+      font:inherit;
+    }
+    .config-inline-btn:hover{
+      border-color:rgba(221,191,100,0.72);
+      background:rgba(221,191,100,0.14);
+    }
+    .config-inline-btn.secondary{
+      background:rgba(255,255,255,0.04);
+    }
+    .config-list{
+      margin:0;
+      padding-left:1.05rem;
+      color:var(--text);
+    }
+    .config-list li{
+      margin:0.15rem 0;
+    }
+    .config-lanes{
+      display:grid;
+      grid-template-columns:repeat(3,minmax(0,1fr));
+      gap:0.6rem;
+    }
+    .config-lane{
+      border:1px dashed rgba(221,191,100,0.25);
+      border-radius:14px;
+      padding:0.8rem;
+      background:rgba(255,255,255,0.02);
+      display:grid;
+      gap:0.25rem;
+      min-width:0;
+    }
+    .config-lane b{
+      color:var(--accent);
+    }
+    .config-lane span{
+      color:var(--muted);
+      font-size:0.78rem;
+    }
+    .firebase-status-grid{
+      display:grid;
+      grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+      gap:0.7rem;
+    }
+    .firebase-status-card{
+      display:grid;
+      gap:0.22rem;
+      padding:0.8rem 0.9rem;
+      border-radius:16px;
+      border:1px solid rgba(221,191,100,0.16);
+      background:rgba(0,0,0,0.18);
+    }
+    .firebase-status-value{
+      font-size:1rem;
+      font-weight:700;
+      color:var(--accent);
+      word-break:break-word;
+    }
+    .firebase-status-label{
+      font-size:0.72rem;
+      letter-spacing:0.12em;
+      text-transform:uppercase;
+      color:var(--muted);
+    }
+    .firebase-status-note{
+      color:var(--muted);
+      font-size:0.74rem;
+      line-height:1.35;
+    }
+    .firebase-shell{
+      display:grid;
+      gap:0.75rem;
+    }
+    .firebase-banner{
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:0.75rem;
+      flex-wrap:wrap;
+      padding:0.8rem 0.9rem;
+      border-radius:16px;
+      border:1px solid rgba(221,191,100,0.28);
+      background:linear-gradient(180deg, rgba(221,191,100,0.10), rgba(255,255,255,0.02));
+    }
+    .firebase-banner-copy{
+      display:grid;
+      gap:0.22rem;
+      min-width:0;
+    }
+    .firebase-banner-copy strong{
+      color:var(--accent);
+    }
+    .firebase-diag-grid{
+      display:grid;
+      grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:0.7rem;
+    }
+    .firebase-diag-card{
+      border:1px solid rgba(221,191,100,0.16);
+      border-radius:16px;
+      padding:0.85rem;
+      background:rgba(0,0,0,0.16);
+      display:grid;
+      gap:0.55rem;
+      min-width:0;
+    }
+    .firebase-diag-card h4{
+      margin:0;
+      font-size:0.94rem;
+    }
+    .firebase-diag-card ul{
+      margin:0;
+      padding-left:1.05rem;
+      color:var(--text);
+    }
+    .firebase-diag-card li{
+      margin:0.14rem 0;
+      word-break:break-word;
+    }
+    .firebase-inline-code{
+      font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+      font-size:0.78rem;
+      color:var(--accent);
+      word-break:break-word;
+    }
+    .roles-banner{
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:0.75rem;
+      flex-wrap:wrap;
+      padding:0.8rem 0.9rem;
+      border-radius:16px;
+      border:1px solid rgba(176,0,32,0.36);
+      background:linear-gradient(180deg, rgba(176,0,32,0.12), rgba(255,255,255,0.02));
+    }
+    .roles-banner-copy{
+      display:grid;
+      gap:0.22rem;
+    }
+    .roles-banner-copy strong{
+      color:#ffd0cc;
+    }
+    .roles-summary-grid{
+      display:grid;
+      grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+      gap:0.7rem;
+    }
+    .roles-summary-card{
+      display:grid;
+      gap:0.22rem;
+      padding:0.8rem 0.9rem;
+      border-radius:16px;
+      border:1px solid rgba(221,191,100,0.16);
+      background:rgba(0,0,0,0.18);
+    }
+    .roles-summary-value{
+      font-size:1.08rem;
+      font-weight:700;
+      color:var(--accent);
+    }
+    .roles-summary-label{
+      font-size:0.72rem;
+      letter-spacing:0.12em;
+      text-transform:uppercase;
+      color:var(--muted);
+    }
+    .roles-summary-note{
+      color:var(--muted);
+      font-size:0.74rem;
+      line-height:1.35;
+    }
+    .roles-toolbar-meta{
+      color:var(--muted);
+      font-size:0.78rem;
+    }
+    .roles-shell{
+      display:grid;
+      grid-template-columns:minmax(0,1.35fr) minmax(280px,0.95fr);
+      gap:0.8rem;
+      align-items:start;
+    }
+    .roles-column,
+    .roles-workbench{
+      display:grid;
+      gap:0.75rem;
+      min-width:0;
+    }
+    .roles-toolbar{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:0.65rem;
+      flex-wrap:wrap;
+      padding:0.8rem 0.9rem;
+      border-radius:16px;
+      border:1px solid rgba(221,191,100,0.16);
+      background:rgba(255,255,255,0.03);
+    }
+    .roles-toolbar-copy{
+      display:grid;
+      gap:0.18rem;
+      min-width:0;
+    }
+    .roles-toolbar-copy b{
+      color:var(--accent);
+    }
+    .roles-toolbar-copy span{
+      color:var(--muted);
+      font-size:0.78rem;
+    }
+    .roles-toolbar-actions{
+      display:flex;
+      gap:0.55rem;
+      flex-wrap:wrap;
+    }
+    .users-list{
+      display:grid;
+      gap:0.7rem;
+    }
+    .user-card{
+      display:grid;
+      gap:0.7rem;
+      padding:0.9rem;
+      border-radius:18px;
+      border:1px solid rgba(221,191,100,0.16);
+      background:rgba(0,0,0,0.16);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,0.03);
+    }
+    .user-card.active{
+      border-color:rgba(221,191,100,0.52);
+      background:rgba(221,191,100,0.08);
+      box-shadow:0 0 0 1px rgba(221,191,100,0.12) inset;
+    }
+    .user-card-top{
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:0.7rem;
+      flex-wrap:wrap;
+    }
+    .user-identity{
+      display:grid;
+      gap:0.22rem;
+      min-width:0;
+    }
+    .user-identity h4{
+      margin:0;
+      font-size:0.96rem;
+    }
+    .user-identity span{
+      color:var(--muted);
+      font-size:0.8rem;
+      word-break:break-word;
+    }
+    .user-badges{
+      display:flex;
+      gap:0.45rem;
+      align-items:center;
+      flex-wrap:wrap;
+    }
+    .user-role-badge,
+    .user-status-pill{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      padding:0.24rem 0.65rem;
+      border-radius:999px;
+      font-size:0.72rem;
+      font-weight:700;
+      letter-spacing:0.05em;
+      text-transform:uppercase;
+      border:1px solid transparent;
+      white-space:nowrap;
+    }
+    .user-role-badge.admin{
+      color:#fff0c3;
+      border-color:rgba(221,191,100,0.55);
+      background:rgba(221,191,100,0.16);
+    }
+    .user-role-badge.miembro{
+      color:#d7e4ff;
+      border-color:rgba(102,139,255,0.4);
+      background:rgba(102,139,255,0.12);
+    }
+    .user-status-pill{
+      color:#d8d8d8;
+      border-color:rgba(255,255,255,0.12);
+      background:rgba(255,255,255,0.06);
+    }
+    .user-card-grid{
+      display:grid;
+      grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:0.55rem 0.75rem;
+    }
+    .user-meta{
+      display:grid;
+      gap:0.12rem;
+      min-width:0;
+    }
+    .user-meta-label{
+      color:var(--muted);
+      font-size:0.7rem;
+      letter-spacing:0.12em;
+      text-transform:uppercase;
+    }
+    .user-meta-value{
+      color:var(--text);
+      font-size:0.85rem;
+      word-break:break-word;
+    }
+    .user-card-actions{
+      display:flex;
+      gap:0.5rem;
+      flex-wrap:wrap;
+    }
+    .roles-workbench-card{
+      display:grid;
+      gap:0.8rem;
+      padding:0.95rem;
+      border-radius:18px;
+      border:1px solid rgba(221,191,100,0.24);
+      background:linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.16));
+    }
+    .roles-workbench-header{
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:0.65rem;
+      flex-wrap:wrap;
+    }
+    .roles-workbench-header h4{
+      margin:0;
+      font-size:0.98rem;
+    }
+    .roles-workbench-copy{
+      margin:0;
+      color:var(--text);
+    }
+    .roles-form-grid{
+      display:grid;
+      gap:0.65rem;
+    }
+    .roles-form-grid.two{
+      grid-template-columns:repeat(2,minmax(0,1fr));
+    }
+    .roles-field{
+      display:grid;
+      gap:0.32rem;
+      min-width:0;
+    }
+    .roles-field label{
+      font-size:0.74rem;
+      letter-spacing:0.08em;
+      text-transform:uppercase;
+      color:var(--muted);
+      font-weight:700;
+    }
+    .roles-field input,
+    .roles-field select,
+    .roles-field textarea{
+      width:100%;
+      min-height:44px;
+      border-radius:14px;
+      border:1px solid rgba(221,191,100,0.22);
+      background:rgba(7,7,7,0.55);
+      color:var(--text);
+      padding:0.72rem 0.8rem;
+      font:inherit;
+      resize:vertical;
+      box-sizing:border-box;
+    }
+    .roles-field textarea{
+      min-height:96px;
+    }
+    .roles-field input:focus,
+    .roles-field select:focus,
+    .roles-field textarea:focus{
+      outline:none;
+      border-color:rgba(221,191,100,0.62);
+      box-shadow:0 0 0 3px rgba(221,191,100,0.08);
+    }
+    .roles-radio-list{
+      display:grid;
+      gap:0.55rem;
+    }
+    .roles-radio-card{
+      display:flex;
+      align-items:flex-start;
+      gap:0.65rem;
+      padding:0.75rem 0.8rem;
+      border-radius:14px;
+      border:1px solid rgba(221,191,100,0.18);
+      background:rgba(255,255,255,0.03);
+    }
+    .roles-radio-card input{
+      margin-top:0.2rem;
+    }
+    .roles-radio-copy{
+      display:grid;
+      gap:0.16rem;
+    }
+    .roles-radio-copy b{
+      color:var(--text);
+    }
+    .roles-radio-copy span{
+      color:var(--muted);
+      font-size:0.78rem;
+    }
+    .roles-help-list{
+      display:grid;
+      gap:0.55rem;
+      margin:0;
+      padding-left:1rem;
+    }
+    .roles-help-list li{
+      color:var(--text);
+    }
+    .roles-inline-note{
+      color:var(--muted);
+      font-size:0.78rem;
+    }
+    .roles-empty{
+      padding:0.95rem;
+      border-radius:16px;
+      border:1px dashed rgba(221,191,100,0.28);
+      background:rgba(255,255,255,0.03);
+      color:var(--muted);
+    }
+
+    .home-access-strip{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:0.9rem;
+      padding:0.95rem 1rem;
+      margin:0 0 1rem;
+      border-radius:18px;
+      border:1px solid rgba(221,191,100,0.22);
+      background:linear-gradient(180deg, rgba(16,16,16,0.92), rgba(10,10,10,0.96));
+      box-shadow:0 16px 34px rgba(0,0,0,0.26);
+    }
+    .home-access-copy{
+      display:grid;
+      gap:0.18rem;
+      min-width:0;
+    }
+    .home-access-copy strong{
+      color:var(--text);
+      font-size:0.96rem;
+    }
+    .home-access-copy span{
+      color:var(--muted);
+      font-size:0.82rem;
+    }
+    .home-access-actions{
+      display:flex;
+      flex-wrap:wrap;
+      gap:0.55rem;
+      justify-content:flex-end;
+    }
+    .auth-inline-status{
+      margin-top:0.9rem;
+      padding:0.72rem 0.82rem;
+      border-radius:14px;
+      border:1px solid rgba(221,191,100,0.18);
+      background:rgba(255,255,255,0.03);
+      color:var(--muted);
+      font-size:0.82rem;
+    }
+    .auth-inline-status.success{
+      border-color:rgba(57,176,114,0.34);
+      background:rgba(57,176,114,0.10);
+      color:#dff7ea;
+    }
+    .auth-inline-status.error{
+      border-color:rgba(194,57,57,0.34);
+      background:rgba(194,57,57,0.12);
+      color:#ffd8d8;
+    }
+    .auth-inline-status.pending{
+      border-color:rgba(221,191,100,0.24);
+      background:rgba(221,191,100,0.09);
+      color:#f5e8bf;
+    }
+    .auth-session-list{
+      display:grid;
+      gap:0.58rem;
+      margin:0.95rem 0 0;
+      padding:0;
+      list-style:none;
+    }
+    .auth-session-list li{
+      display:grid;
+      gap:0.1rem;
+      padding:0.72rem 0.78rem;
+      border-radius:14px;
+      border:1px solid rgba(221,191,100,0.16);
+      background:rgba(255,255,255,0.03);
+    }
+    .auth-session-list b{
+      color:var(--text);
+      font-size:0.78rem;
+      letter-spacing:0.04em;
+      text-transform:uppercase;
+    }
+    .auth-session-list span{
+      color:var(--muted);
+      font-size:0.82rem;
+      word-break:break-word;
+    }
+    @media (max-width:860px){
+      .roles-shell,
+      .firebase-diag-grid,
+      .roles-summary-grid,
+      .roles-form-grid.two,
+      .user-card-grid{
+        grid-template-columns:1fr;
+      }
+    }
+    @media (max-width:720px){
+      .firebase-status-grid,
+      .config-module-stats,
+      .config-grid,
+      .config-lanes,
+      .roles-toolbar-actions{
+        grid-template-columns:1fr;
+      }
+      .config-section-actions,
+      .config-card-actions{
+        flex-direction:column;
+      }
+      .config-inline-btn,
+      .config-nav-btn{
+        width:100%;
+      }
+      .roles-toolbar,
+      .user-card-actions,
+      .user-card-top,
+      .roles-workbench-header,
+      .home-access-strip{
+        flex-direction:column;
+        align-items:stretch;
+      }
+      .roles-toolbar-actions,
+      .user-card-actions,
+      .home-access-actions{
+        display:grid;
+      }
+    }
 
 </style>
 </head>
@@ -341,6 +1067,14 @@
       <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.35rem;">
         Selecciona un módulo para trabajar. Puedes fijar esta Suite en la pantalla de inicio de tu teléfono para acceder más rápido.
       </p>
+
+      <div class="home-access-strip" id="home-access-strip">
+        <div class="home-access-copy">
+          <strong>Acceso</strong>
+          <span>Revisando estado de sesión…</span>
+        </div>
+        <div class="home-access-actions"></div>
+      </div>
 
       <section class="menu-section">
         <h2 class="menu-title">Suite A33 Hecha por El Alquimista</h2>
@@ -446,11 +1180,11 @@
         <div class="grid support-grid" id="support-grid">
 
           <article class="card" id="card-backup-hub">
-            <div class="pill"><span>🗄️</span><span>Respaldo</span></div>
-            <h2>Respaldo</h2>
-            <p>Exporta o importa un JSON con todos los datos locales (IndexedDB + localStorage) de esta Suite.</p>
+            <div class="pill"><span>🗄️</span><span>Configuración</span></div>
+            <h2>Configuración</h2>
+            <p>Módulo contenedor para ajustes base de la Suite. Mantiene <b>Respaldo</b> operativo, suma <b>Acceso</b> con Firebase y convierte <b>Usuarios y Roles</b> en gestión real de miembros del espacio compartido.</p>
             <div class="footer-row">
-              <span>Exportar / Importar</span>
+              <span>Abrir módulo</span>
               <button class="link-btn secondary"><span>Abrir</span> →</button>
             </div>
           </article>
@@ -499,7 +1233,7 @@
 
   <div class="modal-overlay" id="backup-modal" style="display:none;">
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="backup-modal-title">
-      <h2 class="modal-title" id="backup-modal-title">Respaldo</h2>
+      <h2 class="modal-title" id="backup-modal-title">Configuración</h2>
       <div class="modal-body" id="backup-modal-body"></div>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="backup-modal-cancel">Cancelar</button>
@@ -513,10 +1247,16 @@
   <input id="calc-only-file-input" type="file" accept="application/json" style="display:none;">
   <div id="a33-toast" class="a33-toast" aria-live="polite"></div>
 
-  <script src="/assets/js/a33-release.js?v=4.20.77&r=2"></script>
-  <script src="assets/js/a33-storage.js?v=4.20.77&r=2"></script>
+  <script src="/assets/js/a33-release.js?v=4.20.77&r=6"></script>
+  <script src="assets/js/a33-storage.js?v=4.20.77&r=3"></script>
+  <script src="/assets/js/a33-firebase-config.js?v=4.20.77&r=1"></script>
+  <script src="/assets/js/a33-firebase-core.js?v=4.20.77&r=5"></script>
+  <script src="/assets/js/a33-firebase-auth.js?v=4.20.77&r=5"></script>
+  <script src="/assets/js/a33-firebase-workspace.js?v=4.20.77&r=3"></script>
+  <script src="/assets/js/a33-route-guard.js?v=4.20.77&r=1"></script>
+  <script src="/assets/js/a33-firebase-members.js?v=4.20.77&r=2"></script>
   <script>
-    // --- Home libre de acceso ---
+    // --- Home con guard global ---
     function hideBootSplash(){}
 
     function showApp(){
@@ -894,6 +1634,2385 @@
       `;
     }
 
+    const CONFIG_USERS_ROLES_STORAGE_KEY = 'a33_configuracion_usuarios_roles_ui_v1';
+    const CONFIG_USERS_ROLES_STORAGE_VERSION = 2;
+    const CONFIG_ROLE_OPTIONS = ['ADMIN', 'MIEMBRO'];
+    const CONFIG_USER_STATUS_OPTIONS = ['Activo', 'Invitado', 'Pendiente'];
+    const CONFIG_USERS_ROLES_SEED = [
+      {
+        id: 'usr_admin_001',
+        name: 'Administrador General',
+        email: 'admin@arcano33.local',
+        role: 'ADMIN',
+        status: 'Activo',
+        scope: 'Suite completa',
+        notes: 'Perfil visual para administración general. No concede seguridad real en esta etapa.',
+        lastSeen: 'Hoy · 08:15'
+      },
+      {
+        id: 'usr_member_002',
+        name: 'Operación Eventos',
+        email: 'eventos@arcano33.local',
+        role: 'MIEMBRO',
+        status: 'Activo',
+        scope: 'POS y Agenda',
+        notes: 'Perfil pensado para flujo de ventas y eventos.',
+        lastSeen: 'Hoy · 06:40'
+      },
+      {
+        id: 'usr_member_003',
+        name: 'Inventario Central',
+        email: 'inventario@arcano33.local',
+        role: 'MIEMBRO',
+        status: 'Invitado',
+        scope: 'Inventario y Lotes',
+        notes: 'Perfil listo para futuras asignaciones de módulos.',
+        lastSeen: 'Aún sin acceso'
+      }
+    ];
+    let configurationUsersRolesUI = null;
+
+    function cloneUsersRolesSeed(){
+      return CONFIG_USERS_ROLES_SEED.map((user) => ({ ...user }));
+    }
+
+    function getUsersRolesNowIso(){
+      return new Date().toISOString();
+    }
+
+    function normalizeUsersRolesEmail(email = ''){
+      return String(email || '').trim().toLowerCase();
+    }
+
+    function buildUsersRolesState({ users = [], panel = 'overview', selectedId = null, lastUpdatedAt, source = 'local' } = {}){
+      const safeUsers = Array.isArray(users) ? users : [];
+      const safeSelectedId = safeUsers.some(user => user.id === selectedId) ? selectedId : (safeUsers[0]?.id || null);
+      const safePanel = ['overview', 'add', 'edit', 'assign-role', 'delete'].includes(panel) ? panel : 'overview';
+      return {
+        version: CONFIG_USERS_ROLES_STORAGE_VERSION,
+        users: safeUsers,
+        panel: safePanel,
+        selectedId: safeSelectedId,
+        lastUpdatedAt: lastUpdatedAt || getUsersRolesNowIso(),
+        source: source || 'local'
+      };
+    }
+
+    function createDefaultUsersRolesUI(){
+      return buildUsersRolesState({
+        users: cloneUsersRolesSeed(),
+        panel: 'overview',
+        selectedId: 'usr_admin_001',
+        source: 'seed'
+      });
+    }
+
+    function createEmptyUsersRolesUI(){
+      return buildUsersRolesState({
+        users: [],
+        panel: 'add',
+        selectedId: null,
+        source: 'local'
+      });
+    }
+
+    function sanitizeUsersRolesUser(raw = {}, fallbackId = ''){
+      const role = CONFIG_ROLE_OPTIONS.includes(raw.role) ? raw.role : 'MIEMBRO';
+      const status = CONFIG_USER_STATUS_OPTIONS.includes(raw.status) ? raw.status : 'Pendiente';
+      return {
+        id: String(raw.id || fallbackId || `usr_${Date.now()}`),
+        name: String(raw.name || '').trim() || 'Usuario sin nombre',
+        email: normalizeUsersRolesEmail(raw.email || 'sin-correo@arcano33.local') || 'sin-correo@arcano33.local',
+        role,
+        status,
+        scope: String(raw.scope || '').trim() || 'Sin definir',
+        notes: String(raw.notes || '').trim(),
+        lastSeen: String(raw.lastSeen || '').trim() || 'Aún sin acceso'
+      };
+    }
+
+    function generateUsersRolesUserId(){
+      return `usr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    function formatUsersRolesTimestamp(iso){
+      if (!iso) return 'Sin cambios registrados';
+      const date = new Date(iso);
+      if (Number.isNaN(date.getTime())) return 'Sin cambios registrados';
+      return date.toLocaleString();
+    }
+
+    function getUsersRolesStorageMeta(users = [], lastUpdatedAt = '', source = 'local'){
+      const total = users.length;
+      const adminCount = users.filter(user => user.role === 'ADMIN').length;
+      const memberCount = users.filter(user => user.role === 'MIEMBRO').length;
+      return {
+        total,
+        adminCount,
+        memberCount,
+        lastUpdatedLabel: formatUsersRolesTimestamp(lastUpdatedAt),
+        sourceLabel: source === 'seed' ? 'Ejemplo inicial' : 'Persistencia local activa'
+      };
+    }
+
+    function loadUsersRolesUI(){
+      try{
+        const raw = A33Storage.getItem(CONFIG_USERS_ROLES_STORAGE_KEY);
+        if (!raw) return createDefaultUsersRolesUI();
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.users)) return createDefaultUsersRolesUI();
+        const users = parsed.users.map((user, index) => sanitizeUsersRolesUser(user, `usr_recovered_${index + 1}`));
+        return buildUsersRolesState({
+          users,
+          selectedId: parsed.selectedId,
+          panel: parsed.panel,
+          lastUpdatedAt: parsed.lastUpdatedAt,
+          source: parsed.source || 'local'
+        });
+      }catch(_){
+        return createDefaultUsersRolesUI();
+      }
+    }
+
+    function persistUsersRolesUI(){
+      if (!configurationUsersRolesUI) return;
+      try{
+        const state = buildUsersRolesState(configurationUsersRolesUI);
+        configurationUsersRolesUI = state;
+        A33Storage.setItem(CONFIG_USERS_ROLES_STORAGE_KEY, JSON.stringify(state));
+      }catch(_){ }
+    }
+
+    function getUsersRolesUI(){
+      if (!configurationUsersRolesUI){
+        configurationUsersRolesUI = loadUsersRolesUI();
+      }
+      if (!configurationUsersRolesUI || !Array.isArray(configurationUsersRolesUI.users)){
+        configurationUsersRolesUI = createDefaultUsersRolesUI();
+      }
+      configurationUsersRolesUI = buildUsersRolesState(configurationUsersRolesUI);
+      return configurationUsersRolesUI;
+    }
+
+    function setUsersRolesUI(patch = {}){
+      const current = getUsersRolesUI();
+      configurationUsersRolesUI = buildUsersRolesState({
+        ...current,
+        ...patch,
+        users: Array.isArray(patch.users) ? patch.users : current.users,
+        lastUpdatedAt: patch.lastUpdatedAt || getUsersRolesNowIso(),
+        source: patch.source || 'local'
+      });
+      persistUsersRolesUI();
+      return configurationUsersRolesUI;
+    }
+
+    function getSelectedUsersRolesUser(){
+      const state = getUsersRolesUI();
+      return state.users.find((user) => user.id === state.selectedId) || null;
+    }
+
+    function validateUsersRolesPayload(payload, users = [], mode = 'add', currentUserId = ''){
+      const name = String(payload?.name || '').trim();
+      const email = normalizeUsersRolesEmail(payload?.email || '');
+      if (!name) return 'Escribe un nombre para este usuario.';
+      if (!email) return 'Escribe un correo para este usuario.';
+      if (!email.includes('@') || email.startsWith('@') || email.endsWith('@')) return 'El correo no tiene un formato válido.';
+      const duplicate = users.find((user) => normalizeUsersRolesEmail(user.email) === email && (mode === 'add' || user.id !== currentUserId));
+      if (duplicate) return 'Ya existe un usuario local con ese correo.';
+      return '';
+    }
+
+    function buildUsersRolesSummaryCards(users = [], lastUpdatedAt = '', source = 'local'){
+      const meta = getUsersRolesStorageMeta(users, lastUpdatedAt, source);
+      return `
+        <div class="roles-summary-grid">
+          <article class="roles-summary-card">
+            <span class="roles-summary-value">${meta.total}</span>
+            <span class="roles-summary-label">Usuarios locales</span>
+          </article>
+          <article class="roles-summary-card">
+            <span class="roles-summary-value">${meta.adminCount}</span>
+            <span class="roles-summary-label">Rol ADMIN</span>
+          </article>
+          <article class="roles-summary-card">
+            <span class="roles-summary-value">${meta.memberCount}</span>
+            <span class="roles-summary-label">Rol MIEMBRO</span>
+          </article>
+          <article class="roles-summary-card">
+            <span class="roles-summary-value">Local</span>
+            <span class="roles-summary-label">Persistencia</span>
+            <span class="roles-summary-note">${escapeHtml(meta.sourceLabel)} · ${escapeHtml(meta.lastUpdatedLabel)}</span>
+          </article>
+        </div>
+      `;
+    }
+
+    function buildUsersRolesList(users = [], selectedId = ''){
+      if (!users.length){
+        return `
+          <div class="roles-empty">
+            <b>No hay usuarios locales todavía.</b>
+            <div class="roles-inline-note">Ya puedes empezar limpio: crea el primero o restaura el ejemplo visual cuando te convenga.</div>
+            <div class="config-section-actions" style="margin-top:0.75rem;">
+              <button type="button" class="config-inline-btn" data-ur-panel="add">Crear primer usuario</button>
+              <button type="button" class="config-inline-btn secondary" data-ur-reset-demo="1">Restaurar ejemplo</button>
+            </div>
+          </div>
+        `;
+      }
+      return `
+        <div class="users-list">
+          ${users.map((user) => {
+            const roleClass = (user.role || '').toLowerCase();
+            const isActive = user.id === selectedId;
+            return `
+              <article class="user-card${isActive ? ' active' : ''}">
+                <div class="user-card-top">
+                  <div class="user-identity">
+                    <h4>${escapeHtml(user.name)}</h4>
+                    <span>${escapeHtml(user.email)}</span>
+                  </div>
+                  <div class="user-badges">
+                    <span class="user-role-badge ${escapeHtml(roleClass)}">${escapeHtml(user.role)}</span>
+                    <span class="user-status-pill">${escapeHtml(user.status)}</span>
+                  </div>
+                </div>
+                <div class="user-card-grid">
+                  <div class="user-meta">
+                    <span class="user-meta-label">Alcance UX</span>
+                    <span class="user-meta-value">${escapeHtml(user.scope)}</span>
+                  </div>
+                  <div class="user-meta">
+                    <span class="user-meta-label">Último acceso visible</span>
+                    <span class="user-meta-value">${escapeHtml(user.lastSeen)}</span>
+                  </div>
+                  <div class="user-meta">
+                    <span class="user-meta-label">Notas</span>
+                    <span class="user-meta-value">${escapeHtml(user.notes || 'Sin notas')}</span>
+                  </div>
+                  <div class="user-meta">
+                    <span class="user-meta-label">Flujo disponible</span>
+                    <span class="user-meta-value">Agregar · Editar · Borrar · Asignar rol</span>
+                  </div>
+                </div>
+                <div class="user-card-actions">
+                  <button type="button" class="config-inline-btn secondary" data-ur-panel="overview" data-ur-user-id="${escapeHtml(user.id)}">Ver ficha</button>
+                  <button type="button" class="config-inline-btn secondary" data-ur-panel="edit" data-ur-user-id="${escapeHtml(user.id)}">Editar</button>
+                  <button type="button" class="config-inline-btn secondary" data-ur-panel="assign-role" data-ur-user-id="${escapeHtml(user.id)}">Asignar rol</button>
+                  <button type="button" class="config-inline-btn secondary" data-ur-panel="delete" data-ur-user-id="${escapeHtml(user.id)}">Borrar</button>
+                </div>
+              </article>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
+
+    function buildUsersRolesWorkbench(){
+      const state = getUsersRolesUI();
+      const selectedUser = getSelectedUsersRolesUser();
+      const selectedName = selectedUser ? escapeHtml(selectedUser.name) : 'usuario';
+      const selectedRole = selectedUser ? escapeHtml(selectedUser.role) : 'MIEMBRO';
+      if (state.panel === 'add'){
+        return `
+          <section class="roles-workbench-card">
+            <div class="roles-workbench-header">
+              <div>
+                <div class="config-section-kicker">CRUD provisional</div>
+                <h4>Agregar usuario</h4>
+              </div>
+              <div class="config-chip">UI local</div>
+            </div>
+            <p class="roles-workbench-copy">Alta provisional/local para amarrar el flujo antes de Firebase. Se guarda en este navegador y nada más.</p>
+            <form class="roles-form-grid" data-ur-form="add">
+              <div class="roles-form-grid two">
+                <div class="roles-field">
+                  <label for="ur-add-name">Nombre</label>
+                  <input id="ur-add-name" name="name" type="text" placeholder="Nombre del usuario" required>
+                </div>
+                <div class="roles-field">
+                  <label for="ur-add-email">Correo</label>
+                  <input id="ur-add-email" name="email" type="email" placeholder="correo@arcano33.local" required>
+                </div>
+              </div>
+              <div class="roles-form-grid two">
+                <div class="roles-field">
+                  <label for="ur-add-role">Rol inicial</label>
+                  <select id="ur-add-role" name="role">
+                    ${CONFIG_ROLE_OPTIONS.map(role => `<option value="${role}">${role}</option>`).join('')}
+                  </select>
+                </div>
+                <div class="roles-field">
+                  <label for="ur-add-status">Estado visual</label>
+                  <select id="ur-add-status" name="status">
+                    ${CONFIG_USER_STATUS_OPTIONS.map(status => `<option value="${status}">${status}</option>`).join('')}
+                  </select>
+                </div>
+              </div>
+              <div class="roles-field">
+                <label for="ur-add-scope">Alcance UX</label>
+                <input id="ur-add-scope" name="scope" type="text" placeholder="Ej. POS, Agenda o Suite completa">
+              </div>
+              <div class="roles-field">
+                <label for="ur-add-notes">Notas</label>
+                <textarea id="ur-add-notes" name="notes" placeholder="Notas visibles para esta base local"></textarea>
+              </div>
+              <div class="config-section-actions">
+                <button type="submit" class="config-inline-btn">Guardar usuario</button>
+                <button type="button" class="config-inline-btn secondary" data-ur-panel="overview">Cancelar</button>
+              </div>
+            </form>
+          </section>
+        `;
+      }
+      if (state.panel === 'edit' && selectedUser){
+        return `
+          <section class="roles-workbench-card">
+            <div class="roles-workbench-header">
+              <div>
+                <div class="config-section-kicker">CRUD provisional</div>
+                <h4>Editar usuario</h4>
+              </div>
+              <div class="config-chip">${selectedRole}</div>
+            </div>
+            <p class="roles-workbench-copy">Edición local para ${selectedName}. Cambia ficha, rol visible y estado sin fingir permisos reales.</p>
+            <form class="roles-form-grid" data-ur-form="edit" data-ur-user-id="${escapeHtml(selectedUser.id)}">
+              <div class="roles-form-grid two">
+                <div class="roles-field">
+                  <label for="ur-edit-name">Nombre</label>
+                  <input id="ur-edit-name" name="name" type="text" value="${escapeHtml(selectedUser.name)}" required>
+                </div>
+                <div class="roles-field">
+                  <label for="ur-edit-email">Correo</label>
+                  <input id="ur-edit-email" name="email" type="email" value="${escapeHtml(selectedUser.email)}" required>
+                </div>
+              </div>
+              <div class="roles-form-grid two">
+                <div class="roles-field">
+                  <label for="ur-edit-role">Rol visible</label>
+                  <select id="ur-edit-role" name="role">
+                    ${CONFIG_ROLE_OPTIONS.map(role => `<option value="${role}" ${selectedUser.role === role ? 'selected' : ''}>${role}</option>`).join('')}
+                  </select>
+                </div>
+                <div class="roles-field">
+                  <label for="ur-edit-status">Estado visual</label>
+                  <select id="ur-edit-status" name="status">
+                    ${CONFIG_USER_STATUS_OPTIONS.map(status => `<option value="${status}" ${selectedUser.status === status ? 'selected' : ''}>${status}</option>`).join('')}
+                  </select>
+                </div>
+              </div>
+              <div class="roles-field">
+                <label for="ur-edit-scope">Alcance UX</label>
+                <input id="ur-edit-scope" name="scope" type="text" value="${escapeHtml(selectedUser.scope)}">
+              </div>
+              <div class="roles-field">
+                <label for="ur-edit-notes">Notas</label>
+                <textarea id="ur-edit-notes" name="notes">${escapeHtml(selectedUser.notes || '')}</textarea>
+              </div>
+              <div class="config-section-actions">
+                <button type="submit" class="config-inline-btn">Guardar cambios</button>
+                <button type="button" class="config-inline-btn secondary" data-ur-panel="overview" data-ur-user-id="${escapeHtml(selectedUser.id)}">Cancelar</button>
+              </div>
+            </form>
+          </section>
+        `;
+      }
+      if (state.panel === 'assign-role' && selectedUser){
+        return `
+          <section class="roles-workbench-card">
+            <div class="roles-workbench-header">
+              <div>
+                <div class="config-section-kicker">CRUD provisional</div>
+                <h4>Asignar rol</h4>
+              </div>
+              <div class="config-chip">${selectedName}</div>
+            </div>
+            <p class="roles-workbench-copy">Asignación visible para ADMIN y MIEMBRO antes del backend real. Aquí mandan la UX y el modelo, no la seguridad.</p>
+            <form class="roles-form-grid" data-ur-form="assign-role" data-ur-user-id="${escapeHtml(selectedUser.id)}">
+              <div class="roles-radio-list">
+                ${CONFIG_ROLE_OPTIONS.map((role) => `
+                  <label class="roles-radio-card">
+                    <input type="radio" name="role" value="${role}" ${selectedUser.role === role ? 'checked' : ''}>
+                    <div class="roles-radio-copy">
+                      <b>${role}</b>
+                      <span>${role === 'ADMIN' ? 'Perfil para administración visible de la suite y futuros controles.' : 'Perfil base para operación diaria sin fingir permisos finos todavía.'}</span>
+                    </div>
+                  </label>
+                `).join('')}
+              </div>
+              <div class="roles-field">
+                <label for="ur-role-scope">Alcance UX</label>
+                <input id="ur-role-scope" name="scope" type="text" value="${escapeHtml(selectedUser.scope)}">
+              </div>
+              <div class="config-section-actions">
+                <button type="submit" class="config-inline-btn">Guardar rol</button>
+                <button type="button" class="config-inline-btn secondary" data-ur-panel="overview" data-ur-user-id="${escapeHtml(selectedUser.id)}">Cancelar</button>
+              </div>
+            </form>
+          </section>
+        `;
+      }
+      if (state.panel === 'delete' && selectedUser){
+        return `
+          <section class="roles-workbench-card">
+            <div class="roles-workbench-header">
+              <div>
+                <div class="config-section-kicker">CRUD provisional</div>
+                <h4>Borrar usuario</h4>
+              </div>
+              <div class="badge-warn" style="margin-top:0;">Acción local</div>
+            </div>
+            <p class="roles-workbench-copy">Confirmación clara para ${selectedName}. En esta etapa solo limpia la base local del navegador actual.</p>
+            <ul class="roles-help-list">
+              <li><b>Correo:</b> ${escapeHtml(selectedUser.email)}</li>
+              <li><b>Rol visible:</b> ${selectedRole}</li>
+              <li><b>Alcance UX:</b> ${escapeHtml(selectedUser.scope)}</li>
+            </ul>
+            <div class="config-section-actions">
+              <button type="button" class="config-inline-btn" data-ur-confirm-delete="${escapeHtml(selectedUser.id)}">Confirmar borrado</button>
+              <button type="button" class="config-inline-btn secondary" data-ur-panel="overview" data-ur-user-id="${escapeHtml(selectedUser.id)}">Cancelar</button>
+            </div>
+          </section>
+        `;
+      }
+      return `
+        <section class="roles-workbench-card">
+          <div class="roles-workbench-header">
+            <div>
+              <div class="config-section-kicker">Vista activa</div>
+              <h4>CRUD provisional/local de Usuarios y Roles</h4>
+            </div>
+            <div class="config-chip">Persistencia local</div>
+          </div>
+          <p class="roles-workbench-copy">La experiencia ya no es maqueta: agrega, edita, borra y reasigna rol en local para dejar listo el salto a Firebase.</p>
+          ${selectedUser ? `
+            <div class="user-card-grid">
+              <div class="user-meta">
+                <span class="user-meta-label">Usuario seleccionado</span>
+                <span class="user-meta-value">${selectedName}</span>
+              </div>
+              <div class="user-meta">
+                <span class="user-meta-label">Rol visible</span>
+                <span class="user-meta-value">${selectedRole}</span>
+              </div>
+              <div class="user-meta">
+                <span class="user-meta-label">Estado visual</span>
+                <span class="user-meta-value">${escapeHtml(selectedUser.status)}</span>
+              </div>
+              <div class="user-meta">
+                <span class="user-meta-label">Último acceso visible</span>
+                <span class="user-meta-value">${escapeHtml(selectedUser.lastSeen)}</span>
+              </div>
+            </div>
+          ` : `
+            <div class="roles-empty">
+              No hay un usuario seleccionado todavía. Nada roto: puedes crear el primero o restaurar el ejemplo visual.
+            </div>
+          `}
+          <div class="config-section-actions">
+            <button type="button" class="config-inline-btn" data-ur-panel="add">Agregar usuario</button>
+            ${selectedUser ? `<button type="button" class="config-inline-btn secondary" data-ur-panel="edit" data-ur-user-id="${escapeHtml(selectedUser.id)}">Editar seleccionado</button>` : ''}
+            ${selectedUser ? `<button type="button" class="config-inline-btn secondary" data-ur-panel="assign-role" data-ur-user-id="${escapeHtml(selectedUser.id)}">Asignar rol</button>` : ''}
+            ${!selectedUser ? `<button type="button" class="config-inline-btn secondary" data-ur-reset-demo="1">Restaurar ejemplo</button>` : ''}
+          </div>
+          <ul class="roles-help-list">
+            <li>Roles visibles desde ya: <b>ADMIN</b> y <b>MIEMBRO</b>.</li>
+            <li>Todo se guarda localmente en este navegador dentro de la arquitectura actual de la Suite.</li>
+            <li>La próxima conexión real podrá reemplazar la fuente local sin rediseñar esta experiencia.</li>
+          </ul>
+          <div class="roles-inline-note">Pista útil: también puedes dejar la base completamente vacía y volver a construirla desde cero.</div>
+        </section>
+      `;
+    }
+    let configurationMembersView = { panel:'overview', selectedId:'', lastInviteCode:'' };
+
+    function getMembersViewState(){
+      const base = configurationMembersView && typeof configurationMembersView === 'object' ? configurationMembersView : {};
+      const panel = ['overview', 'invite-create', 'join-code', 'change-role', 'remove'].includes(base.panel) ? base.panel : 'overview';
+      return {
+        panel,
+        selectedId: String(base.selectedId || '').trim(),
+        lastInviteCode: String(base.lastInviteCode || '').trim()
+      };
+    }
+
+    function setMembersViewState(patch = {}){
+      const current = getMembersViewState();
+      configurationMembersView = {
+        ...current,
+        ...(patch || {}),
+        panel: ['overview', 'invite-create', 'join-code', 'change-role', 'remove'].includes(String((patch || {}).panel || current.panel))
+          ? String((patch || {}).panel || current.panel)
+          : 'overview',
+        selectedId: String((patch || {}).selectedId != null ? (patch || {}).selectedId : current.selectedId || '').trim(),
+        lastInviteCode: String((patch || {}).lastInviteCode != null ? (patch || {}).lastInviteCode : current.lastInviteCode || '').trim()
+      };
+      return configurationMembersView;
+    }
+
+    function getMembersSectionStatusSnapshot(){
+      try{
+        if (window.A33Members && typeof window.A33Members.getStatusSync === 'function'){
+          return window.A33Members.getStatusSync();
+        }
+      }catch(_){ }
+      return {
+        code:'idle',
+        label:'Pendiente',
+        message:'La gestión real de miembros todavía no está lista.',
+        isBusy:false,
+        isAuthenticated:false,
+        hasContext:false,
+        canManage:false,
+        role:'',
+        currentUserId:'',
+        workspace:null,
+        members:[],
+        counts:{ total:0, adminCount:0, memberCount:0, activeCount:0 },
+        activeJoinCode:'',
+        activeJoinRole:'MIEMBRO',
+        activeJoinStatus:''
+      };
+    }
+
+    function getMembersSectionBadge(status = getMembersSectionStatusSnapshot()){
+      if (!status?.isAuthenticated) return 'Sin sesión';
+      if (status?.isBusy) return 'Cargando';
+      if (!status?.hasContext) return 'Unión pendiente';
+      return status?.canManage ? 'ADMIN real' : 'Miembro real';
+    }
+
+    function formatMembersTimestamp(iso = ''){
+      if (!iso) return 'Sin fecha';
+      const date = new Date(iso);
+      if (Number.isNaN(date.getTime())) return 'Sin fecha';
+      return date.toLocaleString();
+    }
+
+    function getRealMembersActiveList(status = getMembersSectionStatusSnapshot()){
+      const list = Array.isArray(status?.members) ? status.members.slice() : [];
+      return list.filter((item) => String(item?.status || '').trim().toUpperCase() === 'ACTIVO');
+    }
+
+    function getSelectedRealMember(status = getMembersSectionStatusSnapshot()){
+      const members = getRealMembersActiveList(status);
+      const view = getMembersViewState();
+      const preferredId = view.selectedId || status?.currentUserId || '';
+      return members.find((item) => item.uid === preferredId) || members[0] || null;
+    }
+
+    function buildRealMembersSummaryCards(status = getMembersSectionStatusSnapshot()){
+      const counts = status?.counts || { total:0, adminCount:0, memberCount:0, activeCount:0 };
+      const sourceLabel = status?.hasContext ? 'Firestore real' : 'Pendiente';
+      const lastLabel = formatMembersTimestamp(status?.checkedAt);
+      return `
+        <div class="roles-summary-grid">
+          <article class="roles-summary-card">
+            <span class="roles-summary-value">${Number(counts.activeCount || 0)}</span>
+            <span class="roles-summary-label">Miembros activos</span>
+          </article>
+          <article class="roles-summary-card">
+            <span class="roles-summary-value">${Number(counts.adminCount || 0)}</span>
+            <span class="roles-summary-label">Rol ADMIN</span>
+          </article>
+          <article class="roles-summary-card">
+            <span class="roles-summary-value">${Number(counts.memberCount || 0)}</span>
+            <span class="roles-summary-label">Rol MIEMBRO</span>
+          </article>
+          <article class="roles-summary-card">
+            <span class="roles-summary-value">${escapeHtml(sourceLabel)}</span>
+            <span class="roles-summary-label">Fuente</span>
+            <span class="roles-summary-note">${escapeHtml(lastLabel)}</span>
+          </article>
+        </div>
+      `;
+    }
+
+    function buildRealMembersList(status = getMembersSectionStatusSnapshot()){
+      const members = getRealMembersActiveList(status);
+      const selected = getSelectedRealMember(status);
+      if (!members.length){
+        return `
+          <div class="roles-empty">
+            <b>No hay miembros activos cargados todavía.</b>
+            <div class="roles-inline-note">Nada dramático: inicia sesión, prepara el contexto o entra con un código de unión si te compartieron uno.</div>
+            <div class="config-section-actions" style="margin-top:0.75rem;">
+              <button type="button" class="config-inline-btn" data-real-members-panel="join-code">Unirme por código</button>
+              <button type="button" class="config-inline-btn secondary" data-real-members-action="refresh">Refrescar</button>
+            </div>
+          </div>
+        `;
+      }
+      return `
+        <div class="users-list">
+          ${members.map((member) => {
+            const roleClass = String(member.role || '').toLowerCase();
+            const isActive = selected && member.uid === selected.uid;
+            const name = member.displayName || member.email || member.uid;
+            const typeLabel = member.kind === 'OWNER' ? 'Propietario' : 'Miembro';
+            return `
+              <article class="user-card${isActive ? ' active' : ''}">
+                <div class="user-card-top">
+                  <div class="user-identity">
+                    <h4>${escapeHtml(name)}${member.uid === status?.currentUserId ? ' · tú' : ''}</h4>
+                    <span>${escapeHtml(member.email || member.uid)}</span>
+                  </div>
+                  <div class="user-badges">
+                    <span class="user-role-badge ${escapeHtml(roleClass)}">${escapeHtml(member.role)}</span>
+                    <span class="user-status-pill">${escapeHtml(typeLabel)}</span>
+                  </div>
+                </div>
+                <div class="user-card-grid">
+                  <div class="user-meta">
+                    <span class="user-meta-label">Estado</span>
+                    <span class="user-meta-value">${escapeHtml(member.status)}</span>
+                  </div>
+                  <div class="user-meta">
+                    <span class="user-meta-label">Ingreso</span>
+                    <span class="user-meta-value">${escapeHtml(formatMembersTimestamp(member.joinedAt))}</span>
+                  </div>
+                  <div class="user-meta">
+                    <span class="user-meta-label">Tipo</span>
+                    <span class="user-meta-value">${escapeHtml(typeLabel)}</span>
+                  </div>
+                  <div class="user-meta">
+                    <span class="user-meta-label">Flujo</span>
+                    <span class="user-meta-value">${status?.canManage ? 'Ver · Cambiar rol · Remover' : 'Ver ficha · lectura operativa'}</span>
+                  </div>
+                </div>
+                <div class="user-card-actions">
+                  <button type="button" class="config-inline-btn secondary" data-real-members-panel="overview" data-real-member-id="${escapeHtml(member.uid)}">Ver ficha</button>
+                  ${status?.canManage ? `<button type="button" class="config-inline-btn secondary" data-real-members-panel="change-role" data-real-member-id="${escapeHtml(member.uid)}">Cambiar rol</button>` : ''}
+                  ${status?.canManage ? `<button type="button" class="config-inline-btn secondary" data-real-members-panel="remove" data-real-member-id="${escapeHtml(member.uid)}">Remover</button>` : ''}
+                </div>
+              </article>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
+
+    function buildRealMembersWorkbench(status = getMembersSectionStatusSnapshot()){
+      const view = getMembersViewState();
+      const selected = getSelectedRealMember(status);
+      const selectedName = selected ? escapeHtml(selected.displayName || selected.email || selected.uid) : 'miembro';
+      const selectedRole = selected ? escapeHtml(selected.role) : 'MIEMBRO';
+      const canManage = !!status?.canManage;
+      const activeCode = canManage ? String(status?.activeJoinCode || view.lastInviteCode || '').trim() : '';
+      const isOwner = selected && selected.kind === 'OWNER';
+      const lastAdmin = selected && selected.role === 'ADMIN' && Number(status?.counts?.adminCount || 0) <= 1;
+
+      if (!status?.isAuthenticated){
+        return `
+          <section class="roles-workbench-card">
+            <div class="roles-workbench-header">
+              <div>
+                <div class="config-section-kicker">Acceso requerido</div>
+                <h4>Inicia sesión primero</h4>
+              </div>
+              <div class="config-chip">Firebase Auth</div>
+            </div>
+            <p class="roles-workbench-copy">Sin sesión no hay UID real, sin UID real no hay miembros reales. Firebase no perdona la poesía.</p>
+            <div class="config-section-actions">
+              <button type="button" class="config-inline-btn" data-real-members-open-access="1">Ir a Acceso</button>
+            </div>
+          </section>
+        `;
+      }
+
+      if (!status?.hasContext){
+        return `
+          <section class="roles-workbench-card">
+            <div class="roles-workbench-header">
+              <div>
+                <div class="config-section-kicker">Unión al espacio</div>
+                <h4>Entrar con código</h4>
+              </div>
+              <div class="config-chip">Miembro real</div>
+            </div>
+            <p class="roles-workbench-copy">${escapeHtml(status?.message || 'Todavía no perteneces a un espacio activo. Usa un código de unión compartido por un ADMIN.')}</p>
+            <form class="roles-form-grid" data-real-members-form="join">
+              <div class="roles-field">
+                <label for="rm-join-code">Código de unión</label>
+                <input id="rm-join-code" name="code" type="text" placeholder="A33-XXXX-XXXX" required>
+              </div>
+              <div class="config-section-actions">
+                <button type="submit" class="config-inline-btn">Unirme al espacio</button>
+                <button type="button" class="config-inline-btn secondary" data-real-members-action="refresh">Refrescar</button>
+              </div>
+            </form>
+            <div class="roles-inline-note">Si te removieron de un espacio, aquí vuelves a la pelea con otro código válido.</div>
+          </section>
+        `;
+      }
+
+      if (view.panel === 'join-code'){
+        return `
+          <section class="roles-workbench-card">
+            <div class="roles-workbench-header">
+              <div>
+                <div class="config-section-kicker">Unión manual</div>
+                <h4>Entrar con código</h4>
+              </div>
+              <div class="config-chip">Cambio de espacio</div>
+            </div>
+            <p class="roles-workbench-copy">Usa un código activo para entrar al espacio compartido que te hayan autorizado.</p>
+            <form class="roles-form-grid" data-real-members-form="join">
+              <div class="roles-field">
+                <label for="rm-join-code-2">Código de unión</label>
+                <input id="rm-join-code-2" name="code" type="text" placeholder="A33-XXXX-XXXX" required>
+              </div>
+              <div class="config-section-actions">
+                <button type="submit" class="config-inline-btn">Entrar con código</button>
+                <button type="button" class="config-inline-btn secondary" data-real-members-panel="overview">Cancelar</button>
+              </div>
+            </form>
+          </section>
+        `;
+      }
+
+      if (view.panel === 'invite-create' && status?.canManage){
+        return `
+          <section class="roles-workbench-card">
+            <div class="roles-workbench-header">
+              <div>
+                <div class="config-section-kicker">Invitación operativa</div>
+                <h4>Generar código de unión</h4>
+              </div>
+              <div class="config-chip">ADMIN</div>
+            </div>
+            <p class="roles-workbench-copy">Genera un código simple y compártelo al nuevo miembro. Si creas uno nuevo, el código activo anterior se revoca.</p>
+            <form class="roles-form-grid" data-real-members-form="invite">
+              <div class="roles-field">
+                <label for="rm-invite-role">Rol inicial</label>
+                <select id="rm-invite-role" name="role">
+                  <option value="MIEMBRO">MIEMBRO</option>
+                  <option value="ADMIN">ADMIN</option>
+                </select>
+              </div>
+              <div class="config-section-actions">
+                <button type="submit" class="config-inline-btn">Generar código</button>
+                <button type="button" class="config-inline-btn secondary" data-real-members-panel="overview">Cancelar</button>
+              </div>
+            </form>
+            ${activeCode ? `
+              <ul class="roles-help-list">
+                <li><b>Código activo:</b> <span class="firebase-inline-code">${escapeHtml(activeCode)}</span></li>
+                <li><b>Rol inicial:</b> ${escapeHtml(status?.activeJoinRole || 'MIEMBRO')}</li>
+                <li><b>Estado:</b> ${escapeHtml(status?.activeJoinStatus || 'ACTIVA')}</li>
+              </ul>
+              <div class="config-section-actions">
+                <button type="button" class="config-inline-btn secondary" data-real-members-copy-code="${escapeHtml(activeCode)}">Copiar código</button>
+                <button type="button" class="config-inline-btn secondary" data-real-members-action="revoke-code">Revocar código activo</button>
+              </div>
+            ` : '<div class="roles-inline-note">Todavía no hay un código activo para este espacio.</div>'}
+          </section>
+        `;
+      }
+
+      if (view.panel === 'change-role' && selected && status?.canManage){
+        return `
+          <section class="roles-workbench-card">
+            <div class="roles-workbench-header">
+              <div>
+                <div class="config-section-kicker">Cambio real de rol</div>
+                <h4>Actualizar rol de ${selectedName}</h4>
+              </div>
+              <div class="config-chip">${selectedRole}</div>
+            </div>
+            <p class="roles-workbench-copy">El cambio se guarda en Firestore. Sin humo local, sin teatro comunitario.</p>
+            <form class="roles-form-grid" data-real-members-form="change-role" data-real-member-id="${escapeHtml(selected.uid)}">
+              <div class="roles-radio-list">
+                ${['ADMIN','MIEMBRO'].map((role) => `
+                  <label class="roles-radio-card">
+                    <input type="radio" name="role" value="${role}" ${role === selected.role ? 'checked' : ''} ${isOwner && role !== 'ADMIN' ? 'disabled' : ''}>
+                    <div class="roles-radio-copy">
+                      <b>${role}</b>
+                      <span>${role === 'ADMIN' ? 'Puede invitar, cambiar roles y remover miembros.' : 'Opera como miembro del espacio sin administración.'}</span>
+                    </div>
+                  </label>
+                `).join('')}
+              </div>
+              <div class="config-section-actions">
+                <button type="submit" class="config-inline-btn" ${isOwner && selected.role !== 'ADMIN' ? 'disabled' : ''}>Guardar rol</button>
+                <button type="button" class="config-inline-btn secondary" data-real-members-panel="overview" data-real-member-id="${escapeHtml(selected.uid)}">Cancelar</button>
+              </div>
+            </form>
+            <ul class="roles-help-list">
+              ${isOwner ? '<li>El propietario original conserva rol ADMIN en este cierre final.</li>' : ''}
+              ${lastAdmin ? '<li>No puedes dejar el espacio sin al menos un ADMIN activo.</li>' : ''}
+              <li>El guard global y el acceso por URL directa ya quedaron cubiertos; aquí cerramos la administración sensible por rol.</li>
+            </ul>
+          </section>
+        `;
+      }
+
+      if (view.panel === 'remove' && selected && status?.canManage){
+        return `
+          <section class="roles-workbench-card">
+            <div class="roles-workbench-header">
+              <div>
+                <div class="config-section-kicker">Remoción real</div>
+                <h4>Remover a ${selectedName}</h4>
+              </div>
+              <div class="config-chip">Confirmación</div>
+            </div>
+            <p class="roles-workbench-copy">La remoción marca la membresía como inactiva en Firestore. El usuario deja de contar como miembro activo de este espacio.</p>
+            <ul class="roles-help-list">
+              <li>Rol actual: <b>${selectedRole}</b></li>
+              <li>Tipo: <b>${escapeHtml(selected.kind === 'OWNER' ? 'Propietario' : 'Miembro')}</b></li>
+              ${isOwner ? '<li>El propietario original no se puede remover desde este cierre final.</li>' : ''}
+              ${lastAdmin ? '<li>No puedes remover al último ADMIN activo.</li>' : ''}
+            </ul>
+            <div class="config-section-actions">
+              <button type="button" class="config-inline-btn" data-real-member-remove="${escapeHtml(selected.uid)}" ${isOwner || lastAdmin ? 'disabled' : ''}>Confirmar remoción</button>
+              <button type="button" class="config-inline-btn secondary" data-real-members-panel="overview" data-real-member-id="${escapeHtml(selected.uid)}">Cancelar</button>
+            </div>
+          </section>
+        `;
+      }
+
+      return `
+        <section class="roles-workbench-card">
+          <div class="roles-workbench-header">
+            <div>
+              <div class="config-section-kicker">Miembro seleccionado</div>
+              <h4>${selected ? selectedName : 'Miembros del espacio'}</h4>
+            </div>
+            <div class="config-chip">${escapeHtml(status?.canManage ? 'ADMIN' : (status?.role || 'MIEMBRO'))}</div>
+          </div>
+          ${selected ? `
+            <div class="user-card-grid">
+              <div class="user-meta">
+                <span class="user-meta-label">Correo</span>
+                <span class="user-meta-value">${escapeHtml(selected.email || selected.uid)}</span>
+              </div>
+              <div class="user-meta">
+                <span class="user-meta-label">Rol</span>
+                <span class="user-meta-value">${escapeHtml(selected.role)}</span>
+              </div>
+              <div class="user-meta">
+                <span class="user-meta-label">Tipo</span>
+                <span class="user-meta-value">${escapeHtml(selected.kind === 'OWNER' ? 'Propietario' : 'Miembro')}</span>
+              </div>
+              <div class="user-meta">
+                <span class="user-meta-label">Ingreso</span>
+                <span class="user-meta-value">${escapeHtml(formatMembersTimestamp(selected.joinedAt))}</span>
+              </div>
+            </div>
+          ` : `
+            <div class="roles-empty">Todavía no hay una ficha seleccionada.</div>
+          `}
+          ${activeCode ? `
+            <div class="roles-inline-note" style="margin-top:1rem;">Código activo del espacio: <span class="firebase-inline-code">${escapeHtml(activeCode)}</span></div>
+          ` : ''}
+          <div class="config-section-actions">
+            ${status?.canManage ? '<button type="button" class="config-inline-btn" data-real-members-panel="invite-create">Nuevo código</button>' : '<button type="button" class="config-inline-btn" data-real-members-panel="join-code">Entrar con código</button>'}
+            <button type="button" class="config-inline-btn secondary" data-real-members-action="refresh">Refrescar</button>
+            ${activeCode ? `<button type="button" class="config-inline-btn secondary" data-real-members-copy-code="${escapeHtml(activeCode)}">Copiar código</button>` : ''}
+          </div>
+          <ul class="roles-help-list">
+            <li>Fuente real: <b>Firestore</b>.</li>
+            <li>Roles operativos vigentes: <b>ADMIN</b> y <b>MIEMBRO</b>.</li>
+            <li>Esta vista ya quedó cerrada para ADMIN/MIEMBRO sin caer en permisos barrocos.</li>
+          </ul>
+        </section>
+      `;
+    }
+
+    function buildUsersRolesSectionHtml(){
+      const status = getMembersSectionStatusSnapshot();
+      const workspaceName = status?.workspace?.name || status?.currentWorkspaceId || 'Espacio pendiente';
+      const bannerStatus = !status?.isAuthenticated
+        ? 'Sin sesión'
+        : (status?.hasContext ? (status?.canManage ? 'ADMIN real' : 'Miembro real') : 'Unión por código');
+      return `
+        <div class="config-panel-header">
+          <div>
+            <div class="config-section-kicker">Miembros reales del espacio</div>
+            <h3 class="config-panel-title" id="config-panel-title">Usuarios y Roles</h3>
+          </div>
+          <div class="config-chip">Firebase + Firestore</div>
+        </div>
+        <p class="config-panel-copy">Aquí ya no hay catálogo local de juguete: la Suite lista miembros reales, permite unirse por código y deja las acciones sensibles en manos de ADMIN sin volver esto una maraña.</p>
+        <div class="roles-banner">
+          <div class="roles-banner-copy">
+            <strong>Espacio actual:</strong>
+            <span>${escapeHtml(workspaceName)} · ${escapeHtml(status?.message || 'Gestión real de miembros lista para operar.')}</span>
+          </div>
+          <div class="badge-warn" style="margin-top:0;">${escapeHtml(bannerStatus)}</div>
+        </div>
+        ${buildRealMembersSummaryCards(status)}
+        ${status?.hasContext && !status?.canManage ? buildRoleRestrictionNoteHtml({ title:'Gestión sensible reservada para ADMIN', body:'Como MIEMBRO puedes consultar el estado del espacio y usar tu acceso. Generar códigos, cambiar roles y remover miembros quedan fuera de tu carril.' }) : ''}
+        <div class="roles-shell" data-real-members-root="1">
+          <div class="roles-column">
+            <div class="roles-toolbar">
+              <div class="roles-toolbar-copy">
+                <b>Miembros cargados desde Firestore</b>
+                <span>${escapeHtml(status?.hasContext ? 'Listado real del espacio compartido con roles operativos.' : 'Aún no hay contexto activo; puedes entrar con código cuando corresponda.')}</span>
+              </div>
+              <div class="roles-toolbar-actions">
+                ${status?.canManage ? '<button type="button" class="config-inline-btn" data-real-members-panel="invite-create">Nuevo código</button>' : ''}
+                ${status?.isAuthenticated ? '<button type="button" class="config-inline-btn secondary" data-real-members-panel="join-code">Entrar con código</button>' : ''}
+                <button type="button" class="config-inline-btn secondary" data-real-members-action="refresh">Refrescar</button>
+              </div>
+              <div class="roles-toolbar-meta">${escapeHtml(formatMembersTimestamp(status?.checkedAt))}</div>
+            </div>
+            ${buildRealMembersList(status)}
+          </div>
+          <div class="roles-workbench">
+            ${buildRealMembersWorkbench(status)}
+          </div>
+        </div>
+        <div class="roles-inline-note" style="margin-top:0.9rem;">Paso mínimo en Firebase Console: publica las reglas incluidas en <span class="firebase-inline-code">pruebas/firebase/firestore.rules</span> para que la membresía quede realmente protegida.</div>
+      `;
+    }
+
+    function rerenderUsersRolesSection(onExport, onImport){
+      renderConfigurationModule({
+        sectionId: 'usuarios-roles',
+        onExport,
+        onImport
+      });
+    }
+
+    function handleUsersRolesPanelChange(panel = 'overview', userId = '', onExport, onImport){
+      setMembersViewState({ panel, selectedId: userId || getMembersViewState().selectedId || '' });
+      rerenderUsersRolesSection(onExport, onImport);
+    }
+
+    function readUsersRolesFormPayload(form){
+      const fd = new FormData(form);
+      return sanitizeUsersRolesUser({
+        id: form.dataset.urUserId || '',
+        name: fd.get('name'),
+        email: fd.get('email'),
+        role: fd.get('role'),
+        status: fd.get('status'),
+        scope: fd.get('scope'),
+        notes: fd.get('notes')
+      }, form.dataset.urUserId || '');
+    }
+
+    function getFirebaseBaseStatusSnapshot(){
+      try{
+        if (window.A33Firebase && typeof window.A33Firebase.getStatusSync === 'function'){
+          return window.A33Firebase.getStatusSync();
+        }
+      }catch(_){ }
+      return {
+        code: 'placeholder',
+        label: 'Pendiente de configuración',
+        message: 'La base de Firebase todavía no está disponible.',
+        configSourceLabel: 'Placeholder seguro',
+        hasRealConfig: false,
+        missingKeys: ['apiKey', 'authDomain', 'projectId', 'appId'],
+        services: { appPrepared:false, authPrepared:false, firestorePrepared:false },
+        sdk: { version:'12.11.0', loaded:false },
+        runtime: { currentHost: window.location.hostname || '(sin host)', currentOrigin: window.location.origin || '(sin origin)' },
+        warnings: [],
+        error: null,
+        checkedAt: new Date().toISOString(),
+        projectId: '',
+        authDomain: ''
+      };
+    }
+
+    function getFirebaseStatusBadge(status){
+      const code = String(status?.code || 'placeholder');
+      if (code === 'ready') return 'Base operativa';
+      if (code === 'ready-to-init') return 'Lista para inicializar';
+      if (code === 'loading') return 'Inicializando';
+      if (code === 'error') return 'Diagnóstico con error';
+      return 'Placeholder seguro';
+    }
+
+    function getFirebaseStatusMeta(status){
+      const services = status?.services || {};
+      const readyCount = [services.appPrepared, services.authPrepared, services.firestorePrepared].filter(Boolean).length;
+      return {
+        sourceLabel: status?.configSourceLabel || 'Placeholder seguro',
+        sdkLabel: (status?.sdk?.loaded ? 'Cargado' : 'Pendiente') + ' · v' + escapeHtml(status?.sdk?.version || '12.11.0'),
+        servicesLabel: readyCount ? `${readyCount}/3` : '0/3',
+        hostLabel: status?.runtime?.currentHost || '(sin host)'
+      };
+    }
+
+    function buildFirebaseStatusCards(status){
+      const meta = getFirebaseStatusMeta(status);
+      return `
+        <div class="firebase-status-grid">
+          <article class="firebase-status-card">
+            <span class="firebase-status-value">${escapeHtml(status?.hasRealConfig ? 'Real' : 'Pendiente')}</span>
+            <span class="firebase-status-label">Config</span>
+            <span class="firebase-status-note">${escapeHtml(meta.sourceLabel)}</span>
+          </article>
+          <article class="firebase-status-card">
+            <span class="firebase-status-value">${escapeHtml(status?.sdk?.loaded ? 'Activa' : 'En espera')}</span>
+            <span class="firebase-status-label">SDK</span>
+            <span class="firebase-status-note">${escapeHtml(meta.sdkLabel)}</span>
+          </article>
+          <article class="firebase-status-card">
+            <span class="firebase-status-value">${escapeHtml(meta.servicesLabel)}</span>
+            <span class="firebase-status-label">Servicios preparados</span>
+            <span class="firebase-status-note">App · Auth · Firestore</span>
+          </article>
+          <article class="firebase-status-card">
+            <span class="firebase-status-value">${escapeHtml(meta.hostLabel)}</span>
+            <span class="firebase-status-label">Host actual</span>
+            <span class="firebase-status-note">${escapeHtml(formatUsersRolesTimestamp(status?.checkedAt || ''))}</span>
+          </article>
+        </div>
+      `;
+    }
+
+    function buildFirebaseDiagList(items = [], emptyText = 'Sin observaciones por ahora.'){
+      if (!Array.isArray(items) || !items.length){
+        return `<ul><li>${escapeHtml(emptyText)}</li></ul>`;
+      }
+      return `<ul>${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
+    }
+
+    function getAuthAccessStatusSnapshot(){
+      try{
+        if (window.A33Auth && typeof window.A33Auth.getStatusSync === 'function'){
+          return window.A33Auth.getStatusSync();
+        }
+      }catch(_){ }
+      const firebase = getFirebaseBaseStatusSnapshot();
+      return {
+        code: firebase?.hasRealConfig ? 'signed-out' : 'needs-config',
+        label: firebase?.hasRealConfig ? 'Sin sesión' : 'Config pendiente',
+        message: firebase?.hasRealConfig
+          ? 'No hay una sesión activa en este navegador.'
+          : 'Completa la configuración de Firebase para activar el acceso real.',
+        isAuthenticated: false,
+        isBusy: false,
+        authReady: !!firebase?.services?.authPrepared,
+        persistence: 'LOCAL',
+        user: null,
+        error: firebase?.error || null,
+        checkedAt: firebase?.checkedAt || new Date().toISOString(),
+        firebase: {
+          code: firebase?.code || 'placeholder',
+          label: firebase?.label || 'Pendiente de configuración',
+          message: firebase?.message || '',
+          hasRealConfig: !!firebase?.hasRealConfig,
+          warnings: Array.isArray(firebase?.warnings) ? firebase.warnings.slice() : [],
+          checkedAt: firebase?.checkedAt || new Date().toISOString(),
+          error: firebase?.error || null,
+          projectId: firebase?.projectId || '',
+          authDomain: firebase?.authDomain || ''
+        }
+      };
+    }
+
+    function getAuthAccessBadge(status){
+      const code = String(status?.code || 'signed-out');
+      if (code === 'authenticated') return 'Sesión activa';
+      if (code === 'signing-in') return 'Entrando…';
+      if (code === 'signing-out') return 'Cerrando…';
+      if (code === 'needs-config') return 'Config pendiente';
+      if (code === 'firebase-error' || code === 'error') return 'Revisar acceso';
+      return 'Sin sesión';
+    }
+
+
+    function getWorkspaceContextStatusSnapshot(){
+      try{
+        if (window.A33Workspace && typeof window.A33Workspace.getStatusSync === 'function'){
+          return window.A33Workspace.getStatusSync();
+        }
+      }catch(_){ }
+      const auth = getAuthAccessStatusSnapshot();
+      return {
+        code: auth?.isAuthenticated ? 'awaiting-context' : (auth?.code || 'signed-out'),
+        label: auth?.isAuthenticated ? 'Contexto pendiente' : (auth?.label || 'Sin sesión'),
+        message: auth?.isAuthenticated
+          ? 'La sesión existe, pero el contexto real de usuario y espacio todavía no está validado.'
+          : (auth?.message || 'No hay una sesión activa en este navegador.'),
+        isBusy: false,
+        isAuthenticated: !!auth?.isAuthenticated,
+        hasContext: false,
+        user: auth?.user || null,
+        profile: null,
+        workspace: null,
+        membership: null,
+        role: '',
+        currentWorkspaceId: '',
+        error: auth?.error || null,
+        checkedAt: auth?.checkedAt || new Date().toISOString(),
+        created: { user:false, workspace:false, membership:false }
+      };
+    }
+
+    function getWorkspaceContextBadge(status){
+      const code = String(status?.code || 'signed-out');
+      if (code === 'ready') return 'Contexto listo';
+      if (code === 'syncing' || code === 'awaiting-context') return 'Preparando';
+      if (code === 'needs-config') return 'Config pendiente';
+      if (code === 'firebase-error' || code === 'error') return 'Revisar contexto';
+      if (code === 'signed-out') return 'Sin sesión';
+      return 'En espera';
+    }
+
+
+    function getRoleAccessControlState(){
+      const authStatus = getAuthAccessStatusSnapshot();
+      const workspaceStatus = getWorkspaceContextStatusSnapshot();
+      const role = String(workspaceStatus?.membership?.role || workspaceStatus?.role || '').trim().toUpperCase();
+      const isAuthenticated = !!authStatus?.isAuthenticated;
+      const hasContext = !!workspaceStatus?.hasContext;
+      const isAdmin = isAuthenticated && hasContext && role === 'ADMIN';
+      const isMember = isAuthenticated && hasContext && role === 'MIEMBRO';
+      return {
+        authStatus,
+        workspaceStatus,
+        role,
+        isAuthenticated,
+        hasContext,
+        isAdmin,
+        isMember,
+        configReadOnly: isMember,
+        canManageMembers: isAdmin,
+        canUseBackup: !isMember,
+        canEditFirebaseConfig: !isMember,
+        canRepairContext: isAdmin
+      };
+    }
+
+    function getAdminOnlyMessage(actionLabel = 'Esta acción'){
+      const access = getRoleAccessControlState();
+      if (!access.isAuthenticated) return 'Primero inicia sesión para continuar.';
+      if (!access.hasContext) return 'Primero valida tu acceso o entra con un código de unión.';
+      return `${actionLabel} está reservada para ADMIN en este espacio.`;
+    }
+
+    function buildRoleRestrictionNoteHtml({ title = 'Solo lectura para MIEMBRO', body = 'Puedes consultar esta sección, pero la acción sensible queda reservada para ADMIN.' } = {}){
+      return `
+        <div class="badge-warn" style="margin-top:0.85rem;">
+          ⚠️ <b>${escapeHtml(title)}</b> · ${escapeHtml(body)}
+        </div>
+      `;
+    }
+
+    function buildWorkspaceContextStatusCards(status){
+      const workspaceName = status?.workspace?.name || 'Pendiente';
+      const role = status?.membership?.role || status?.role || '—';
+      const memberState = status?.membership?.status || (status?.hasContext ? 'Activo' : 'Pendiente');
+      return `
+        <div class="firebase-status-grid">
+          <article class="firebase-status-card">
+            <span class="firebase-status-value">${escapeHtml(status?.profile?.email || status?.user?.email || 'Pendiente')}</span>
+            <span class="firebase-status-label">Usuario real</span>
+            <span class="firebase-status-note">${escapeHtml(status?.profile?.uidShort || status?.user?.uidShort || 'Sin UID')}</span>
+          </article>
+          <article class="firebase-status-card">
+            <span class="firebase-status-value">${escapeHtml(workspaceName)}</span>
+            <span class="firebase-status-label">Espacio</span>
+            <span class="firebase-status-note">${escapeHtml(status?.workspace?.id || status?.currentWorkspaceId || 'Sin ID')}</span>
+          </article>
+          <article class="firebase-status-card">
+            <span class="firebase-status-value">${escapeHtml(role)}</span>
+            <span class="firebase-status-label">Rol actual</span>
+            <span class="firebase-status-note">ADMIN · MIEMBRO</span>
+          </article>
+          <article class="firebase-status-card">
+            <span class="firebase-status-value">${escapeHtml(memberState)}</span>
+            <span class="firebase-status-label">Vínculo</span>
+            <span class="firebase-status-note">${escapeHtml(formatUsersRolesTimestamp(status?.checkedAt || ''))}</span>
+          </article>
+        </div>
+      `;
+    }
+
+    function buildWorkspaceContextDocList(status){
+      return `
+        <ul>
+          <li><span class="firebase-inline-code">users/${escapeHtml(status?.profile?.uid || status?.user?.uid || '{uid}')}</span> → perfil real del usuario.</li>
+          <li><span class="firebase-inline-code">workspaces/${escapeHtml(status?.workspace?.id || status?.currentWorkspaceId || '{workspaceId}')}</span> → espacio compartido base.</li>
+          <li><span class="firebase-inline-code">workspaces/${escapeHtml(status?.workspace?.id || status?.currentWorkspaceId || '{workspaceId}')}/members/${escapeHtml(status?.profile?.uid || status?.user?.uid || '{uid}')}</span> → vínculo usuario ↔ espacio con rol.</li>
+        </ul>
+      `;
+    }
+
+    function buildWorkspaceContextSectionHtml(){
+      const status = getWorkspaceContextStatusSnapshot();
+      const authStatus = getAuthAccessStatusSnapshot();
+      const roleAccess = getRoleAccessControlState();
+      const badge = getWorkspaceContextBadge(status);
+      const statusClass = getAuthInlineStatusClass({ code: status?.code === 'ready' ? 'authenticated' : status?.code, error: status?.error || null });
+      const summaryItems = [];
+      if (status?.profile?.email || status?.user?.email) summaryItems.push(`Usuario: ${status?.profile?.email || status?.user?.email}`);
+      if (status?.workspace?.name || status?.workspace?.id) summaryItems.push(`Espacio: ${status?.workspace?.name || status?.workspace?.id}`);
+      if (status?.membership?.role || status?.role) summaryItems.push(`Rol: ${status?.membership?.role || status?.role}`);
+      if (!summaryItems.length) summaryItems.push('Todavía no hay contexto real montado en Firestore para esta sesión.');
+      const createdFlags = [];
+      if (status?.created?.user) createdFlags.push('usuario');
+      if (status?.created?.workspace) createdFlags.push('espacio');
+      if (status?.created?.membership) createdFlags.push('vínculo');
+
+      const actionCard = !authStatus?.isAuthenticated ? `
+        <article class="firebase-diag-card">
+          <div class="config-card-top">
+            <h4>Primero inicia sesión</h4>
+            <div class="config-chip">Paso previo</div>
+          </div>
+          <p class="roles-inline-note">Sin sesión no hay UID real que vincular. Primero entra con Firebase Auth y luego la Suite arma el contexto automáticamente.</p>
+          <div class="config-card-actions" style="margin-top:0.9rem;">
+            <button type="button" class="config-inline-btn" data-workspace-open-access="1">Ir a Acceso</button>
+          </div>
+        </article>
+      ` : (roleAccess.isAdmin ? `
+        <article class="firebase-diag-card">
+          <div class="config-card-top">
+            <h4>Acciones sensibles</h4>
+            <div class="config-chip">ADMIN</div>
+          </div>
+          <p class="roles-inline-note">Aquí sí mandan los dientes del sistema: preparar o reparar contexto queda en manos de ADMIN para evitar espacios o vínculos accidentales.</p>
+          <div class="config-card-actions" style="margin-top:0.9rem;">
+            <button type="button" class="config-inline-btn" data-workspace-action="ensure">Preparar / reparar contexto</button>
+            <button type="button" class="config-inline-btn secondary" data-workspace-action="refresh">Refrescar contexto</button>
+          </div>
+          <ul class="config-list">
+            <li>El bootstrap inicial sigue creando el espacio base cuando corresponde.</li>
+            <li>La reparación manual del contexto ya no queda abierta a cualquier miembro.</li>
+            <li>El modelo se mantiene simple: usuario, espacio y vínculo.</li>
+          </ul>
+        </article>
+      ` : `
+        <article class="firebase-diag-card">
+          <div class="config-card-top">
+            <h4>Lectura operativa</h4>
+            <div class="config-chip">${escapeHtml(roleAccess.role || 'MIEMBRO')}</div>
+          </div>
+          <p class="roles-inline-note">Puedes revisar el contexto y refrescarlo. Preparar o reparar el espacio queda reservado para ADMIN para no sembrar contextos raros por accidente.</p>
+          <div class="config-card-actions" style="margin-top:0.9rem;">
+            <button type="button" class="config-inline-btn secondary" data-workspace-action="refresh">Refrescar contexto</button>
+          </div>
+          <ul class="config-list">
+            <li>Tu operación diaria sigue normal mientras la membresía esté activa.</li>
+            <li>Si ves algo descuadrado, refresca primero y luego avisa a un ADMIN.</li>
+          </ul>
+        </article>
+      `);
+
+      return `
+        <div class="config-panel-header">
+          <div>
+            <div class="config-section-kicker">Contexto real mínimo</div>
+            <h3 class="config-panel-title" id="config-panel-title">Espacio compartido</h3>
+          </div>
+          <div class="config-chip">${escapeHtml(badge)}</div>
+        </div>
+        <p class="config-panel-copy">Aquí la Suite deja de ser solo login: cada sesión válida pasa a tener usuario real, espacio de trabajo y vínculo real dentro de Firestore, sin meter aún invitaciones completas ni permisos finos por módulo.</p>
+        <div class="firebase-banner">
+          <div class="firebase-banner-copy">
+            <strong>Estado actual</strong>
+            <span>${escapeHtml(status?.message || 'Sin diagnóstico del contexto todavía.')}</span>
+          </div>
+          <div class="badge-warn" style="margin-top:0;">${escapeHtml(status?.hasContext ? 'Contexto real montado' : 'Base mínima en preparación')}</div>
+        </div>
+        ${buildWorkspaceContextStatusCards(status)}
+        <div class="firebase-diag-grid">
+          <article class="firebase-diag-card">
+            <div class="config-card-top">
+              <h4>Contexto detectado</h4>
+              <div class="config-chip">Usuario + espacio</div>
+            </div>
+            ${buildFirebaseDiagList(summaryItems, 'Todavía no hay contexto real detectado.')}
+            <div class="auth-inline-status ${escapeHtml(statusClass)}">${escapeHtml(status?.error?.message || (createdFlags.length ? `Se creó: ${createdFlags.join(', ')}.` : (status?.message || 'Sin novedades.')))}</div>
+          </article>
+          <article class="firebase-diag-card">
+            <div class="config-card-top">
+              <h4>Estructura mínima</h4>
+              <div class="config-chip">Firestore</div>
+            </div>
+            ${buildWorkspaceContextDocList(status)}
+            <div class="small-note">Modelo simple: perfil del usuario, espacio compartido y membresía por subcolección.</div>
+          </article>
+        </div>
+        <div class="firebase-diag-grid">
+          ${actionCard}
+          <article class="firebase-diag-card">
+            <div class="config-card-top">
+              <h4>Lo que ya quedó resuelto</h4>
+              <div class="config-chip">Sin barroco</div>
+            </div>
+            <ul>
+              <li>Existe un usuario real persistido en <span class="firebase-inline-code">Firestore</span>.</li>
+              <li>Existe un espacio de trabajo real con identidad propia.</li>
+              <li>Existe el vínculo <span class="firebase-inline-code">usuario ↔ espacio</span> con rol base.</li>
+              <li>La base queda lista para miembros reales y administración posterior.</li>
+            </ul>
+          </article>
+        </div>
+      `;
+    }
+
+    async function refreshWorkspaceContextSection({ onExport, onImport, forceEnsure = false } = {}){
+      try{
+        if (window.A33Workspace && typeof window.A33Workspace.refresh === 'function'){
+          await window.A33Workspace.refresh({ forceEnsure: !!forceEnsure });
+        }
+      }catch(_){
+        showToast('No se pudo refrescar el contexto real.');
+      }
+      renderHomeAccessStrip();
+      renderConfigurationModule({
+        sectionId: 'workspace-context',
+        onExport,
+        onImport
+      });
+    }
+
+    function getFirebaseRuntimeConfigForForm(){
+      try{
+        if (window.A33FirebaseConfig && typeof window.A33FirebaseConfig.describeConfig === 'function'){
+          const desc = window.A33FirebaseConfig.describeConfig();
+          const config = { ...(desc?.config || {}) };
+          const normalizeField = (key) => {
+            const value = String(config?.[key] || '').trim();
+            if (window.A33FirebaseConfig && typeof window.A33FirebaseConfig.isPlaceholderValue === 'function'){
+              return window.A33FirebaseConfig.isPlaceholderValue(value) ? '' : value;
+            }
+            return value;
+          };
+          return {
+            ...desc,
+            config: {
+              apiKey: normalizeField('apiKey'),
+              authDomain: normalizeField('authDomain'),
+              projectId: normalizeField('projectId'),
+              storageBucket: normalizeField('storageBucket'),
+              messagingSenderId: normalizeField('messagingSenderId'),
+              appId: normalizeField('appId'),
+              measurementId: normalizeField('measurementId')
+            }
+          };
+        }
+      }catch(_){ }
+      return {
+        hasRealConfig: false,
+        source: 'placeholder',
+        config: {
+          apiKey: '',
+          authDomain: '',
+          projectId: '',
+          storageBucket: '',
+          messagingSenderId: '',
+          appId: '',
+          measurementId: ''
+        }
+      };
+    }
+
+    function buildAuthStatusCards(status, firebaseStatus){
+      const sessionLabel = status?.isAuthenticated ? 'Activa' : (status?.isBusy ? 'Moviendo' : 'Sin sesión');
+      const sessionNote = status?.user?.email || status?.message || 'Sin usuario autenticado.';
+      const authLabel = status?.authReady ? 'Lista' : 'Pendiente';
+      const authNote = firebaseStatus?.label || 'Sin diagnóstico';
+      const persistenceLabel = status?.persistence || 'LOCAL';
+      const persistenceNote = status?.isAuthenticated ? 'Persistente en este navegador' : 'Se aplicará al iniciar sesión';
+      const userLabel = status?.user?.email ? 'Usuario actual' : 'Último chequeo';
+      const userValue = status?.user?.email || formatUsersRolesTimestamp(status?.checkedAt || firebaseStatus?.checkedAt || '');
+      const userNote = status?.user?.uidShort || (firebaseStatus?.runtime?.currentHost || '(sin host)');
+      return `
+        <div class="firebase-status-grid">
+          <article class="firebase-status-card">
+            <span class="firebase-status-value">${escapeHtml(sessionLabel)}</span>
+            <span class="firebase-status-label">Sesión</span>
+            <span class="firebase-status-note">${escapeHtml(sessionNote)}</span>
+          </article>
+          <article class="firebase-status-card">
+            <span class="firebase-status-value">${escapeHtml(authLabel)}</span>
+            <span class="firebase-status-label">Auth</span>
+            <span class="firebase-status-note">${escapeHtml(authNote)}</span>
+          </article>
+          <article class="firebase-status-card">
+            <span class="firebase-status-value">${escapeHtml(persistenceLabel)}</span>
+            <span class="firebase-status-label">Persistencia</span>
+            <span class="firebase-status-note">${escapeHtml(persistenceNote)}</span>
+          </article>
+          <article class="firebase-status-card">
+            <span class="firebase-status-value">${escapeHtml(userLabel)}</span>
+            <span class="firebase-status-label">Referencia</span>
+            <span class="firebase-status-note">${escapeHtml(userValue)}${userNote ? ` · ${escapeHtml(userNote)}` : ''}</span>
+          </article>
+        </div>
+      `;
+    }
+
+    function buildAuthSessionList(user){
+      if (!user){
+        return `
+          <ul class="auth-session-list">
+            <li>
+              <b>Estado</b>
+              <span>Sin sesión activa por ahora. Aquí entramos simple: correo, contraseña, persistencia local y salida limpia.</span>
+            </li>
+          </ul>
+        `;
+      }
+      const items = [
+        ['Correo', user.email || 'Sin correo'],
+        ['UID', user.uid || 'Sin UID'],
+        ['Verificación', user.emailVerified ? 'Correo verificado' : 'Correo no verificado'],
+        ['Último acceso', user.lastLoginAt || 'Sin dato'],
+        ['Creado', user.createdAt || 'Sin dato']
+      ];
+      return `
+        <ul class="auth-session-list">
+          ${items.map(([label, value]) => `
+            <li>
+              <b>${escapeHtml(label)}</b>
+              <span>${escapeHtml(value)}</span>
+            </li>
+          `).join('')}
+        </ul>
+      `;
+    }
+
+    function readFirebaseRuntimeConfigFormPayload(form){
+      const fd = new FormData(form);
+      const normalizeDomain = (value = '') => String(value || '').trim().replace(/^https?:\/\//i, '').replace(/\/$/, '');
+      return {
+        apiKey: String(fd.get('apiKey') || '').trim(),
+        authDomain: normalizeDomain(fd.get('authDomain')),
+        projectId: String(fd.get('projectId') || '').trim(),
+        storageBucket: String(fd.get('storageBucket') || '').trim(),
+        messagingSenderId: String(fd.get('messagingSenderId') || '').trim(),
+        appId: String(fd.get('appId') || '').trim(),
+        measurementId: String(fd.get('measurementId') || '').trim()
+      };
+    }
+
+    function validateFirebaseRuntimeConfigPayload(payload = {}){
+      const missing = ['apiKey', 'authDomain', 'projectId', 'appId'].filter((key) => !String(payload?.[key] || '').trim());
+      if (missing.length){
+        return `Faltan campos Firebase: ${missing.join(', ')}.`;
+      }
+      return '';
+    }
+
+    function buildFirebaseRuntimeConfigForm(configState, options = {}){
+      const opts = options && typeof options === 'object' ? options : {};
+      const cfg = configState?.config || {};
+      const readOnly = !!opts.readOnly;
+      const disabledAttr = readOnly ? 'disabled' : '';
+      const sourceLabel = configState?.source === 'runtime-local'
+        ? 'Local en este navegador'
+        : (configState?.hasRealConfig ? 'Embebida/real' : 'Pendiente');
+      const restrictionNote = readOnly
+        ? buildRoleRestrictionNoteHtml({
+            title: 'Config sensible reservada para ADMIN',
+            body: 'Como MIEMBRO puedes revisar el diagnóstico y usar tu sesión, pero cambiar la configuración local de Firebase queda bloqueado mientras este navegador esté dentro del espacio.'
+          })
+        : '';
+      return `
+        <article class="firebase-diag-card">
+          <div class="config-card-top">
+            <h4>Config Firebase del navegador</h4>
+            <div class="config-chip">${escapeHtml(sourceLabel)}</div>
+          </div>
+          <p class="roles-inline-note">Puedes guardar la web config aquí sin editar archivos. Solo afecta este navegador actual.</p>
+          ${restrictionNote}
+          <form class="roles-form-grid" data-firebase-config-form="save">
+            <div class="roles-form-grid two">
+              <div class="roles-field">
+                <label for="firebase-api-key">API Key</label>
+                <input id="firebase-api-key" name="apiKey" type="text" value="${escapeHtml(cfg.apiKey || '')}" autocomplete="off" placeholder="AIza..." ${disabledAttr}>
+              </div>
+              <div class="roles-field">
+                <label for="firebase-auth-domain">Auth Domain</label>
+                <input id="firebase-auth-domain" name="authDomain" type="text" value="${escapeHtml(cfg.authDomain || '')}" autocomplete="off" placeholder="tu-proyecto.firebaseapp.com" ${disabledAttr}>
+              </div>
+            </div>
+            <div class="roles-form-grid two">
+              <div class="roles-field">
+                <label for="firebase-project-id">Project ID</label>
+                <input id="firebase-project-id" name="projectId" type="text" value="${escapeHtml(cfg.projectId || '')}" autocomplete="off" placeholder="tu-proyecto" ${disabledAttr}>
+              </div>
+              <div class="roles-field">
+                <label for="firebase-app-id">App ID</label>
+                <input id="firebase-app-id" name="appId" type="text" value="${escapeHtml(cfg.appId || '')}" autocomplete="off" placeholder="1:123456:web:abcdef" ${disabledAttr}>
+              </div>
+            </div>
+            <div class="roles-form-grid two">
+              <div class="roles-field">
+                <label for="firebase-storage-bucket">Storage Bucket (opcional)</label>
+                <input id="firebase-storage-bucket" name="storageBucket" type="text" value="${escapeHtml(cfg.storageBucket || '')}" autocomplete="off" placeholder="tu-proyecto.firebasestorage.app" ${disabledAttr}>
+              </div>
+              <div class="roles-field">
+                <label for="firebase-msg-id">Messaging Sender ID (opcional)</label>
+                <input id="firebase-msg-id" name="messagingSenderId" type="text" value="${escapeHtml(cfg.messagingSenderId || '')}" autocomplete="off" placeholder="1234567890" ${disabledAttr}>
+              </div>
+            </div>
+            <div class="roles-field">
+              <label for="firebase-measurement-id">Measurement ID (opcional)</label>
+              <input id="firebase-measurement-id" name="measurementId" type="text" value="${escapeHtml(cfg.measurementId || '')}" autocomplete="off" placeholder="G-XXXXXXX" ${disabledAttr}>
+            </div>
+            <div class="config-card-actions">
+              <button type="submit" class="config-inline-btn" ${disabledAttr}>Guardar config local</button>
+              <button type="button" class="config-inline-btn secondary" data-firebase-config-clear="1" ${disabledAttr}>Limpiar config</button>
+            </div>
+          </form>
+        </article>
+      `;
+    }
+
+    function buildAuthAccessSectionHtml(){
+      const firebaseStatus = getFirebaseBaseStatusSnapshot();
+      const authStatus = getAuthAccessStatusSnapshot();
+      const roleAccess = getRoleAccessControlState();
+      const configState = getFirebaseRuntimeConfigForForm();
+      const configItems = [];
+      configItems.push(`Origen: ${firebaseStatus?.configSourceLabel || 'Placeholder seguro'}`);
+      configItems.push(`Project ID: ${firebaseStatus?.projectId || 'Pendiente'}`);
+      configItems.push(`Auth domain: ${firebaseStatus?.authDomain || 'Pendiente'}`);
+      if (Array.isArray(firebaseStatus?.missingKeys) && firebaseStatus.missingKeys.length){
+        configItems.push(`Claves pendientes: ${firebaseStatus.missingKeys.join(', ')}`);
+      }
+      const diagItems = [];
+      diagItems.push(`Estado acceso: ${authStatus?.label || 'Sin dato'}`);
+      diagItems.push(`Estado Firebase: ${firebaseStatus?.label || 'Sin dato'}`);
+      diagItems.push(`Host actual: ${firebaseStatus?.runtime?.currentHost || '(sin host)'}`);
+      diagItems.push(`Origen actual: ${firebaseStatus?.runtime?.currentOrigin || '(sin origin)'}`);
+      diagItems.push(`Persistencia: ${authStatus?.persistence || 'LOCAL'}`);
+      if (authStatus?.error?.code){
+        diagItems.push(`Error: ${authStatus.error.code}`);
+      }
+
+      const loginDisabled = !firebaseStatus?.hasRealConfig || authStatus?.isBusy;
+      const loginDisabledAttr = loginDisabled ? 'disabled' : '';
+      const statusClass = getAuthInlineStatusClass(authStatus);
+      const sessionCard = authStatus?.isAuthenticated ? `
+        <article class="firebase-diag-card">
+          <div class="config-card-top">
+            <h4>Sesión actual</h4>
+            <div class="config-chip">${escapeHtml(authStatus?.user?.email || 'Activa')}</div>
+          </div>
+          <p class="roles-inline-note">Sesión real montada con persistencia local y guard global activo. Aquí se entra, se mantiene la sesión y se sale sin tropiezos.</p>
+          ${buildAuthSessionList(authStatus?.user)}
+          <div class="config-card-actions" style="margin-top:0.9rem;">
+            <button type="button" class="config-inline-btn" data-auth-action="signout">Cerrar sesión</button>
+            <button type="button" class="config-inline-btn secondary" data-auth-action="refresh">Revisar estado</button>
+          </div>
+          <div class="auth-inline-status ${escapeHtml(statusClass)}">${escapeHtml(authStatus?.message || 'Sesión activa.')}</div>
+        </article>
+      ` : `
+        <article class="firebase-diag-card">
+          <div class="config-card-top">
+            <h4>Entrar</h4>
+            <div class="config-chip">Email + contraseña</div>
+          </div>
+          <p class="roles-inline-note">Acceso simple y manejable: inicia sesión con un usuario ya existente en Firebase Authentication. La administración sensible ya quedó separada por rol.</p>
+          <form class="roles-form-grid" data-auth-form="sign-in">
+            <div class="roles-form-grid two">
+              <div class="roles-field">
+                <label for="auth-email">Correo</label>
+                <input id="auth-email" name="email" type="email" inputmode="email" autocomplete="username" placeholder="usuario@dominio.com" ${loginDisabledAttr}>
+              </div>
+              <div class="roles-field">
+                <label for="auth-password">Contraseña</label>
+                <input id="auth-password" name="password" type="password" autocomplete="current-password" placeholder="Tu contraseña" ${loginDisabledAttr}>
+              </div>
+            </div>
+            <div class="config-card-actions">
+              <button type="submit" class="config-inline-btn" ${loginDisabledAttr}>Iniciar sesión</button>
+              <button type="button" class="config-inline-btn secondary" data-auth-action="refresh">Revisar estado</button>
+            </div>
+          </form>
+          <div class="auth-inline-status ${escapeHtml(statusClass)}">${escapeHtml(authStatus?.message || 'Sin sesión activa.')}</div>
+          <ul class="config-list">
+            <li>La sesión queda persistente en este navegador.</li>
+            <li>Los errores comunes se traducen a mensajes claros.</li>
+            <li>Si aún no existe el usuario, se crea luego desde el flujo administrativo real.</li>
+          </ul>
+        </article>
+      `;
+
+      return `
+        <div class="config-panel-header">
+          <div>
+            <div class="config-section-kicker">Acceso real simple</div>
+            <h3 class="config-panel-title" id="config-panel-title">Acceso</h3>
+          </div>
+          <div class="config-chip">${escapeHtml(getAuthAccessBadge(authStatus))}</div>
+        </div>
+        <p class="config-panel-copy">Aquí queda amarrado el acceso real de la Suite: login con Firebase Auth, sesión persistente y logout estable, ya conviviendo con membresía real y control suficiente por rol.</p>
+        <div class="firebase-banner">
+          <div class="firebase-banner-copy">
+            <strong>Estado actual</strong>
+            <span>${escapeHtml(authStatus?.message || firebaseStatus?.message || 'Sin diagnóstico disponible.')}</span>
+          </div>
+          <div class="badge-warn" style="margin-top:0;">${escapeHtml(authStatus?.isAuthenticated ? 'Sesión real activa' : 'Acceso simple listo')}</div>
+        </div>
+        ${buildAuthStatusCards(authStatus, firebaseStatus)}
+        <div class="firebase-diag-grid">
+          ${sessionCard}
+          ${buildFirebaseRuntimeConfigForm(configState, { readOnly: roleAccess.isMember })}
+        </div>
+        <div class="firebase-diag-grid">
+          <article class="firebase-diag-card">
+            <div class="config-card-top">
+              <h4>Diagnóstico y acciones</h4>
+              <div class="config-chip">Auth + Firebase</div>
+            </div>
+            ${buildFirebaseDiagList(diagItems, 'Sin diagnóstico todavía.')}
+            ${authStatus?.error?.message ? `<div class="badge-warn" style="margin-top:0;">${escapeHtml(authStatus.error.message)}</div>` : ''}
+            <div class="config-card-actions" style="margin-top:0.9rem;">
+              <button type="button" class="config-inline-btn" data-firebase-refresh="status">Refrescar diagnóstico</button>
+              <button type="button" class="config-inline-btn secondary" data-firebase-refresh="boot">Probar acceso Firebase</button>
+            </div>
+          </article>
+          <article class="firebase-diag-card">
+            <div class="config-card-top">
+              <h4>Configuración activa</h4>
+              <div class="config-chip">${escapeHtml(firebaseStatus?.hasRealConfig ? 'Real' : 'Pendiente')}</div>
+            </div>
+            ${buildFirebaseDiagList(configItems, 'Sin datos de configuración todavía.')}
+            <div class="small-note">La config local guardada aquí evita tocar archivos y deja el navegador listo para probar acceso real.</div>
+          </article>
+        </div>
+        <div class="firebase-diag-grid">
+          <article class="firebase-diag-card">
+            <div class="config-card-top">
+              <h4>Advertencias / pendientes</h4>
+              <div class="config-chip">Sin humo</div>
+            </div>
+            ${buildFirebaseDiagList(authStatus?.firebase?.warnings || firebaseStatus?.warnings || [], 'Nada crítico detectado en este momento.')}
+          </article>
+          <article class="firebase-diag-card">
+            <div class="config-card-top">
+              <h4>Lo que ya quedó resuelto</h4>
+              <div class="config-chip">Base estable</div>
+            </div>
+            <ul>
+              <li>Login real con <span class="firebase-inline-code">Email/Password</span> sin añadir frameworks nuevos.</li>
+              <li>Persistencia local mediante <span class="firebase-inline-code">browserLocalPersistence</span> para sostener la sesión.</li>
+              <li>Logout estable y mensajes claros ante errores comunes de acceso o configuración.</li>
+            </ul>
+          </article>
+        </div>
+        <div class="firebase-diag-grid">
+          <article class="firebase-diag-card">
+            <div class="config-card-top">
+              <h4>Base Firebase</h4>
+              <div class="config-chip">Diagnóstico técnico</div>
+            </div>
+            ${buildFirebaseStatusCards(firebaseStatus)}
+          </article>
+        </div>
+      `;
+    }
+
+    async function refreshFirebaseBaseSection({ onExport, onImport, attemptBoot = false } = {}){
+      try{
+        if (window.A33Firebase && typeof window.A33Firebase.refreshStatus === 'function'){
+          await window.A33Firebase.refreshStatus({ attemptBoot: !!attemptBoot });
+        }
+        if (window.A33Auth && typeof window.A33Auth.refresh === 'function'){
+          await window.A33Auth.refresh();
+        }
+        if (window.A33Workspace && typeof window.A33Workspace.refresh === 'function'){
+          await window.A33Workspace.refresh({ forceEnsure:false });
+        }
+      }catch(err){
+        showToast('No se pudo refrescar el acceso Firebase.');
+      }
+      renderConfigurationModule({
+        sectionId: 'firebase-base',
+        onExport,
+        onImport
+      });
+    }
+
+    function getConfigurationModuleSections(){
+      return [
+        {
+          id: 'overview',
+          label: 'Vista general',
+          navLabel: 'Vista general',
+          state: 'Contenedor',
+          buildContent: () => `
+            <div class="config-panel-header">
+              <div>
+                <div class="config-section-kicker">Arquitectura interna</div>
+                <h3 class="config-panel-title" id="config-panel-title">Vista general</h3>
+              </div>
+              <div class="config-chip">Módulo contenedor</div>
+            </div>
+            <p class="config-panel-copy">Configuración ahora separa carriles por intención: respaldo operativo, acceso Firebase simple, contexto real de espacio compartido, gestión real de miembros y un hueco limpio para ajustes globales futuros. Menos cajón de sastre, más orden con dientes.</p>
+            <div class="config-grid">
+              <article class="config-card">
+                <div class="config-card-top">
+                  <h4>Respaldo</h4>
+                  <div class="config-chip">Operativo</div>
+                </div>
+                <p>Exporta o importa el JSON completo del navegador actual sin romper compatibilidad.</p>
+                <div class="config-card-actions">
+                  <button type="button" class="config-inline-btn" data-config-open-section="respaldo">Abrir Respaldo</button>
+                </div>
+              </article>
+              <article class="config-card">
+                <div class="config-card-top">
+                  <h4>Usuarios y Roles</h4>
+                  <div class="config-chip">Miembros reales</div>
+                </div>
+                <p>Ahora trabaja con miembros reales del espacio: unión por código, cambio real de rol y remoción operativa desde Firebase.</p>
+                <div class="config-card-actions">
+                  <button type="button" class="config-inline-btn secondary" data-config-open-section="usuarios-roles">Abrir miembros reales</button>
+                </div>
+              </article>
+              <article class="config-card">
+                <div class="config-card-top">
+                  <h4>Acceso</h4>
+                  <div class="config-chip">Firebase Auth</div>
+                </div>
+                <p>Login real simple, sesión persistente, logout estable y diagnóstico claro, ya conviviendo con guard global y cierre por rol en acciones sensibles.</p>
+                <div class="config-card-actions">
+                  <button type="button" class="config-inline-btn secondary" data-config-open-section="firebase-base">Abrir acceso</button>
+                </div>
+              </article>
+              <article class="config-card">
+                <div class="config-card-top">
+                  <h4>Espacio compartido</h4>
+                  <div class="config-chip">Contexto real</div>
+                </div>
+                <p>Usuario real, espacio de trabajo y vínculo base en Firestore para que la Suite tenga pertenencia real.</p>
+                <div class="config-card-actions">
+                  <button type="button" class="config-inline-btn secondary" data-config-open-section="workspace-context">Abrir contexto</button>
+                </div>
+              </article>
+              <article class="config-card">
+                <div class="config-card-top">
+                  <h4>Ajustes globales</h4>
+                  <div class="config-chip">Reservado</div>
+                </div>
+                <p>Espacio listo para parámetros transversales de la Suite sin invadir respaldo ni usuarios.</p>
+                <div class="config-card-actions">
+                  <button type="button" class="config-inline-btn secondary" data-config-open-section="ajustes-globales">Ver carril</button>
+                </div>
+              </article>
+            </div>
+          `
+        },
+        {
+          id: 'respaldo',
+          label: 'Respaldo',
+          navLabel: 'Respaldo',
+          state: 'Operativo',
+          buildContent: () => {
+            const roleAccess = getRoleAccessControlState();
+            const backupLocked = roleAccess.isMember;
+            const disabledAttr = backupLocked ? 'disabled' : '';
+            return `
+            <div class="config-panel-header">
+              <div>
+                <div class="config-section-kicker">Sección activa</div>
+                <h3 class="config-panel-title" id="config-panel-title">Respaldo</h3>
+              </div>
+              <div class="badge-warn" style="margin-top:0;">${escapeHtml(backupLocked ? 'Solo ADMIN' : 'Local · sin sync')}</div>
+            </div>
+            <p class="config-panel-copy">Exporta o importa un JSON con todos los datos guardados en este navegador actual. El formato se mantiene intacto; solo lo acomodamos donde corresponde.</p>
+            ${backupLocked ? buildRoleRestrictionNoteHtml({ title:'Respaldo sensible', body:'Exportar o importar el navegador completo queda reservado para ADMIN mientras este dispositivo esté dentro del espacio compartido.' }) : ''}
+            <div class="config-section-actions">
+              <button type="button" class="config-inline-btn" data-config-action="export" ${disabledAttr}>Exportar JSON</button>
+              <button type="button" class="config-inline-btn secondary" data-config-action="import" ${disabledAttr}>Importar JSON</button>
+            </div>
+            <ul class="config-list">
+              <li>Incluye IndexedDB y localStorage de la Suite.</li>
+              <li>La importación reemplaza los datos del navegador actual.</li>
+              <li>Recomendado: exportar antes de importar. La paranoia aquí sí paga dividendos.</li>
+            </ul>
+          `;
+          }
+        },
+        {
+          id: 'usuarios-roles',
+          label: 'Usuarios y Roles',
+          navLabel: 'Usuarios y Roles',
+          state: getMembersSectionBadge(getMembersSectionStatusSnapshot()),
+          buildContent: () => buildUsersRolesSectionHtml()
+        },
+        {
+          id: 'firebase-base',
+          label: 'Acceso',
+          navLabel: 'Acceso',
+          state: getAuthAccessBadge(getAuthAccessStatusSnapshot()),
+          buildContent: () => buildAuthAccessSectionHtml()
+        },
+        {
+          id: 'workspace-context',
+          label: 'Espacio compartido',
+          navLabel: 'Espacio compartido',
+          state: getWorkspaceContextBadge(getWorkspaceContextStatusSnapshot()),
+          buildContent: () => buildWorkspaceContextSectionHtml()
+        },
+        {
+          id: 'ajustes-globales',
+          label: 'Ajustes globales',
+          navLabel: 'Ajustes globales',
+          state: 'Reservado',
+          buildContent: () => `
+            <div class="config-panel-header">
+              <div>
+                <div class="config-section-kicker">Espacio futuro</div>
+                <h3 class="config-panel-title" id="config-panel-title">Ajustes globales</h3>
+              </div>
+              <div class="config-chip">Listo para crecer</div>
+            </div>
+            <p class="config-panel-copy">Este carril queda libre para parámetros transversales de la Suite. No toca respaldo ni usuarios, y eso es exactamente la idea.</p>
+            <div class="config-grid">
+              <article class="config-card">
+                <div class="config-card-top">
+                  <h4>Parámetros de operación</h4>
+                  <div class="config-chip">Futuro</div>
+                </div>
+                <p>Constantes compartidas, defaults globales y switches del sistema cuando llegue su momento.</p>
+              </article>
+              <article class="config-card">
+                <div class="config-card-top">
+                  <h4>Entorno / dispositivo</h4>
+                  <div class="config-chip">Futuro</div>
+                </div>
+                <p>Ajustes locales del dispositivo, presentación o comportamiento PWA sin romper otros carriles.</p>
+              </article>
+            </div>
+          `
+        }
+      ];
+    }
+
+    function buildConfigurationModuleHtml({ sectionId = 'overview' } = {}){
+      const sections = getConfigurationModuleSections();
+      const currentSection = sections.find(section => section.id === sectionId) || sections[0];
+      const navHtml = sections.map(section => `
+        <button
+          type="button"
+          class="config-nav-btn${section.id === currentSection.id ? ' active' : ''}"
+          data-config-open-section="${escapeHtml(section.id)}"
+          aria-pressed="${section.id === currentSection.id ? 'true' : 'false'}"
+        >
+          <span>${escapeHtml(section.navLabel || section.label)}</span>
+          <span class="config-nav-meta">${escapeHtml(section.state || '')}</span>
+        </button>
+      `).join('');
+
+      return `
+        <div class="config-shell" data-config-shell="1">
+          <div class="config-module-head">
+            <div class="config-module-title-row">
+              <div>
+                <div class="config-section-kicker">Módulo contenedor</div>
+                <h3 class="config-module-title">Configuración</h3>
+              </div>
+              <div class="badge-warn" style="margin-top:0;">Local + acceso Firebase</div>
+            </div>
+            <div class="config-module-copy">Ordena ajustes transversales de la Suite con secciones claras, acceso Firebase simple, contexto real de espacio compartido y gestión operativa de miembros sin convertir esto en un laberinto.</div>
+            <div class="config-module-stats">
+              <div class="config-stat">
+                <span class="config-stat-value">5</span>
+                <span class="config-stat-label">Carriles listos</span>
+              </div>
+              <div class="config-stat">
+                <span class="config-stat-value">4</span>
+                <span class="config-stat-label">Piezas Firebase</span>
+              </div>
+              <div class="config-stat">
+                <span class="config-stat-value">${Number((getMembersSectionStatusSnapshot().counts || {}).activeCount || 0)}</span>
+                <span class="config-stat-label">Miembros activos</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="config-nav" role="tablist" aria-label="Secciones de Configuración">
+            ${navHtml}
+          </div>
+
+          <section class="config-panel" aria-labelledby="config-panel-title">
+            ${currentSection.buildContent()}
+          </section>
+        </div>
+      `;
+    }
+
+    function renderConfigurationModule({ sectionId = 'overview', onExport, onImport } = {}){
+      const bodyEl = document.getElementById('backup-modal-body');
+      if (!bodyEl) return;
+      bodyEl.innerHTML = buildConfigurationModuleHtml({ sectionId });
+      bodyEl.scrollTop = 0;
+      bindConfigurationModuleEvents({ onExport, onImport });
+    }
+
+    function bindConfigurationModuleEvents({ onExport, onImport } = {}){
+      const root = document.querySelector('[data-config-shell="1"]');
+      if (!root) return;
+
+      root.querySelectorAll('[data-config-open-section]').forEach((button) => {
+        button.onclick = () => {
+          renderConfigurationModule({
+            sectionId: button.dataset.configOpenSection || 'overview',
+            onExport,
+            onImport
+          });
+        };
+      });
+
+      if (root.querySelector('[data-real-members-root]')){
+        const membersStatus = getMembersSectionStatusSnapshot();
+        if (window.A33Members && typeof window.A33Members.refresh === 'function' && !membersStatus?.isBusy && (!membersStatus?.code || membersStatus.code === 'idle')) {
+          window.A33Members.refresh().then(() => {
+            rerenderUsersRolesSection(onExport, onImport);
+          }).catch(() => {});
+        }
+      }
+
+      root.querySelectorAll('[data-real-members-panel]').forEach((button) => {
+        button.onclick = () => {
+          const panel = button.dataset.realMembersPanel || 'overview';
+          if (['invite-create', 'change-role', 'remove'].includes(panel) && !getRoleAccessControlState().canManageMembers){
+            showToast(getAdminOnlyMessage('Esta acción'));
+            return;
+          }
+          handleUsersRolesPanelChange(
+            panel,
+            button.dataset.realMemberId || '',
+            onExport,
+            onImport
+          );
+        };
+      });
+
+      root.querySelectorAll('[data-real-members-action]').forEach((button) => {
+        button.onclick = async () => {
+          const action = button.dataset.realMembersAction || 'refresh';
+          button.disabled = true;
+          try{
+            if (action === 'revoke-code'){
+              if (!getRoleAccessControlState().canManageMembers){
+                showToast(getAdminOnlyMessage('Revocar el código activo'));
+                return;
+              }
+              const result = window.A33Members && typeof window.A33Members.revokeActiveJoinCode === 'function'
+                ? await window.A33Members.revokeActiveJoinCode()
+                : { ok:false, error:{ message:'A33Members no está disponible.' } };
+              showToast(result?.ok ? 'Código activo revocado.' : (result?.error?.message || 'No se pudo revocar el código.'));
+            }else{
+              if (window.A33Members && typeof window.A33Members.refresh === 'function'){
+                await window.A33Members.refresh();
+              }
+              showToast('Miembros reales refrescados.');
+            }
+            rerenderUsersRolesSection(onExport, onImport);
+          }finally{
+            button.disabled = false;
+          }
+        };
+      });
+
+      root.querySelectorAll('[data-real-members-copy-code]').forEach((button) => {
+        button.onclick = async () => {
+          if (!getRoleAccessControlState().canManageMembers){
+            showToast(getAdminOnlyMessage('Copiar el código activo'));
+            return;
+          }
+          const code = String(button.dataset.realMembersCopyCode || '').trim();
+          if (!code) return;
+          try{
+            if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function'){
+              await navigator.clipboard.writeText(code);
+              showToast('Código copiado.');
+            }else{
+              showToast(code);
+            }
+          }catch(_){
+            showToast(code);
+          }
+        };
+      });
+
+      root.querySelectorAll('[data-real-members-form="invite"]').forEach((form) => {
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          if (!getRoleAccessControlState().canManageMembers){
+            showToast(getAdminOnlyMessage('Generar un código de unión'));
+            return;
+          }
+          const fd = new FormData(form);
+          const role = String(fd.get('role') || 'MIEMBRO').trim().toUpperCase();
+          const submitBtn = form.querySelector('button[type="submit"]');
+          if (submitBtn) submitBtn.disabled = true;
+          try{
+            const result = window.A33Members && typeof window.A33Members.createJoinCode === 'function'
+              ? await window.A33Members.createJoinCode({ role })
+              : { ok:false, error:{ message:'A33Members no está disponible.' } };
+            if (result?.ok){
+              setMembersViewState({ panel:'overview', lastInviteCode: result.code || '' });
+            }
+            showToast(result?.ok ? `Código listo: ${result.code}` : (result?.error?.message || 'No se pudo generar el código.'));
+            rerenderUsersRolesSection(onExport, onImport);
+          }finally{
+            if (submitBtn) submitBtn.disabled = false;
+          }
+        });
+      });
+
+      root.querySelectorAll('[data-real-members-form="join"]').forEach((form) => {
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          const fd = new FormData(form);
+          const code = String(fd.get('code') || '').trim();
+          const submitBtn = form.querySelector('button[type="submit"]');
+          if (submitBtn) submitBtn.disabled = true;
+          try{
+            const result = window.A33Members && typeof window.A33Members.redeemJoinCode === 'function'
+              ? await window.A33Members.redeemJoinCode(code)
+              : { ok:false, error:{ message:'A33Members no está disponible.' } };
+            if (result?.ok){
+              setMembersViewState({ panel:'overview', selectedId:'' });
+            }
+            showToast(result?.ok ? 'Te uniste al espacio correctamente.' : (result?.error?.message || 'No se pudo usar el código.'));
+            renderHomeAccessStrip();
+            rerenderUsersRolesSection(onExport, onImport);
+          }finally{
+            if (submitBtn) submitBtn.disabled = false;
+          }
+        });
+      });
+
+      root.querySelectorAll('[data-real-members-form="change-role"]').forEach((form) => {
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          if (!getRoleAccessControlState().canManageMembers){
+            showToast(getAdminOnlyMessage('Cambiar el rol de un miembro'));
+            return;
+          }
+          const fd = new FormData(form);
+          const role = String(fd.get('role') || 'MIEMBRO').trim().toUpperCase();
+          const memberId = String(form.dataset.realMemberId || '').trim();
+          const submitBtn = form.querySelector('button[type="submit"]');
+          if (submitBtn) submitBtn.disabled = true;
+          try{
+            const result = window.A33Members && typeof window.A33Members.updateMemberRole === 'function'
+              ? await window.A33Members.updateMemberRole(memberId, role)
+              : { ok:false, error:{ message:'A33Members no está disponible.' } };
+            if (result?.ok){
+              setMembersViewState({ panel:'overview', selectedId: memberId });
+            }
+            showToast(result?.ok ? 'Rol actualizado correctamente.' : (result?.error?.message || 'No se pudo actualizar el rol.'));
+            renderHomeAccessStrip();
+            rerenderUsersRolesSection(onExport, onImport);
+          }finally{
+            if (submitBtn) submitBtn.disabled = false;
+          }
+        });
+      });
+
+      root.querySelectorAll('[data-real-member-remove]').forEach((button) => {
+        button.onclick = async () => {
+          if (!getRoleAccessControlState().canManageMembers){
+            showToast(getAdminOnlyMessage('Remover miembros del espacio'));
+            return;
+          }
+          const memberId = String(button.dataset.realMemberRemove || '').trim();
+          if (!memberId) return;
+          button.disabled = true;
+          try{
+            const result = window.A33Members && typeof window.A33Members.removeMember === 'function'
+              ? await window.A33Members.removeMember(memberId)
+              : { ok:false, error:{ message:'A33Members no está disponible.' } };
+            if (result?.ok){
+              setMembersViewState({ panel:'overview', selectedId:'' });
+            }
+            showToast(result?.ok ? 'Miembro removido del espacio.' : (result?.error?.message || 'No se pudo remover al miembro.'));
+            renderHomeAccessStrip();
+            rerenderUsersRolesSection(onExport, onImport);
+          }finally{
+            button.disabled = false;
+          }
+        };
+      });
+
+      root.querySelectorAll('[data-real-members-open-access]').forEach((button) => {
+        button.onclick = () => {
+          renderConfigurationModule({ sectionId: 'firebase-base', onExport, onImport });
+        };
+      });
+
+      root.querySelectorAll('[data-ur-panel]').forEach((button) => {
+        button.onclick = () => {
+          handleUsersRolesPanelChange(
+            button.dataset.urPanel || 'overview',
+            button.dataset.urUserId || '',
+            onExport,
+            onImport
+          );
+        };
+      });
+
+      root.querySelectorAll('[data-ur-form]').forEach((form) => {
+        form.addEventListener('submit', (event) => {
+          event.preventDefault();
+          const state = getUsersRolesUI();
+          const mode = form.dataset.urForm || 'add';
+
+          if (mode === 'add'){
+            const payload = readUsersRolesFormPayload(form);
+            const validationError = validateUsersRolesPayload(payload, state.users, 'add');
+            if (validationError){
+              showToast(validationError);
+              return;
+            }
+            payload.id = generateUsersRolesUserId();
+            payload.lastSeen = 'Aún sin acceso';
+            const users = [...state.users, payload];
+            setUsersRolesUI({ users, selectedId: payload.id, panel: 'overview', source: 'local' });
+            showToast('Usuario agregado en la base local.');
+            rerenderUsersRolesSection(onExport, onImport);
+            return;
+          }
+
+          if (mode === 'edit'){
+            const payload = readUsersRolesFormPayload(form);
+            const validationError = validateUsersRolesPayload(payload, state.users, 'edit', payload.id);
+            if (validationError){
+              showToast(validationError);
+              return;
+            }
+            const users = state.users.map((user) => user.id === payload.id ? { ...user, ...payload, lastSeen: user.lastSeen } : user);
+            setUsersRolesUI({ users, selectedId: payload.id, panel: 'overview', source: 'local' });
+            showToast('Usuario actualizado en la base local.');
+            rerenderUsersRolesSection(onExport, onImport);
+            return;
+          }
+
+          if (mode === 'assign-role'){
+            const fd = new FormData(form);
+            const role = CONFIG_ROLE_OPTIONS.includes(fd.get('role')) ? fd.get('role') : 'MIEMBRO';
+            const scope = String(fd.get('scope') || '').trim() || 'Sin definir';
+            const userId = form.dataset.urUserId || state.selectedId;
+            const users = state.users.map((user) => user.id === userId ? { ...user, role, scope } : user);
+            setUsersRolesUI({ users, selectedId: userId, panel: 'overview', source: 'local' });
+            showToast('Rol local actualizado.');
+            rerenderUsersRolesSection(onExport, onImport);
+          }
+        });
+      });
+
+      root.querySelectorAll('[data-ur-confirm-delete]').forEach((button) => {
+        button.onclick = () => {
+          const state = getUsersRolesUI();
+          const userId = button.dataset.urConfirmDelete || '';
+          const users = state.users.filter((user) => user.id !== userId);
+          const isLastDeletion = !users.length;
+          setUsersRolesUI({
+            users,
+            selectedId: users[0]?.id || null,
+            panel: isLastDeletion ? 'overview' : 'overview',
+            source: 'local'
+          });
+          showToast(isLastDeletion ? 'Se eliminó el último usuario local. Puedes crear uno nuevo.' : 'Usuario eliminado de la base local.');
+          rerenderUsersRolesSection(onExport, onImport);
+        };
+      });
+
+      root.querySelectorAll('[data-ur-reset-demo]').forEach((button) => {
+        button.onclick = () => {
+          const fallback = createDefaultUsersRolesUI();
+          configurationUsersRolesUI = fallback;
+          persistUsersRolesUI();
+          showToast('Se restauró el ejemplo local de usuarios y roles.');
+          rerenderUsersRolesSection(onExport, onImport);
+        };
+      });
+
+
+      root.querySelectorAll('[data-auth-form="sign-in"]').forEach((form) => {
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          const fd = new FormData(form);
+          const email = String(fd.get('email') || '').trim();
+          const password = String(fd.get('password') || '');
+          const submitBtn = form.querySelector('button[type="submit"]');
+          if (submitBtn) submitBtn.disabled = true;
+          try{
+            const result = window.A33Auth && typeof window.A33Auth.signIn === 'function'
+              ? await window.A33Auth.signIn(email, password)
+              : { ok:false, error:{ message:'A33Auth no está disponible.' } };
+            if (result?.ok && window.A33Workspace && typeof window.A33Workspace.ensure === 'function'){
+              await window.A33Workspace.ensure({ forceEnsure:true });
+            }
+            showToast(result?.ok ? 'Sesión iniciada correctamente.' : (result?.error?.message || 'No se pudo iniciar sesión.'));
+            renderHomeAccessStrip();
+            renderConfigurationModule({ sectionId: result?.ok ? 'usuarios-roles' : 'firebase-base', onExport, onImport });
+          }finally{
+            if (submitBtn) submitBtn.disabled = false;
+          }
+        });
+      });
+
+      root.querySelectorAll('[data-auth-action]').forEach((button) => {
+        button.onclick = async () => {
+          const action = button.dataset.authAction || 'refresh';
+          button.disabled = true;
+          try{
+            if (action === 'signout'){
+              const result = window.A33Auth && typeof window.A33Auth.signOut === 'function'
+                ? await window.A33Auth.signOut()
+                : { ok:false, error:{ message:'A33Auth no está disponible.' } };
+              showToast(result?.ok ? 'Sesión cerrada correctamente.' : (result?.error?.message || 'No se pudo cerrar sesión.'));
+            }else{
+              await refreshFirebaseBaseSection({ onExport, onImport, attemptBoot:false });
+              showToast('Estado de acceso refrescado.');
+            }
+            renderHomeAccessStrip();
+            renderConfigurationModule({ sectionId: 'firebase-base', onExport, onImport });
+          }finally{
+            button.disabled = false;
+          }
+        };
+      });
+
+      root.querySelectorAll('[data-workspace-action]').forEach((button) => {
+        button.onclick = async () => {
+          const action = button.dataset.workspaceAction || 'refresh';
+          if (action === 'ensure' && !getRoleAccessControlState().canRepairContext){
+            showToast(getAdminOnlyMessage('Preparar o reparar el contexto'));
+            return;
+          }
+          button.disabled = true;
+          try{
+            await refreshWorkspaceContextSection({
+              onExport,
+              onImport,
+              forceEnsure: action === 'ensure'
+            });
+            showToast(action === 'ensure' ? 'Contexto real verificado.' : 'Contexto real refrescado.');
+          }finally{
+            button.disabled = false;
+          }
+        };
+      });
+
+      root.querySelectorAll('[data-workspace-open-access]').forEach((button) => {
+        button.onclick = () => {
+          renderConfigurationModule({ sectionId: 'firebase-base', onExport, onImport });
+        };
+      });
+
+      root.querySelectorAll('[data-firebase-config-form="save"]').forEach((form) => {
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          if (!getRoleAccessControlState().canEditFirebaseConfig){
+            showToast(getAdminOnlyMessage('Cambiar la config local de Firebase'));
+            return;
+          }
+          const payload = readFirebaseRuntimeConfigFormPayload(form);
+          const validationError = validateFirebaseRuntimeConfigPayload(payload);
+          if (validationError){
+            showToast(validationError);
+            return;
+          }
+          try{
+            if (window.A33FirebaseConfig && typeof window.A33FirebaseConfig.setRuntimeConfig === 'function'){
+              window.A33FirebaseConfig.setRuntimeConfig(payload);
+            }
+            if (window.A33Auth && typeof window.A33Auth.reset === 'function') await window.A33Auth.reset();
+            if (window.A33Firebase && typeof window.A33Firebase.reset === 'function') await window.A33Firebase.reset();
+            await refreshFirebaseBaseSection({ onExport, onImport, attemptBoot:true });
+            renderHomeAccessStrip();
+            showToast('Config Firebase guardada en este navegador.');
+          }catch(_){
+            showToast('No se pudo guardar la config Firebase.');
+          }
+        });
+      });
+
+      root.querySelectorAll('[data-firebase-config-clear]').forEach((button) => {
+        button.onclick = async () => {
+          if (!getRoleAccessControlState().canEditFirebaseConfig){
+            showToast(getAdminOnlyMessage('Limpiar la config local de Firebase'));
+            return;
+          }
+          button.disabled = true;
+          try{
+            if (window.A33FirebaseConfig && typeof window.A33FirebaseConfig.clearRuntimeConfig === 'function'){
+              window.A33FirebaseConfig.clearRuntimeConfig();
+            }
+            if (window.A33Auth && typeof window.A33Auth.reset === 'function') await window.A33Auth.reset();
+            if (window.A33Firebase && typeof window.A33Firebase.reset === 'function') await window.A33Firebase.reset();
+            await refreshFirebaseBaseSection({ onExport, onImport, attemptBoot:false });
+            renderHomeAccessStrip();
+            showToast('Config Firebase local limpiada.');
+          }finally{
+            button.disabled = false;
+          }
+        };
+      });
+
+      root.querySelectorAll('[data-firebase-refresh]').forEach((button) => {
+        button.onclick = async () => {
+          const mode = button.dataset.firebaseRefresh || 'status';
+          button.disabled = true;
+          try{
+            await refreshFirebaseBaseSection({
+              onExport,
+              onImport,
+              attemptBoot: mode === 'boot'
+            });
+            renderHomeAccessStrip();
+            showToast(mode === 'boot' ? 'Diagnóstico Firebase actualizado.' : 'Diagnóstico refrescado.');
+          }finally{
+            button.disabled = false;
+          }
+        };
+      });
+
+      const exportBtn = root.querySelector('[data-config-action="export"]');
+      if (exportBtn){
+        exportBtn.onclick = () => {
+          if (!getRoleAccessControlState().canUseBackup){
+            showToast(getAdminOnlyMessage('Exportar el respaldo'));
+            return;
+          }
+          hideModal();
+          if (typeof onExport === 'function') onExport();
+        };
+      }
+
+      const importBtn = root.querySelector('[data-config-action="import"]');
+      if (importBtn){
+        importBtn.onclick = () => {
+          if (!getRoleAccessControlState().canUseBackup){
+            showToast(getAdminOnlyMessage('Importar un respaldo'));
+            return;
+          }
+          hideModal();
+          if (typeof onImport === 'function') onImport();
+        };
+      }
+    }
+
+    function showConfigurationHome({ onExport, onImport, initialSection = 'overview' } = {}){
+      showModal({
+        title: 'Configuración',
+        bodyHtml: '',
+        primaryText: 'Cerrar',
+        onPrimary: hideModal,
+        cancelText: 'Cancelar',
+        onCancel: hideModal
+      });
+
+      renderConfigurationModule({
+        sectionId: initialSection,
+        onExport,
+        onImport
+      });
+    }
+
     function showModal({ title, bodyHtml, primaryText, onPrimary, secondaryText, onSecondary, cancelText, onCancel, disableCancel, disablePrimary }){
       const modal = document.getElementById('backup-modal');
       const titleEl = document.getElementById('backup-modal-title');
@@ -902,7 +4021,7 @@
       const btnPrimary = document.getElementById('backup-modal-primary');
       const btnSecondary = document.getElementById('backup-modal-secondary');
 
-      titleEl.textContent = title || 'Respaldo';
+      titleEl.textContent = title || 'Configuración';
       bodyEl.innerHTML = bodyHtml || '';
 
       btnPrimary.textContent = primaryText || 'OK';
@@ -1402,13 +4521,94 @@
       return true;
     }
 
+    function renderHomeAccessStrip(){
+      const root = document.getElementById('home-access-strip');
+      if (!root) return;
+      const status = getAuthAccessStatusSnapshot();
+      const workspaceStatus = getWorkspaceContextStatusSnapshot();
+      const summary = status?.isAuthenticated
+        ? (workspaceStatus?.hasContext
+          ? `Sesión activa: ${status?.user?.email || 'usuario autenticado'} · ${workspaceStatus?.workspace?.name || workspaceStatus?.workspace?.id || 'espacio listo'} · ${workspaceStatus?.membership?.role || workspaceStatus?.role || 'MIEMBRO'}`
+          : (workspaceStatus?.code === 'no-membership'
+            ? `Sesión activa: ${status?.user?.email || 'usuario autenticado'} · sin membresía activa en el espacio actual.`
+            : `Sesión activa: ${status?.user?.email || 'usuario autenticado'} · preparando contexto real…`))
+        : (status?.code === 'needs-config'
+          ? 'Completa la config de Firebase y habilita el acceso real.'
+          : (status?.message || 'Sin sesión activa.'));
+      const mainButtonLabel = status?.isAuthenticated
+        ? (workspaceStatus?.hasContext ? 'Mi espacio' : 'Preparar contexto')
+        : (status?.code === 'needs-config' ? 'Configurar acceso' : 'Entrar');
+      const actions = [];
+      actions.push(`<button type="button" class="config-inline-btn" data-home-access-open="1">${escapeHtml(mainButtonLabel)}</button>`);
+      if (status?.isAuthenticated){
+        actions.push('<button type="button" class="config-inline-btn secondary" data-home-access-signout="1">Salir</button>');
+      }
+      root.innerHTML = `
+        <div class="home-access-copy">
+          <strong>${status?.isAuthenticated ? (workspaceStatus?.hasContext ? 'Acceso con contexto' : 'Acceso activo') : 'Acceso simple'}</strong>
+          <span>${escapeHtml(summary)}</span>
+        </div>
+        <div class="home-access-actions">${actions.join('')}</div>
+      `;
+      bindHomeAccessStripEvents();
+    }
+
+    function bindHomeAccessStripEvents(){
+      const root = document.getElementById('home-access-strip');
+      if (!root) return;
+      const openBtn = root.querySelector('[data-home-access-open]');
+      if (openBtn){
+        openBtn.onclick = () => {
+          const authStatus = getAuthAccessStatusSnapshot();
+          const workspaceStatus = getWorkspaceContextStatusSnapshot();
+          showConfigurationHome({
+            onExport: () => {
+              const exportCard = document.getElementById('card-export-backup');
+              if (exportCard) exportCard.click();
+            },
+            onImport: () => {
+              const importCard = document.getElementById('card-import-backup');
+              if (importCard) importCard.click();
+            },
+            initialSection: authStatus?.isAuthenticated
+              ? (workspaceStatus?.hasContext ? 'usuarios-roles' : 'workspace-context')
+              : 'firebase-base'
+          });
+        };
+      }
+      const signOutBtn = root.querySelector('[data-home-access-signout]');
+      if (signOutBtn){
+        signOutBtn.onclick = async () => {
+          signOutBtn.disabled = true;
+          try{
+            const result = window.A33Auth && typeof window.A33Auth.signOut === 'function'
+              ? await window.A33Auth.signOut()
+              : { ok:false, error:{ message:'A33Auth no está disponible.' } };
+            if (result?.ok){
+              showToast('Sesión cerrada correctamente.');
+            }else{
+              showToast(result?.error?.message || 'No se pudo cerrar sesión.');
+            }
+            renderHomeAccessStrip();
+          }finally{
+            signOutBtn.disabled = false;
+          }
+        };
+      }
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
 
       // Navegación: tarjetas del menú principal
       document.querySelectorAll('[data-link]').forEach(card => {
         card.addEventListener('click', () => {
           const href = card.getAttribute('data-link');
-          if (href) window.location.href = href;
+          if (!href) return;
+          if (window.A33RouteGuard && typeof window.A33RouteGuard.navigate === 'function') {
+            window.A33RouteGuard.navigate(href, { page:'home', homeUrl:'./index.html', requireContext:true });
+            return;
+          }
+          window.location.href = href;
         });
       });
 
@@ -1417,35 +4617,27 @@
       const importCard = document.getElementById('card-import-backup');
       const fileInput = document.getElementById('backup-file-input');
 
-      // Card: Respaldo (hub)
+      // Card: Configuración (hub)
       const backupHubCard = document.getElementById('card-backup-hub');
       if (backupHubCard){
         backupHubCard.addEventListener('click', () => {
-          showModal({
-            title: 'Respaldo',
-            bodyHtml: `
-              <div>Elegí una acción. Esto trabaja <b>solo en este dispositivo</b> (no hay sync).</div>
-              <div class="small-note">Tip: exportá antes de importar, por si acaso.</div>
-            `,
-            primaryText: 'Exportar',
-            onPrimary: () => {
-              hideModal();
+          showConfigurationHome({
+            onExport: () => {
               if (exportCard) exportCard.click();
             },
-            secondaryText: 'Importar',
-            onSecondary: () => {
-              hideModal();
+            onImport: () => {
               if (importCard) importCard.click();
-            },
-            cancelText: 'Cerrar',
-            onCancel: hideModal
+            }
           });
-
         });
       }
 
       if (exportCard){
         exportCard.addEventListener('click', async () => {
+          if (!getRoleAccessControlState().canUseBackup){
+            showToast(getAdminOnlyMessage('Exportar el respaldo'));
+            return;
+          }
           showModal({
             title: 'Resumen del respaldo',
             bodyHtml: '<div class="muted">Generando resumen...</div>',
@@ -1510,11 +4702,20 @@
 
       if (importCard && fileInput){
         importCard.addEventListener('click', () => {
+          if (!getRoleAccessControlState().canUseBackup){
+            showToast(getAdminOnlyMessage('Importar un respaldo'));
+            return;
+          }
           fileInput.value = '';
           fileInput.click();
         });
 
         fileInput.addEventListener('change', async () => {
+          if (!getRoleAccessControlState().canUseBackup){
+            showToast(getAdminOnlyMessage('Importar un respaldo'));
+            fileInput.value = '';
+            return;
+          }
           const file = fileInput.files && fileInput.files[0];
           if (!file) return;
 
@@ -1605,10 +4806,46 @@
           }
         });
       }
+      try{
+        if (window.A33Firebase && typeof window.A33Firebase.refreshStatus === 'function'){
+          window.A33Firebase.refreshStatus({ attemptBoot: false });
+        }
+      }catch(_){ }
+
+      renderHomeAccessStrip();
+      try{
+        const authEventName = (window.A33Auth && window.A33Auth.EVENT_NAME) || 'a33-auth-state';
+        const workspaceEventName = (window.A33Workspace && window.A33Workspace.EVENT_NAME) || 'a33-workspace-state';
+        window.addEventListener(authEventName, () => {
+          renderHomeAccessStrip();
+        });
+        window.addEventListener(workspaceEventName, () => {
+          renderHomeAccessStrip();
+        });
+        if (window.A33RouteGuard && typeof window.A33RouteGuard.bindReactivity === 'function'){
+          window.A33RouteGuard.bindReactivity({ page:'home', homeUrl:'./index.html', requireContext:true });
+        }
+        if (window.A33RouteGuard && typeof window.A33RouteGuard.boot === 'function'){
+          window.A33RouteGuard.boot({ page:'home', homeUrl:'./index.html', requireContext:true }).catch(() => {
+            document.documentElement.classList.remove('a33-guard-pending');
+          });
+        }else{
+          document.documentElement.classList.remove('a33-guard-pending');
+          if (window.A33Auth && typeof window.A33Auth.refresh === 'function'){
+            window.A33Auth.refresh().catch(() => {});
+          }
+          if (window.A33Workspace && typeof window.A33Workspace.refresh === 'function'){
+            window.A33Workspace.refresh({ forceEnsure:false }).catch(() => {});
+          }
+        }
+      }catch(_){
+        document.documentElement.classList.remove('a33-guard-pending');
+      }
+
       initHomeUi();
 
     });
   </script>
-  <script src="/assets/js/a33-input-ux.js?v=4.20.77&r=2"></script>
+  <script src="/assets/js/a33-input-ux.js?v=4.20.77&r=3"></script>
 </body>
 </html>

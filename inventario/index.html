@@ -6,6 +6,7 @@
   <title>Arcano 33 · Inventario</title>
   <meta name="description" content="Inventario interno de insumos, botellas y producto terminado de Arcano 33." />
   <meta name="theme-color" content="#7b1818" />
+  <script>document.documentElement.classList.add('a33-guard-pending');</script>
 
   <link rel="icon" type="image/png" sizes="192x192" href="images/logo.png" />
   <link rel="apple-touch-icon" href="images/logo.png" />
@@ -200,13 +201,30 @@
       </div>
     </div>
   </div>
-  <script src="/assets/js/a33-release.js?v=4.20.77&r=2"></script>
+  <script src="/assets/js/a33-release.js?v=4.20.77&r=6"></script>
 
 
   <script src="/assets/js/a33-storage.js?v=4.20.77&r=2"></script>
   <script src="/assets/js/a33-presentations.js?v=4.20.77&r=2"></script>
 
-  <script src="script.js?v=4.20.77&r=2"></script>
+    <script src="/assets/js/a33-firebase-config.js?v=4.20.77&r=1"></script>
+  <script src="/assets/js/a33-firebase-core.js?v=4.20.77&r=5"></script>
+  <script src="/assets/js/a33-firebase-auth.js?v=4.20.77&r=5"></script>
+  <script src="/assets/js/a33-firebase-workspace.js?v=4.20.77&r=3"></script>
+  <script src="/assets/js/a33-route-guard.js?v=4.20.77&r=1"></script>
+  <script>
+    if (window.A33RouteGuard && typeof window.A33RouteGuard.bindReactivity === 'function'){
+      window.A33RouteGuard.bindReactivity({ page:'module', homeUrl:'../index.html', requireContext:true });
+    }
+    if (window.A33RouteGuard && typeof window.A33RouteGuard.boot === 'function'){
+      window.A33RouteGuard.boot({ page:'module', homeUrl:'../index.html', requireContext:true }).catch(() => {
+        document.documentElement.classList.remove('a33-guard-pending');
+      });
+    }else{
+      document.documentElement.classList.remove('a33-guard-pending');
+    }
+  </script>
+<script src="script.js?v=4.20.77&r=2"></script>
   <script src="/assets/js/a33-input-ux.js?v=4.20.77&r=2"></script>
 </body>
 </html>
