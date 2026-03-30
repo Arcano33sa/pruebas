@@ -3,7 +3,7 @@
 */
 
 // A33_RELEASE (fuente única)
-try { importScripts('/assets/js/a33-release.js?v=4.20.77&r=6'); } catch (e) {}
+try { importScripts('/assets/js/a33-release.js?v=4.20.77&r=2'); } catch (e) {}
 
 const SW_VERSION = (self.A33_RELEASE && (self.A33_RELEASE.suiteVersion || self.A33_RELEASE.SuiteVersion))
   ? String(self.A33_RELEASE.suiteVersion || self.A33_RELEASE.SuiteVersion)
@@ -17,13 +17,14 @@ const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}-r${SW_REV}`;
 
 const PRECACHE_URLS = [
   './',
-  './index.html?v=4.20.77&r=3',
+  './index.html?v=4.20.77&r=2',
   './style.css?v=4.20.77&r=2',
   './script.js?v=4.20.77&r=2',
   './manifest.webmanifest?v=4.20.77&r=2',
   './offline.html',
   './images/logo.png',
-  '/assets/js/a33-release.js?v=4.20.77&r=6',
+  '/assets/js/a33-release.js?v=4.20.77&r=2',
+
   '/assets/js/a33-input-ux.js?v=4.20.77&r=2',
   '/assets/js/a33-storage.js?v=4.20.77&r=2',
   '/assets/css/a33-header.css?v=4.20.77&r=2',
@@ -91,7 +92,7 @@ async function handleNavigate(request){
     const cache = await caches.open(CACHE_NAME);
     return (
       (await cache.match(request)) ||
-      (await cache.match('./index.html?v=4.20.77&r=3')) ||
+      (await cache.match('./index.html?v=4.20.77&r=2')) ||
       (await cache.match('./index.html')) ||
       (await cache.match('./offline.html')) ||
       (await cache.match('./')) ||
