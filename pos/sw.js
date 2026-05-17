@@ -3,31 +3,31 @@
 */
 
 // A33_RELEASE (fuente única)
-try { importScripts('/assets/js/a33-release.js?v=4.20.77&r=5'); } catch (e) {}
+try { importScripts('/assets/js/a33-release.js?v=4.20.77&r=7'); } catch (e) {}
 
 const SW_VERSION = (self.A33_RELEASE && (self.A33_RELEASE.suiteVersion || self.A33_RELEASE.SuiteVersion))
   ? String(self.A33_RELEASE.suiteVersion || self.A33_RELEASE.SuiteVersion)
   : '4.20.77';
-const SW_REV = '5'; // POS cache bump local — Etapa 3/5 T/C evento en Efectivo
+const SW_REV = '7'; // POS cache bump local — Etapa 5/5 arqueo USD y vuelto C$
 
 const MODULE = 'pos';
 const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}-r${SW_REV}`;
 
 const PRECACHE_URLS = [
   './',
-  './index.html?v=4.20.77&r=5',
-  './styles.css?v=4.20.77&r=5',
-  './app.js?v=4.20.77&r=5',
-  './manifest.webmanifest?v=4.20.77&r=5',
+  './index.html?v=4.20.77&r=7',
+  './styles.css?v=4.20.77&r=7',
+  './app.js?v=4.20.77&r=7',
+  './manifest.webmanifest?v=4.20.77&r=7',
   './offline.html',
   './logo.png',
-  './vendor/xlsx.full.min.js?v=4.20.77&r=5',
-  '/assets/js/a33-release.js?v=4.20.77&r=5',
+  './vendor/xlsx.full.min.js?v=4.20.77&r=7',
+  '/assets/js/a33-release.js?v=4.20.77&r=7',
 
-  '/assets/js/a33-input-ux.js?v=4.20.77&r=5',
-  '/assets/js/a33-storage.js?v=4.20.77&r=5',
-  '/assets/js/a33-presentations.js?v=4.20.77&r=5',
-  '/assets/css/a33-header.css?v=4.20.77&r=5'
+  '/assets/js/a33-input-ux.js?v=4.20.77&r=7',
+  '/assets/js/a33-storage.js?v=4.20.77&r=7',
+  '/assets/js/a33-presentations.js?v=4.20.77&r=7',
+  '/assets/css/a33-header.css?v=4.20.77&r=7'
 ];
 
 function sameOrigin(url){
@@ -94,7 +94,7 @@ async function handleNavigate(request){
     const cache = await caches.open(CACHE_NAME);
     return (
       (await cache.match(request)) ||
-      (await cache.match('./index.html?v=4.20.77&r=5')) ||
+      (await cache.match('./index.html?v=4.20.77&r=7')) ||
       (await cache.match('./index.html', { ignoreSearch: true })) ||
       (await cache.match('./offline.html')) ||
       (await cache.match('./')) ||
