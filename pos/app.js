@@ -7,7 +7,7 @@ let db;
 const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.77';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r1');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r5');
 
 // --- Util: round2 (2 decimales) — Hotfix Ventas Etapa 1/3
 // Nota: evita NaN y errores de flotante (EPSILON). Retorna Number.
@@ -994,7 +994,9 @@ function cashV2CoerceInitial(initial){
 const CASHV2_FX_LS_KEY = 'A33.EF2.fxByEvent';
 
 function cashV2FxNorm(raw){
-  const n = Number(raw);
+  const str = String(raw == null ? '' : raw).trim().replace(',', '.');
+  if (!str) return null;
+  const n = Number(str);
   if (!Number.isFinite(n) || n <= 0) return null;
   const r = Math.round(n * 100) / 100;
   if (!Number.isFinite(r) || r <= 0) return null;
@@ -1149,6 +1151,30 @@ function cashV2ApplyFxToDom(rec, eventId, evObj){
   try{ if (st) st.textContent = fixed ? `Actual: ${fixed}` : '—'; }catch(_){ }
 }
 
+
+async function cashV2PromoteLegacyFxToEventIfNeeded(eventId, rec, evObj, editable){
+  if (!editable) return null;
+  const eid = String(eventId == null ? '' : eventId).trim();
+  if (!eid || !rec || typeof rec !== 'object') return null;
+
+  try{
+    const current = cashV2GetFxFromEventObj(evObj);
+    if (current != null) return current;
+  }catch(_){ }
+
+  const legacy = cashV2FxNorm(rec.fx);
+  if (legacy == null) return null;
+
+  try{
+    const ok = await setEventExchangeRateByIdPOS(eid, legacy);
+    if (ok){
+      try{ cashV2FxSetCached(eid, legacy); }catch(_){ }
+      return legacy;
+    }
+  }catch(_){ }
+  return null;
+}
+
 function cashV2InitFxUIOnce(){
   const card = document.getElementById('cashv2-fx-card');
   const inp = document.getElementById('cashv2-fx-input');
@@ -1164,66 +1190,372 @@ function cashV2InitFxUIOnce(){
     try{ if (err) err.style.display = msg ? 'block' : 'none'; }catch(_){ }
   };
 
-  inp.addEventListener('input', ()=>{
-    const n = cashV2FxNorm(inp.value);
-    try{ if (st) st.textContent = n != null ? `Actual: ${cashV2FxFmt2(n)}` : '—'; }catch(_){ }
-  });
+  let saving = false;
 
-  inp.addEventListener('blur', ()=>{
-    const n = cashV2FxNorm(inp.value);
-    if (n != null){
-      try{ inp.value = cashV2FxFmt2(n); }catch(_){ }
-    }
-  });
-
-  btn.addEventListener('click', async ()=>{
-    if (btn.disabled) return;
+  const persist = async (opts)=>{
+    opts = opts || {};
+    if (saving) return false;
+    if (btn.disabled && !opts.force) return false;
     showErr('');
 
     const eid = String(card.dataset.eventId || '').trim();
     const dk = String(card.dataset.dayKey || '').trim();
     const ro = String(card.dataset.readonly || '') === '1';
-    if (!eid || !dk) return;
+    if (!eid || !dk) return false;
     if (ro){
-      try{ toast('Bloqueado: no editable'); }catch(_){ }
-      return;
+      if (!opts.silent){ try{ toast('Bloqueado: no editable'); }catch(_){ } }
+      return false;
     }
 
     const n = cashV2FxNorm(inp.value);
     if (n == null){
       showErr('Ingresa un tipo de cambio válido (> 0).');
-      try{ toast('Tipo de cambio inválido'); }catch(_){ }
-      return;
+      if (!opts.silent){ try{ toast('Tipo de cambio inválido'); }catch(_){ } }
+      return false;
     }
 
     const fixed = cashV2FxFmt2(n);
     try{ inp.value = fixed; }catch(_){ }
+    try{ setEventFxDraftPOS(eid, fixed); }catch(_){ }
 
+    saving = true;
     try{
-      const rec = await cashV2Ensure(eid, dk);
-      rec.fx = cashV2CoerceFx(n);
-      const saved = await cashV2Save(rec);
+      // Fuente única: primero se actualiza el T/C canónico del evento.
+      const okEvent = await setEventExchangeRateByIdPOS(eid, fixed);
+      if (!okEvent) throw new Error('No se pudo actualizar el T/C del evento.');
 
-      try{ cashV2SetLastRec(saved); }catch(_){ }
-      cashV2FxSetCached(eid, n);
-      try{ await cashV2PersistEventFx(eid, n); }catch(_){ }
-
-      // write-through: also save FX where Calculadora reads its rate (single source of truth)
+      // Compatibilidad: reflejar el mismo T/C en el registro diario abierto, sin convertirlo en fuente independiente.
       try{
-        const fx2 = String(fixed || '').trim();
-        posCalcSafeLSSet(A33_POS_CALC_FX_LS_KEY, fx2);
-      }catch(_){ }
+        const rec = await cashV2Ensure(eid, dk);
+        rec.fx = cashV2CoerceFx(fixed);
+        const saved = await cashV2Save(rec);
+        try{ cashV2SetLastRec(saved); }catch(_){ }
+      }catch(mirrorErr){
+        console.warn('[A33][CASHv2][FX] espejo diario no crítico', mirrorErr);
+      }
 
-      try{ if (st) st.textContent = `Guardado: ${fixed}`; }catch(_){ }
-      try{ toast('Tipo de cambio guardado'); }catch(_){ }
+      try{ cashV2FxSetCached(eid, fixed); }catch(_){ }
+      try{ await syncExchangeRateInputs(); }catch(_){ }
+
+      try{ if (st) st.textContent = opts.silent ? `Actual: ${fixed}` : `Guardado: ${fixed}`; }catch(_){ }
+      if (!opts.silent){ try{ toast('Tipo de cambio guardado'); }catch(_){ } }
+      return true;
     }catch(e){
       console.error('[A33][CASHv2][FX] save error', e);
+      try{ clearEventFxDraftPOS(eid); }catch(_){ }
       showErr('No se pudo guardar.');
-      try{ toast('Error al guardar'); }catch(_){ }
+      if (!opts.silent){ try{ toast('Error al guardar'); }catch(_){ } }
+      return false;
+    }finally{
+      saving = false;
+    }
+  };
+
+  inp.addEventListener('input', ()=>{
+    const n = cashV2FxNorm(inp.value);
+    try{
+      const eid = String(card.dataset.eventId || '').trim();
+      if (eid && n != null) setEventFxDraftPOS(eid, n);
+    }catch(_){ }
+    try{ if (st) st.textContent = n != null ? `Actual: ${cashV2FxFmt2(n)}` : '—'; }catch(_){ }
+    try{ if (n != null) showErr(''); }catch(_){ }
+  });
+
+  const markButtonIntent = ()=>{
+    try{ btn.dataset.skipBlurSave = '1'; }catch(_){ }
+    setTimeout(()=>{ try{ delete btn.dataset.skipBlurSave; }catch(_){ } }, 350);
+  };
+  try{ btn.addEventListener('pointerdown', markButtonIntent); }catch(_){ }
+  try{ btn.addEventListener('mousedown', markButtonIntent); }catch(_){ }
+  try{ btn.addEventListener('touchstart', markButtonIntent, { passive:true }); }catch(_){ }
+
+  inp.addEventListener('blur', ()=>{
+    if (String(btn.dataset.skipBlurSave || '') === '1') return;
+    const n = cashV2FxNorm(inp.value);
+    if (n != null){
+      try{ inp.value = cashV2FxFmt2(n); }catch(_){ }
+      persist({ silent:true }).catch(err=>console.error('[A33][CASHv2][FX] blur save', err));
     }
   });
 
+  inp.addEventListener('change', ()=>{
+    persist({ silent:true }).catch(err=>console.error('[A33][CASHv2][FX] change save', err));
+  });
+
+  inp.addEventListener('keydown', (ev)=>{
+    if (ev && ev.key === 'Enter'){
+      try{ ev.preventDefault(); }catch(_){ }
+      persist({ silent:false }).catch(err=>console.error('[A33][CASHv2][FX] enter save', err));
+      try{ inp.blur(); }catch(_){ }
+    }
+  });
+
+  btn.addEventListener('click', async ()=>{
+    if (btn.disabled) return;
+    await persist({ silent:false });
+  });
+
   btn.dataset.ready = '1';
+}
+
+// --- POS: T/C único del evento activo conectado a Vender — Etapa 1/5
+function normalizeExchangeRate(value){
+  return cashV2FxNorm(value);
+}
+
+function formatExchangeRate2(value){
+  return cashV2FxFmt2(value);
+}
+
+let __A33_POS_EVENT_FX_DRAFT = null;
+
+function setEventFxDraftPOS(eventId, value){
+  const eid = String(eventId == null ? '' : eventId).trim();
+  const rate = normalizeExchangeRate(value);
+  if (!eid || rate == null) return null;
+  const fixed = formatExchangeRate2(rate);
+  __A33_POS_EVENT_FX_DRAFT = { eventId: eid, rate, fixed, ts: Date.now() };
+  return fixed;
+}
+
+function getEventFxDraftPOS(eventId){
+  const eid = String(eventId == null ? '' : eventId).trim();
+  const d = __A33_POS_EVENT_FX_DRAFT;
+  if (!eid || !d || String(d.eventId) !== eid) return null;
+  const age = Date.now() - Number(d.ts || 0);
+  if (!Number.isFinite(age) || age < 0 || age > 120000){
+    __A33_POS_EVENT_FX_DRAFT = null;
+    return null;
+  }
+  return normalizeExchangeRate(d.rate);
+}
+
+function clearEventFxDraftPOS(eventId, value){
+  const eid = String(eventId == null ? '' : eventId).trim();
+  const d = __A33_POS_EVENT_FX_DRAFT;
+  if (!d || (eid && String(d.eventId) !== eid)) return;
+  const expected = normalizeExchangeRate(value);
+  if (expected == null || normalizeExchangeRate(d.rate) === expected){
+    __A33_POS_EVENT_FX_DRAFT = null;
+  }
+}
+
+async function getCurrentEventForExchangeRatePOS(){
+  try{
+    const current = await getMeta('currentEventId');
+    if (!current) return null;
+    const evs = await getAll('events');
+    return (Array.isArray(evs) ? evs : []).find(ev => ev && String(ev.id) === String(current)) || null;
+  }catch(_){
+    return null;
+  }
+}
+
+async function getActiveEventExchangeRate(){
+  try{
+    const ev = await getCurrentEventForExchangeRatePOS();
+    if (!ev || ev.closedAt) return null;
+    const fromEvent = cashV2GetFxFromEventObj(ev);
+    if (fromEvent != null) return fromEvent;
+    return await cashV2ReadEventFxCanon(ev.id);
+  }catch(_){
+    return null;
+  }
+}
+
+async function setEventExchangeRateByIdPOS(eventId, value){
+  const rate = normalizeExchangeRate(value);
+  const eidNum = Number(eventId);
+  if (!Number.isFinite(eidNum) || rate == null) return false;
+
+  const fixed = formatExchangeRate2(rate);
+
+  try{
+    if (!db) await openDB();
+    const ev = await getOne('events', eidNum);
+    if (!ev || typeof ev !== 'object' || ev.closedAt) return false;
+
+    ev[CASHV2_EVENT_FX_PROP] = fixed;
+    await put('events', ev);
+
+    try{ cashV2FxSetCached(eidNum, fixed); }catch(_){ }
+    try{ clearEventFxDraftPOS(eidNum, fixed); }catch(_){ }
+    return true;
+  }catch(err){
+    console.error('[A33][POS][FX] No se pudo guardar T/C del evento', err);
+    return false;
+  }
+}
+
+async function setActiveEventExchangeRate(value){
+  const rate = normalizeExchangeRate(value);
+  if (rate == null) return false;
+
+  const ev = await getCurrentEventForExchangeRatePOS();
+  if (!ev || ev.closedAt) return false;
+
+  return await setEventExchangeRateByIdPOS(ev.id, rate);
+}
+
+function setSaleExchangeRateStatusPOS(msg, isError){
+  const status = document.getElementById('sale-exchange-rate-status');
+  const err = document.getElementById('sale-exchange-rate-error');
+  const inp = document.getElementById('sale-exchange-rate');
+  try{ if (status) status.textContent = isError ? '—' : (msg || '—'); }catch(_){ }
+  try{
+    if (err){
+      err.textContent = isError ? (msg || 'T/C inválido') : '';
+      err.style.display = isError ? 'block' : 'none';
+    }
+  }catch(_){ }
+  try{ toggleInvalidBorderPOS(inp, !!isError); }catch(_){ }
+}
+
+async function syncExchangeRateInputs(){
+  const saleInp = document.getElementById('sale-exchange-rate');
+  const saleWrap = document.getElementById('sale-exchange-rate-wrap');
+  let ev = null;
+  let editable = false;
+  let fixed = '';
+
+  try{
+    ev = await getCurrentEventForExchangeRatePOS();
+    editable = !!(ev && !ev.closedAt);
+    let rate = null;
+    if (ev){
+      rate = cashV2GetFxFromEventObj(ev);
+      if (rate == null){
+        rate = await cashV2ReadEventFxCanon(ev.id);
+        // Consolidación conservadora: si venía de cache/legacy y el evento está activo, dejarlo ya en events.fx.
+        if (rate != null && editable){
+          try{
+            ev[CASHV2_EVENT_FX_PROP] = formatExchangeRate2(rate);
+            await put('events', ev);
+          }catch(_){ }
+        }
+      }
+    }
+    const draftRate = ev && editable ? getEventFxDraftPOS(ev.id) : null;
+    if (draftRate != null) rate = draftRate;
+    fixed = rate != null ? formatExchangeRate2(rate) : '';
+  }catch(_){
+    ev = null;
+    editable = false;
+    fixed = '';
+  }
+
+  if (saleInp){
+    try{ saleInp.disabled = !editable; }catch(_){ }
+    try{ saleInp.value = fixed; }catch(_){ }
+  }
+  if (saleWrap){
+    try{ saleWrap.dataset.eventId = ev && ev.id != null ? String(ev.id) : ''; }catch(_){ }
+  }
+
+  if (!ev){
+    setSaleExchangeRateStatusPOS('Sin evento activo', false);
+  } else if (ev.closedAt){
+    setSaleExchangeRateStatusPOS('Evento cerrado', false);
+  } else if (fixed){
+    setSaleExchangeRateStatusPOS('Actual: ' + fixed, false);
+  } else {
+    setSaleExchangeRateStatusPOS('Sin T/C guardado', false);
+  }
+
+  // Mantener coherente el campo existente de Efectivo si está presente en el DOM.
+  try{
+    const cashCard = document.getElementById('cashv2-fx-card');
+    const cashCardEid = cashCard ? String(cashCard.dataset.eventId || '').trim() : '';
+    const evId = ev && ev.id != null ? String(ev.id) : '';
+    if (!cashCardEid || !evId || cashCardEid === evId){
+      const cashInp = document.getElementById('cashv2-fx-input');
+      const cashSt = document.getElementById('cashv2-fx-save-status');
+      const activeEl = document.activeElement;
+      if (cashInp && (activeEl !== cashInp || String(window.__A33_ACTIVE_TAB || '') !== 'efectivo')) cashInp.value = fixed;
+      if (cashSt) cashSt.textContent = fixed ? ('Actual: ' + fixed) : '—';
+    }
+  }catch(_){ }
+
+  // Mantener coherente el campo de Calculadora sin convertirlo en otra fuente de verdad.
+  try{
+    const calcInp = document.getElementById('fx-rate');
+    const calcMeta = document.getElementById('fx-meta');
+    const calcStatus = document.getElementById('fx-status');
+    if (calcInp){
+      const activeEl = document.activeElement;
+      if (activeEl !== calcInp || String(window.__A33_ACTIVE_TAB || '') !== 'calculadora'){
+        calcInp.disabled = !editable;
+        calcInp.value = fixed;
+      }
+      calcInp.title = editable ? 'T/C del evento activo' : 'Selecciona un evento activo para editar el T/C';
+    }
+    if (String(window.__A33_ACTIVE_TAB || '') === 'calculadora'){
+      if (calcMeta){
+        if (!ev) calcMeta.textContent = 'Sin evento activo · T/C del evento';
+        else if (ev.closedAt) calcMeta.textContent = 'Evento cerrado · T/C no editable';
+        else calcMeta.textContent = `Evento activo: ${ev.name || 'Sin nombre'} · T/C del evento`;
+      }
+      if (calcStatus){
+        calcStatus.style.display = 'block';
+        calcStatus.textContent = !ev ? 'Selecciona un evento activo para usar el T/C.' : (ev.closedAt ? 'Evento cerrado.' : (fixed ? ('Actual: ' + fixed) : 'Sin T/C guardado.'));
+      }
+    }
+  }catch(_){ }
+}
+
+function setupSaleExchangeRateUIOnce(){
+  const inp = document.getElementById('sale-exchange-rate');
+  if (!inp || inp.dataset.ready === '1') return;
+
+  const persist = async ()=>{
+    const raw = String(inp.value || '').trim();
+    const rate = normalizeExchangeRate(raw);
+    if (rate == null){
+      const existing = await getActiveEventExchangeRate();
+      if (existing != null){
+        try{ inp.value = formatExchangeRate2(existing); }catch(_){ }
+      }
+      setSaleExchangeRateStatusPOS('Ingresa un T/C válido mayor que 0.', true);
+      return false;
+    }
+
+    const fixed = formatExchangeRate2(rate);
+    try{ inp.value = fixed; }catch(_){ }
+    const ok = await setActiveEventExchangeRate(fixed);
+    if (!ok){
+      setSaleExchangeRateStatusPOS('No se pudo guardar el T/C del evento.', true);
+      return false;
+    }
+
+    setSaleExchangeRateStatusPOS('Guardado: ' + fixed, false);
+    try{ await syncExchangeRateInputs(); }catch(_){ }
+    return true;
+  };
+
+  inp.addEventListener('input', ()=>{
+    const rate = normalizeExchangeRate(inp.value);
+    try{
+      const wrap = document.getElementById('sale-exchange-rate-wrap');
+      const eid = wrap ? String(wrap.dataset.eventId || '').trim() : '';
+      if (eid && rate != null) setEventFxDraftPOS(eid, rate);
+    }catch(_){ }
+    if (String(inp.value || '').trim() && rate == null){
+      setSaleExchangeRateStatusPOS('T/C inválido', true);
+    } else {
+      setSaleExchangeRateStatusPOS(rate != null ? ('Actual: ' + formatExchangeRate2(rate)) : 'Sin T/C guardado', false);
+    }
+  });
+
+  inp.addEventListener('blur', ()=>{ persist().catch(err=>console.error('[A33][POS][FX] blur save', err)); });
+  inp.addEventListener('change', ()=>{ persist().catch(err=>console.error('[A33][POS][FX] change save', err)); });
+  inp.addEventListener('keydown', (ev)=>{
+    if (ev && ev.key === 'Enter'){
+      try{ ev.preventDefault(); }catch(_){ }
+      try{ inp.blur(); }catch(_){ }
+    }
+  });
+
+  inp.dataset.ready = '1';
 }
 
 
@@ -1478,6 +1810,25 @@ async function cashV2ComputeCashSalesC(eventId, dayKey){
   if (!Number.isFinite(sum)) sum = 0;
   return sum;
 }
+
+async function cashV2ReadEventCashSalesPreparedPOS(eventId, dayKey){
+  const eid = String(eventId || '').trim();
+  const dk = safeYMD(dayKey);
+  const fx = eid ? await cashV2ReadEventFxCanon(eid) : null;
+  const cashSalesC = eid ? await cashV2ComputeCashSalesC(eid, dk) : 0;
+
+  // Preparación segura para la siguiente etapa: no calcula cobro mixto todavía.
+  return {
+    eventId: eid,
+    dayKey: dk,
+    fx: fx != null ? cashV2FxFmt2(fx) : '',
+    cashSalesC: cashV2Round2Money(cashSalesC),
+    cashSalesUSD: 0,
+    changeC: 0,
+    mixedCashReady: false
+  };
+}
+try{ window.cashV2ReadEventCashSalesPreparedPOS = cashV2ReadEventCashSalesPreparedPOS; }catch(_){ }
 
 // --- POS: Efectivo v2 — Movimientos (Entradas/Salidas/Ajuste) por moneda — Etapa 4
 function cashV2NormAmountInt(v, opts){
@@ -3769,11 +4120,12 @@ async function renderEfectivoTab(){
     try{ if (rec && typeof rec === 'object') rec.cashSalesC = cashSalesC; }catch(_){ }
     try{ cashV2SetLastRec(rec); }catch(_){ }
 
-    // Etapa 3/7: mostrar Tipo de cambio
+    // Etapa 3/5: mostrar Tipo de cambio conectado al evento activo
     try{
       const fx = document.getElementById('cashv2-fx-card');
       if (fx){ fx.style.display = 'block'; fx.dataset.eventId = String(eventId); fx.dataset.dayKey = dayKey; }
     }catch(_){ }
+    try{ await cashV2PromoteLegacyFxToEventIfNeeded(eventId, rec, evObj, editable && !locked); }catch(_){ }
     try{ cashV2ApplyFxToDom(rec, eventId, evObj); }catch(_){ }
     try{
       const card = document.getElementById('cashv2-initial-card');
@@ -8587,22 +8939,6 @@ async function refreshSaleBankSelect(){
   }
 }
 
-
-async function resetSalePaymentToCashPOS(){
-  try{
-    const pay = document.getElementById('sale-payment');
-    const bank = document.getElementById('sale-bank');
-    if (pay) pay.value = 'efectivo';
-    if (bank) bank.value = '';
-    try{ await refreshSaleBankSelect(); }catch(_){
-      const row = document.getElementById('sale-bank-row');
-      const note = document.getElementById('sale-bank-note');
-      if (row) row.style.display = 'none';
-      if (note) note.textContent = '';
-    }
-  }catch(_){ }
-}
-
 async function renderBancos(){
   const wrap = document.getElementById('banks-list');
   if (!wrap) return;
@@ -9060,7 +9396,10 @@ const tabs = $$('.tab');
   if (name==='efectivo') renderEfectivoTab().catch(err=>console.error(err));
   if (name==='calculadora') onOpenPosCalculatorTab().catch(err=>console.error(err));
   if (name==='checklist') renderChecklistTab().catch(err=>console.error(err));
-  if (name==='venta') initVasosPanelPOS().catch(err=>console.error(err));
+  if (name==='venta') {
+    initVasosPanelPOS().catch(err=>console.error(err));
+    syncExchangeRateInputs().catch(err=>console.error(err));
+  }
 }
 
 // --- Vasos panel (colapsable persistente)
@@ -10673,6 +11012,7 @@ async function refreshEventUI(){
   }
 
   await updateSellEnabled();
+  try{ await syncExchangeRateInputs(); }catch(e){ console.warn('No se pudo sincronizar T/C en Vender', e); }
   try{ await refreshProductSelect({ keepSelection:true }); }catch(e){ try{ await renderProductChips(); }catch(_){ } }
   try{ await renderExtrasUI(); }catch(e){}
   try{ await initVasosPanelPOS(); }catch(e){}
@@ -12094,7 +12434,6 @@ async function sellCupsPOS(isCourtesy){
 
   const qtyInp = document.getElementById('cup-qty');
   if (qtyInp) qtyInp.value = 1;
-  await resetSalePaymentToCashPOS();
 
   await renderDay();
   await renderSummary();
@@ -17810,6 +18149,7 @@ async function init(){
   }
 
   // Paso 4: refrescar vistas principales
+  await runStep('setupSaleExchangeRateUI', async()=>{ setupSaleExchangeRateUIOnce(); });
   await runStep('refreshEventUI', refreshEventUI);
   await runStep('refreshProductSelect', refreshProductSelect);
   await runStep('refreshSaleBankSelect', refreshSaleBankSelect);
@@ -18682,7 +19022,6 @@ async function addSale(){
   afterSaleCustomerHousekeepingPOS(customerName, customerId);
   $('#sale-courtesy-to').value='';
   $('#sale-notes').value=''; // limpiar notas
-  await resetSalePaymentToCashPOS();
   const nextTotal = (courtesy?0:price).toFixed(2);
   const saleTotal2 = $('#sale-total');
   if (saleTotal2) {
@@ -18925,7 +19264,6 @@ async function addExtraSale(extraId){
   $('#sale-courtesy-to').value = '';
   $('#sale-notes').value = '';
   $('#sale-return').checked = false;
-  await resetSalePaymentToCashPOS();
 
   await renderDay();
   await renderSummary();
@@ -19230,25 +19568,6 @@ function posCalcTrimDec(s){
 }
 
 
-const A33_POS_CALC_FX_LS_KEY = 'A33_POS_CALC_FX_RATE';
-
-function posCalcSafeLSGet(key){
-  try{
-    if (typeof window === 'undefined') return null;
-    if (!window.localStorage) return null;
-    return window.localStorage.getItem(String(key));
-  }catch(_){ return null; }
-}
-
-function posCalcSafeLSSet(key, value){
-  try{
-    if (typeof window === 'undefined') return false;
-    if (!window.localStorage) return false;
-    window.localStorage.setItem(String(key), String(value));
-    return true;
-  }catch(_){ return false; }
-}
-
 function posCalcParsePositiveNumber(raw){
   const s0 = String(raw == null ? '' : raw).trim();
   if (!s0) return null;
@@ -19266,20 +19585,13 @@ function posCalcReadNum(el){
   return Number.isFinite(n) ? n : null;
 }
 
-function posCalcRound2(n){
-  const x = Number(n);
-  if (!Number.isFinite(x)) return null;
-  return Math.round(x * 100) / 100;
-}
-
 function posCalcFmt2(n){
   const x = Number(n);
   if (!Number.isFinite(x)) return '';
   return (Math.round(x * 100) / 100).toFixed(2);
 }
 
-// REQUISITO CLAVE: source of truth = sección (solo lectura)
-// Devuelve el tipo de cambio actual usado por sección para el evento activo.
+// REQUISITO CLAVE: source of truth = T/C canónico del evento activo (events.fx).
 function initPosCalculatorTabOnce(){
   if (__A33_POS_CALC_INIT) return;
   __A33_POS_CALC_INIT = true;
@@ -19293,7 +19605,7 @@ function initPosCalculatorTabOnce(){
     fxNio: document.getElementById('fx-nio'),
     fxMeta: document.getElementById('fx-meta'),
     fxStatus: document.getElementById('fx-status'),
-fxClear: document.getElementById('fx-clear')
+    fxClear: document.getElementById('fx-clear')
   };
 
   const calc = {
@@ -19493,26 +19805,63 @@ fxClear: document.getElementById('fx-clear')
 
 
 
-  function fxPersistRate(){
+  async function fxPersistRate(){
     try{
-      if (!els.fxRate) return;
+      if (!els.fxRate) return false;
       const n = posCalcParsePositiveNumber(els.fxRate.value);
-      if (!n) return; // NO sobreescribir lo guardado con vacío/invalid
+      if (!n){
+        fxShowStatus('Ingresa un tipo de cambio válido mayor que 0.');
+        try{ toggleInvalidBorderPOS(els.fxRate, true); }catch(_){ }
+        return false;
+      }
+
       const fixed = posCalcFmt2(n);
       try{ els.fxRate.value = fixed; }catch(_){ }
-      posCalcSafeLSSet(A33_POS_CALC_FX_LS_KEY, fixed);
-    }catch(_){ }
+      const ok = await setActiveEventExchangeRate(fixed);
+      if (!ok){
+        fxShowStatus('No se pudo guardar el T/C del evento activo.');
+        try{ toggleInvalidBorderPOS(els.fxRate, true); }catch(_){ }
+        return false;
+      }
+
+      try{ toggleInvalidBorderPOS(els.fxRate, false); }catch(_){ }
+      try{ await syncExchangeRateInputs(); }catch(_){ }
+      try{ fxRecompute(); }catch(_){ }
+      fxShowStatus('Guardado: ' + fixed);
+      return true;
+    }catch(err){
+      console.error('[A33][POS][FX][CALC] No se pudo guardar T/C del evento', err);
+      fxShowStatus('No se pudo guardar el T/C del evento activo.');
+      try{ toggleInvalidBorderPOS(els.fxRate, true); }catch(_){ }
+      return false;
+    }
   }
 
   // Bind conversor FX
   if (els.fxUsd) els.fxUsd.addEventListener('input', fxUpdateFromUSD);
   if (els.fxNio) els.fxNio.addEventListener('input', fxUpdateFromNIO);
   if (els.fxRate){
-    els.fxRate.addEventListener('input', ()=>{ fxShowStatus(''); fxRecompute(); });
-    els.fxRate.addEventListener('change', fxPersistRate);
-    els.fxRate.addEventListener('blur', fxPersistRate);
+    els.fxRate.addEventListener('input', ()=>{
+      try{ toggleInvalidBorderPOS(els.fxRate, false); }catch(_){ }
+      const n = posCalcParsePositiveNumber(els.fxRate.value);
+      try{
+        getCurrentEventForExchangeRatePOS().then(ev=>{
+          try{ if (ev && !ev.closedAt && n) setEventFxDraftPOS(ev.id, n); }catch(_){ }
+        }).catch(()=>{});
+      }catch(_){ }
+      fxShowStatus(n ? ('Actual: ' + posCalcFmt2(n)) : '');
+      fxRecompute();
+    });
+    els.fxRate.addEventListener('change', ()=>{ fxPersistRate().catch(err=>console.error('[A33][POS][FX][CALC] change save', err)); });
+    els.fxRate.addEventListener('blur', ()=>{ fxPersistRate().catch(err=>console.error('[A33][POS][FX][CALC] blur save', err)); });
+    els.fxRate.addEventListener('keydown', (ev)=>{
+      if (ev && ev.key === 'Enter'){
+        try{ ev.preventDefault(); }catch(_){ }
+        try{ els.fxRate.blur(); }catch(_){ }
+      }
+    });
   }
-if (els.fxClear) els.fxClear.addEventListener('click', ()=>{
+  if (els.fxClear) els.fxClear.addEventListener('click', ()=>{
     if (els.fxUsd) els.fxUsd.value = '';
     if (els.fxNio) els.fxNio.value = '';
     fxShowStatus('');
@@ -19539,27 +19888,38 @@ async function onOpenPosCalculatorTab(){
   const statusEl = document.getElementById('fx-status');
   if (!rateEl || !metaEl || !statusEl) return;
 
-  // Precargar (y normalizar) tipo de cambio guardado: siempre 2 decimales.
+  let ev = null;
+  let rate = null;
+  try{ ev = await getCurrentEventForExchangeRatePOS(); }catch(_){ ev = null; }
   try{
-    const saved = posCalcSafeLSGet(A33_POS_CALC_FX_LS_KEY);
-    const nSaved = posCalcParsePositiveNumber(saved);
-    const curN = posCalcParsePositiveNumber(rateEl.value);
-    if (nSaved) rateEl.value = posCalcFmt2(nSaved);
-    else if (curN) rateEl.value = posCalcFmt2(curN);
+    if (ev){
+      rate = cashV2GetFxFromEventObj(ev);
+      if (rate == null) rate = await cashV2ReadEventFxCanon(ev.id);
+    }
+  }catch(_){ rate = null; }
+
+  const editable = !!(ev && !ev.closedAt);
+  try{
+    const draftRate = ev && editable ? getEventFxDraftPOS(ev.id) : null;
+    if (draftRate != null) rate = draftRate;
   }catch(_){ }
+  const fixed = rate != null ? posCalcFmt2(rate) : '';
 
-  const ev = await getActiveEventPOS();
+  try{ rateEl.disabled = !editable; }catch(_){ }
+  try{ rateEl.readOnly = false; }catch(_){ }
+  try{ rateEl.value = fixed; }catch(_){ }
+  try{ rateEl.title = editable ? 'T/C del evento activo' : 'Selecciona un evento activo para editar el T/C'; }catch(_){ }
+  try{ toggleInvalidBorderPOS(rateEl, false); }catch(_){ }
 
-  // Tipo de cambio manual (se guarda localmente en este dispositivo).
-  rateEl.readOnly = false;
-  rateEl.title = 'Tipo de cambio (se guarda en este dispositivo)';
-
-  if (ev){
-    metaEl.textContent = `Evento activo: ${ev.name} · Tipo de cambio manual (guardado)`;
-    statusEl.textContent = 'Este tipo de cambio se guarda en este dispositivo.';
+  if (!ev){
+    metaEl.textContent = 'Sin evento activo · T/C del evento';
+    statusEl.textContent = 'Selecciona un evento activo para usar el T/C.';
+  } else if (ev.closedAt){
+    metaEl.textContent = `Evento cerrado: ${ev.name || 'Sin nombre'} · T/C no editable`;
+    statusEl.textContent = fixed ? ('Actual: ' + fixed) : 'Evento cerrado sin T/C guardado.';
   } else {
-    metaEl.textContent = 'Sin evento activo · Tipo de cambio manual (guardado)';
-    statusEl.textContent = 'Este tipo de cambio se guarda en este dispositivo.';
+    metaEl.textContent = `Evento activo: ${ev.name || 'Sin nombre'} · T/C del evento`;
+    statusEl.textContent = fixed ? ('Actual: ' + fixed) : 'Sin T/C guardado.';
   }
   statusEl.style.display = 'block';
 

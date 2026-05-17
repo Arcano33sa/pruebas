@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.77&r=3">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.77&r=5">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.77&r=3">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.77&r=3" />
+<link rel="stylesheet" href="styles.css?v=4.20.77&r=5">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.77&r=5" />
 </head>
 <body>
   <header class="a33-header" role="banner">
@@ -75,6 +75,12 @@
       <div>
         <label>Fecha</label>
         <input id="sale-date" type="date">
+        <div class="sale-fx-field" id="sale-exchange-rate-wrap">
+          <label for="sale-exchange-rate">T/C</label>
+          <input id="sale-exchange-rate" class="a33-num" type="number" inputmode="decimal" step="0.01" min="0" placeholder="36.80" autocomplete="off">
+          <small id="sale-exchange-rate-status" class="muted">—</small>
+          <small id="sale-exchange-rate-error" class="warn sale-fx-error" style="display:none"></small>
+        </div>
       </div>
     </div>
 
@@ -1084,7 +1090,7 @@
     </div>
 
     <div class="info" style="margin-top:10px">
-      <small><b>Regla:</b> el tipo de cambio se guarda en este dispositivo. <b>Limpiar</b> solo borra montos.</small>
+      <small><b>Regla:</b> el tipo de cambio usa el T/C único del evento activo. <b>Limpiar</b> solo borra montos.</small>
     </div>
   </section>
 
@@ -1604,24 +1610,23 @@
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
-  <script src="/assets/js/a33-release.js?v=4.20.77&r=3"></script>
+  <script src="/assets/js/a33-release.js?v=4.20.77&r=5"></script>
 
-<script src="/assets/js/a33-storage.js?v=4.20.77&r=3"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.77&r=3"></script>
-<script src="/assets/js/a33-build.js?v=4.20.77&r=3"></script>
+<script src="/assets/js/a33-storage.js?v=4.20.77&r=5"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.77&r=5"></script>
+<script src="/assets/js/a33-build.js?v=4.20.77&r=5"></script>
 <script>
   (function(){
     try{
       const relObj = (window.A33_RELEASE || {});
       const v = (relObj && relObj.suiteVersion) ? String(relObj.suiteVersion) : '4.20.77';
-      const rev = '3'; // POS local cache-busting rev
+      const rev = '5'; // POS cache bump local — Etapa 3/5 T/C evento en Efectivo
       try{ window.A33_VERSION = v; }catch(_){ }
       try{ window.A33_ASSET_REV = rev; }catch(_){ }
       try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r'+rev).toString(); }catch(_){ }
       try{ window.A33_BUILD_TAG = (v + '-r' + rev).toString(); }catch(_){ }
       const verEl = document.getElementById('a33-version-text');
-      const rel = (window.A33_RELEASE && window.A33_RELEASE.label) ? String(window.A33_RELEASE.label) : '';
-      const shown = rel ? ('v' + rel) : ('v' + v);
+      const shown = 'v' + v + ' r' + rev;
       if (verEl) verEl.textContent = shown;
       const bEl = document.getElementById('pos-build-id');
       if (bEl) bEl.textContent = 'POS Build: ' + v;
@@ -1635,12 +1640,12 @@
   })();
 </script>
 
-<script src="app.js?v=4.20.77&r=3"></script>
-<script src="/assets/js/a33-input-ux.js?v=4.20.77&r=3"></script>
+<script src="app.js?v=4.20.77&r=5"></script>
+<script src="/assets/js/a33-input-ux.js?v=4.20.77&r=5"></script>
 <script>
   (function(){
     const BUILD = (window.A33_VERSION || '4.20.77').toString();
-    const REV = (window.A33_ASSET_REV || '3').toString();
+    const REV = (window.A33_ASSET_REV || '2').toString();
     const SW_URL = './sw.js?v=' + encodeURIComponent(BUILD) + '&r=' + encodeURIComponent(REV);
 
     const btn = document.getElementById('a33-update-indicator');

@@ -109,6 +109,11 @@ input[type="date"]{padding:10px}
 /* Permite que inputs/selects/botones dentro de grid/flex puedan encogerse sin desbordar */
 .row > *, .row3 > *, .row4 > *{min-width:0}
 
+.sale-fx-field{margin-top:8px}
+.sale-fx-field label{margin-top:6px}
+.sale-fx-field input{font-weight:800;letter-spacing:.02em}
+.sale-fx-field .sale-fx-error{display:block;margin-top:6px;padding:8px 10px;border-radius:10px}
+
 /* Barra superior (Vender/Eventos): alinea y permite wrap en pantallas angostas */
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .topbar > *{flex:1 1 180px;min-width:0}
