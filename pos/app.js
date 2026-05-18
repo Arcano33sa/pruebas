@@ -7,7 +7,7 @@ let db;
 const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.77';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r17');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r18');
 
 // --- Util: round2 (2 decimales) — Hotfix Ventas Etapa 1/3
 // Nota: evita NaN y errores de flotante (EPSILON). Retorna Number.
@@ -8289,6 +8289,8 @@ function getCostoUnitarioProducto(productName) {
 }
 
 // Defaults (SKUs Arcano 33)
+const DEFAULT_GALON_PRICE_POS = 900;
+const LEGACY_DEFAULT_GALON_PRICE_POS = 800;
 const SEED = [
   // "Vaso" aquí es una PORCIÓN vendible (Venta por vaso), no un producto del selector.
   {name:'Vaso', price:100, manageStock:false, active:true, internalType:'cup_portion'},
@@ -8296,7 +8298,7 @@ const SEED = [
   {name:'Media 375ml', price:150, manageStock:true, active:true},
   {name:'Djeba 750ml', price:300, manageStock:true, active:true},
   {name:'Litro 1000ml', price:330, manageStock:true, active:true},
-  {name:'Galón 3750 ml', price:800, manageStock:true, active:true},
+  {name:'Galón 3750 ml', price:DEFAULT_GALON_PRICE_POS, manageStock:true, active:true},
 ];
 const DEFAULT_EVENTS = [{name:'General'}];
 
@@ -8328,7 +8330,9 @@ async function seedMissingDefaults(force=false){
         if (existing.active !== true){ existing.active = true; changed = true; }
         if (k === normKeyPOS(CANON_GALON_LABEL) && existing.name !== s.name && !list.some(p => p && p.id !== existing.id && normKeyPOS(p.name) === k)){ existing.name = s.name; changed = true; }
         // Catálogo global editable: un precio válido del usuario NUNCA se pisa por defaults.
-        if (!isValidCatalogPricePOS(existing.price)){ existing.price = s.price; changed = true; }
+        // Excepción controlada: migrar Galón desde el viejo default C$800 al nuevo default C$900.
+        if (k === normKeyPOS(CANON_GALON_LABEL) && Number(existing.price) === LEGACY_DEFAULT_GALON_PRICE_POS){ existing.price = s.price; changed = true; }
+        else if (!isValidCatalogPricePOS(existing.price)){ existing.price = s.price; changed = true; }
         if (typeof existing.manageStock === 'undefined'){ existing.manageStock = s.manageStock; changed = true; }
         if (s.internalType && existing.internalType !== s.internalType){ existing.internalType = s.internalType; changed = true; }
         if (changed) await put('products', existing);
@@ -8341,7 +8345,9 @@ async function seedMissingDefaults(force=false){
       if (typeof existing.active === 'undefined'){ existing.active = true; changed = true; }
       if (k === normKeyPOS(CANON_GALON_LABEL) && existing.name !== s.name && !list.some(p => p && p.id !== existing.id && normKeyPOS(p.name) === k)){ existing.name = s.name; changed = true; }
       if (typeof existing.manageStock === 'undefined'){ existing.manageStock = s.manageStock; changed = true; }
-      if (!isValidCatalogPricePOS(existing.price)) { existing.price = s.price; changed = true; }
+      // Excepción controlada: migrar Galón desde el viejo default C$800 al nuevo default C$900.
+      if (k === normKeyPOS(CANON_GALON_LABEL) && Number(existing.price) === LEGACY_DEFAULT_GALON_PRICE_POS){ existing.price = s.price; changed = true; }
+      else if (!isValidCatalogPricePOS(existing.price)) { existing.price = s.price; changed = true; }
       if (changed) await put('products', existing);
     }
   }
@@ -9604,7 +9610,7 @@ async function normalizeLegacyGallonProductPOS(){
 
     const canonicalName = CANON_GALON_LABEL;
     const canonicalKey = normKeyPOS(canonicalName);
-    const defaultGallon = (SEED.find(x => normKeyPOS(x.name) === canonicalKey) || {}).price || 800;
+    const defaultGallon = (SEED.find(x => normKeyPOS(x.name) === canonicalKey) || {}).price || DEFAULT_GALON_PRICE_POS;
 
     // Identificar productos tipo "galón" con la misma heurística usada por inventario.
     const galonProducts = products.filter(p => p && mapProductNameToFinishedId(p.name || '') === 'galon');
@@ -9621,13 +9627,16 @@ async function normalizeLegacyGallonProductPOS(){
       || galonProducts.find(p => normName(p.name).includes('3750'))
       || galonProducts[0];
 
-    // Precio a conservar: si el canon no tiene precio válido, tomar otro precio válido existente; nunca tratar C$900 como default inválido.
+    // Precio a conservar: si el canon no tiene precio válido, tomar otro precio válido existente.
+    // Migración suave: el viejo default C$800 pasa a C$900; otros precios manuales se respetan.
     let preservedPrice = isValidCatalogPricePOS(canon.price) ? Number(canon.price) : null;
-    if (activeValidLegacy && (!isValidCatalogPricePOS(canon.price) || Number(canon.price) === Number(defaultGallon))){
+    if (Number(preservedPrice) === LEGACY_DEFAULT_GALON_PRICE_POS){ preservedPrice = Number(defaultGallon); }
+    if (activeValidLegacy && (!isValidCatalogPricePOS(canon.price) || (Number(canon.price) === Number(defaultGallon) && Number(activeValidLegacy.price) !== LEGACY_DEFAULT_GALON_PRICE_POS))){
       preservedPrice = Number(activeValidLegacy.price);
     }
+    if (Number(preservedPrice) === LEGACY_DEFAULT_GALON_PRICE_POS){ preservedPrice = Number(defaultGallon); }
     if (!isValidCatalogPricePOS(preservedPrice)){
-      const anyValid = galonProducts.find(p => isValidCatalogPricePOS(p.price));
+      const anyValid = galonProducts.find(p => isValidCatalogPricePOS(p.price) && Number(p.price) !== LEGACY_DEFAULT_GALON_PRICE_POS);
       preservedPrice = anyValid ? Number(anyValid.price) : Number(defaultGallon);
     }
 
