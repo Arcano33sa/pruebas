@@ -7,7 +7,7 @@ let db;
 const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.77';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r25');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r26');
 
 // --- Util: round2 (2 decimales) — Hotfix Ventas Etapa 1/3
 // Nota: evita NaN y errores de flotante (EPSILON). Retorna Number.
@@ -5822,7 +5822,8 @@ function reempaqueValidateMultipleRecordPOS(record){
   if (reempaqueRawHasNegativeNumberPOS(r)) errors.push('valores_negativos_no_permitidos');
 
   let volumenDestinos = 0;
-  let costoDistribuido = 0;
+  let costoLiquidoDistribuido = 0;
+  let costoFinalDistribuido = 0;
   for (let i = 0; i < (destinos || []).length; i++){
     const d = destinos[i] || {};
     const dName = String(d.targetProductName || d.productoDestinoNombre || d.productoDestino || (d.targetProduct && d.targetProduct.name) || '').trim();
@@ -5830,19 +5831,33 @@ function reempaqueValidateMultipleRecordPOS(record){
     const qty = reempaquePositivePOS(d.cantidadCreada ?? d.cantidadCreadaDestino ?? d.cantidadDestino ?? d.targetQty ?? d.qty ?? d.cantidad);
     const ml = reempaquePositivePOS(d.mlPorUnidad ?? d.capacidadDestinoMl ?? (d.targetProduct && d.targetProduct.capacityMl));
     const vol = reempaquePositivePOS(d.volumenTotalDestinoMl ?? reempaqueTotalVolumePOS(qty, ml));
-    const cost = reempaqueMoneyPOS(d.costoTotalAsignado ?? ((costoPorMl > 0 && vol > 0) ? vol * costoPorMl : 0));
+    const extraUnit = reempaqueMoneyPOS(d.costoAdicionalUnitario ?? d.costoEmpaqueUnitario ?? d.extraUnitCost ?? d.additionalUnitCost ?? 0);
+    const extraTotal = reempaqueMoneyPOS(d.costoAdicionalTotal ?? d.costoEmpaqueTotal ?? d.extraCostTotal ?? d.additionalCostTotal ?? ((extraUnit > 0 && qty > 0) ? extraUnit * qty : 0));
+    const finalCost = reempaqueMoneyPOS(d.costoTotalAsignado ?? d.costoAsignado ?? ((d.costoUnitarioCalculado ?? d.costoUnitarioDestino ?? d.targetUnitCost) && qty > 0 ? (d.costoUnitarioCalculado ?? d.costoUnitarioDestino ?? d.targetUnitCost) * qty : 0));
+    const liquidCost = reempaqueMoneyPOS(
+      d.costoLiquidoTotal ??
+      d.costoLiquidoAsignado ??
+      d.liquidCostTotal ??
+      d.liquidTotalCost ??
+      ((costoPorMl > 0 && vol > 0) ? vol * costoPorMl : (finalCost > 0 ? Math.max(0, finalCost - extraTotal) : 0))
+    );
     if (!dName && (dId === null || typeof dId === 'undefined' || dId === '')) errors.push(`destino_${i+1}_producto_requerido`);
     if (!(qty > 0)) errors.push(`destino_${i+1}_cantidad_mayor_cero`);
     if (!(ml > 0)) errors.push(`destino_${i+1}_ml_por_unidad_mayor_cero`);
     if (!(vol > 0)) errors.push(`destino_${i+1}_volumen_mayor_cero`);
     volumenDestinos += vol;
-    costoDistribuido += cost;
+    costoLiquidoDistribuido += liquidCost;
+    costoFinalDistribuido += finalCost > 0 ? finalCost : round2(liquidCost + extraTotal);
   }
 
   volumenDestinos = reempaqueRound4POS(volumenDestinos);
-  costoDistribuido = round2(costoDistribuido);
+  costoLiquidoDistribuido = round2(costoLiquidoDistribuido);
+  costoFinalDistribuido = round2(costoFinalDistribuido);
   if (volumenOrigen > 0 && volumenDestinos > (volumenOrigen + 0.0001)) errors.push('volumen_destino_excede_origen');
-  if (costoOrigen > 0 && costoDistribuido > (costoOrigen + 0.01)) errors.push('costo_distribuido_excede_origen');
+  // Solo el costo líquido distribuido se compara contra el origen.
+  // Los costos adicionales (botella, tapa, empaque, etc.) forman parte del costo final del destino
+  // y pueden hacer que el costo final total supere el costo del origen sin bloquear el Reempaque.
+  if (costoOrigen > 0 && costoLiquidoDistribuido > (costoOrigen + 0.05)) errors.push('costo_distribuido_excede_origen');
   if (!(costoOrigen > 0)) warnings.push('origen_sin_costo_total');
   if (!(costoPorMl > 0)) warnings.push('costo_por_ml_no_calculado');
 
@@ -15116,6 +15131,20 @@ async function reempaqueEnsureCentralTargetProductPOS(input){
   return { ...product, __rpqCreated:true, __rpqMatchedExisting:false };
 }
 
+async function reempaqueRollbackCreatedTargetProductsPOS(createdTargets){
+  const list = Array.isArray(createdTargets) ? createdTargets : [];
+  for (let i = list.length - 1; i >= 0; i--){
+    const product = list[i] || {};
+    const id = product.id ?? product.productId;
+    if (id === null || typeof id === 'undefined' || id === '') continue;
+    try{
+      await del('products', id);
+    }catch(err){
+      console.warn('No se pudo revertir producto nuevo de Reempaque fallido', product && (product.name || product.nombre || id), err);
+    }
+  }
+}
+
 function reempaqueGetSourceCostInfoPOS(productLike){
   const p = (productLike && typeof productLike === 'object') ? productLike : {};
   const candidates = [
@@ -15720,9 +15749,59 @@ async function registrarReempaqueMultipleUiPOS(){
     return;
   }
 
+  try{
+    const capacidadOrigenMlPreview = state.sourceUnitMl > 0 ? state.sourceUnitMl : (state.qtySource > 0 ? reempaqueRound4POS(state.volumeOrigin / state.qtySource) : 0);
+    const destinosPreview = state.destinations.map(d => ({
+      productoDestino: d.target,
+      tipoDestino: d.isNewTarget ? 'NUEVO' : 'EXISTENTE',
+      destinoTipo: d.isNewTarget ? 'NUEVO' : 'EXISTENTE',
+      destinoNuevo: !!d.isNewTarget,
+      productoNuevoDestino: !!d.isNewTarget,
+      precioVentaDestino: d.isNewTarget ? d.newTarget.price : reempaqueMoneyPOS(d.target && d.target.price),
+      cantidadCreada: d.qty,
+      cantidadCreadaDestino: d.qty,
+      mlPorUnidad: d.ml,
+      capacidadDestinoMl: d.ml,
+      volumenTotalDestinoMl: d.volume,
+      costoLiquidoUnitario: d.liquidUnitCost,
+      costoUnitarioLiquido: d.liquidUnitCost,
+      costoLiquidoTotal: d.liquidTotalCost,
+      costoLiquidoAsignado: d.liquidTotalCost,
+      costoAdicionalUnitario: d.extraUnitCost,
+      costoEmpaqueUnitario: d.extraUnitCost,
+      costoAdicionalTotal: d.extraTotalCost,
+      costoEmpaqueTotal: d.extraTotalCost,
+      costoUnitarioCalculado: d.unitCost,
+      costoUnitarioDestino: d.unitCost,
+      costoTotalAsignado: d.totalCost
+    }));
+    const previewRecord = await reempaquePrepareMultiplePayloadPOS({
+      eventId: state.eventId,
+      productoOrigen: state.source,
+      cantidadOrigen: state.qtySource,
+      capacidadOrigenMl: capacidadOrigenMlPreview,
+      volumenTotalOrigenMl: state.volumeOrigin,
+      costoUnitarioOrigen: state.unitCost,
+      costoFuenteOrigen: state.unitCostSource || '',
+      costoOrigenTotal: state.costOriginTotal,
+      destinos: destinosPreview
+    });
+    const previewValidation = reempaqueValidateMultipleRecordPOS(previewRecord);
+    if (!previewValidation.ok){
+      reempaqueSetMsgPOS('No se pudo validar Reempaque múltiple: ' + previewValidation.errors.join(', '), 'warn');
+      return;
+    }
+  }catch(err){
+    console.warn('No se pudo prevalidar Reempaque múltiple', err);
+    reempaqueSetMsgPOS('No se pudo validar Reempaque múltiple: ' + humanizeError(err), 'warn');
+    return;
+  }
+
   const noteEl = document.getElementById('rp-note-multi');
   const note = noteEl ? String(noteEl.value || '').trim() : '';
   const prevTxt = btn ? btn.textContent : '';
+  const createdTargetsForRollback = [];
+  let movementCompleted = false;
   if (btn){ btn.disabled = true; btn.textContent = 'Registrando…'; }
 
   try{
@@ -15744,6 +15823,7 @@ async function registrarReempaqueMultipleUiPOS(){
           throw new Error(`No se pudo crear el producto destino ${d.newTarget.name}.`);
         }
         destinoNuevoCreado = !!targetForMovement.__rpqCreated;
+        if (destinoNuevoCreado) createdTargetsForRollback.push(targetForMovement);
         tipoDestino = destinoNuevoCreado ? 'NUEVO' : 'NUEVO_EXISTENTE';
       }
       destinosMovimiento.push({
@@ -15785,6 +15865,7 @@ async function registrarReempaqueMultipleUiPOS(){
       destinos: destinosMovimiento,
       nota: note
     });
+    movementCompleted = true;
 
     const qtySourceEl = document.getElementById('rp-source-qty');
     const volumeEl = document.getElementById('rp-source-total-ml-manual');
@@ -15806,6 +15887,9 @@ async function registrarReempaqueMultipleUiPOS(){
     toast('Reempaque múltiple registrado');
     return record;
   }catch(err){
+    if (!movementCompleted && createdTargetsForRollback.length){
+      await reempaqueRollbackCreatedTargetProductsPOS(createdTargetsForRollback);
+    }
     console.error('No se pudo registrar Reempaque múltiple', err);
     reempaqueSetMsgPOS('No se pudo registrar Reempaque múltiple: ' + humanizeError(err), 'warn');
   }finally{
