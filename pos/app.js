@@ -9437,89 +9437,9 @@ function escapeHtml(str){
     .replace(/'/g,'&#039;');
 }
 
-function productSalesSortKeyPOS(name){
-  return normName(getSummaryProductDisplayNamePOS(name || '')).replace(/\s+/g, ' ').trim();
-}
-
-async function getProductSalesAmountIndexPOS(products){
-  const totalsById = new Map();
-  const totalsByName = new Map();
-  const hasSalesById = new Set();
-  const hasSalesByName = new Set();
-
-  const productIds = new Set();
-  for (const p of (products || [])){
-    const id = Number(p && p.id);
-    if (Number.isFinite(id)) productIds.add(id);
-  }
-
-  let sales = [];
-  try{ sales = await getAll('sales'); }catch(_){ sales = []; }
-
-  for (const s of (sales || [])){
-    if (!s) continue;
-    if (s.courtesy || s.isCourtesy) continue;
-
-    const total = Number(s.total || 0);
-    if (!Number.isFinite(total)) continue;
-
-    const pid = (s.productId != null && s.productId !== '') ? Number(s.productId) : null;
-    if (pid != null && Number.isFinite(pid) && productIds.has(pid)){
-      totalsById.set(pid, (totalsById.get(pid) || 0) + total);
-      hasSalesById.add(pid);
-      continue;
-    }
-
-    const key = productSalesSortKeyPOS(s.productName || '');
-    if (key){
-      totalsByName.set(key, (totalsByName.get(key) || 0) + total);
-      hasSalesByName.add(key);
-    }
-  }
-
-  return { totalsById, totalsByName, hasSalesById, hasSalesByName };
-}
-
-function getProductSalesAmountForSortPOS(product, salesIndex){
-  const idx = salesIndex || {};
-  const id = Number(product && product.id);
-  const key = productSalesSortKeyPOS(product && product.name);
-
-  let total = 0;
-  let hasSales = false;
-
-  if (Number.isFinite(id)){
-    total += Number((idx.totalsById && idx.totalsById.get(id)) || 0) || 0;
-    if (idx.hasSalesById && idx.hasSalesById.has(id)) hasSales = true;
-  }
-
-  if (key){
-    total += Number((idx.totalsByName && idx.totalsByName.get(key)) || 0) || 0;
-    if (idx.hasSalesByName && idx.hasSalesByName.has(key)) hasSales = true;
-  }
-
-  return { total, hasSales };
-}
-
-function sortProductsBySalesAmountPOS(products, salesIndex){
-  return (products || []).slice().sort((a,b)=>{
-    const aa = getProductSalesAmountForSortPOS(a, salesIndex);
-    const bb = getProductSalesAmountForSortPOS(b, salesIndex);
-
-    if (aa.hasSales !== bb.hasSales) return aa.hasSales ? -1 : 1;
-
-    const diff = Number(bb.total || 0) - Number(aa.total || 0);
-    if (Math.abs(diff) > 1e-9) return diff;
-
-    return String(a && a.name || '').localeCompare(String(b && b.name || ''), 'es-NI', { sensitivity:'base' });
-  });
-}
-
 // Productos
 async function renderProductos(){
-  const rawList = await getAll('products');
-  const salesIndex = await getProductSalesAmountIndexPOS(rawList);
-  const list = sortProductsBySalesAmountPOS(rawList, salesIndex);
+  const list = await getAll('products');
   const wrap = $('#productos-list');
   if (!wrap) return;
   wrap.innerHTML = '';
@@ -14856,11 +14776,105 @@ function summaryProductRowsFromMapPOS(map){
       return { key: getSummaryProductDisplayNamePOS(k), qty: agg.qty || 0, qtyKnown: !!agg.qtyKnown, total: agg.total || 0, val: agg.total || 0 };
     })
     .filter(it=>it.key && !(/\(Cortesía\)/i.test(String(it.key))))
-    .sort((a,b)=>String(a.key).localeCompare(String(b.key),'es-NI'));
+    .sort(compareSummaryProductByTotalDescPOS);
 }
 
 function summaryProductItemTotalPOS(it){
   return Number((it && (it.total ?? it.amount ?? it.val ?? it.value)) || 0) || 0;
+}
+
+function summaryProductItemNamePOS(it){
+  const src = (it && typeof it === 'object') ? it : {};
+  return getSummaryProductDisplayNamePOS(src.key ?? src.name ?? src.producto ?? src.product ?? src.productName ?? '');
+}
+
+function compareSummaryProductByTotalDescPOS(a, b){
+  const ta = summaryProductItemTotalPOS(a);
+  const tb = summaryProductItemTotalPOS(b);
+  const diff = tb - ta;
+  if (Math.abs(diff) > 0.000001) return diff;
+  return String(summaryProductItemNamePOS(a)).localeCompare(String(summaryProductItemNamePOS(b)), 'es-NI');
+}
+
+function sortSummaryProductItemsByTotalPOS(items){
+  return (Array.isArray(items) ? items.slice() : []).sort(compareSummaryProductByTotalDescPOS);
+}
+
+function sortSummaryPorProductoSheetRowsPOS(rows){
+  const safeRows = Array.isArray(rows) ? rows : [];
+  if (safeRows.length <= 2) return safeRows.slice();
+  const header = Array.isArray(safeRows[0]) ? safeRows[0] : [];
+  const sortedBody = safeRows.slice(1)
+    .map((row, idx)=>({ row, idx, item: parseSummaryProductSheetRowPOS(row, header) }))
+    .sort((a,b)=>{
+      const cmp = compareSummaryProductByTotalDescPOS(a.item, b.item);
+      return cmp || (a.idx - b.idx);
+    })
+    .map(x=>x.row);
+  return [safeRows[0], ...sortedBody];
+}
+
+function getSummarySaleDiscountSignedTotalPOS(s){
+  const d = Number(getSaleDiscountTotalPOS(s) || 0) || 0;
+  if (!Number.isFinite(d) || Math.abs(d) < 0.000001) return 0;
+  return (s && s.isReturn) ? (-1 * d) : d;
+}
+
+function addSummaryDiscountAggPOS(map, productName, discountTotal){
+  if (!map) return;
+  const d = Number(discountTotal || 0) || 0;
+  if (!Number.isFinite(d) || Math.abs(d) < 0.000001) return;
+  const key = getSummaryProductDisplayNamePOS(productName);
+  map.set(key, (Number(map.get(key) || 0) || 0) + d);
+}
+
+function summaryDiscountItemNamePOS(it){
+  const src = (it && typeof it === 'object') ? it : {};
+  return getSummaryProductDisplayNamePOS(src.key ?? src.name ?? src.producto ?? src.product ?? src.productName ?? '');
+}
+
+function summaryDiscountItemTotalPOS(it){
+  const src = (it && typeof it === 'object') ? it : {};
+  return Number(src.total ?? src.discount ?? src.amount ?? src.val ?? src.value ?? 0) || 0;
+}
+
+function compareSummaryDiscountByTotalDescPOS(a, b){
+  const da = summaryDiscountItemTotalPOS(a);
+  const db = summaryDiscountItemTotalPOS(b);
+  const diff = db - da;
+  if (Math.abs(diff) > 0.000001) return diff;
+  return String(summaryDiscountItemNamePOS(a)).localeCompare(String(summaryDiscountItemNamePOS(b)), 'es-NI');
+}
+
+function summaryDiscountRowsFromMapPOS(map){
+  return Array.from((map || new Map()).entries())
+    .map(([key,total])=>({ key: getSummaryProductDisplayNamePOS(key), total: Number(total || 0) || 0 }))
+    .filter(it=>it.key && Math.abs(Number(it.total || 0)) > 0.000001)
+    .sort(compareSummaryDiscountByTotalDescPOS);
+}
+
+function parseSummaryDiscountSheetRowPOS(row){
+  const r = Array.isArray(row) ? row : [];
+  return {
+    key: getSummaryProductDisplayNamePOS(r[0] || ''),
+    total: Number(r[1] || 0) || 0
+  };
+}
+
+function sortSummaryDescuentosSheetRowsPOS(rows){
+  const safeRows = Array.isArray(rows) ? rows : [];
+  if (safeRows.length <= 2) return safeRows.slice();
+  const sortedBody = safeRows.slice(1)
+    .map((row, idx)=>({ row, idx, item: parseSummaryDiscountSheetRowPOS(row) }))
+    .filter(x=>x.item && x.item.key)
+    .sort((a,b)=> compareSummaryDiscountByTotalDescPOS(a.item, b.item) || (a.idx - b.idx))
+    .map(x=>x.row);
+  return [safeRows[0], ...sortedBody];
+}
+
+function sumSummaryDiscountSheetRowsPOS(rows){
+  const safeRows = Array.isArray(rows) ? rows : [];
+  return safeRows.slice(1).reduce((acc,row)=> acc + (Number((row && row[1]) || 0) || 0), 0);
 }
 
 function summaryProductItemQtyPOS(it){
@@ -14878,6 +14892,8 @@ function renderSummaryFromSnapshotPOS(archive){
   const m = (snap.metrics && typeof snap.metrics === 'object') ? snap.metrics : {};
 
   const grand = Number(m.grand || 0) || 0;
+  const discountSheetRowsForMetric = readSheetRowsPOS(sheets, 'Descuentos');
+  const discountTotal = (m.discountTotal != null) ? (Number(m.discountTotal || 0) || 0) : sumSummaryDiscountSheetRowsPOS(discountSheetRowsForMetric);
   const grandCost = Number(m.grandCost || 0) || 0;
   const grandProfit = Number(m.grandProfit || 0) || 0;
   const courtesyCost = Number(m.courtesyCost || 0) || 0;
@@ -14889,6 +14905,8 @@ function renderSummaryFromSnapshotPOS(archive){
   // KPIs
   const grandTotalEl = document.getElementById('grand-total');
   if (grandTotalEl) grandTotalEl.textContent = fmt(grand);
+  const discountEl = document.getElementById('grand-discount');
+  if (discountEl) discountEl.textContent = fmt(discountTotal);
   const costEl = document.getElementById('grand-cost');
   if (costEl) costEl.textContent = fmt(grandCost);
   const profitEl = document.getElementById('grand-profit');
@@ -14960,7 +14978,7 @@ function renderSummaryFromSnapshotPOS(archive){
   const byProdRows = (prodSheetRows || []).slice(1)
     .map(r=>parseSummaryProductSheetRowPOS(r, prodHeader))
     .filter(it=>it.key);
-  byProdRows.sort((a,b)=>String(a.key).localeCompare(String(b.key),'es-NI'));
+  byProdRows.sort(compareSummaryProductByTotalDescPOS);
 
   const tbP = document.querySelector('#tbl-por-prod tbody');
   if (tbP){
@@ -14969,6 +14987,27 @@ function renderSummaryFromSnapshotPOS(archive){
       const tr = document.createElement('tr');
       tr.innerHTML = `<td>${escapeHtml(it.key)}</td><td>${formatSummarySoldQtyPOS(it.qty, it.qtyKnown)}</td><td>${fmt(it.total)}</td>`;
       tbP.appendChild(tr);
+    }
+  }
+
+  const tbDisc = document.querySelector('#tbl-discounts-byprod tbody');
+  if (tbDisc){
+    tbDisc.innerHTML = '';
+    const discRows = (readSheetRowsPOS(sheets, 'Descuentos') || []).slice(1)
+      .map(r=>parseSummaryDiscountSheetRowPOS(r))
+      .filter(it=>it.key && Math.abs(Number(it.total || 0)) > 0.000001)
+      .sort(compareSummaryDiscountByTotalDescPOS);
+
+    if (discRows.length){
+      for (const it of discRows){
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${escapeHtml(it.key)}</td><td>${fmt(it.total)}</td>`;
+        tbDisc.appendChild(tr);
+      }
+    } else {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td colspan="2" class="muted">(sin descuentos)</td>';
+      tbDisc.appendChild(tr);
     }
   }
 
@@ -15123,6 +15162,7 @@ async function renderSummary(){
 
   // Ventas reales (ingresos)
   let grand = 0;
+  let discountTotal = 0;
   let grandCost = 0;
   let grandProfit = 0;
 
@@ -15136,6 +15176,7 @@ async function renderSummary(){
 
   const byDay = new Map();
   const byProd = new Map();
+  const byDiscount = new Map();
   const byPay = new Map();
   const byEvent = new Map();
 
@@ -15190,6 +15231,10 @@ async function renderSummary(){
 
     if (!courtesy){
       grand += total;
+
+      const saleDiscount = getSummarySaleDiscountSignedTotalPOS(s);
+      discountTotal += saleDiscount;
+      addSummaryDiscountAggPOS(byDiscount, s.productName, saleDiscount);
 
       byDay.set(s.date, (byDay.get(s.date) || 0) + total);
       addSummaryProductAggPOS(byProd, s.productName, total, getSummarySaleQtyPOS(s), true);
@@ -15282,6 +15327,7 @@ async function renderSummary(){
       const t = ev.archive.totals;
 
       grand += (t.grand || 0);
+      discountTotal += (Number(t.discountTotal || 0) || 0);
       byEvent.set(ev.name, (byEvent.get(ev.name) || 0) + (t.grand || 0));
 
       if (t.byPay){
@@ -15297,6 +15343,12 @@ async function renderSummary(){
           const raw = t.byProduct[k];
           const agg = normalizeSummaryProductAggPOS(raw);
           addSummaryProductAggPOS(byProd, k, agg.total, agg.qty, agg.qtyKnown);
+        }
+      }
+
+      if (t.byDiscount){
+        for (const k of Object.keys(t.byDiscount)){
+          addSummaryDiscountAggPOS(byDiscount, k, Number(t.byDiscount[k] || 0) || 0);
         }
       }
 
@@ -15316,6 +15368,9 @@ async function renderSummary(){
   // --- Top KPIs ---
   const grandTotalEl = document.getElementById('grand-total');
   if (grandTotalEl) grandTotalEl.textContent = fmt(grand);
+
+  const discountEl = document.getElementById('grand-discount');
+  if (discountEl) discountEl.textContent = fmt(discountTotal);
 
   const costEl = document.getElementById('grand-cost');
   if (costEl) costEl.textContent = fmt(grandCost);
@@ -15368,7 +15423,7 @@ async function renderSummary(){
   }
 
   // Compat: si no existe el bloque superior nuevo, intentamos crearlo sin romper el HTML viejo
-  if (!costEl || !profitEl || !courCostEl || !profitAfterEl){
+  if (!discountEl || !costEl || !profitEl || !courCostEl || !profitAfterEl){
     const totalSpan = document.getElementById('grand-total');
     if (totalSpan){
       const card = totalSpan.closest('.card') || totalSpan.parentElement || document.getElementById('tab-resumen') || document.body;
@@ -15379,6 +15434,7 @@ async function renderSummary(){
         if (card) card.appendChild(extraBlock);
       }
       extraBlock.innerHTML = `
+        <p>Total descuento: C$ <span id="grand-discount">${fmt(discountTotal)}</span></p>
         <p>Costo estimado de producto: C$ <span id="grand-cost">${fmt(grandCost)}</span></p>
         <p>Utilidad bruta aproximada: C$ <span id="grand-profit">${fmt(grandProfit)}</span></p>
         <p>Cortesías (Costo real): C$ <span id="grand-courtesy-cost">${fmt(courtesyCost)}</span></p>
@@ -15421,6 +15477,24 @@ async function renderSummary(){
       tr.innerHTML = `<td>${escapeHtml(it.key)}</td><td>${formatSummarySoldQtyPOS(it.qty, it.qtyKnown)}</td><td>${fmt(it.total)}</td>`;
       tbP.appendChild(tr);
     });
+  }
+
+
+  const tbDisc = document.querySelector('#tbl-discounts-byprod tbody');
+  if (tbDisc){
+    tbDisc.innerHTML = '';
+    const entries = summaryDiscountRowsFromMapPOS(byDiscount);
+    if (entries.length){
+      for (const it of entries){
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${escapeHtml(it.key)}</td><td>${fmt(it.total)}</td>`;
+        tbDisc.appendChild(tr);
+      }
+    } else {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td colspan="2" class="muted">(sin descuentos)</td>`;
+      tbDisc.appendChild(tr);
+    }
   }
 
   const tbPay = document.querySelector('#tbl-por-pago tbody');
@@ -16540,6 +16614,7 @@ async function computeSummaryDataForPeriodPOS(periodKey, selectedSummaryEventId)
   const transferByBank = new Map();
 
   let grand = 0;
+  let discountTotal = 0;
   let grandCost = 0;
   let grandProfit = 0;
 
@@ -16551,6 +16626,7 @@ async function computeSummaryDataForPeriodPOS(periodKey, selectedSummaryEventId)
 
   const byDay = new Map();
   const byProd = new Map();
+  const byDiscount = new Map();
   const byPay = new Map();
   const byEvent = new Map();
 
@@ -16561,6 +16637,9 @@ async function computeSummaryDataForPeriodPOS(periodKey, selectedSummaryEventId)
 
     if (!courtesy){
       grand += total;
+      const saleDiscount = getSummarySaleDiscountSignedTotalPOS(s);
+      discountTotal += saleDiscount;
+      addSummaryDiscountAggPOS(byDiscount, s.productName, saleDiscount);
       byDay.set(s.date, (byDay.get(s.date) || 0) + total);
       addSummaryProductAggPOS(byProd, s.productName, total, getSummarySaleQtyPOS(s), true);
       byPay.set(s.payment || 'efectivo', (byPay.get(s.payment || 'efectivo') || 0) + total);
@@ -16620,18 +16699,21 @@ async function computeSummaryDataForPeriodPOS(periodKey, selectedSummaryEventId)
   const courtesyList = Array.from(courtesyByProd.entries()).map(([name, o]) => ({ name, qty: o.qty || 0, cost: o.cost || 0, equiv: o.equiv || 0 }))
     .sort((a,b)=> (Number(b.cost||0) - Number(a.cost||0)));
 
-  // Tablawt helper: para el Excel, listas ordenadas
+  const discountList = summaryDiscountRowsFromMapPOS(byDiscount);
+
+  // Helpers para Excel/listas ordenadas
   const sortMapDesc = (m) => Array.from(m.entries()).map(([k,v])=>({ key:k, val:v }))
     .sort((a,b)=> (Number(b.val||0) - Number(a.val||0)));
   const sortMapDateAsc = (m) => Array.from(m.entries()).map(([k,v])=>({ key:k, val:v }))
     .sort((a,b)=> String(a.key).localeCompare(String(b.key)));
-  const sortProductAggAlpha = (m) => summaryProductRowsFromMapPOS(m);
+  const sortProductAggByTotal = (m) => summaryProductRowsFromMapPOS(m);
 
   return {
     periodKey,
     periodLabel: periodLabelPOS(periodKey),
     metrics: {
       grand,
+      discountTotal,
       grandCost,
       grandProfit,
       courtesyCost,
@@ -16642,7 +16724,8 @@ async function computeSummaryDataForPeriodPOS(periodKey, selectedSummaryEventId)
     },
     byEvent: sortMapDesc(byEvent),
     byDay: sortMapDateAsc(byDay),
-    byProd: sortProductAggAlpha(byProd),
+    byProd: sortProductAggByTotal(byProd),
+    byDiscount: discountList,
     byPay: sortMapDesc(byPay),
     transferByBank: transferList,
     courtesyByProd: courtesyList,
@@ -16662,6 +16745,7 @@ function buildSummarySheetsFromDataPOS(data){
   r.push([]);
   r.push(['Métrica', 'Monto C$']);
   r.push(['Total general', m.grand || 0]);
+  r.push(['Total descuento', m.discountTotal || 0]);
   r.push(['Costo estimado', m.grandCost || 0]);
   r.push(['Utilidad bruta', m.grandProfit || 0]);
   r.push(['Cortesías (Costo real)', m.courtesyCost || 0]);
@@ -16684,11 +16768,18 @@ function buildSummarySheetsFromDataPOS(data){
 
   // Hoja PorProducto
   const pRows = [['Producto','Vendido','Total C$']];
-  for (const it of (data.byProd || [])){
+  for (const it of sortSummaryProductItemsByTotalPOS(data.byProd || [])){
     const q = summaryProductItemQtyPOS(it);
-    pRows.push([it.key, q.qtyKnown ? q.qty : '', summaryProductItemTotalPOS(it)]);
+    pRows.push([summaryProductItemNamePOS(it), q.qtyKnown ? q.qty : '', summaryProductItemTotalPOS(it)]);
   }
   sheets.push({ name: 'PorProducto', rows: pRows });
+
+  // Hoja Descuentos
+  const discRows = [['Producto','Total descuento C$']];
+  for (const it of (data.byDiscount || [])){
+    discRows.push([summaryDiscountItemNamePOS(it), summaryDiscountItemTotalPOS(it)]);
+  }
+  sheets.push({ name: 'Descuentos', rows: discRows });
 
   // Hoja PorPago
   const payRows = [['Método','Total C$']];
@@ -16714,8 +16805,12 @@ function writeWorkbookFromSheetsPOS(filename, sheets){
   }
   const wb = XLSX.utils.book_new();
   for (const sh of (sheets || [])){
-    const ws = XLSX.utils.aoa_to_sheet(sh.rows || []);
-    XLSX.utils.book_append_sheet(wb, ws, sh.name || 'Hoja');
+    const sheetName = sh.name || 'Hoja';
+    const rows = (String(sheetName) === 'PorProducto')
+      ? sortSummaryPorProductoSheetRowsPOS(sh.rows || [])
+      : ((String(sheetName) === 'Descuentos') ? sortSummaryDescuentosSheetRowsPOS(sh.rows || []) : (sh.rows || []));
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
   }
   XLSX.writeFile(wb, filename);
 }
@@ -17268,7 +17363,7 @@ async function rebuildSummaryArchivesCachesPOS(){
   const items = [];
   const periodIndex = {}; // periodKey -> { id, seq, seqStr, createdAt, periodLabel }
 
-  const acc = { grand:0, grandCost:0, grandProfit:0, courtesyCost:0, profitAfterCourtesy:0, courtesyQty:0, courtesyTx:0, courtesyEquiv:0 };
+  const acc = { grand:0, discountTotal:0, grandCost:0, grandProfit:0, courtesyCost:0, profitAfterCourtesy:0, courtesyQty:0, courtesyTx:0, courtesyEquiv:0 };
 
   for (const a of list){
     if (!a) continue;
@@ -17297,6 +17392,7 @@ async function rebuildSummaryArchivesCachesPOS(){
     }
     const nm = normalizeArchiveMetricsPOS(m || {});
     acc.grand += nm.grand;
+    acc.discountTotal += nm.discountTotal;
     acc.grandCost += nm.grandCost;
     acc.grandProfit += nm.grandProfit;
     acc.courtesyCost += nm.courtesyCost;
@@ -17436,6 +17532,7 @@ function parseArchiveMetricsFromSummarySheetPOS(sheets){
     const val = __numPOS(r[1]);
     switch (label){
       case 'Total general': out.grand = val; break;
+      case 'Total descuento': out.discountTotal = val; break;
       case 'Costo estimado': out.grandCost = val; break;
       case 'Utilidad bruta': out.grandProfit = val; break;
       case 'Cortesías (Costo real)': out.courtesyCost = val; break;
@@ -17451,6 +17548,7 @@ function parseArchiveMetricsFromSummarySheetPOS(sheets){
 
 function normalizeArchiveMetricsPOS(m){
   const grand = __numPOS(m && m.grand);
+  const discountTotal = __numPOS(m && m.discountTotal);
   const grandCost = __numPOS(m && m.grandCost);
   const grandProfit = __numPOS(m && m.grandProfit);
   const courtesyCost = __numPOS(m && m.courtesyCost);
@@ -17458,11 +17556,11 @@ function normalizeArchiveMetricsPOS(m){
   const courtesyTx = __numPOS(m && m.courtesyTx);
   const courtesyEquiv = __numPOS(m && m.courtesyEquiv);
   const profitAfterCourtesy = (m && m.profitAfterCourtesy != null) ? __numPOS(m.profitAfterCourtesy) : (grandProfit - courtesyCost);
-  return { grand, grandCost, grandProfit, courtesyCost, profitAfterCourtesy, courtesyQty, courtesyTx, courtesyEquiv };
+  return { grand, discountTotal, grandCost, grandProfit, courtesyCost, profitAfterCourtesy, courtesyQty, courtesyTx, courtesyEquiv };
 }
 
 function zeroArchiveMetricsPOS(){
-  return { grand:0, grandCost:0, grandProfit:0, courtesyCost:0, profitAfterCourtesy:0, courtesyQty:0, courtesyTx:0, courtesyEquiv:0 };
+  return { grand:0, discountTotal:0, grandCost:0, grandProfit:0, courtesyCost:0, profitAfterCourtesy:0, courtesyQty:0, courtesyTx:0, courtesyEquiv:0 };
 }
 
 function sumArchiveMetricsPOS(a, b){
@@ -17470,6 +17568,7 @@ function sumArchiveMetricsPOS(a, b){
   const y = normalizeArchiveMetricsPOS(b || {});
   return {
     grand: x.grand + y.grand,
+    discountTotal: x.discountTotal + y.discountTotal,
     grandCost: x.grandCost + y.grandCost,
     grandProfit: x.grandProfit + y.grandProfit,
     courtesyCost: x.courtesyCost + y.courtesyCost,
