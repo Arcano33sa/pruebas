@@ -7,7 +7,7 @@ let db;
 const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.77';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r21');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r25');
 
 // --- Util: round2 (2 decimales) — Hotfix Ventas Etapa 1/3
 // Nota: evita NaN y errores de flotante (EPSILON). Retorna Number.
@@ -5672,6 +5672,9 @@ function reempaqueBuildMultipleDestinationsPOS(rawDestinos, products, costoPorMl
     const costoUnitarioCalculado = (cantidadCreada > 0 && costoTotalAsignado > 0)
       ? round2(costoTotalAsignado / cantidadCreada)
       : reempaqueMoneyPOS(raw.costoUnitarioCalculado ?? raw.costoUnitarioDestino ?? raw.targetUnitCost ?? raw.unitCost ?? 0);
+    const tipoDestinoRaw = String(raw.tipoDestino ?? raw.destinoTipo ?? (raw.productoNuevoCreado ? 'NUEVO' : (raw.destinoNuevo || raw.productoNuevoDestino ? 'NUEVO' : 'EXISTENTE'))).toUpperCase();
+    const tipoDestino = (tipoDestinoRaw === 'NUEVO' || tipoDestinoRaw === 'NUEVO_EXISTENTE') ? tipoDestinoRaw : 'EXISTENTE';
+    const precioVentaDestino = reempaqueMoneyPOS(raw.precioVentaDestino ?? raw.precioDestino ?? (normalized.base && normalized.base.price));
     out.push({
       index: i,
       productoDestino: normalized.name,
@@ -5680,6 +5683,12 @@ function reempaqueBuildMultipleDestinationsPOS(rawDestinos, products, costoPorMl
       targetProduct: { id: normalized.id, name: normalized.name, capacityMl: mlPorUnidad > 0 ? mlPorUnidad : normalized.capacityMl },
       targetProductId: normalized.id,
       targetProductName: normalized.name,
+      tipoDestino,
+      destinoTipo: tipoDestino,
+      destinoNuevo: !!(raw.destinoNuevo || raw.productoNuevoDestino || tipoDestino === 'NUEVO' || tipoDestino === 'NUEVO_EXISTENTE'),
+      productoNuevoDestino: !!(raw.destinoNuevo || raw.productoNuevoDestino || tipoDestino === 'NUEVO' || tipoDestino === 'NUEVO_EXISTENTE'),
+      productoNuevoCreado: !!(raw.productoNuevoCreado || tipoDestino === 'NUEVO'),
+      precioVentaDestino,
       cantidadCreada,
       cantidadCreadaDestino: cantidadCreada,
       cantidadDestino: cantidadCreada,
@@ -12801,6 +12810,8 @@ async function reempaqueApplyMultipleMovementPOS(input={}){
     const costoAdicionalUnitario = reempaqueMoneyPOS(d.costoAdicionalUnitario ?? d.costoEmpaqueUnitario ?? 0);
     const costoAdicionalTotal = reempaqueMoneyPOS(d.costoAdicionalTotal ?? d.costoEmpaqueTotal ?? (costoAdicionalUnitario > 0 && qtyTarget > 0 ? costoAdicionalUnitario * qtyTarget : 0));
     const costoAsignado = reempaqueMoneyPOS(d.costoTotalAsignado ?? (unitTarget > 0 && qtyTarget > 0 ? unitTarget * qtyTarget : 0));
+    const tipoDestinoRaw = String(d.tipoDestino ?? d.destinoTipo ?? (d.productoNuevoCreado ? 'NUEVO' : (d.destinoNuevo || d.productoNuevoDestino ? 'NUEVO' : 'EXISTENTE'))).toUpperCase();
+    const tipoDestino = (tipoDestinoRaw === 'NUEVO' || tipoDestinoRaw === 'NUEVO_EXISTENTE') ? tipoDestinoRaw : 'EXISTENTE';
     if (!(qtyTarget > 0)){
       throw reempaqueMovementErrorPOS('Cada destino debe tener cantidad creada mayor que 0.');
     }
@@ -12811,6 +12822,11 @@ async function reempaqueApplyMultipleMovementPOS(input={}){
       source: 'reempaque',
       sourceType: 'REEMPAQUE',
       reempaqueId: base.id,
+      tipoDestino,
+      destinoTipo: tipoDestino,
+      productoNuevoDestino: !!(d.productoNuevoDestino || d.destinoNuevo || tipoDestino === 'NUEVO' || tipoDestino === 'NUEVO_EXISTENTE'),
+      productoNuevoCreado: !!(d.productoNuevoCreado || tipoDestino === 'NUEVO'),
+      precioVentaDestino: reempaqueMoneyPOS(d.precioVentaDestino ?? (targetProduct && targetProduct.price)),
       time: now,
       createdAt: now,
       affectsSales: false,
@@ -12870,6 +12886,10 @@ async function reempaqueApplyMultipleMovementPOS(input={}){
       productId: row.productId,
       productName: row.productName,
       qty: row.qty,
+      tipoDestino: row.tipoDestino || row.destinoTipo || 'EXISTENTE',
+      productoNuevoDestino: !!row.productoNuevoDestino,
+      productoNuevoCreado: !!row.productoNuevoCreado,
+      precioVentaDestino: row.precioVentaDestino || 0,
       costoLiquidoUnitario: row.costoLiquidoUnitario,
       costoAdicionalUnitario: row.costoAdicionalUnitario,
       costoUnitarioDestino: row.costoUnitarioDestino
@@ -15044,6 +15064,8 @@ async function reempaqueEnsureCentralTargetProductPOS(input){
 
   const capacityMl = reempaquePositivePOS(input && input.capacityMl);
   const price = reempaqueMoneyPOS(input && input.price);
+  const unitCost = reempaqueMoneyPOS(input && (input.unitCost ?? input.costoUnitario ?? input.costoUnitarioDestino));
+  const createdFrom = String((input && input.createdFrom) || 'reempaque').trim() || 'reempaque';
   const now = reempaqueNowISOPOS();
   const products = await getAll('products').catch(()=>[]);
   let existing = reempaqueFindProductByNamePOS(products, name);
@@ -15061,12 +15083,18 @@ async function reempaqueEnsureCentralTargetProductPOS(input){
       existing.price = price;
       changed = true;
     }
+    if (unitCost > 0 && !(getProductStoredUnitCostPOS(existing) > 0)){
+      existing.unitCost = unitCost;
+      existing.costoUnitario = unitCost;
+      existing.costPerUnit = unitCost;
+      changed = true;
+    }
     existing.updatedAt = existing.updatedAt || now;
     if (changed){
       existing.updatedAt = now;
       await put('products', existing);
     }
-    return existing;
+    return { ...existing, __rpqCreated:false, __rpqMatchedExisting:true };
   }
 
   const product = {
@@ -15076,13 +15104,16 @@ async function reempaqueEnsureCentralTargetProductPOS(input){
     active: true,
     capacityMl: capacityMl > 0 ? capacityMl : null,
     capacidadMl: capacityMl > 0 ? capacityMl : null,
-    createdFrom: 'reempaque',
+    unitCost: unitCost > 0 ? unitCost : 0,
+    costoUnitario: unitCost > 0 ? unitCost : 0,
+    costPerUnit: unitCost > 0 ? unitCost : 0,
+    createdFrom,
     createdAt: now,
     updatedAt: now
   };
   const newId = await put('products', product);
   product.id = newId;
-  return product;
+  return { ...product, __rpqCreated:true, __rpqMatchedExisting:false };
 }
 
 function reempaqueGetSourceCostInfoPOS(productLike){
@@ -15304,6 +15335,38 @@ function reempaqueInputNumberInfoPOS(el){
   return { raw, empty:false, invalid:!Number.isFinite(n), value:n };
 }
 
+function reempaqueGetMultiDestinationKindPOS(card){
+  const raw = String(card?.querySelector('.rp-multi-target-kind')?.value || 'EXISTING').toUpperCase();
+  return raw === 'NEW' ? 'NEW' : 'EXISTING';
+}
+
+function reempaqueApplyMultiDestinationKindUiPOS(card){
+  if (!card) return 'EXISTING';
+  const kind = reempaqueGetMultiDestinationKindPOS(card);
+  card.classList.toggle('rp-multi-new-mode', kind === 'NEW');
+  card.classList.toggle('rp-multi-existing-mode', kind !== 'NEW');
+  const existingWrap = card.querySelector('.rp-multi-existing-wrap');
+  const newWrap = card.querySelector('.rp-multi-new-wrap');
+  if (existingWrap) existingWrap.hidden = kind === 'NEW';
+  if (newWrap) newWrap.hidden = kind !== 'NEW';
+  return kind;
+}
+
+function reempaqueReadMultiNewTargetPOS(card){
+  if (!card) return { name:'', capacityMl:0, price:0 };
+  const name = String(card.querySelector('.rp-multi-new-target-name')?.value || '').trim();
+  const capacityMl = reempaquePositivePOS(card.querySelector('.rp-multi-new-target-capacity')?.value || 0);
+  const price = reempaqueMoneyPOS(card.querySelector('.rp-multi-new-target-price')?.value || 0);
+  return { name, capacityMl, price };
+}
+
+function reempaqueDescribeDestinationKindPOS(rawKind){
+  const kind = String(rawKind || '').toUpperCase();
+  if (kind === 'NUEVO_EXISTENTE') return 'Nuevo (ya existía)';
+  if (kind === 'NUEVO' || kind === 'NEW') return 'Nuevo';
+  return 'Existente';
+}
+
 function reempaqueSyncSourceVolumeFieldPOS(source){
   const el = document.getElementById('rp-source-total-ml-manual');
   if (!el) return;
@@ -15323,15 +15386,37 @@ function reempaqueMultiRowIdPOS(){
 function reempaqueCreateMultiDestinationCardPOS(){
   const id = reempaqueMultiRowIdPOS();
   const card = document.createElement('article');
-  card.className = 'reempaque-dest-card';
+  card.className = 'reempaque-dest-card rp-multi-existing-mode';
   card.dataset.rpqRow = id;
   card.innerHTML = `
     <div class="reempaque-dest-head">
       <b class="rp-multi-dest-title">Destino</b>
       <button class="btn-danger btn-pill btn-pill-mini rp-multi-remove" type="button">Quitar</button>
     </div>
-    <label>Producto destino</label>
-    <select class="rp-multi-target-product"></select>
+    <label>Tipo de destino</label>
+    <select class="rp-multi-target-kind" aria-label="Tipo de producto destino">
+      <option value="EXISTING" selected>Producto existente</option>
+      <option value="NEW">Producto nuevo</option>
+    </select>
+    <div class="rp-multi-existing-wrap">
+      <label>Producto destino</label>
+      <select class="rp-multi-target-product"></select>
+    </div>
+    <div class="rp-multi-new-wrap reempaque-new-target" hidden>
+      <small class="muted">Producto nuevo: quedará disponible para vender y para futuros reempaques.</small>
+      <label>Nombre nuevo producto</label>
+      <input class="rp-multi-new-target-name" type="text" placeholder="Ej: Catrinita" autocomplete="off">
+      <div class="reempaque-inline-fields">
+        <div>
+          <label>Capacidad ml</label>
+          <input class="rp-multi-new-target-capacity a33-num" data-a33-default="0" type="number" inputmode="decimal" min="0" step="0.01" placeholder="Ej: 150">
+        </div>
+        <div>
+          <label>Precio venta</label>
+          <input class="rp-multi-new-target-price a33-num" data-a33-default="0" type="number" inputmode="decimal" min="0" step="0.01" placeholder="Ej: 80">
+        </div>
+      </div>
+    </div>
     <div class="reempaque-mini-grid">
       <div>
         <label>Cantidad creada</label>
@@ -15352,6 +15437,7 @@ function reempaqueCreateMultiDestinationCardPOS(){
     <div class="reempaque-kv"><span>Costo final unitario</span><b class="rp-multi-target-unit-cost">N/D</b></div>
     <div class="reempaque-kv"><span>Costo total destino</span><b class="rp-multi-target-total-cost">N/D</b></div>
   `;
+  reempaqueApplyMultiDestinationKindUiPOS(card);
   return card;
 }
 
@@ -15402,12 +15488,33 @@ function reempaqueReadMultiDestinationRowsPOS(products, costoPorMl){
   const rows = [];
   const cards = Array.from(document.querySelectorAll('#rp-multi-destinations .reempaque-dest-card'));
   cards.forEach((card, idx)=>{
+    const kind = reempaqueApplyMultiDestinationKindUiPOS(card);
+    const isNewTarget = kind === 'NEW';
     const sel = card.querySelector('.rp-multi-target-product');
     const qtyEl = card.querySelector('.rp-multi-target-qty');
     const mlEl = card.querySelector('.rp-multi-target-ml');
     const extraEl = card.querySelector('.rp-multi-extra-unit-cost');
-    const target = reempaqueFindProductPOS(products, sel ? sel.value : '');
-    const cap = target ? reempaqueCapacityMlFromProductPOS(target) : 0;
+    const newNameEl = card.querySelector('.rp-multi-new-target-name');
+    const newCapEl = card.querySelector('.rp-multi-new-target-capacity');
+    const newPriceEl = card.querySelector('.rp-multi-new-target-price');
+    const newTarget = reempaqueReadMultiNewTargetPOS(card);
+    const existingNewTarget = isNewTarget && newTarget.name ? reempaqueFindProductByNamePOS(products, newTarget.name) : null;
+    const selectedTarget = reempaqueFindProductPOS(products, sel ? sel.value : '');
+    const target = isNewTarget
+      ? (existingNewTarget || (newTarget.name ? {
+          id: `__new_multi_target_${idx + 1}`,
+          name: newTarget.name,
+          price: newTarget.price > 0 ? newTarget.price : 0,
+          capacityMl: newTarget.capacityMl > 0 ? newTarget.capacityMl : null,
+          capacidadMl: newTarget.capacityMl > 0 ? newTarget.capacityMl : null,
+          active: true,
+          manageStock: true,
+          __rpqNewTarget: true
+        } : null))
+      : selectedTarget;
+    const cap = isNewTarget
+      ? (newTarget.capacityMl > 0 ? newTarget.capacityMl : (target ? reempaqueCapacityMlFromProductPOS(target) : 0))
+      : (target ? reempaqueCapacityMlFromProductPOS(target) : 0);
     if (mlEl){
       const cur = String(mlEl.value || '').trim();
       const auto = mlEl.dataset.rpqAuto === '1';
@@ -15419,6 +15526,8 @@ function reempaqueReadMultiDestinationRowsPOS(products, costoPorMl){
     const qtyInfo = reempaqueInputNumberInfoPOS(qtyEl);
     const mlInfo = reempaqueInputNumberInfoPOS(mlEl);
     const extraInfo = reempaqueInputNumberInfoPOS(extraEl);
+    const newCapInfo = reempaqueInputNumberInfoPOS(newCapEl);
+    const newPriceInfo = reempaqueInputNumberInfoPOS(newPriceEl);
     const qty = qtyInfo.value > 0 ? qtyInfo.value : 0;
     const ml = mlInfo.value > 0 ? mlInfo.value : 0;
     const extraUnitCost = extraInfo.value > 0 ? extraInfo.value : 0;
@@ -15429,8 +15538,8 @@ function reempaqueReadMultiDestinationRowsPOS(products, costoPorMl){
     const totalCost = round2(liquidTotalCost + extraTotalCost);
     const unitCost = (qty > 0 && totalCost > 0) ? round2(totalCost / qty) : 0;
     rows.push({
-      card, index:idx, selectEl:sel, qtyEl, mlEl, extraEl,
-      qtyInfo, mlInfo, extraInfo, target, cap, qty, ml, volume,
+      card, index:idx, kind, isNewTarget, selectEl:sel, qtyEl, mlEl, extraEl, newNameEl, newCapEl, newPriceEl,
+      qtyInfo, mlInfo, extraInfo, newCapInfo, newPriceInfo, newTarget, existingNewTarget, selectedTarget, target, cap, qty, ml, volume,
       liquidTotalCost, liquidUnitCost, extraUnitCost, extraTotalCost,
       totalCost, unitCost
     });
@@ -15565,17 +15674,33 @@ async function registrarReempaqueMultipleUiPOS(){
   if (!state.destinations.length) errors.push('Agrega al menos un destino.');
 
   state.destinations.forEach((d, idx)=>{
-    if (!d.target){ errors.push(`Destino ${idx + 1}: producto destino requerido.`); reempaqueSetElementInvalidPOS(d.selectEl, true); }
-    if (state.source && d.target && String(state.source.id) === String(d.target.id)){
-      errors.push(`Destino ${idx + 1}: el producto destino no puede ser el mismo origen.`);
-      reempaqueSetElementInvalidPOS(d.selectEl, true);
+    const destNo = idx + 1;
+    const destName = d.isNewTarget ? String(d.newTarget && d.newTarget.name || '').trim() : (d.target && d.target.name || '');
+    if (d.isNewTarget){
+      if (!destName){ errors.push(`Destino ${destNo}: nombre del producto nuevo requerido.`); reempaqueSetElementInvalidPOS(d.newNameEl, true); }
+      if (d.newCapInfo.invalid || (!d.newCapInfo.empty && d.newCapInfo.value < 0)){ errors.push(`Destino ${destNo}: capacidad del producto nuevo inválida.`); reempaqueSetElementInvalidPOS(d.newCapEl, true); }
+      if (!(d.newTarget && d.newTarget.capacityMl > 0)){ errors.push(`Destino ${destNo}: capacidad ml del producto nuevo mayor que 0.`); reempaqueSetElementInvalidPOS(d.newCapEl, true); }
+      if (d.newPriceInfo.invalid || (!d.newPriceInfo.empty && d.newPriceInfo.value < 0)){ errors.push(`Destino ${destNo}: precio de venta inválido.`); reempaqueSetElementInvalidPOS(d.newPriceEl, true); }
+      if (!(d.newTarget && d.newTarget.price > 0)){ errors.push(`Destino ${destNo}: precio de venta del producto nuevo mayor que 0.`); reempaqueSetElementInvalidPOS(d.newPriceEl, true); }
     }
-    if (d.qtyInfo.invalid){ errors.push(`Destino ${idx + 1}: cantidad inválida.`); reempaqueSetElementInvalidPOS(d.qtyEl, true); }
-    if (!(d.qty > 0)){ errors.push(`Destino ${idx + 1}: cantidad destino mayor que 0.`); reempaqueSetElementInvalidPOS(d.qtyEl, true); }
-    if (d.mlInfo.invalid){ errors.push(`Destino ${idx + 1}: ml por unidad inválido.`); reempaqueSetElementInvalidPOS(d.mlEl, true); }
-    if (!(d.ml > 0)){ errors.push(`Destino ${idx + 1}: ml por unidad mayor que 0.`); reempaqueSetElementInvalidPOS(d.mlEl, true); }
+    if (!d.target){
+      errors.push(`Destino ${destNo}: producto destino requerido.`);
+      reempaqueSetElementInvalidPOS(d.isNewTarget ? d.newNameEl : d.selectEl, true);
+    }
+    if (state.source && d.target){
+      const sameId = String(state.source.id) === String(d.target.id);
+      const sameName = (typeof normKeyPOS === 'function') && normKeyPOS(state.source.name || '') === normKeyPOS(d.target.name || destName || '');
+      if (sameId || sameName){
+        errors.push(`Destino ${destNo}: el producto destino no puede ser el mismo origen.`);
+        reempaqueSetElementInvalidPOS(d.isNewTarget ? d.newNameEl : d.selectEl, true);
+      }
+    }
+    if (d.qtyInfo.invalid){ errors.push(`Destino ${destNo}: cantidad inválida.`); reempaqueSetElementInvalidPOS(d.qtyEl, true); }
+    if (!(d.qty > 0)){ errors.push(`Destino ${destNo}: cantidad destino mayor que 0.`); reempaqueSetElementInvalidPOS(d.qtyEl, true); }
+    if (d.mlInfo.invalid){ errors.push(`Destino ${destNo}: ml por unidad inválido.`); reempaqueSetElementInvalidPOS(d.mlEl, true); }
+    if (!(d.ml > 0)){ errors.push(`Destino ${destNo}: ml por unidad mayor que 0.`); reempaqueSetElementInvalidPOS(d.mlEl, true); }
     if (d.extraInfo.invalid || (!d.extraInfo.empty && d.extraInfo.value < 0)){
-      errors.push(`Destino ${idx + 1}: costo adicional unitario inválido.`);
+      errors.push(`Destino ${destNo}: costo adicional unitario inválido.`);
       reempaqueSetElementInvalidPOS(d.extraEl, true);
     }
   });
@@ -15602,17 +15727,33 @@ async function registrarReempaqueMultipleUiPOS(){
 
   try{
     const capacidadOrigenMl = state.sourceUnitMl > 0 ? state.sourceUnitMl : (state.qtySource > 0 ? reempaqueRound4POS(state.volumeOrigin / state.qtySource) : 0);
-    const record = await reempaqueApplyMovementPOS({
-      eventId: state.eventId,
-      productoOrigen: state.source,
-      cantidadOrigen: state.qtySource,
-      capacidadOrigenMl,
-      volumenTotalOrigenMl: state.volumeOrigin,
-      costoUnitarioOrigen: state.unitCost,
-      costoFuenteOrigen: state.unitCostSource || '',
-      costoOrigenTotal: state.costOriginTotal,
-      destinos: state.destinations.map(d => ({
-        productoDestino: d.target,
+    const destinosMovimiento = [];
+    for (const d of state.destinations){
+      let targetForMovement = d.target;
+      let tipoDestino = d.isNewTarget ? 'NUEVO' : 'EXISTENTE';
+      let destinoNuevoCreado = false;
+      if (d.isNewTarget){
+        targetForMovement = await reempaqueEnsureCentralTargetProductPOS({
+          name: d.newTarget.name,
+          capacityMl: d.newTarget.capacityMl,
+          price: d.newTarget.price,
+          unitCost: d.unitCost,
+          createdFrom: 'reempaque_multiple'
+        });
+        if (!targetForMovement || targetForMovement.id == null){
+          throw new Error(`No se pudo crear el producto destino ${d.newTarget.name}.`);
+        }
+        destinoNuevoCreado = !!targetForMovement.__rpqCreated;
+        tipoDestino = destinoNuevoCreado ? 'NUEVO' : 'NUEVO_EXISTENTE';
+      }
+      destinosMovimiento.push({
+        productoDestino: targetForMovement,
+        tipoDestino,
+        destinoTipo: tipoDestino,
+        destinoNuevo: !!d.isNewTarget,
+        productoNuevoDestino: !!d.isNewTarget,
+        productoNuevoCreado: destinoNuevoCreado,
+        precioVentaDestino: d.isNewTarget ? d.newTarget.price : reempaqueMoneyPOS(targetForMovement && targetForMovement.price),
         cantidadCreada: d.qty,
         cantidadCreadaDestino: d.qty,
         mlPorUnidad: d.ml,
@@ -15629,7 +15770,19 @@ async function registrarReempaqueMultipleUiPOS(){
         costoUnitarioCalculado: d.unitCost,
         costoUnitarioDestino: d.unitCost,
         costoTotalAsignado: d.totalCost
-      })),
+      });
+    }
+
+    const record = await reempaqueApplyMovementPOS({
+      eventId: state.eventId,
+      productoOrigen: state.source,
+      cantidadOrigen: state.qtySource,
+      capacidadOrigenMl,
+      volumenTotalOrigenMl: state.volumeOrigin,
+      costoUnitarioOrigen: state.unitCost,
+      costoFuenteOrigen: state.unitCostSource || '',
+      costoOrigenTotal: state.costOriginTotal,
+      destinos: destinosMovimiento,
       nota: note
     });
 
@@ -15716,10 +15869,16 @@ function reempaqueDestinationPartsFromRecordPOS(r){
       const extraTotalCost = reempaqueMoneyPOS(d.costoAdicionalTotal ?? d.costoEmpaqueTotal ?? (extraUnitCost > 0 && qty > 0 ? extraUnitCost * qty : 0));
       const liquidTotalCost = reempaqueMoneyPOS(d.costoLiquidoTotal ?? d.costoLiquidoAsignado ?? Math.max(0, totalCost - extraTotalCost));
       const liquidUnitCost = reempaqueMoneyPOS(d.costoLiquidoUnitario ?? d.costoUnitarioLiquido ?? (qty > 0 && liquidTotalCost > 0 ? liquidTotalCost / qty : Math.max(0, unitCost - extraUnitCost)));
+      const tipoDestinoRaw = String(d.tipoDestino ?? d.destinoTipo ?? (d.productoNuevoCreado ? 'NUEVO' : (d.destinoNuevo || d.productoNuevoDestino ? 'NUEVO' : 'EXISTENTE'))).toUpperCase();
+      const tipoDestino = (tipoDestinoRaw === 'NUEVO' || tipoDestinoRaw === 'NUEVO_EXISTENTE') ? tipoDestinoRaw : 'EXISTENTE';
       out.push({
         index: idx,
         name: String(name || `Destino ${idx + 1}`).trim(),
         label: reempaqueHistoryProductLabelPOS(name, ml),
+        tipoDestino,
+        destinoNuevo: !!(d.destinoNuevo || d.productoNuevoDestino || tipoDestino === 'NUEVO' || tipoDestino === 'NUEVO_EXISTENTE'),
+        productoNuevoCreado: !!(d.productoNuevoCreado || tipoDestino === 'NUEVO'),
+        precioVentaDestino: reempaqueMoneyPOS(d.precioVentaDestino ?? d.precioDestino ?? 0),
         qty,
         ml,
         volume,
@@ -15744,7 +15903,7 @@ function reempaqueDestinationPartsFromRecordPOS(r){
   const extraUnitCost = reempaqueMoneyPOS(record.costoAdicionalUnitario ?? record.costoEmpaqueUnitario ?? ((qty > 0 && extraTotalCost > 0) ? extraTotalCost / qty : 0));
   const liquidTotalCost = reempaqueMoneyPOS(record.costoLiquidoTotal ?? record.costoOrigenTotal ?? record.costoTotalOrigen ?? Math.max(0, totalCost - extraTotalCost));
   const liquidUnitCost = reempaqueMoneyPOS(record.costoLiquidoUnitario ?? record.costoUnitarioLiquido ?? (qty > 0 && liquidTotalCost > 0 ? liquidTotalCost / qty : Math.max(0, unitCost - extraUnitCost)));
-  return [{ index:0, name:String(name || '—').trim(), label:reempaqueHistoryProductLabelPOS(name, ml), qty, ml, volume, liquidUnitCost, liquidTotalCost, extraUnitCost, extraTotalCost, unitCost, totalCost }];
+  return [{ index:0, name:String(name || '—').trim(), label:reempaqueHistoryProductLabelPOS(name, ml), tipoDestino:'EXISTENTE', destinoNuevo:false, productoNuevoCreado:false, precioVentaDestino:0, qty, ml, volume, liquidUnitCost, liquidTotalCost, extraUnitCost, extraTotalCost, unitCost, totalCost }];
 }
 
 function reempaqueHistoryRecordPartsPOS(r){
@@ -15772,7 +15931,9 @@ function reempaqueHistoryRecordPartsPOS(r){
     const unit = reempaqueFmtMoneyPOS(d.unitCost);
     const total = reempaqueFmtMoneyPOS(d.totalCost);
     const volume = d.volume > 0 ? `${reempaqueFmtQtyPOS(d.volume)} ml` : 'volumen N/D';
-    return `${name}: ${qty} unidades, ${ml}, ${volume}, costo líquido unitario ${liquid}, adicional unitario ${extra}, costo final unitario ${unit}, costo total ${total}`;
+    const tipo = reempaqueDescribeDestinationKindPOS(d.tipoDestino);
+    const price = d.precioVentaDestino > 0 ? `, precio venta ${reempaqueFmtMoneyPOS(d.precioVentaDestino)}` : '';
+    return `${name}: ${tipo}, ${qty} unidades, ${ml}, ${volume}, costo líquido unitario ${liquid}, adicional unitario ${extra}, costo final unitario ${unit}, costo total ${total}${price}`;
   });
 
   return {
@@ -15869,6 +16030,7 @@ async function reempaqueBuildExportRowsPOS(eventId){
     'Costo origen total',
     'Costo por ml',
     'Producto destino',
+    'Tipo destino',
     'Cantidad destino',
     'ml por unidad destino',
     'Volumen destino total ml',
@@ -15901,6 +16063,7 @@ async function reempaqueBuildExportRowsPOS(eventId){
         p.costoOrigen || 0,
         p.costoPorMl || '',
         d.label || d.name || '',
+        reempaqueDescribeDestinationKindPOS(d.tipoDestino),
         d.qty || 0,
         d.ml || '',
         d.volume || '',
@@ -15974,7 +16137,11 @@ async function registrarReempaqueUiPOS(){
   try{
     let targetForMovement = state.target;
     if (state.newTarget && state.newTarget.name){
-      targetForMovement = await reempaqueEnsureCentralTargetProductPOS(state.newTarget);
+      targetForMovement = await reempaqueEnsureCentralTargetProductPOS({
+        ...state.newTarget,
+        unitCost: state.unitTarget > 0 ? state.unitTarget : 0,
+        createdFrom: 'reempaque'
+      });
       if (!targetForMovement || targetForMovement.id == null){
         throw new Error('No se pudo crear el producto destino en el catálogo central.');
       }
@@ -16187,6 +16354,15 @@ document.addEventListener('change', async (e)=>{
     reempaqueClearValidationPOS();
     reempaqueSetMsgPOS('', '');
   }
+  if (t.classList && t.classList.contains('rp-multi-target-kind')){
+    const card = t.closest('.reempaque-dest-card');
+    reempaqueApplyMultiDestinationKindUiPOS(card);
+    const mlEl = card ? card.querySelector('.rp-multi-target-ml') : null;
+    if (mlEl) mlEl.dataset.rpqAuto = '1';
+    await reempaqueUpdateMultiplePreviewPOS();
+    reempaqueClearValidationPOS();
+    reempaqueSetMsgPOS('', '');
+  }
 });
 
 document.addEventListener('input', async (e)=>{
@@ -16211,8 +16387,13 @@ document.addEventListener('input', async (e)=>{
     await reempaqueUpdateMultiplePreviewPOS();
   } else if (t.classList && t.classList.contains('rp-multi-extra-unit-cost')){
     await reempaqueUpdateMultiplePreviewPOS();
+  } else if (t.classList && (t.classList.contains('rp-multi-new-target-name') || t.classList.contains('rp-multi-new-target-capacity') || t.classList.contains('rp-multi-new-target-price'))){
+    const card = t.closest('.reempaque-dest-card');
+    const mlEl = card ? card.querySelector('.rp-multi-target-ml') : null;
+    if (mlEl && (t.classList.contains('rp-multi-new-target-name') || t.classList.contains('rp-multi-new-target-capacity'))) mlEl.dataset.rpqAuto = '1';
+    await reempaqueUpdateMultiplePreviewPOS();
   }
-  if (t.id === 'rp-source-qty' || t.id === 'rp-target-qty' || t.id === 'rp-source-unit-cost' || t.id === 'rp-extra-cost' || t.id === 'rp-source-total-ml-manual' || t.id === 'rp-new-target-name' || t.id === 'rp-new-target-capacity' || t.id === 'rp-new-target-price' || (t.classList && (t.classList.contains('rp-multi-target-qty') || t.classList.contains('rp-multi-target-ml') || t.classList.contains('rp-multi-extra-unit-cost')))){
+  if (t.id === 'rp-source-qty' || t.id === 'rp-target-qty' || t.id === 'rp-source-unit-cost' || t.id === 'rp-extra-cost' || t.id === 'rp-source-total-ml-manual' || t.id === 'rp-new-target-name' || t.id === 'rp-new-target-capacity' || t.id === 'rp-new-target-price' || (t.classList && (t.classList.contains('rp-multi-target-qty') || t.classList.contains('rp-multi-target-ml') || t.classList.contains('rp-multi-extra-unit-cost') || t.classList.contains('rp-multi-new-target-name') || t.classList.contains('rp-multi-new-target-capacity') || t.classList.contains('rp-multi-new-target-price')))){
     reempaqueClearValidationPOS();
     reempaqueSetMsgPOS('', '');
   }
