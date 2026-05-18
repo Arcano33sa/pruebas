@@ -7,7 +7,7 @@ let db;
 const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.77';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r26');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r27');
 
 // --- Util: round2 (2 decimales) — Hotfix Ventas Etapa 1/3
 // Nota: evita NaN y errores de flotante (EPSILON). Retorna Number.
@@ -10165,6 +10165,258 @@ function escapeHtml(str){
 }
 
 // Productos
+function productEditNormKeyPOS(value){
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try{ if (typeof normKeyPOS === 'function') return normKeyPOS(raw); }catch(_){ }
+  return raw.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,'');
+}
+
+function productEditMoneyPOS(value, fallback=0){
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return round2(Math.max(0, n));
+}
+
+function productEditQtyPOS(value, fallback=0){
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.round((n + Number.EPSILON) * 10000) / 10000);
+}
+
+function productEditDisplayMoneyPOS(value){
+  const n = Number(value);
+  return 'C$ ' + fmt(Number.isFinite(n) ? n : 0);
+}
+
+function productEditDisplayMlPOS(value){
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  const fixed = Math.round((n + Number.EPSILON) * 100) / 100;
+  return (String(fixed).replace(/\.00$/,'').replace(/(\.\d)0$/,'$1')) + ' ml';
+}
+
+function productEditGetCapacityPOS(product){
+  try{ return productEditQtyPOS(reempaqueCapacityMlFromProductPOS(product), 0); }catch(_){ return 0; }
+}
+
+function productEditGetUnitCostPOS(product){
+  try{ return productEditMoneyPOS(getProductStoredUnitCostPOS(product), 0); }catch(_){
+    const p = (product && typeof product === 'object') ? product : {};
+    return productEditMoneyPOS(p.unitCost ?? p.costoUnitario ?? p.costPerUnit ?? 0, 0);
+  }
+}
+
+function productEditSetMsgPOS(msg, kind=''){
+  const el = document.getElementById('product-edit-msg');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.className = 'muted product-edit-msg' + (kind ? (' ' + kind) : '');
+}
+
+function productEditHasMatchingProductRefPOS(ref, product){
+  if (!ref || !product) return false;
+  const pid = String(product.id ?? '').trim();
+  const pname = productEditNormKeyPOS(product.name || product.nombre || '');
+  if (typeof ref === 'object'){
+    const rid = String(ref.id ?? ref.productId ?? ref.productoId ?? ref.codigo ?? ref.code ?? '').trim();
+    if (pid && rid && rid === pid) return true;
+    const rn = productEditNormKeyPOS(ref.name || ref.nombre || ref.productName || ref.label || '');
+    return !!(pname && rn && rn === pname);
+  }
+  const raw = String(ref || '').trim();
+  if (pid && raw === pid) return true;
+  const rn = productEditNormKeyPOS(raw);
+  return !!(pname && rn && rn === pname);
+}
+
+function productEditReempaqueRecordTouchesPOS(record, product){
+  if (!record || !product) return false;
+  const pid = String(product.id ?? '').trim();
+  const pname = productEditNormKeyPOS(product.name || product.nombre || '');
+  const fields = [
+    record.sourceProductId, record.productoOrigenId, record.productIdOrigen, record.origenId,
+    record.targetProductId, record.productoDestinoId, record.productIdDestino, record.destinoId
+  ];
+  if (pid && fields.some(v => String(v ?? '').trim() === pid)) return true;
+  const names = [
+    record.sourceProductName, record.productoOrigenNombre, record.productoOrigen,
+    record.targetProductName, record.productoDestinoNombre, record.productoDestino
+  ];
+  if (pname && names.some(v => productEditNormKeyPOS(v) === pname)) return true;
+  if (productEditHasMatchingProductRefPOS(record.sourceProduct, product)) return true;
+  if (productEditHasMatchingProductRefPOS(record.targetProduct, product)) return true;
+  const destinos = Array.isArray(record.destinos) ? record.destinos : [];
+  return destinos.some(d => {
+    if (!d) return false;
+    const dIds = [d.targetProductId, d.productoDestinoId, d.productId, d.id];
+    if (pid && dIds.some(v => String(v ?? '').trim() === pid)) return true;
+    const dNames = [d.targetProductName, d.productoDestinoNombre, d.productoDestino, d.name, d.nombre];
+    if (pname && dNames.some(v => productEditNormKeyPOS(v) === pname)) return true;
+    return productEditHasMatchingProductRefPOS(d.targetProduct, product) || productEditHasMatchingProductRefPOS(d.productoDestino, product);
+  });
+}
+
+async function productEditHasMovementsPOS(product){
+  if (!product) return false;
+  const pid = String(product.id ?? '').trim();
+  const pname = productEditNormKeyPOS(product.name || product.nombre || '');
+  try{
+    const sales = await getAll('sales');
+    if ((sales || []).some(s => s && ((pid && String(s.productId ?? '').trim() === pid) || (pname && productEditNormKeyPOS(s.productName || s.name || '') === pname)))) return true;
+  }catch(_){ }
+  try{
+    const inv = await getAll('inventory');
+    if ((inv || []).some(i => i && pid && String(i.productId ?? '').trim() === pid)) return true;
+  }catch(_){ }
+  try{
+    const reempaques = await getAll(REEMPAQUE_STORE_POS);
+    if ((reempaques || []).some(r => productEditReempaqueRecordTouchesPOS(r, product))) return true;
+  }catch(_){ }
+  return false;
+}
+
+function closeProductEditModalPOS(){
+  const modal = document.getElementById('product-edit-modal');
+  if (!modal) return;
+  modal.style.display = 'none';
+  try{ delete modal.dataset.productId; }catch(_){ }
+  productEditSetMsgPOS('');
+}
+
+async function openProductEditModalPOS(productId){
+  const modal = document.getElementById('product-edit-modal');
+  if (!modal) return;
+  const id = Number(productId);
+  if (!Number.isFinite(id) || id <= 0){ toast('Producto inválido'); return; }
+  const products = await getAll('products');
+  const product = (products || []).find(p => Number(p && p.id) === id);
+  if (!product){ toast('Producto no existe'); return; }
+
+  modal.dataset.productId = String(product.id);
+  const current = document.getElementById('product-edit-current');
+  if (current) current.textContent = 'Producto actual: ' + String(product.name || '—');
+  const nameEl = document.getElementById('product-edit-name');
+  const priceEl = document.getElementById('product-edit-price');
+  const capEl = document.getElementById('product-edit-capacity');
+  const costEl = document.getElementById('product-edit-unit-cost');
+  const activeEl = document.getElementById('product-edit-active');
+  const manageEl = document.getElementById('product-edit-manage');
+  if (nameEl) nameEl.value = String(product.name || '');
+  if (priceEl) priceEl.value = String(productEditMoneyPOS(product.price, 0));
+  const cap = productEditGetCapacityPOS(product);
+  if (capEl) capEl.value = cap > 0 ? String(cap) : '';
+  const cost = productEditGetUnitCostPOS(product);
+  if (costEl) costEl.value = cost > 0 ? String(cost) : '';
+  if (activeEl) activeEl.checked = product.active !== false;
+  if (manageEl) manageEl.checked = product.manageStock !== false;
+  const note = document.getElementById('product-edit-history-note');
+  if (note){
+    note.style.display = 'none';
+    productEditHasMovementsPOS(product).then(has => {
+      try{ note.style.display = has ? 'block' : 'none'; }catch(_){ }
+    }).catch(()=>{});
+  }
+  productEditSetMsgPOS('');
+  openModalPOS('product-edit-modal');
+  setTimeout(()=>{ try{ nameEl?.focus({ preventScroll:true }); nameEl?.select(); }catch(_){ } }, 60);
+}
+
+async function saveProductEditModalPOS(){
+  const modal = document.getElementById('product-edit-modal');
+  if (!modal) return;
+  const id = Number(modal.dataset.productId || 0);
+  const products = await getAll('products');
+  const product = (products || []).find(p => Number(p && p.id) === id);
+  if (!product){ productEditSetMsgPOS('El producto no existe. Recarga el POS e intenta de nuevo.', 'warn'); return; }
+
+  const name = String(document.getElementById('product-edit-name')?.value || '').trim();
+  const priceRaw = String(document.getElementById('product-edit-price')?.value || '').trim();
+  const capRaw = String(document.getElementById('product-edit-capacity')?.value || '').trim();
+  const costRaw = String(document.getElementById('product-edit-unit-cost')?.value || '').trim();
+
+  if (!name){ productEditSetMsgPOS('Nombre obligatorio.', 'warn'); return; }
+  const price = Number(priceRaw);
+  if (!priceRaw || !Number.isFinite(price) || price < 0){ productEditSetMsgPOS('Precio de venta inválido. Debe ser 0 o mayor.', 'warn'); return; }
+
+  const existingCapacity = productEditGetCapacityPOS(product);
+  const createdFromReempaque = String(product.createdFrom || product.origen || '').toLowerCase().includes('reempaque');
+  const capacityRequired = existingCapacity > 0 || createdFromReempaque;
+  let capacity = 0;
+  if (capRaw){
+    capacity = Number(capRaw);
+    if (!Number.isFinite(capacity) || capacity <= 0){ productEditSetMsgPOS('ml por unidad inválido. Debe ser mayor que 0.', 'warn'); return; }
+  } else if (capacityRequired){
+    productEditSetMsgPOS('ml por unidad obligatorio para este producto. Debe ser mayor que 0.', 'warn');
+    return;
+  }
+
+  let unitCost = 0;
+  if (costRaw){
+    unitCost = Number(costRaw);
+    if (!Number.isFinite(unitCost) || unitCost < 0){ productEditSetMsgPOS('Costo unitario inválido. Debe ser 0 o mayor.', 'warn'); return; }
+  }
+
+  const newKey = productEditNormKeyPOS(name);
+  const dup = (products || []).find(p => p && Number(p.id) !== id && productEditNormKeyPOS(p.name || p.nombre || '') === newKey);
+  if (dup){ productEditSetMsgPOS('Ya existe otro producto con ese nombre. No se duplicó nada.', 'warn'); return; }
+
+  const now = new Date().toISOString();
+  const next = { ...product };
+  next.name = name;
+  next.price = productEditMoneyPOS(price, 0);
+  next.capacityMl = capRaw ? productEditQtyPOS(capacity, 0) : 0;
+  next.capacidadMl = next.capacityMl;
+  next.volumeMl = next.capacityMl;
+  next.volumenMl = next.capacityMl;
+  next.unitCost = productEditMoneyPOS(unitCost, 0);
+  next.costoUnitario = next.unitCost;
+  next.costPerUnit = next.unitCost;
+  const activeEl = document.getElementById('product-edit-active');
+  const manageEl = document.getElementById('product-edit-manage');
+  if (activeEl) next.active = !!activeEl.checked;
+  if (manageEl) next.manageStock = !!manageEl.checked;
+  next.updatedAt = now;
+  next.updatedFrom = 'productos_edit_modal';
+
+  try{
+    await put('products', next);
+    closeProductEditModalPOS();
+    await renderProductos();
+    await refreshProductSelect();
+    await renderInventario();
+    try{ await reempaquePopulateSelectorsPOS(); }catch(_){ }
+    try{ await reempaqueRefreshUiPOS(); }catch(_){ }
+    toast('Producto actualizado');
+  }catch(err){
+    console.error('No se pudo guardar edición de producto', err);
+    productEditSetMsgPOS('No se pudo guardar. Revisa si el nombre ya existe o si hay datos inválidos.', 'warn');
+  }
+}
+
+function setupProductEditModalPOS(){
+  const modal = document.getElementById('product-edit-modal');
+  if (!modal || modal.dataset.bound === '1') return;
+  modal.dataset.bound = '1';
+  const closeBtn = document.getElementById('product-edit-close');
+  const cancelBtn = document.getElementById('product-edit-cancel');
+  const saveBtn = document.getElementById('product-edit-save');
+  if (closeBtn) closeBtn.addEventListener('click', closeProductEditModalPOS);
+  if (cancelBtn) cancelBtn.addEventListener('click', closeProductEditModalPOS);
+  if (saveBtn) saveBtn.addEventListener('click', ()=> saveProductEditModalPOS().catch(err=>{
+    console.error(err);
+    productEditSetMsgPOS('No se pudo guardar el producto.', 'warn');
+  }));
+  modal.addEventListener('click', (e)=>{ if (e.target === modal) closeProductEditModalPOS(); });
+  modal.addEventListener('keydown', (e)=>{
+    if (e.key === 'Escape') closeProductEditModalPOS();
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter'){
+      e.preventDefault();
+      saveProductEditModalPOS().catch(err=>console.error(err));
+    }
+  });
+}
+
 async function renderProductos(){
   const list = await getAll('products');
   const wrap = $('#productos-list');
@@ -10173,18 +10425,35 @@ async function renderProductos(){
   if (!list.length){
     const p = document.createElement('div'); p.className = 'warn'; p.textContent = 'No hay productos. Agrega los de Arcano 33 abajo.'; wrap.appendChild(p);
   }
-  for (const p of list) {
+  const rows = (Array.isArray(list) ? list : []).slice().sort((a,b)=>{
+    const aa = (a && a.active === false) ? 1 : 0;
+    const bb = (b && b.active === false) ? 1 : 0;
+    if (aa !== bb) return aa - bb;
+    return String((a && a.name) || '').localeCompare(String((b && b.name) || ''), 'es-NI', { sensitivity:'base' });
+  });
+  for (const p of rows) {
+    if (!p) continue;
     const row = document.createElement('div');
-    row.className = 'card';
+    row.className = 'card product-card-a33';
+    const name = String(p.name || 'Producto sin nombre').trim() || 'Producto sin nombre';
+    const price = productEditMoneyPOS(p.price, 0);
+    const cap = productEditGetCapacityPOS(p);
+    const cost = productEditGetUnitCostPOS(p);
+    const active = p.active === false ? 'Inactivo' : 'Activo';
+    const manage = p.manageStock === false ? 'No' : 'Sí';
     row.innerHTML = `
-      <div class="row">
-        <input data-id="${p.id}" class="p-name" value="${p.name}">
-        <div class="row">
-          <input data-id="${p.id}" class="p-price a33-num" data-a33-default="${p.price}" type="number" inputmode="decimal" step="0.01" value="${p.price}">
-          <label class="flag"><input type="checkbox" class="p-active" data-id="${p.id}" ${p.active===false?'':'checked'}> Activo</label>
-          <label class="flag"><input type="checkbox" class="p-manage" data-id="${p.id}" ${p.manageStock===false?'':'checked'}> Inventario</label>
-          <button data-id="${p.id}" class="btn-danger btn-del">Eliminar</button>
+      <div class="product-main-a33">
+        <div class="product-title">${escapeHtml(name)}</div>
+        <div class="product-meta-grid">
+          <div class="product-meta-item"><small>Precio</small><b>${escapeHtml(productEditDisplayMoneyPOS(price))}</b></div>
+          <div class="product-meta-item"><small>ml/unidad</small><b>${escapeHtml(productEditDisplayMlPOS(cap))}</b></div>
+          <div class="product-meta-item"><small>Costo ref.</small><b>${escapeHtml(productEditDisplayMoneyPOS(cost))}</b></div>
+          <div class="product-meta-item"><small>Estado</small><b>${escapeHtml(active)} · Inv: ${escapeHtml(manage)}</b></div>
         </div>
+      </div>
+      <div class="product-actions-a33">
+        <button data-id="${escapeHtml(String(p.id))}" class="btn-ok btn-pill btn-edit-product" type="button">Editar</button>
+        <button data-id="${escapeHtml(String(p.id))}" class="btn-danger btn-pill btn-del" type="button">Eliminar</button>
       </div>
     `;
     wrap.appendChild(row);
@@ -10327,12 +10596,20 @@ document.addEventListener('change', async (e)=>{
   }
 });
 document.addEventListener('click', async (e)=>{
+  const editBtn = e.target.closest('.btn-edit-product');
+  if (editBtn){
+    const id = parseInt(editBtn.dataset.id || '0', 10);
+    await openProductEditModalPOS(id);
+    return;
+  }
+
   const delBtn = e.target.closest('.btn-del');
   if (delBtn){
     const id = parseInt(delBtn.dataset.id,10);
     if (!confirm('¿Eliminar este producto? Esto no borra ventas pasadas.')) return;
     await del('products', id);
     await renderProductos(); await refreshProductSelect(); await renderInventario();
+    try{ await reempaquePopulateSelectorsPOS(); }catch(_){ }
     toast('Producto eliminado');
   }
 });
@@ -21486,7 +21763,8 @@ async function init(){
 
 
   // Productos: agregar + restaurar
-  document.getElementById('btn-add-prod').onclick = async()=>{ const name = $('#new-name').value.trim(); const price = parseFloat($('#new-price').value||'0'); if (!name || !(price>0)) return alert('Nombre y precio'); try{ await put('products', {name, price, manageStock:true, active:true}); $('#new-name').value=''; $('#new-price').value=''; await renderProductos(); await refreshProductSelect(); await renderInventario(); toast('Producto agregado'); }catch(err){ alert('No se pudo agregar. ¿Nombre duplicado?'); } };
+  try{ setupProductEditModalPOS(); }catch(_){ }
+  document.getElementById('btn-add-prod').onclick = async()=>{ const name = $('#new-name').value.trim(); const price = parseFloat($('#new-price').value||'0'); if (!name || !(price>0)) return alert('Nombre y precio'); try{ await put('products', {name, price, manageStock:true, active:true, capacityMl:0, capacidadMl:0, unitCost:0, costoUnitario:0, costPerUnit:0, createdAt:new Date().toISOString(), updatedAt:new Date().toISOString()}); $('#new-name').value=''; $('#new-price').value=''; await renderProductos(); await refreshProductSelect(); await renderInventario(); try{ await reempaquePopulateSelectorsPOS(); }catch(_){ } toast('Producto agregado'); }catch(err){ alert('No se pudo agregar. ¿Nombre duplicado?'); } };
   document.getElementById('btn-restore-seed').onclick = restoreSeed;
 
   // Bancos: agregar desde pestaña Productos
