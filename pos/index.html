@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.77&r=18">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.77&r=20">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.77&r=18">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.77&r=18" />
+<link rel="stylesheet" href="styles.css?v=4.20.77&r=20">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.77&r=20" />
 </head>
 <body>
   <header class="a33-header" role="banner">
@@ -253,75 +253,6 @@
       <button id="btn-undo" class="btn-warn">↩︎ Deshacer última</button>
     </div>
 
-        <div class="vasos-panel">
-      <button type="button" id="vasosPanelToggle" class="vasos-panel-toggle btn-pill" aria-expanded="false">
-        <span class="vasos-panel-title">VASOS</span>
-        <span class="vasos-panel-meta">
-          <span class="vasos-panel-state">Mostrar</span>
-          <span class="vasos-panel-caret" aria-hidden="true">▸</span>
-        </span>
-      </button>
-
-      <div id="vasosPanelBody" class="vasos-panel-body is-collapsed" aria-hidden="true">
-        <div class="vasos-panel-actions">
-          <button type="button" id="vasosPanelCloseBtn" class="vasos-panel-close btn-mini">Cerrar</button>
-        </div>
-
-      <div class="card" id="cup-block">
-            <h3>Venta por vaso</h3>
-      
-            <div class="row">
-              <div><strong>Vasos disponibles: <span id="cup-available">0</span></strong></div>
-              <div style="text-align:right"><strong>Galones fraccionados: <span id="cup-gallons">0</span></strong></div>
-            </div>
-      
-            <div class="row3">
-              <div>
-                <label>Galones a fraccionar</label>
-                <input id="cup-fraction-gallons" type="number" inputmode="numeric" step="1" min="1" value="1">
-              </div>
-              <div>
-                <label>Vasos por galón</label>
-                <input id="cup-yield" type="number" inputmode="numeric" step="1" min="1" value="22">
-              </div>
-              <div>
-                <label>&nbsp;</label>
-                <button id="btn-fraction" class="btn-primary btn-pill">Fraccionar</button>
-              </div>
-            </div>
-      
-            <div class="row3">
-              <div>
-                <label>Cantidad de vasos</label>
-                <div class="stepper">
-                  <button id="cup-qty-minus" type="button">−</button>
-                  <input id="cup-qty" type="number" inputmode="numeric" step="1" min="1" value="1">
-                  <button id="cup-qty-plus" type="button">+</button>
-                </div>
-              </div>
-              <div>
-                <label>Precio por vaso (C$)</label>
-                <input id="cup-price" class="a33-num" data-a33-default="0" type="number" inputmode="decimal" step="0.01" min="0" value="0">
-              </div>
-              <div>
-                <label>&nbsp;</label>
-                <div class="row" style="grid-template-columns:1fr 1fr; gap:8px">
-                  <button id="btn-sell-cups" class="btn-ok">Vender vasos</button>
-                  <button id="btn-courtesy-cups" class="btn-warn">Registrar cortesía</button>
-                </div>
-              </div>
-            </div>
-      
-            <div class="info" style="margin-top:10px">
-              <div><b>Vasos creados:</b> <span id="cup-created">0</span> · <b>Vendidos:</b> <span id="cup-sold">0</span> · <b>Cortesía:</b> <span id="cup-courtesy">0</span> · <b>Restantes:</b> <span id="cup-remaining">0</span></div>
-              <div><b>Remanente exacto:</b> <span id="cup-remnant">0</span> ml</div>
-            </div>
-      
-            <small class="muted">Nota: esto controla porciones vendibles (vasos de sangría). No es inventario de vasos plásticos.</small>
-          </div>
-      </div>
-    </div>
-
 
     <div class="card">
       <div class="row">
@@ -549,7 +480,7 @@
       </thead>
       <tbody></tbody>
     </table>
-    <div class="info"><small>“Manejar” desactiva inventario para productos que no se controlan aquí. Inicial se guarda por evento. Reposición y Ajuste crean movimientos fechados. <b>Nota:</b> la <i>Venta por vaso</i> se gestiona en el bloque “Venta por vaso” (no aparece en este inventario).</small></div>
+    <div class="info"><small>“Manejar” desactiva inventario para productos que no se controlan aquí. Inicial se guarda por evento. Reposición y Ajuste crean movimientos fechados. <b>Nota:</b> Vasos se alimenta formalmente desde Inventario → Reempaque y se vende como producto normal.</small></div>
   </section>
 
   <section id="tab-eventos" class="tab card" style="display:none">
@@ -1750,17 +1681,17 @@
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
-  <script src="/assets/js/a33-release.js?v=4.20.77&r=18"></script>
+  <script src="/assets/js/a33-release.js?v=4.20.77&r=20"></script>
 
-<script src="/assets/js/a33-storage.js?v=4.20.77&r=18"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.77&r=18"></script>
-<script src="/assets/js/a33-build.js?v=4.20.77&r=18"></script>
+<script src="/assets/js/a33-storage.js?v=4.20.77&r=20"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.77&r=20"></script>
+<script src="/assets/js/a33-build.js?v=4.20.77&r=20"></script>
 <script>
   (function(){
     try{
       const relObj = (window.A33_RELEASE || {});
       const v = (relObj && relObj.suiteVersion) ? String(relObj.suiteVersion) : '4.20.77';
-      const rev = '18'; // POS cache bump local — Galón default C$900
+      const rev = '20'; // POS cache bump local — Vasos desde Reempaque final
       try{ window.A33_VERSION = v; }catch(_){ }
       try{ window.A33_ASSET_REV = rev; }catch(_){ }
       try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r'+rev).toString(); }catch(_){ }
@@ -1780,8 +1711,8 @@
   })();
 </script>
 
-<script src="app.js?v=4.20.77&r=18"></script>
-<script src="/assets/js/a33-input-ux.js?v=4.20.77&r=18"></script>
+<script src="app.js?v=4.20.77&r=20"></script>
+<script src="/assets/js/a33-input-ux.js?v=4.20.77&r=20"></script>
 <script>
   (function(){
     const BUILD = (window.A33_VERSION || '4.20.77').toString();

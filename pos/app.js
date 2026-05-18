@@ -1,13 +1,13 @@
 // --- IndexedDB helpers POS
 const DB_NAME = 'a33-pos';
-const DB_VER = 32; // Reempaque: store interno genérico + helpers seguros
+const DB_VER = 33; // Vasos desde Reempaque: Vaso vendible normal + flujo legacy final
 let db;
 
 // --- Build / version (fuente unica de verdad)
 const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.77';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r18');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r19');
 
 // --- Util: round2 (2 decimales) — Hotfix Ventas Etapa 1/3
 // Nota: evita NaN y errores de flotante (EPSILON). Retorna Number.
@@ -6593,19 +6593,7 @@ async function resetOperationalStateOnEventSwitchPOS(){
     try{ resetSaleCashTenderPOS(); }catch(_){ }
   }catch(_){ }
 
-  // 4) Venta por vaso: inputs (sin tocar data real de vasos del evento)
-  try{
-    const cq = document.getElementById('cup-qty');
-    if (cq) cq.value = '1';
-    const cp = document.getElementById('cup-price');
-    if (cp) cp.value = '0';
-    const fg = document.getElementById('cup-fraction-gallons');
-    if (fg) fg.value = '1';
-    const cy = document.getElementById('cup-yield');
-    if (cy) cy.value = '22';
-  }catch(_){ }
-
-  // 5) Búsquedas / filtros temporales
+  // 4) Búsquedas / filtros temporales
   try{
     const s1 = document.getElementById('customer-picker-search');
     if (s1) s1.value = '';
@@ -6619,7 +6607,7 @@ async function resetOperationalStateOnEventSwitchPOS(){
     if (fg) fg.value = '';
   }catch(_){ }
 
-  // 6) Cerrar modales/paneles que podrían quedar “colgados”
+  // 5) Cerrar modales/paneles que podrían quedar “colgados”
   try{ closeModalPOS('customer-picker-modal'); }catch(_){ }
   try{ closeModalPOS('customer-edit-modal'); }catch(_){ }
   try{ closeModalPOS('customer-merge-modal'); }catch(_){ }
@@ -8292,8 +8280,8 @@ function getCostoUnitarioProducto(productName) {
 const DEFAULT_GALON_PRICE_POS = 900;
 const LEGACY_DEFAULT_GALON_PRICE_POS = 800;
 const SEED = [
-  // "Vaso" aquí es una PORCIÓN vendible (Venta por vaso), no un producto del selector.
-  {name:'Vaso', price:100, manageStock:false, active:true, internalType:'cup_portion'},
+  // "Vaso" ahora es producto vendible normal; su stock formal viene de Reempaque.
+  {name:'Vaso', price:100, manageStock:true, active:true, capacityMl:null},
   {name:'Pulso 250ml', price:120, manageStock:true, active:true},
   {name:'Media 375ml', price:150, manageStock:true, active:true},
   {name:'Djeba 750ml', price:300, manageStock:true, active:true},
@@ -9490,8 +9478,7 @@ function setSellControlsDisabledPOS(disabled){
   const ids = [
     'sale-product','sale-price','sale-qty','qty-minus','qty-plus','sale-discount',
     'sale-payment','sale-bank','sale-courtesy','sale-return','sale-customer','sale-courtesy-to','sale-notes',
-    'btn-add','btn-add-sticky','btn-undo',
-    'btn-fraction','cup-fraction-gallons','cup-yield','cup-qty','cup-qty-minus','cup-qty-plus','cup-price','btn-sell-cups','btn-courtesy-cups'
+    'btn-add','btn-add-sticky','btn-undo'
   ];
   for (const id of ids){
     const el = document.getElementById(id);
@@ -9509,14 +9496,6 @@ function setSellControlsDisabledPOS(disabled){
     btn.disabled = !!disabled;
   });
 
-  // Bloque Venta por vaso
-  const cupBlock = document.getElementById('cup-block');
-  if (cupBlock){
-    cupBlock.classList.toggle('disabled', !!disabled);
-    cupBlock.querySelectorAll('input, button, select, textarea').forEach(el=>{
-      el.disabled = !!disabled;
-    });
-  }
 }
 
 function setSellDayClosedBannerPOS(show, dayKey, reopenHint){
@@ -9598,8 +9577,45 @@ async function updateSellEnabled(){
   // Candado real de controles
   setSellControlsDisabledPOS(!sellEnabled);
 
-  // Refrescar cup-block labels/stock sin romper nada
-  try{ await refreshCupBlock(); }catch(e){}
+}
+
+// Normalizar Vaso como producto vendible normal alimentado por Inventario → Reempaque.
+async function normalizeVasoProductForReempaquePOS(){
+  try{
+    const products = await getAll('products');
+    if (!Array.isArray(products) || !products.length) return;
+
+    const vasoProducts = products.filter(p => p && (
+      normKeyPOS(p.name || '') === normKeyPOS('Vaso') ||
+      p.internalType === 'cup_portion'
+    ));
+    if (!vasoProducts.length) return;
+
+    let canon = vasoProducts.find(p => normKeyPOS(p.name || '') === normKeyPOS('Vaso') && p.active !== false)
+      || vasoProducts.find(p => normKeyPOS(p.name || '') === normKeyPOS('Vaso'))
+      || vasoProducts[0];
+
+    let changed = false;
+    if (canon.name !== 'Vaso'){ canon.name = 'Vaso'; changed = true; }
+    if (canon.active !== true){ canon.active = true; changed = true; }
+    if (canon.manageStock !== true){ canon.manageStock = true; changed = true; }
+    if (!isValidCatalogPricePOS(canon.price)){ canon.price = 100; changed = true; }
+    // Dejar de tratarlo como producto interno/virtual: ahora se vende como cualquier SKU normal.
+    if (canon.internalType === 'cup_portion'){ try{ delete canon.internalType; changed = true; }catch(_){ canon.internalType = ''; changed = true; } }
+    if (typeof canon.capacityMl === 'undefined') { canon.capacityMl = null; changed = true; }
+    if (changed) await put('products', canon);
+
+    // Duplicados legacy: no borrar ni tocar ventas antiguas; solo ocultarlos para evitar doble Vaso en venta.
+    for (const p of vasoProducts){
+      if (!p || p.id === canon.id) continue;
+      let ch = false;
+      if (p.active !== false){ p.active = false; ch = true; }
+      if (typeof p.manageStock === 'undefined'){ p.manageStock = true; ch = true; }
+      if (ch) await put('products', p);
+    }
+  }catch(e){
+    console.warn('No se pudo normalizar producto Vaso para Reempaque', e);
+  }
 }
 
 // Normalizar producto Galón (legacy 3800ml -> 3750ml)
@@ -9669,7 +9685,8 @@ async function normalizeLegacyGallonProductPOS(){
 // Ensure defaults
 async function ensureDefaults(){
   let products = await getAll('products');
-  // Migración suave: renombrar Galón 3750 ml -> Galón 3750 ml (sin migraciones destructivas)
+  // Migración suave: Vaso pasa a producto vendible normal y Galón queda canónico.
+  await normalizeVasoProductForReempaquePOS();
   await normalizeLegacyGallonProductPOS();
   products = await getAll('products');
   if (!products.length){
@@ -9866,14 +9883,9 @@ async function renderProductos(){
 }
 
 // Productos internos/virtuales del POS que NO deben aparecer en selector ni inventario.
-// Nota: "Vaso" aquí representa porciones de sangría (Venta por vaso), no un producto vendible del selector.
+// Etapa Vasos desde Reempaque: "Vaso" ya es producto vendible normal; no se oculta.
 async function getHiddenProductIdsPOS(){
-  const hidden = new Set();
-  try{
-    const vaso = await getVasoProductPOS();
-    if (vaso && vaso.id != null) hidden.add(vaso.id);
-  }catch(e){}
-  return hidden;
+  return new Set();
 }
 
 // Chips de productos (todos los activos)
@@ -10252,96 +10264,9 @@ const tabs = $$('.tab');
   if (name==='calculadora') onOpenPosCalculatorTab().catch(err=>console.error(err));
   if (name==='checklist') renderChecklistTab().catch(err=>console.error(err));
   if (name==='venta') {
-    initVasosPanelPOS().catch(err=>console.error(err));
     syncExchangeRateInputs().catch(err=>console.error(err));
     try{ setupSaleCashTenderUIOnce(); refreshSaleCashTenderUiPOS({ forceFx:true }); }catch(_){ }
   }
-}
-
-// --- Vasos panel (colapsable persistente)
-async function syncVasosPanelKeyPOS(){
-  const toggle = document.getElementById('vasosPanelToggle');
-  if (!toggle) return 'pos_vasos_panel_open';
-
-  let evId = null;
-  try{
-    if (window.__A33_SELL_STATE && window.__A33_SELL_STATE.eventId != null){
-      evId = parseInt(window.__A33_SELL_STATE.eventId, 10);
-    }
-  }catch(_){ }
-
-  if (!evId){
-    try{
-      const cur = await getMeta('currentEventId');
-      if (cur != null && cur !== '') evId = parseInt(cur, 10);
-    }catch(_){ }
-  }
-
-  const key = (evId && Number.isFinite(evId)) ? `pos_vasos_panel_open_${evId}` : 'pos_vasos_panel_open';
-  toggle.dataset.storageKey = key;
-  return key;
-}
-
-function setVasosPanelStatePOS(isOpen, opts){
-  const o = (opts || {});
-  const save = (o.save !== false);
-  const toggle = document.getElementById('vasosPanelToggle');
-  const body = document.getElementById('vasosPanelBody');
-  if (!toggle || !body) return;
-
-  const open = !!isOpen;
-  body.classList.toggle('is-collapsed', !open);
-  body.setAttribute('aria-hidden', open ? 'false' : 'true');
-  toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-
-  const caret = toggle.querySelector('.vasos-panel-caret');
-  if (caret) caret.textContent = open ? '▾' : '▸';
-  const stateLbl = toggle.querySelector('.vasos-panel-state');
-  if (stateLbl) stateLbl.textContent = open ? 'Ocultar' : 'Mostrar';
-
-  if (save){
-    const key = toggle.dataset.storageKey || 'pos_vasos_panel_open';
-    try{ localStorage.setItem(key, open ? '1' : '0'); }catch(_){ }
-  }
-}
-
-async function loadVasosPanelStatePOS(){
-  const toggle = document.getElementById('vasosPanelToggle');
-  const body = document.getElementById('vasosPanelBody');
-  if (!toggle || !body) return;
-
-  const key = await syncVasosPanelKeyPOS();
-  let raw = null;
-  try{ raw = localStorage.getItem(key); }catch(_){ raw = null; }
-  const isOpen = (raw === '1');
-  setVasosPanelStatePOS(isOpen, { save:false });
-}
-
-function bindVasosPanelOncePOS(){
-  // Re-render safe: se enlaza por elemento (no global)
-  const toggle = document.getElementById('vasosPanelToggle');
-  if (toggle && !toggle.dataset.bound){
-    toggle.dataset.bound = '1';
-    toggle.addEventListener('click', async ()=>{
-      await syncVasosPanelKeyPOS();
-      const expanded = (toggle.getAttribute('aria-expanded') === 'true');
-      setVasosPanelStatePOS(!expanded, { save:true });
-    });
-  }
-
-  const closeBtn = document.getElementById('vasosPanelCloseBtn');
-  if (closeBtn && !closeBtn.dataset.bound){
-    closeBtn.dataset.bound = '1';
-    closeBtn.addEventListener('click', async ()=>{
-      await syncVasosPanelKeyPOS();
-      setVasosPanelStatePOS(false, { save:true });
-    });
-  }
-}
-
-async function initVasosPanelPOS(){
-  bindVasosPanelOncePOS();
-  await loadVasosPanelStatePOS();
 }
 
 // --- Deep-link mínimo (Centro de Mando -> POS)
@@ -11871,7 +11796,6 @@ async function refreshEventUI(){
   try{ await syncExchangeRateInputs(); }catch(e){ console.warn('No se pudo sincronizar T/C en Vender', e); }
   try{ await refreshProductSelect({ keepSelection:true }); }catch(e){ try{ await renderProductChips(); }catch(_){ } }
   try{ await renderExtrasUI(); }catch(e){}
-  try{ await initVasosPanelPOS(); }catch(e){}
 }
 
 async function refreshProductSelect(opts){
@@ -12308,12 +12232,92 @@ async function computeStock(eventId, productId){
     .reduce((a,b)=> a + (Number(b && b.qty) || 0), 0);
 
   const allSales = await getAll('sales');
-  const sold = (Array.isArray(allSales) ? allSales : [])
-    .filter(s => s && Number(s.eventId) === evId && Number(s.productId) === pid)
-    .reduce((a,b)=> a + (Number(b && b.qty) || 0), 0);
+  const salesForProduct = (Array.isArray(allSales) ? allSales : [])
+    .filter(s => s && Number(s.eventId) === evId && Number(s.productId) === pid);
 
+  // Compatibilidad: ventas antiguas por el flujo legacy de vasos ya descontaban cupos
+  // dentro de event.fractionBatches. Para el Vaso vendible normal, el stock formal
+  // debe venir de Inventario/Reempaque y solo las ventas normales descuentan aquí.
+  try{
+    const products = await getAll('products');
+    const prod = (products || []).find(p => p && Number(p.id) === pid);
+    const isVaso = !!(prod && normName(prod.name || '') === 'vaso');
+    if (isVaso){
+      const ev = await getEventByIdPOS(evId).catch(()=>null);
+      const legacyBatches = sanitizeFractionBatches(ev && ev.fractionBatches);
+      const legacyRemaining = legacyBatches.reduce((a,b)=> a + safeInt(b && b.cupsRemaining, 0), 0);
+      const normalSold = salesForProduct
+        .filter(s => !isCupSaleRecord(s))
+        .reduce((a,b)=> a + (Number(b && b.qty) || 0), 0);
+      const vasoOut = ledger + legacyRemaining - normalSold;
+      return Number.isFinite(vasoOut) ? vasoOut : 0;
+    }
+  }catch(_){ }
+
+  const sold = salesForProduct.reduce((a,b)=> a + (Number(b && b.qty) || 0), 0);
   const out = ledger - sold;
   return Number.isFinite(out) ? out : 0;
+}
+
+function saleCostFieldValuePOS(value){
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function getProductStoredUnitCostPOS(product){
+  if (!product || typeof product !== 'object') return 0;
+  const candidates = [
+    product.unitCost, product.costoUnitario, product.costoUnidad,
+    product.costPerUnit, product.sourceUnitCost
+  ];
+  for (const c of candidates){
+    const n = saleCostFieldValuePOS(c);
+    if (n > 0) return n;
+  }
+  return 0;
+}
+
+async function getReempaqueUnitCostForSalePOS(eventId, productId){
+  try{
+    const evId = Number(eventId);
+    const pid = Number(productId);
+    if (!Number.isFinite(evId) || evId <= 0 || !Number.isFinite(pid) || pid <= 0) return 0;
+    const entries = await getInventoryEntries(evId);
+    let qtyCost = 0;
+    let qtyTotal = 0;
+
+    for (const e of (entries || [])){
+      if (!e || Number(e.productId) !== pid) continue;
+      const isReempaqueDest =
+        e.reempaqueRole === 'destino' &&
+        (e.source === 'reempaque' || e.sourceType === 'REEMPAQUE' || e.reempaqueId);
+      if (!isReempaqueDest) continue;
+
+      const q = Math.max(0, Number(e.qty) || 0);
+      const c = saleCostFieldValuePOS(e.costoUnitarioDestino ?? e.targetUnitCost ?? e.unitCost ?? e.costPerUnit);
+      if (!(q > 0) || !(c > 0)) continue;
+      qtyTotal += q;
+      qtyCost += q * c;
+    }
+
+    if (qtyTotal > 0 && qtyCost > 0) return round2(qtyCost / qtyTotal);
+  }catch(err){
+    console.warn('No se pudo leer costo unitario desde Reempaque para venta', err);
+  }
+  return 0;
+}
+
+async function resolveSaleUnitCostPOS(eventId, productId, productName, productObj){
+  const fromReempaque = await getReempaqueUnitCostForSalePOS(eventId, productId);
+  if (fromReempaque > 0) return { unitCost: fromReempaque, source: 'reempaque' };
+
+  const fromProduct = getProductStoredUnitCostPOS(productObj);
+  if (fromProduct > 0) return { unitCost: fromProduct, source: 'producto' };
+
+  const fromCalc = saleCostFieldValuePOS(getCostoUnitarioProducto(productName));
+  if (fromCalc > 0) return { unitCost: fromCalc, source: 'calculadora' };
+
+  return { unitCost: 0, source: '' };
 }
 
 function reempaqueMovementErrorPOS(msg){
@@ -13053,7 +13057,7 @@ function queueLotsUsageSyncPOS(eventId){
 try{ window.syncLotsUsageForEvent = syncLotsUsageForEvent; }catch(_){ }
 
 
-// --- Venta por vaso (fraccionamiento de galones) ---
+// --- Compatibilidad histórica: registros legacy de vasos ---
 const ML_PER_GALON = 3750;
 
 function safeInt(val, def){
@@ -13094,457 +13098,6 @@ function isCupSaleRecord(sale){
 async function getEventByIdPOS(eventId){
   const evs = await getAll('events');
   return evs.find(e => e.id === eventId) || null;
-}
-
-async function getVasoProductPOS(){
-  const prods = await getAll('products');
-  // Prioridad: producto marcado como interno para "Venta por vaso"
-  return prods.find(p => p && p.internalType === 'cup_portion')
-    || prods.find(p => normName(p.name) === 'vaso')
-    || null;
-}
-
-function fmtMl(value){
-  const n = Number(value || 0);
-  if (!Number.isFinite(n)) return '0';
-  const r = Math.round(n * 10) / 10;
-  if (Math.abs(r - Math.round(r)) < 1e-9) return String(Math.round(r));
-  return r.toFixed(1);
-}
-
-function computeCupStatsFromEvent(ev, allSales){
-  const batches = sanitizeFractionBatches(ev && ev.fractionBatches);
-  batches.sort((a,b)=> (a.timestamp||'').localeCompare(b.timestamp||''));
-
-  const cupsAvailable = batches.reduce((a,b)=> a + safeInt(b.cupsRemaining, 0), 0);
-  const gallonsFractionedTotal = batches.reduce((a,b)=> a + safeInt(b.gallons, 0), 0);
-  const cupsCreatedTotal = batches.reduce((a,b)=> a + safeInt(b.cupsCreated, 0), 0);
-
-  let soldPaid = 0;
-  let courtesy = 0;
-
-  (allSales || []).forEach(s=>{
-    if (!s || !ev || s.eventId !== ev.id) return;
-    if (!isCupSaleRecord(s)) return;
-    const q = Number(s.qty || 0);
-    const qty = Number.isFinite(q) ? q : 0;
-    if (s.courtesy || s.isCourtesy) courtesy += Math.abs(qty);
-    else soldPaid += Math.abs(qty);
-  });
-
-  const remnantMl = batches.reduce((a,b)=> a + (safeInt(b.cupsRemaining, 0) * (Number(b.mlPerCup) || 0)), 0);
-
-  return { batches, cupsAvailable, gallonsFractionedTotal, cupsCreatedTotal, soldPaid, courtesy, remnantMl };
-}
-
-async function refreshCupBlock(){
-  const evIdRaw = await getMeta('currentEventId');
-  const evId = Number(evIdRaw);
-  const block = document.getElementById('cup-block');
-  if (!block) return;
-
-  const setText = (id, val) => {
-    const el = document.getElementById(id);
-    if (el) el.textContent = val;
-  };
-
-  if (!evId){
-    setText('cup-available','0');
-    setText('cup-gallons','0');
-    setText('cup-created','0');
-    setText('cup-sold','0');
-    setText('cup-courtesy','0');
-    setText('cup-remaining','0');
-    setText('cup-remnant','0');
-    return;
-  }
-
-  const ev = await getEventByIdPOS(evId);
-  const allSales = await getAll('sales');
-  const stats = computeCupStatsFromEvent(ev, allSales);
-
-  setText('cup-available', String(stats.cupsAvailable));
-  setText('cup-gallons', String(stats.gallonsFractionedTotal));
-  setText('cup-created', String(stats.cupsCreatedTotal));
-  setText('cup-sold', String(stats.soldPaid));
-  setText('cup-courtesy', String(stats.courtesy));
-  setText('cup-remaining', String(stats.cupsAvailable));
-  setText('cup-remnant', fmtMl(stats.remnantMl));
-
-  // Default de precio por vaso (si está vacío o en 0)
-  try{
-    const inp = document.getElementById('cup-price');
-    if (inp){
-      const cur = parseFloat(inp.value || '0');
-      if (!cur){
-        const vasoProd = await getVasoProductPOS();
-        if (vasoProd && Number(vasoProd.price) > 0) inp.value = vasoProd.price;
-      }
-    }
-  }catch(e){}
-}
-
-async function fractionGallonsToCupsPOS(){
-  const evId = await getMeta('currentEventId');
-  if (!evId){ alert('Selecciona un evento'); return; }
-
-  const ev = await getEventByIdPOS(evId);
-  if (!ev){ alert('Evento no encontrado'); return; }
-  if (ev.closedAt){ alert('Este evento está cerrado. Reábrelo o activa otro.'); return; }
-
-  const saleDate = document.getElementById('sale-date')?.value || '';
-  // Candado: no permitir fraccionamiento ni operaciones de venta si el día está cerrado
-  if (!(await guardSellDayOpenOrToastPOS(ev, saleDate))) return;
-
-  const gallonsToFraction = safeInt(document.getElementById('cup-fraction-gallons')?.value, 0);
-  const yieldCupsPerGallon = safeInt(document.getElementById('cup-yield')?.value, 22);
-
-  if (!(gallonsToFraction >= 1)) { alert('Galones a fraccionar debe ser un entero >= 1'); return; }
-  if (!(yieldCupsPerGallon >= 1)) { alert('Vasos por galón debe ser un entero >= 1'); return; }
-
-  // Validar inventario de Galón (producto terminado) usando el sistema existente
-  const products = await getAll('products');
-  const galProd = products.find(p => mapProductNameToFinishedId(p.name) === 'galon') || null;
-  if (!galProd){
-    alert('No encontré el producto "Galón 3750 ml" (antes 3800ml) en Productos. Restaura productos base o créalo.');
-    return;
-  }
-
-  const stockEvent = await computeStock(evId, galProd.id);
-  if (stockEvent < gallonsToFraction){
-    alert(`Inventario insuficiente de Galón para este evento. Disponible: ${stockEvent}. Intentas fraccionar: ${gallonsToFraction}.`);
-    return;
-  }
-
-  // Descontar inventario por evento (ledger) y central (producto terminado)
-  try{
-    await addAdjust(evId, galProd.id, -gallonsToFraction, `Fraccionado a vasos (${yieldCupsPerGallon} vasos/galón)`);
-  }catch(e){
-    console.error('No se pudo registrar ajuste de inventario por evento al fraccionar', e);
-  }
-
-  try{
-    applyFinishedFromSalePOS({ productName: galProd.name, qty: gallonsToFraction }, +1);
-  }catch(e){
-    console.error('No se pudo actualizar inventario central al fraccionar', e);
-  }
-
-  const batchId = 'fb-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,7);
-  const cupsCreated = gallonsToFraction * yieldCupsPerGallon;
-  const mlPerCup = ML_PER_GALON / yieldCupsPerGallon;
-
-  const batches = sanitizeFractionBatches(ev.fractionBatches);
-  batches.push({
-    batchId,
-    timestamp: new Date().toISOString(),
-    gallons: gallonsToFraction,
-    yieldCupsPerGallon,
-    cupsCreated,
-    cupsRemaining: cupsCreated,
-    mlPerCup,
-    note: ''
-  });
-
-  ev.fractionBatches = batches;
-
-  // Persistir fraccionamiento en el evento (esta acción NO crea "sale", así que no pasa por el guardado atómico).
-  try{
-    const evFresh = await getEventByIdPOS(evId);
-    if (evFresh){
-      evFresh.fractionBatches = batches;
-      await put('events', evFresh);
-    } else {
-      await put('events', ev);
-    }
-  }catch(e){
-    console.error('No se pudo persistir fraccionamiento en evento', e);
-    try{ showPersistFailPOS('fraccionamiento', e); }catch(_){ }
-  }
-
-  // Actualizar snapshot de Lotes para este evento (evita "galones fantasma" tras fraccionar a vasos)
-  try{ queueLotsUsageSyncPOS(evId); }catch(_){ }
-
-  await renderInventario();
-  await refreshSaleStockLabel();
-  await refreshCupBlock();
-  toast(`Fraccionados ${gallonsToFraction} galón(es) a ${yieldCupsPerGallon} vasos/galón → +${cupsCreated} vasos`);
-}
-
-function fifoTakeCups(batches, qty){
-  let remaining = qty;
-  const breakdown = [];
-  const ordered = [...batches].sort((a,b)=> (a.timestamp||'').localeCompare(b.timestamp||''));
-  for (const b of ordered){
-    if (remaining <= 0) break;
-    const avail = safeInt(b.cupsRemaining, 0);
-    if (avail <= 0) continue;
-    const take = Math.min(avail, remaining);
-    if (take > 0){
-      b.cupsRemaining = avail - take;
-      breakdown.push({ batchId: b.batchId, cupsTaken: take, mlPerCup: b.mlPerCup });
-      remaining -= take;
-    }
-  }
-  return { ok: remaining === 0, breakdown };
-}
-
-async function sellCupsPOS(isCourtesy){
-  const evId = await getMeta('currentEventId');
-  if (!evId){ alert('Selecciona un evento'); return; }
-
-  const ev = await getEventByIdPOS(evId);
-  if (!ev){ alert('Evento no encontrado'); return; }
-  if (ev.closedAt){ alert('Este evento está cerrado. Reábrelo o activa otro.'); return; }
-
-  const date = document.getElementById('sale-date')?.value || '';
-  if (!date){ alert('Selecciona una fecha'); return; }
-
-  // Candado: no permitir fraccionamiento ni operaciones de venta si el día está cerrado
-  if (!(await guardSellDayOpenOrToastPOS(ev, date))) return;
-
-  const qty = safeInt(document.getElementById('cup-qty')?.value, 0);
-  if (!(qty >= 1)) { alert('Cantidad de vasos debe ser un entero >= 1'); return; }
-
-  // Etapa 1: confirmación si no hay cliente seleccionado
-  if (!confirmProceedSaleWithoutCustomerPOS()) return;
-
-  const allSales = await getAll('sales');
-  const stats = computeCupStatsFromEvent(ev, allSales);
-  if (stats.cupsAvailable < qty){
-    alert('No hay vasos disponibles. Fraccioná un galón.');
-    return;
-  }
-
-  const batches = stats.batches; // sanitized
-  const taken = fifoTakeCups(batches, qty);
-  if (!taken.ok){
-    alert('No hay vasos suficientes. Fraccioná un galón.');
-    return;
-  }
-
-  ev.fractionBatches = batches;
-  // Nota: persistencia de cups+venta se hace atómica (events+sales) más abajo
-
-  // Candado: si sección está activada y el día está cerrado, NO permitir ventas por vaso
-  if (!(await guardSellDayOpenOrToastPOS(ev, date))) return;
-
-  const payment = document.getElementById('sale-payment')?.value || 'efectivo';
-  const customerInputName = getCustomerNameFromUI_POS();
-  const customerResolved = resolveCustomerIdForSalePOS(customerInputName, getCustomerIdHintFromUI_POS());
-  const customerId = customerResolved ? customerResolved.id : null;
-  const customerName = (customerResolved && customerResolved.displayName) ? customerResolved.displayName : customerInputName;
-
-  // Banco (obligatorio si es Transferencia)
-  let bankId = null;
-  let bankName = '';
-  if (payment === 'transferencia'){
-    const activeBanks = (await getAllBanksSafe()).filter(b => b && b.isActive !== false);
-    if (!activeBanks.length){
-      alert('No hay bancos activos. Agregá uno en Productos.');
-      return;
-    }
-    const sel = document.getElementById('sale-bank');
-    const raw = sel ? String(sel.value || '').trim() : '';
-    const id = parseInt(raw || '0', 10);
-    if (!id){
-      alert('Selecciona el banco para la transferencia.');
-      return;
-    }
-    const found = activeBanks.find(b => Number(b.id) === id);
-    bankId = id;
-    bankName = (found && found.name) ? String(found.name) : '';
-  }
-
-  let vasoProd = await getVasoProductPOS();
-  // Si alguien borró el producto interno "Vaso", lo recreamos (sin exponerlo en el selector)
-  if (!vasoProd){
-    try{
-      const newId = await put('products', {name:'Vaso', price:100, manageStock:false, active:false, internalType:'cup_portion'});
-      vasoProd = {id: newId, price:100, manageStock:false, active:false, internalType:'cup_portion'};
-    }catch(e){
-      console.error('No se pudo preparar producto interno Vaso', e);
-      showPersistFailPOS('producto Vaso', e);
-      return;
-    }
-  }
-  const productId = vasoProd ? vasoProd.id : 0;
-
-  const unitPrice = isCourtesy ? 0 : parseFloat(document.getElementById('cup-price')?.value || '0');
-  if (!isCourtesy && !(unitPrice > 0)){
-    alert('Ingresa un precio por vaso (> 0) o usa "Registrar cortesía".');
-    return;
-  }
-
-  const productName = isCourtesy ? 'Vaso (Cortesía)' : 'Vaso';
-  const total = isCourtesy ? 0 : (unitPrice * qty);
-
-  const now = new Date();
-  const time = now.toTimeString().slice(0,5);
-
-  // Costo por vaso (COGS): derivado del costo del Galón configurado en Calculadora (Recetas).
-  // Usamos el breakdown FIFO (mlPerCup) para estimar el costo exacto por ml servido.
-  const costoGallon = getCostoUnitarioProducto('Galón 3750 ml') || getCostoUnitarioProducto('Galón 3750 ml') || getCostoUnitarioProducto('Galón') || 0;
-  let lineCost = 0;
-  if (costoGallon > 0) {
-    const costPerMl = costoGallon / ML_PER_GALON;
-    let totalMl = 0;
-    for (const it of (taken.breakdown || [])) {
-      const cupsTaken = Number(it && it.cupsTaken) || 0;
-      const mlPerCup = Number(it && it.mlPerCup) || 0;
-      if (cupsTaken > 0 && mlPerCup > 0) totalMl += cupsTaken * mlPerCup;
-    }
-    if (!(totalMl > 0)) {
-      // fallback ultra seguro
-      totalMl = qty * (ML_PER_GALON / 22);
-    }
-    lineCost = round2(costPerMl * totalMl);
-  }
-  const costPerUnit = (qty > 0) ? round2(lineCost / qty) : 0;
-  const lineProfit = round2(total - lineCost);
-
-  const tenderCheck = validateSaleCashTenderPOS({ payment, total, courtesy: !!isCourtesy, isReturn: false });
-  if (!tenderCheck.ok){
-    try{ updateSaleCashTenderComputedPOS(); }catch(_){ }
-    alert(tenderCheck.msg || 'Revisa el cobro en efectivo.');
-    return;
-  }
-
-  const saleRecord = {
-    date,
-    time,
-    createdAt: Date.now(),
-    eventId: evId,
-    eventName: ev.name || 'General',
-    productId,
-    productName,
-    unitPrice,
-    qty,
-    discount: 0,
-    discountPerUnit: 0,
-    payment,
-    bankId: (payment === 'transferencia') ? bankId : null,
-    bankName: (payment === 'transferencia') ? bankName : null,
-    courtesy: !!isCourtesy,
-    isCourtesy: !!isCourtesy,
-    isReturn: false,
-    // Compat: mantenemos "customer" y añadimos "customerName" (nuevo)
-    customer: customerName,
-    customerName,
-    customerId,
-    courtesyTo: isCourtesy ? ((document.getElementById('sale-courtesy-to')?.value || '').trim()) : '',
-    total,
-    notes: isCourtesy ? 'Cortesía por vaso' : 'Venta por vaso',
-    costPerUnit,
-    lineCost,
-    lineProfit,
-    vaso: true,
-    fifoBreakdown: taken.breakdown
-  };
-  applySaleCashTenderToRecordPOS(saleRecord, tenderCheck.tender);
-
-  // Validación mínima (bloqueante antes de guardar)
-  const vMin = validateSaleMinimalPOS(saleRecord);
-  if (!vMin.ok){ alert(vMin.msg); return; }
-
-  // Etapa 2D: UID estable por intento + dedupe conservador (antes de insertar)
-  try{
-    const fp = saleFingerprintPOS(saleRecord);
-    const uid = getOrCreatePendingSaleUidPOS(fp);
-    saleRecord.uid = uid;
-    const existing = await getSaleByUidPOS(uid);
-    if (existing){
-      clearPendingSaleUidPOS();
-      try{ await renderDay(); await renderSummary(); }catch(_){ }
-      try{ if (typeof showToast === 'function') showToast('Venta ya guardada (duplicado bloqueado).', 'error', 4500); else alert('Venta ya guardada (duplicado bloqueado).'); }catch(_){ try{ alert('Venta ya guardada (duplicado bloqueado).'); }catch(__){ } }
-      try{ await refreshCupBlock(); }catch(_e){}
-      return;
-    }
-  }catch(_){ }
-
-
-  // Reservar N° por evento en memoria y guardar atómico (events + sales)
-  try{
-    const salesForEvent = (allSales || []).filter(s => s && s.eventId === evId);
-    const seqInfo = reserveSaleSeqInMemoryPOS(ev, saleRecord, salesForEvent);
-    const evUpdated = (seqInfo && seqInfo.eventUpdated) ? seqInfo.eventUpdated : ev;
-    const saleId = await saveSaleAndEventAtomicPOS({ saleRecord, eventUpdated: evUpdated });
-    saleRecord.id = saleId;
-    // Commit en memoria SOLO después de persistir
-    try{ if (seqInfo && seqInfo.nextSeq != null) ev.saleSeq = seqInfo.nextSeq; }catch(_){ }
-  }catch(err){
-    console.error('sellCupsPOS persist error', err);
-    showPersistFailPOS('venta por vaso', err);
-    try{ await refreshCupBlock(); }catch(_e){}
-    return;
-  }
-
-  // VASOS (Etapa 3/3): Auto-descuento Vasos 12oz (Tapas Auto) con idempotencia por operación
-  try{
-    const vSrc = getVasos12ozSourceIdFromSalePOS(saleRecord);
-    const rCap = adjustVasos12ozStockFromPOS(qty, { sourceId: vSrc, mode:'apply' });
-
-    // Registrar marca en la operación (auditoría + idempotencia simple)
-    try{
-      const sFresh = await getOne('sales', saleRecord.id);
-      if (sFresh){
-        if (!sFresh.invEffects || typeof sFresh.invEffects !== 'object') sFresh.invEffects = {};
-        sFresh.invEffects.vasos12oz = {
-          sourceId: vSrc,
-          qtyApplied: toIntSafePOS(qty, qty),
-          state: (rCap && rCap.ok) ? 'APPLIED' : 'FAILED',
-          skipped: !!(rCap && rCap.skipped),
-          reason: (rCap && rCap.reason) ? String(rCap.reason) : '',
-          at: Date.now()
-        };
-        await put('sales', sFresh);
-      }
-    }catch(_e){ }
-
-    if (rCap && rCap.ok && !rCap.skipped){
-      try{ if (typeof showToast === 'function') showToast(`Vasos 12oz: -${qty}`, 'ok', 1600); }catch(_){ }
-    } else if (rCap && rCap.ok && rCap.skipped){
-      // Ya aplicado (idempotente) → no volver a descontar
-      try{ if (typeof showToast === 'function') showToast('Vasos 12oz: ya aplicado (idempotente).', 'ok', 1800); }catch(_){ }
-    } else if (rCap && !rCap.ok){
-      try{ if (typeof showToast === 'function') showToast('No se pudo descontar Vasos 12oz.', 'error', 4200); }catch(_){ }
-    }
-  }catch(e){
-    console.warn('Auto-descuento Vasos 12oz falló', e);
-  }
-
-  // Invalida cache liviano de Consolidado (ventas del período actual)
-  try{
-    const pk = periodKeyFromDatePOS(saleRecord.date);
-    bumpConsolSalesRevPOS(pk);
-    clearConsolLiveCachePOS(pk);
-  }catch(_){ }
-
-  try{
-    await createJournalEntryForSalePOS(saleRecord);
-  }catch(e){
-    console.error('No se pudo generar asiento contable para venta por vaso', e);
-  }
-
-  // Cliente: catálogo + modo pegajoso
-  afterSaleCustomerHousekeepingPOS(customerName, customerId);
-
-  const qtyInp = document.getElementById('cup-qty');
-  if (qtyInp) qtyInp.value = 1;
-  try{ const pay = document.getElementById('sale-payment'); if (pay) pay.value = 'efectivo'; await refreshSaleBankSelect(); }catch(_){ }
-  try{ resetSaleCashTenderPOS(); }catch(_){ }
-
-  await renderDay();
-  await renderSummary();
-  await refreshSaleStockLabel();
-  await renderInventario();
-  await refreshCupBlock();
-  toast(isCourtesy ? 'Cortesía registrada' : 'Venta por vaso agregada');
-
-  // Actualizar snapshot de Lotes para este evento (si hubo fraccionamiento, el Galón debe reflejarse como consumido)
-  try{ queueLotsUsageSyncPOS(evId); }catch(_){ }
-
-  // Etapa 2D: limpiar UID pendiente al finalizar el flujo
-  clearPendingSaleUidPOS();
 }
 
 async function revertCupConsumptionFromSalePOS(sale){
@@ -13607,7 +13160,6 @@ async function revertCupConsumptionFromSalePOS(sale){
 
   ev.fractionBatches = batches;
   await put('events', ev);
-  await refreshCupBlock();
 }
 
 
@@ -14922,7 +14474,7 @@ async function reempaqueSelectableProductsPOS(){
   try{ hiddenIds = await getHiddenProductIdsPOS(); }catch(_){ hiddenIds = new Set(); }
   const all = await getAll('products').catch(()=>[]);
   return (Array.isArray(all) ? all : [])
-    .filter(p => p && p.id != null && !hiddenIds.has(p.id) && p.internalType !== 'cup_portion')
+    .filter(p => p && p.id != null && !hiddenIds.has(p.id))
     .sort((a,b)=>{
       const aa = (a && a.active === false) ? 1 : 0;
       const bb = (b && b.active === false) ? 1 : 0;
@@ -19699,9 +19251,13 @@ async function openEventView(eventId){
         costoCortesiasVasos += lineCost;
       }
     } else {
-      const unitCost = getCostoUnitarioProducto(s.productName);
-      if (unitCost > 0 && qtyParaCosto !== 0) {
-        const lineCost = unitCost * qtyParaCosto;
+      const storedLineCost = getSaleLineCostPOS(s);
+      const fallbackUnitCost = getCostoUnitarioProducto(s.productName);
+      const lineCost = (Math.abs(storedLineCost) > 1e-9)
+        ? storedLineCost
+        : ((fallbackUnitCost > 0 && qtyParaCosto !== 0) ? (fallbackUnitCost * qtyParaCosto) : 0);
+
+      if (Math.abs(lineCost) > 1e-9) {
         costoProductos += lineCost;
 
         if (isCourtesy){
@@ -20155,13 +19711,11 @@ async function init(){
   await runStep('refreshProductSelect', refreshProductSelect);
   await runStep('refreshSaleBankSelect', refreshSaleBankSelect);
   await runStep('renderDay', renderDay);
-  await runStep('refreshCupBlock', refreshCupBlock);
   await runStep('renderSummary', renderSummary);
   await runStep('renderProductos', renderProductos);
   await runStep('renderEventos', renderEventos);
   await runStep('renderInventario', renderInventario);
   await runStep('updateSellEnabled', updateSellEnabled);
-  await runStep('initVasosPanel', initVasosPanelPOS);
   await runStep('initCustomerUX', async()=>{ initCustomerUXPOS(); });
   await runStep('initSummaryCustomerFilter', async()=>{ initSummaryCustomerFilterPOS(); });
   await runStep('bindSummaryDailyClose', async()=>{ bindSummaryDailyClosePOS(); });
@@ -20433,15 +19987,7 @@ async function init(){
     });
   }
 
-  // Venta por vaso (fraccionamiento de galones)
-  const btnFraction = document.getElementById('btn-fraction');
-  if (btnFraction) btnFraction.addEventListener('click', fractionGallonsToCupsPOS);
-
-  const btnSellCups = document.getElementById('btn-sell-cups');
-  if (btnSellCups) btnSellCups.addEventListener('click', ()=> sellCupsPOS(false));
-
-  const btnCourtesyCups = document.getElementById('btn-courtesy-cups');
-  if (btnCourtesyCups) btnCourtesyCups.addEventListener('click', ()=> sellCupsPOS(true));
+  // Flujo legacy de vasos desactivado: Vender solo vende stock existente.
 
   // Deshacer última venta del día para el evento activo
   $('#btn-undo').addEventListener('click', async ()=>{
@@ -20579,18 +20125,6 @@ async function init(){
   $('#qty-minus').addEventListener('click', ()=>{ const v = Math.max(1, parseInt($('#sale-qty').value||'1',10) - 1); $('#sale-qty').value = v; recomputeTotal(); });
   $('#qty-plus').addEventListener('click', ()=>{ const v = Math.max(1, parseInt($('#sale-qty').value||'1',10) + 1); $('#sale-qty').value = v; recomputeTotal(); });
 
-  // Stepper (Venta por vaso)
-  const cupQtyInp = document.getElementById('cup-qty');
-  const cupMinus = document.getElementById('cup-qty-minus');
-  const cupPlus = document.getElementById('cup-qty-plus');
-  if (cupMinus && cupQtyInp) cupMinus.addEventListener('click', ()=>{
-    const v = Math.max(1, parseInt(cupQtyInp.value || '1', 10) - 1);
-    cupQtyInp.value = v;
-  });
-  if (cupPlus && cupQtyInp) cupPlus.addEventListener('click', ()=>{
-    const v = Math.max(1, parseInt(cupQtyInp.value || '1', 10) + 1);
-    cupQtyInp.value = v;
-  });
 
   // Productos: agregar + restaurar
   document.getElementById('btn-add-prod').onclick = async()=>{ const name = $('#new-name').value.trim(); const price = parseFloat($('#new-price').value||'0'); if (!name || !(price>0)) return alert('Nombre y precio'); try{ await put('products', {name, price, manageStock:true, active:true}); $('#new-name').value=''; $('#new-price').value=''; await renderProductos(); await refreshProductSelect(); await renderInventario(); toast('Producto agregado'); }catch(err){ alert('No se pudo agregar. ¿Nombre duplicado?'); } };
@@ -20923,7 +20457,8 @@ async function addSale(){
   const finalQty = isReturn ? -qty : qty;
   if (isReturn) total = -total;
 
-  const unitCost = getCostoUnitarioProducto(productName);
+  const costInfo = await resolveSaleUnitCostPOS(curId, productId, productName, prod);
+  const unitCost = Number(costInfo.unitCost || 0);
   const lineCost = unitCost * finalQty;
   const lineProfit = total - lineCost;
 
@@ -20964,6 +20499,7 @@ async function addSale(){
     total,
     notes,
     costPerUnit:unitCost,
+    costSource: costInfo.source || '',
     lineCost,
     lineProfit
   };
