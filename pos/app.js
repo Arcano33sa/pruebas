@@ -5653,9 +5653,21 @@ function reempaqueBuildMultipleDestinationsPOS(rawDestinos, products, costoPorMl
     const mlPorUnidad = reempaqueDestinationMlFromInputPOS(raw, normalized);
     const volumenManual = reempaquePositivePOS(raw.volumenTotalDestinoMl ?? raw.volumenDestinoMl ?? raw.totalMl ?? raw.volumeTotalMl ?? 0);
     const volumenTotalDestinoMl = volumenManual > 0 ? volumenManual : reempaqueTotalVolumePOS(cantidadCreada, mlPorUnidad);
-    const costoTotalManual = reempaqueMoneyPOS(raw.costoTotalAsignado ?? raw.costoAsignado ?? raw.costTotalAssigned ?? raw.totalCost ?? 0);
-    const costoTotalAsignado = (costoPorMl > 0 && volumenTotalDestinoMl > 0)
+    const costoLiquidoTotalManual = reempaqueMoneyPOS(raw.costoLiquidoTotal ?? raw.costoLiquidoAsignado ?? raw.liquidCostTotal ?? raw.liquidTotalCost ?? 0);
+    const costoLiquidoTotal = (costoPorMl > 0 && volumenTotalDestinoMl > 0)
       ? round2(volumenTotalDestinoMl * costoPorMl)
+      : costoLiquidoTotalManual;
+    const costoLiquidoUnitario = (cantidadCreada > 0 && costoLiquidoTotal > 0)
+      ? round2(costoLiquidoTotal / cantidadCreada)
+      : reempaqueMoneyPOS(raw.costoLiquidoUnitario ?? raw.liquidUnitCost ?? raw.costoUnitarioLiquido ?? 0);
+    const costoAdicionalUnitario = reempaqueMoneyPOS(raw.costoAdicionalUnitario ?? raw.costoEmpaqueUnitario ?? raw.extraUnitCost ?? raw.additionalUnitCost ?? 0);
+    const costoAdicionalTotalManual = reempaqueMoneyPOS(raw.costoAdicionalTotal ?? raw.costoEmpaqueTotal ?? raw.extraCostTotal ?? raw.additionalCostTotal ?? 0);
+    const costoAdicionalTotal = costoAdicionalTotalManual > 0
+      ? costoAdicionalTotalManual
+      : ((cantidadCreada > 0 && costoAdicionalUnitario > 0) ? round2(cantidadCreada * costoAdicionalUnitario) : 0);
+    const costoTotalManual = reempaqueMoneyPOS(raw.costoTotalAsignado ?? raw.costoAsignado ?? raw.costTotalAssigned ?? raw.totalCost ?? 0);
+    const costoTotalAsignado = (costoLiquidoTotal > 0 || costoAdicionalTotal > 0)
+      ? round2(costoLiquidoTotal + costoAdicionalTotal)
       : costoTotalManual;
     const costoUnitarioCalculado = (cantidadCreada > 0 && costoTotalAsignado > 0)
       ? round2(costoTotalAsignado / cantidadCreada)
@@ -5674,6 +5686,14 @@ function reempaqueBuildMultipleDestinationsPOS(rawDestinos, products, costoPorMl
       mlPorUnidad,
       capacidadDestinoMl: mlPorUnidad > 0 ? mlPorUnidad : null,
       volumenTotalDestinoMl,
+      costoLiquidoUnitario,
+      costoUnitarioLiquido: costoLiquidoUnitario,
+      costoLiquidoTotal,
+      costoLiquidoAsignado: costoLiquidoTotal,
+      costoAdicionalUnitario,
+      costoEmpaqueUnitario: costoAdicionalUnitario,
+      costoAdicionalTotal,
+      costoEmpaqueTotal: costoAdicionalTotal,
       costoUnitarioCalculado,
       costoUnitarioDestino: costoUnitarioCalculado,
       costoTotalAsignado,
@@ -5704,6 +5724,8 @@ async function reempaquePrepareMultiplePayloadPOS(input={}){
   const costoPorMl = reempaqueCostPerMlPOS(costoTotalOrigen, volumenTotalOrigenMl);
   const destinos = reempaqueBuildMultipleDestinationsPOS(reempaqueArrayFromInputPOS(input), products, costoPorMl);
   const volumenTotalDestinoMl = reempaqueRound4POS(destinos.reduce((a,d)=> a + reempaquePositivePOS(d && d.volumenTotalDestinoMl), 0));
+  const costoLiquidoDistribuido = round2(destinos.reduce((a,d)=> a + reempaqueMoneyPOS(d && (d.costoLiquidoTotal ?? d.costoLiquidoAsignado)), 0));
+  const costoAdicionalTotal = round2(destinos.reduce((a,d)=> a + reempaqueMoneyPOS(d && d.costoAdicionalTotal), 0));
   const costoTotalDistribuido = round2(destinos.reduce((a,d)=> a + reempaqueMoneyPOS(d && d.costoTotalAsignado), 0));
   const mlSobranteMerma = reempaqueRound4POS(Math.max(0, volumenTotalOrigenMl - volumenTotalDestinoMl));
   const costoSobranteMerma = (costoPorMl > 0 && mlSobranteMerma > 0) ? round2(mlSobranteMerma * costoPorMl) : 0;
@@ -5747,7 +5769,11 @@ async function reempaquePrepareMultiplePayloadPOS(input={}){
     destinoResumen,
     cantidadDestinos: destinos.length,
     volumenTotalDestinoMl,
+    costoLiquidoDistribuido,
+    costoAdicionalTotal,
+    costoAdicionalDestinos: costoAdicionalTotal,
     costoTotalDistribuido,
+    costoTotalFinalDestinos: costoTotalDistribuido,
     costoTotalReempaque: costoTotalDistribuido,
     mlSobranteMerma,
     costoSobranteMerma,
@@ -12770,6 +12796,10 @@ async function reempaqueApplyMultipleMovementPOS(input={}){
     const dstName = String(targetProduct.name || d.targetProductName || d.productoDestino || 'Destino').trim();
     const qtyTarget = reempaqueInventoryQtyPOS(d.cantidadCreada ?? d.cantidadCreadaDestino ?? d.cantidadDestino ?? d.targetQty ?? d.qty ?? d.cantidad);
     const unitTarget = reempaqueMoneyPOS(d.costoUnitarioCalculado ?? d.costoUnitarioDestino ?? d.targetUnitCost ?? 0);
+    const costoLiquidoUnitario = reempaqueMoneyPOS(d.costoLiquidoUnitario ?? d.costoUnitarioLiquido ?? 0);
+    const costoLiquidoTotal = reempaqueMoneyPOS(d.costoLiquidoTotal ?? d.costoLiquidoAsignado ?? (costoLiquidoUnitario > 0 && qtyTarget > 0 ? costoLiquidoUnitario * qtyTarget : 0));
+    const costoAdicionalUnitario = reempaqueMoneyPOS(d.costoAdicionalUnitario ?? d.costoEmpaqueUnitario ?? 0);
+    const costoAdicionalTotal = reempaqueMoneyPOS(d.costoAdicionalTotal ?? d.costoEmpaqueTotal ?? (costoAdicionalUnitario > 0 && qtyTarget > 0 ? costoAdicionalUnitario * qtyTarget : 0));
     const costoAsignado = reempaqueMoneyPOS(d.costoTotalAsignado ?? (unitTarget > 0 && qtyTarget > 0 ? unitTarget * qtyTarget : 0));
     if (!(qtyTarget > 0)){
       throw reempaqueMovementErrorPOS('Cada destino debe tener cantidad creada mayor que 0.');
@@ -12794,6 +12824,14 @@ async function reempaqueApplyMultipleMovementPOS(input={}){
       reempaqueRole: 'destino',
       reempaqueMode: 'MULTIPLE',
       reempaqueDestinoIndex: d.index,
+      costoLiquidoUnitario,
+      costoUnitarioLiquido: costoLiquidoUnitario,
+      costoLiquidoTotal,
+      costoLiquidoAsignado: costoLiquidoTotal,
+      costoAdicionalUnitario,
+      costoEmpaqueUnitario: costoAdicionalUnitario,
+      costoAdicionalTotal,
+      costoEmpaqueTotal: costoAdicionalTotal,
       costoUnitarioDestino: unitTarget,
       costoTotalAsignado: costoAsignado,
       volumenTotalDestinoMl: reempaquePositivePOS(d.volumenTotalDestinoMl),
@@ -12828,7 +12866,14 @@ async function reempaqueApplyMultipleMovementPOS(input={}){
     stockOrigenAntes: stockSource,
     stockOrigenDespues: reempaqueRound4POS(stockSource - qtySource),
     deltaOrigen: reempaqueRound4POS(-qtySource),
-    deltaDestinos: targetRows.map(row => ({ productId: row.productId, productName: row.productName, qty: row.qty, costoUnitarioDestino: row.costoUnitarioDestino })),
+    deltaDestinos: targetRows.map(row => ({
+      productId: row.productId,
+      productName: row.productName,
+      qty: row.qty,
+      costoLiquidoUnitario: row.costoLiquidoUnitario,
+      costoAdicionalUnitario: row.costoAdicionalUnitario,
+      costoUnitarioDestino: row.costoUnitarioDestino
+    })),
     targetProductIds: targetIds,
     targetProductNames: targetNames,
     etapa: 'REEMPAQUE_MULTIPLE_BASE_INTERNA',
@@ -12857,7 +12902,11 @@ async function reempaqueApplyMultipleMovementPOS(input={}){
     costoOrigenTotal: base.costoOrigenTotal,
     costoTotalOrigen: base.costoTotalOrigen,
     costoPorMl: base.costoPorMl,
+    costoLiquidoDistribuido: base.costoLiquidoDistribuido,
+    costoAdicionalTotal: base.costoAdicionalTotal,
+    costoAdicionalDestinos: base.costoAdicionalDestinos,
     costoTotalDistribuido: base.costoTotalDistribuido,
+    costoTotalFinalDestinos: base.costoTotalFinalDestinos,
     costoSobranteMerma: base.costoSobranteMerma,
     mlSobranteMerma: base.mlSobranteMerma,
     targetProductIds: targetIds,
@@ -15292,10 +15341,16 @@ function reempaqueCreateMultiDestinationCardPOS(){
         <label>ml por unidad</label>
         <input class="rp-multi-target-ml a33-num" data-a33-default="0" type="number" inputmode="decimal" min="0" step="0.01" placeholder="Ej: 300">
       </div>
+      <div>
+        <label>Costo adicional unitario</label>
+        <input class="rp-multi-extra-unit-cost a33-num" data-a33-default="0" type="number" inputmode="decimal" min="0" step="0.01" placeholder="Ej: 25">
+      </div>
     </div>
     <div class="reempaque-kv"><span>Volumen total destino</span><b class="rp-multi-target-volume">—</b></div>
-    <div class="reempaque-kv"><span>Costo unitario calculado</span><b class="rp-multi-target-unit-cost">N/D</b></div>
-    <div class="reempaque-kv"><span>Costo total asignado</span><b class="rp-multi-target-total-cost">N/D</b></div>
+    <div class="reempaque-kv"><span>Costo líquido unitario</span><b class="rp-multi-liquid-unit-cost">N/D</b></div>
+    <div class="reempaque-kv"><span>Costo adicional total</span><b class="rp-multi-extra-total-cost">N/D</b></div>
+    <div class="reempaque-kv"><span>Costo final unitario</span><b class="rp-multi-target-unit-cost">N/D</b></div>
+    <div class="reempaque-kv"><span>Costo total destino</span><b class="rp-multi-target-total-cost">N/D</b></div>
   `;
   return card;
 }
@@ -15350,6 +15405,7 @@ function reempaqueReadMultiDestinationRowsPOS(products, costoPorMl){
     const sel = card.querySelector('.rp-multi-target-product');
     const qtyEl = card.querySelector('.rp-multi-target-qty');
     const mlEl = card.querySelector('.rp-multi-target-ml');
+    const extraEl = card.querySelector('.rp-multi-extra-unit-cost');
     const target = reempaqueFindProductPOS(products, sel ? sel.value : '');
     const cap = target ? reempaqueCapacityMlFromProductPOS(target) : 0;
     if (mlEl){
@@ -15362,12 +15418,22 @@ function reempaqueReadMultiDestinationRowsPOS(products, costoPorMl){
     }
     const qtyInfo = reempaqueInputNumberInfoPOS(qtyEl);
     const mlInfo = reempaqueInputNumberInfoPOS(mlEl);
+    const extraInfo = reempaqueInputNumberInfoPOS(extraEl);
     const qty = qtyInfo.value > 0 ? qtyInfo.value : 0;
     const ml = mlInfo.value > 0 ? mlInfo.value : 0;
+    const extraUnitCost = extraInfo.value > 0 ? extraInfo.value : 0;
     const volume = reempaqueTotalVolumePOS(qty, ml);
-    const totalCost = (costoPorMl > 0 && volume > 0) ? round2(volume * costoPorMl) : 0;
+    const liquidTotalCost = (costoPorMl > 0 && volume > 0) ? round2(volume * costoPorMl) : 0;
+    const liquidUnitCost = (qty > 0 && liquidTotalCost > 0) ? round2(liquidTotalCost / qty) : 0;
+    const extraTotalCost = (qty > 0 && extraUnitCost > 0) ? round2(qty * extraUnitCost) : 0;
+    const totalCost = round2(liquidTotalCost + extraTotalCost);
     const unitCost = (qty > 0 && totalCost > 0) ? round2(totalCost / qty) : 0;
-    rows.push({ card, index:idx, selectEl:sel, qtyEl, mlEl, qtyInfo, mlInfo, target, cap, qty, ml, volume, totalCost, unitCost });
+    rows.push({
+      card, index:idx, selectEl:sel, qtyEl, mlEl, extraEl,
+      qtyInfo, mlInfo, extraInfo, target, cap, qty, ml, volume,
+      liquidTotalCost, liquidUnitCost, extraUnitCost, extraTotalCost,
+      totalCost, unitCost
+    });
   });
   return rows;
 }
@@ -15398,9 +15464,11 @@ async function reempaqueGetMultipleUiStatePOS(productsArg){
   const costPerMl = reempaqueCostPerMlPOS(costOriginTotal, volumeOrigin);
   const destinations = reempaqueReadMultiDestinationRowsPOS(products, costPerMl);
   const volumeDistributed = reempaqueRound4POS(destinations.reduce((a,d)=>a + reempaquePositivePOS(d.volume), 0));
+  const liquidCostDistributed = round2(destinations.reduce((a,d)=>a + reempaqueMoneyPOS(d.liquidTotalCost), 0));
+  const additionalCostTotal = round2(destinations.reduce((a,d)=>a + reempaqueMoneyPOS(d.extraTotalCost), 0));
   const costDistributed = round2(destinations.reduce((a,d)=>a + reempaqueMoneyPOS(d.totalCost), 0));
   const volumeLeft = reempaqueRound4POS(volumeOrigin - volumeDistributed);
-  const costLeft = round2(costOriginTotal - costDistributed);
+  const costLeft = round2(costOriginTotal - liquidCostDistributed);
   let stockSource = null;
   if (eventId && source && source.id != null){
     try{ stockSource = reempaqueInventoryQtyPOS(await computeStock(eventId, source.id)); }catch(_){ stockSource = null; }
@@ -15409,7 +15477,7 @@ async function reempaqueGetMultipleUiStatePOS(productsArg){
     products, eventId, source, sourceEl, qtySourceEl, unitCostEl, volumeManualEl,
     qtySourceInfo, unitCostInfo, volumeManualInfo,
     qtySource, sourceUnitMl, autoVolumeOrigin, volumeOrigin, unitCost, unitCostSource,
-    costOriginTotal, costPerMl, destinations, volumeDistributed, costDistributed, volumeLeft, costLeft, stockSource
+    costOriginTotal, costPerMl, destinations, volumeDistributed, liquidCostDistributed, additionalCostTotal, costDistributed, volumeLeft, costLeft, stockSource
   };
 }
 
@@ -15426,14 +15494,20 @@ async function reempaqueUpdateMultiplePreviewPOS(opts){
   reempaqueSetTextPOS('rp-multi-volume-distributed', state.volumeDistributed > 0 ? reempaqueFmtMlPOS(state.volumeDistributed) : '—');
   reempaqueSetTextPOS('rp-multi-volume-left', state.volumeOrigin > 0 ? reempaqueFmtMlSignedPOS(state.volumeLeft) : '—');
   reempaqueSetTextPOS('rp-multi-cost-origin', reempaqueFmtMoneyPOS(state.costOriginTotal));
-  reempaqueSetTextPOS('rp-multi-cost-distributed', reempaqueFmtMoneyPOS(state.costDistributed));
+  reempaqueSetTextPOS('rp-multi-cost-distributed', reempaqueFmtMoneyPOS(state.liquidCostDistributed));
+  reempaqueSetTextPOS('rp-multi-cost-additional', reempaqueFmtMoneyPOS(state.additionalCostTotal, 'C$ 0.00'));
+  reempaqueSetTextPOS('rp-multi-cost-final', reempaqueFmtMoneyPOS(state.costDistributed));
   reempaqueSetTextPOS('rp-multi-cost-left', state.costOriginTotal > 0 ? reempaqueFmtMoneySignedPOS(state.costLeft) : 'N/D');
 
   state.destinations.forEach(d=>{
     const volEl = d.card.querySelector('.rp-multi-target-volume');
+    const liquidUnitEl = d.card.querySelector('.rp-multi-liquid-unit-cost');
+    const extraTotalEl = d.card.querySelector('.rp-multi-extra-total-cost');
     const unitEl = d.card.querySelector('.rp-multi-target-unit-cost');
     const totalEl = d.card.querySelector('.rp-multi-target-total-cost');
     if (volEl) volEl.textContent = d.volume > 0 ? reempaqueFmtMlPOS(d.volume) : '—';
+    if (liquidUnitEl) liquidUnitEl.textContent = reempaqueFmtMoneyPOS(d.liquidUnitCost);
+    if (extraTotalEl) extraTotalEl.textContent = reempaqueFmtMoneyPOS(d.extraTotalCost, 'C$ 0.00');
     if (unitEl) unitEl.textContent = reempaqueFmtMoneyPOS(d.unitCost);
     if (totalEl) totalEl.textContent = reempaqueFmtMoneyPOS(d.totalCost);
   });
@@ -15500,15 +15574,19 @@ async function registrarReempaqueMultipleUiPOS(){
     if (!(d.qty > 0)){ errors.push(`Destino ${idx + 1}: cantidad destino mayor que 0.`); reempaqueSetElementInvalidPOS(d.qtyEl, true); }
     if (d.mlInfo.invalid){ errors.push(`Destino ${idx + 1}: ml por unidad inválido.`); reempaqueSetElementInvalidPOS(d.mlEl, true); }
     if (!(d.ml > 0)){ errors.push(`Destino ${idx + 1}: ml por unidad mayor que 0.`); reempaqueSetElementInvalidPOS(d.mlEl, true); }
+    if (d.extraInfo.invalid || (!d.extraInfo.empty && d.extraInfo.value < 0)){
+      errors.push(`Destino ${idx + 1}: costo adicional unitario inválido.`);
+      reempaqueSetElementInvalidPOS(d.extraEl, true);
+    }
   });
 
   if (state.volumeOrigin > 0 && state.volumeDistributed > state.volumeOrigin + 0.0001){
     errors.push('El volumen distribuido excede el volumen origen.');
   }
-  if (state.destinations.some(d => !Number.isFinite(d.qty) || !Number.isFinite(d.ml) || !Number.isFinite(d.volume) || !Number.isFinite(d.unitCost) || !Number.isFinite(d.totalCost))){
+  if (state.destinations.some(d => !Number.isFinite(d.qty) || !Number.isFinite(d.ml) || !Number.isFinite(d.extraUnitCost) || !Number.isFinite(d.volume) || !Number.isFinite(d.liquidUnitCost) || !Number.isFinite(d.liquidTotalCost) || !Number.isFinite(d.extraTotalCost) || !Number.isFinite(d.unitCost) || !Number.isFinite(d.totalCost))){
     errors.push('Hay valores inválidos en los destinos.');
   }
-  if (![state.qtySource, state.volumeOrigin, state.costOriginTotal, state.costPerMl, state.volumeDistributed, state.costDistributed].every(Number.isFinite)){
+  if (![state.qtySource, state.volumeOrigin, state.costOriginTotal, state.costPerMl, state.volumeDistributed, state.liquidCostDistributed, state.additionalCostTotal, state.costDistributed].every(Number.isFinite)){
     errors.push('Hay valores inválidos en el resumen.');
   }
 
@@ -15540,6 +15618,14 @@ async function registrarReempaqueMultipleUiPOS(){
         mlPorUnidad: d.ml,
         capacidadDestinoMl: d.ml,
         volumenTotalDestinoMl: d.volume,
+        costoLiquidoUnitario: d.liquidUnitCost,
+        costoUnitarioLiquido: d.liquidUnitCost,
+        costoLiquidoTotal: d.liquidTotalCost,
+        costoLiquidoAsignado: d.liquidTotalCost,
+        costoAdicionalUnitario: d.extraUnitCost,
+        costoEmpaqueUnitario: d.extraUnitCost,
+        costoAdicionalTotal: d.extraTotalCost,
+        costoEmpaqueTotal: d.extraTotalCost,
         costoUnitarioCalculado: d.unitCost,
         costoUnitarioDestino: d.unitCost,
         costoTotalAsignado: d.totalCost
@@ -15626,6 +15712,10 @@ function reempaqueDestinationPartsFromRecordPOS(r){
       const volume = reempaquePositivePOS(d.volumenTotalDestinoMl ?? reempaqueTotalVolumePOS(qty, ml));
       const unitCost = reempaqueMoneyPOS(d.costoUnitarioCalculado ?? d.costoUnitarioDestino ?? d.targetUnitCost ?? d.unitCost);
       const totalCost = reempaqueMoneyPOS(d.costoTotalAsignado ?? ((unitCost > 0 && qty > 0) ? unitCost * qty : 0));
+      const extraUnitCost = reempaqueMoneyPOS(d.costoAdicionalUnitario ?? d.costoEmpaqueUnitario ?? d.extraUnitCost ?? d.additionalUnitCost ?? 0);
+      const extraTotalCost = reempaqueMoneyPOS(d.costoAdicionalTotal ?? d.costoEmpaqueTotal ?? (extraUnitCost > 0 && qty > 0 ? extraUnitCost * qty : 0));
+      const liquidTotalCost = reempaqueMoneyPOS(d.costoLiquidoTotal ?? d.costoLiquidoAsignado ?? Math.max(0, totalCost - extraTotalCost));
+      const liquidUnitCost = reempaqueMoneyPOS(d.costoLiquidoUnitario ?? d.costoUnitarioLiquido ?? (qty > 0 && liquidTotalCost > 0 ? liquidTotalCost / qty : Math.max(0, unitCost - extraUnitCost)));
       out.push({
         index: idx,
         name: String(name || `Destino ${idx + 1}`).trim(),
@@ -15633,6 +15723,10 @@ function reempaqueDestinationPartsFromRecordPOS(r){
         qty,
         ml,
         volume,
+        liquidUnitCost,
+        liquidTotalCost,
+        extraUnitCost,
+        extraTotalCost,
         unitCost,
         totalCost
       });
@@ -15646,7 +15740,11 @@ function reempaqueDestinationPartsFromRecordPOS(r){
   const volume = reempaquePositivePOS(record.volumenTotalDestinoMl ?? reempaqueTotalVolumePOS(qty, ml));
   const unitCost = reempaqueMoneyPOS(record.costoUnitarioDestino ?? record.targetUnitCost);
   const totalCost = reempaqueMoneyPOS(record.costoTotalReempaque ?? (unitCost > 0 && qty > 0 ? unitCost * qty : 0));
-  return [{ index:0, name:String(name || '—').trim(), label:reempaqueHistoryProductLabelPOS(name, ml), qty, ml, volume, unitCost, totalCost }];
+  const extraTotalCost = reempaqueMoneyPOS(record.costoAdicionalTotal ?? record.costoEmpaqueTotal ?? record.extraCostTotal ?? 0);
+  const extraUnitCost = reempaqueMoneyPOS(record.costoAdicionalUnitario ?? record.costoEmpaqueUnitario ?? ((qty > 0 && extraTotalCost > 0) ? extraTotalCost / qty : 0));
+  const liquidTotalCost = reempaqueMoneyPOS(record.costoLiquidoTotal ?? record.costoOrigenTotal ?? record.costoTotalOrigen ?? Math.max(0, totalCost - extraTotalCost));
+  const liquidUnitCost = reempaqueMoneyPOS(record.costoLiquidoUnitario ?? record.costoUnitarioLiquido ?? (qty > 0 && liquidTotalCost > 0 ? liquidTotalCost / qty : Math.max(0, unitCost - extraUnitCost)));
+  return [{ index:0, name:String(name || '—').trim(), label:reempaqueHistoryProductLabelPOS(name, ml), qty, ml, volume, liquidUnitCost, liquidTotalCost, extraUnitCost, extraTotalCost, unitCost, totalCost }];
 }
 
 function reempaqueHistoryRecordPartsPOS(r){
@@ -15669,10 +15767,12 @@ function reempaqueHistoryRecordPartsPOS(r){
     const qty = reempaqueFmtQtyPOS(d.qty || 0);
     const name = d.label || d.name || 'Destino';
     const ml = d.ml > 0 ? `${reempaqueFmtQtyPOS(d.ml)} ml c/u` : 'ml N/D';
+    const liquid = reempaqueFmtMoneyPOS(d.liquidUnitCost);
+    const extra = reempaqueFmtMoneyPOS(d.extraUnitCost, 'C$ 0.00');
     const unit = reempaqueFmtMoneyPOS(d.unitCost);
     const total = reempaqueFmtMoneyPOS(d.totalCost);
     const volume = d.volume > 0 ? `${reempaqueFmtQtyPOS(d.volume)} ml` : 'volumen N/D';
-    return `${name}: ${qty} unidades, ${ml}, ${volume}, costo unitario ${unit}, costo total ${total}`;
+    return `${name}: ${qty} unidades, ${ml}, ${volume}, costo líquido unitario ${liquid}, adicional unitario ${extra}, costo final unitario ${unit}, costo total ${total}`;
   });
 
   return {
@@ -15693,8 +15793,8 @@ function reempaqueHistoryRecordPartsPOS(r){
     sugerida: reempaquePositivePOS(r.cantidadSugeridaPorVolumen),
     final: reempaqueRound4POS(destinos.reduce((a,d)=> a + reempaquePositivePOS(d.qty), 0)),
     costoOrigen: reempaqueMoneyPOS(r.costoOrigenTotal ?? r.costoTotalOrigen),
-    costoAdicional: reempaqueMoneyPOS(r.costoAdicionalTotal),
-    costoTotal: reempaqueMoneyPOS(r.costoTotalReempaque ?? r.costoTotalDistribuido),
+    costoAdicional: reempaqueMoneyPOS(r.costoAdicionalTotal ?? r.costoAdicionalDestinos ?? destinos.reduce((a,d)=> a + reempaqueMoneyPOS(d.extraTotalCost), 0)),
+    costoTotal: reempaqueMoneyPOS(r.costoTotalReempaque ?? r.costoTotalFinalDestinos ?? r.costoTotalDistribuido),
     costoPorMl: reempaquePositivePOS(r.costoPorMl),
     costoUnitarioDestino: destinos.length === 1 ? reempaqueMoneyPOS(destinos[0].unitCost) : 0,
     nota: String(r.nota || r.note || '').trim(),
@@ -15772,8 +15872,12 @@ async function reempaqueBuildExportRowsPOS(eventId){
     'Cantidad destino',
     'ml por unidad destino',
     'Volumen destino total ml',
-    'Costo unitario destino',
-    'Costo total asignado',
+    'Costo líquido unitario',
+    'Costo líquido total',
+    'Costo adicional unitario',
+    'Costo adicional total',
+    'Costo unitario destino final',
+    'Costo total asignado final',
     'Volumen distribuido total ml',
     'Sobrante/merma ml',
     'Costo sobrante/merma',
@@ -15800,6 +15904,10 @@ async function reempaqueBuildExportRowsPOS(eventId){
         d.qty || 0,
         d.ml || '',
         d.volume || '',
+        d.liquidUnitCost || 0,
+        d.liquidTotalCost || 0,
+        d.extraUnitCost || 0,
+        d.extraTotalCost || 0,
         d.unitCost || 0,
         d.totalCost || 0,
         p.volumenDestino || '',
@@ -16101,8 +16209,10 @@ document.addEventListener('input', async (e)=>{
   } else if (t.classList && t.classList.contains('rp-multi-target-ml')){
     t.dataset.rpqAuto = '0';
     await reempaqueUpdateMultiplePreviewPOS();
+  } else if (t.classList && t.classList.contains('rp-multi-extra-unit-cost')){
+    await reempaqueUpdateMultiplePreviewPOS();
   }
-  if (t.id === 'rp-source-qty' || t.id === 'rp-target-qty' || t.id === 'rp-source-unit-cost' || t.id === 'rp-extra-cost' || t.id === 'rp-source-total-ml-manual' || t.id === 'rp-new-target-name' || t.id === 'rp-new-target-capacity' || t.id === 'rp-new-target-price' || (t.classList && (t.classList.contains('rp-multi-target-qty') || t.classList.contains('rp-multi-target-ml')))){
+  if (t.id === 'rp-source-qty' || t.id === 'rp-target-qty' || t.id === 'rp-source-unit-cost' || t.id === 'rp-extra-cost' || t.id === 'rp-source-total-ml-manual' || t.id === 'rp-new-target-name' || t.id === 'rp-new-target-capacity' || t.id === 'rp-new-target-price' || (t.classList && (t.classList.contains('rp-multi-target-qty') || t.classList.contains('rp-multi-target-ml') || t.classList.contains('rp-multi-extra-unit-cost')))){
     reempaqueClearValidationPOS();
     reempaqueSetMsgPOS('', '');
   }
