@@ -898,6 +898,7 @@ small.muted{color:var(--muted)}
   color:var(--muted);
 }
 .reempaque-history-meta span{min-width:0;overflow-wrap:anywhere}
+.reempaque-history-meta .reempaque-history-wide{grid-column:1 / -1}
 .reempaque-history-meta strong{color:#ddd}
 .reempaque-empty{
   padding:9px 10px;
@@ -1611,4 +1612,49 @@ small.muted{color:var(--muted)}
   .sale-cash-tender-mode{
     width:100%;
   }
+}
+
+/* Reempaque múltiple (POS > Inventario) — Etapa 2/3 UI */
+.reempaque-panel.rp-mode-simple .rp-multi-only,
+.reempaque-panel.rp-mode-multiple .rp-simple-only{display:none !important}
+.reempaque-mode-card{margin-bottom:10px;background:#141414;border-color:rgba(212,175,55,.18)}
+.reempaque-mode-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:8px}
+.reempaque-mode-pill{
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+  min-width:0;
+  padding:10px 12px;
+  border-radius:14px;
+  border:1px solid rgba(254,254,254,.10);
+  background:#101010;
+  cursor:pointer;
+  touch-action:manipulation;
+}
+.reempaque-mode-pill input{margin:0 0 4px 0;width:auto}
+.reempaque-mode-pill span{font-weight:900;color:#fff}
+.reempaque-mode-pill small{color:var(--muted);line-height:1.25}
+.reempaque-mode-pill:has(input:checked){border-color:rgba(212,175,55,.58);box-shadow:0 0 0 1px rgba(212,175,55,.18) inset;background:rgba(212,175,55,.08)}
+.reempaque-destinations-card{grid-column:span 1}
+.reempaque-destinations-list{display:grid;gap:8px;margin-top:6px}
+.reempaque-dest-card{
+  min-width:0;
+  padding:10px;
+  border-radius:13px;
+  border:1px solid rgba(212,175,55,.18);
+  background:#151515;
+}
+.reempaque-dest-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.reempaque-dest-head b{color:#fff;font-size:13px}
+.reempaque-dest-head button{min-height:32px;padding:6px 10px}
+.reempaque-dest-card label{font-size:12.5px;color:var(--muted)}
+.reempaque-dest-card select,
+.reempaque-dest-card input{width:100%}
+.reempaque-mini-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.reempaque-warning{margin-top:8px;padding:8px 10px;border-radius:12px;border:1px dashed rgba(254,254,254,.12);background:#131313;font-size:12.5px;line-height:1.35}
+.reempaque-warning.warn{color:#f0a31a;border-color:rgba(240,163,26,.42);background:rgba(240,163,26,.08)}
+.reempaque-warning.ok{color:#1db954;border-color:rgba(29,185,84,.35);background:rgba(29,185,84,.08)}
+@media (max-width: 900px){
+  .reempaque-mode-options{grid-template-columns:1fr}
+  .reempaque-mini-grid{grid-template-columns:1fr}
 }
