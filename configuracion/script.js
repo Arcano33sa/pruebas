@@ -2055,7 +2055,6 @@
     const tabsWrap = document.querySelector('.cfg-tabs');
     const shell = document.querySelector('.cfg-shell');
     const shellHead = document.querySelector('.cfg-shell-head');
-    const hero = document.querySelector('.cfg-hero');
     if (!cards.length || !panels.length) return;
 
     let lastTarget = '';
@@ -2082,7 +2081,6 @@
       if (panelsWrap) panelsWrap.hidden = true;
       if (tabsWrap) tabsWrap.hidden = false;
       if (shellHead) shellHead.hidden = false;
-      if (hero) hero.hidden = false;
       setPanelState('');
       setCardState('');
 
@@ -2105,7 +2103,6 @@
       if (panelsWrap) panelsWrap.hidden = false;
       if (tabsWrap) tabsWrap.hidden = true;
       if (shellHead) shellHead.hidden = true;
-      if (hero) hero.hidden = true;
       setCardState(target);
       setPanelState(target);
 
@@ -2175,7 +2172,6 @@
     const model = {
       badgeText: 'Modo local',
       badgeState: 'local',
-      heroHeadline: 'Modo local seguro',
       summary: 'Firebase puede quedar en modo local o con acceso real activo. Aquí ves si Authentication ya está lista para abrir la suite con correo y contraseña.',
       mode: 'Local seguro',
       configFile,
@@ -2193,7 +2189,6 @@
     if (status === 'initializing'){
       model.badgeText = 'Inicializando';
       model.badgeState = 'local';
-      model.heroHeadline = 'Preparando Firebase';
       model.summary = current.message || 'Configuración detectada. Inicializando núcleo Firebase…';
       model.mode = 'Firebase en arranque';
       model.projectId = projectId || 'Detectado';
@@ -2207,7 +2202,6 @@
     if (status === 'ready'){
       model.badgeText = 'Firebase listo';
       model.badgeState = 'ready';
-      model.heroHeadline = 'Firebase enlazado';
       model.summary = current.message || 'Firebase ya está enlazado y Authentication puede controlar el acceso básico de la suite.';
       model.mode = 'Firebase preparado';
       model.projectId = projectId || 'Sin nombre';
@@ -2225,7 +2219,6 @@
     if (status === 'error'){
       model.badgeText = 'Fallback local';
       model.badgeState = 'error';
-      model.heroHeadline = 'Fallback local activo';
       model.summary = current.message || 'Se detectó configuración Firebase, pero el arranque falló. La suite cayó con elegancia a modo local.';
       model.mode = 'Local con fallback';
       model.projectId = projectId || 'Detectado';
@@ -2251,8 +2244,6 @@
       badge.dataset.firebaseState = ui.badgeState;
     }
 
-    const hero = document.getElementById('cfg-hero-firebase-headline');
-    if (hero) hero.textContent = ui.heroHeadline;
 
     const summary = document.getElementById('cfg-firebase-summary');
     if (summary) summary.textContent = ui.summary;

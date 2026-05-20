@@ -53,14 +53,6 @@ textarea{
   background:linear-gradient(135deg, rgba(221,191,100,0.08), transparent 35%, rgba(123,24,24,0.08));
 }
 
-.cfg-hero{
-  display:grid;
-  grid-template-columns:minmax(0,1.45fr) minmax(280px,0.75fr);
-  gap:18px;
-  padding:24px;
-  margin-bottom:18px;
-}
-
 .cfg-kicker,
 .cfg-eyebrow{
   display:inline-flex;
@@ -73,7 +65,6 @@ textarea{
   font-weight:700;
 }
 
-.cfg-hero h1,
 .cfg-panel h2,
 .cfg-panel h3,
 .modal-title,
@@ -83,7 +74,6 @@ textarea{
   letter-spacing:0.04em;
 }
 
-.cfg-hero h1{ font-size:clamp(1.7rem, 2.8vw, 2.3rem); }
 .cfg-panel h2,
 .cfg-panel h3,
 .modal-title,
@@ -101,12 +91,6 @@ textarea{
 .cfg-status-label{
   color:var(--cfg-muted);
   line-height:1.6;
-}
-
-.cfg-hero-side{
-  display:grid;
-  gap:12px;
-  align-content:stretch;
 }
 
 .cfg-mini-stat,
@@ -949,7 +933,6 @@ details summary{ cursor:pointer; color:var(--cfg-gold); margin-top:0.35rem; }
 }
 
 @media (max-width: 780px){
-  .cfg-hero{ grid-template-columns:1fr; }
   .cfg-note-grid,
   .cfg-note-grid--dual{ grid-template-columns:1fr; }
   .cfg-shell-head{ flex-direction:column; }
@@ -963,7 +946,6 @@ details summary{ cursor:pointer; color:var(--cfg-gold); margin-top:0.35rem; }
   .cfg-section-nav{ justify-content:stretch; }
   .cfg-nav-chip{ flex:1 1 100%; }
   .cfg-panel,
-  .cfg-hero,
   .cfg-shell{ padding:18px; }
   .cfg-actions{ flex-direction:column; }
   .cfg-btn{ width:100%; }
@@ -1031,8 +1013,7 @@ details summary{ cursor:pointer; color:var(--cfg-gold); margin-top:0.35rem; }
 /* Configuración como menú interno de 7 tarjetas + vistas individuales */
 .cfg-tabs[hidden],
 .cfg-panels[hidden],
-.cfg-shell-head[hidden],
-.cfg-hero[hidden]{
+.cfg-shell-head[hidden]{
   display:none !important;
 }
 
