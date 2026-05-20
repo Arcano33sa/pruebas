@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Suite A33 · Configuración</title>
-  <meta name="description" content="Módulo Configuración de Suite A33. Organiza Respaldo, Usuarios y Roles, y Ajustes Generales dentro de una arquitectura interna limpia y escalable." />
+  <meta name="description" content="Módulo Configuración de Suite A33. Organiza PWA, Identidad, Apariencia, Reportes, Moneda, Seguridad y Respaldo en un solo lugar." />
   <meta name="theme-color" content="#7b1818" />
   <link rel="icon" type="image/png" sizes="192x192" href="../icon-a33-192.png" />
   <link rel="apple-touch-icon" href="../icon-a33-192.png" />
@@ -14,11 +14,11 @@
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
 
   <link rel="stylesheet" href="../assets/css/a33-header.css?v=4.20.77&r=2" />
-  <link rel="stylesheet" href="style.css?v=4.20.77&r=8" />
+  <link rel="stylesheet" href="style.css?v=4.20.77&r=9" />
 </head>
 <body>
   <header class="a33-header" role="banner">
-    <a class="a33-btn-menu" href="../index.html" aria-label="Volver al Menú principal">← Menú principal</a>
+    <a class="a33-btn-menu" href="../index.html" aria-label="Ir al Menú principal">⌂ Menú principal</a>
     <div class="a33-title">Configuración</div>
     <div class="a33-version" data-a33-version="1" data-a33-fallback="v4.20.77">v...</div>
   </header>
@@ -28,16 +28,16 @@
       <div class="cfg-hero-copy">
         <span class="cfg-kicker">Núcleo A33</span>
         <h1 id="cfg-title">Configuración</h1>
-        <p class="cfg-lead">Módulo contenedor para ordenar la operación interna de la Suite A33. Ahora <b>PWA</b> entra como primer apartado central; <b>Respaldo</b> queda al final y la arquitectura queda lista para crecer sin hacerse un cajón de sastre.</p>
+        <p class="cfg-lead">Centro de control de la Suite A33. <b>PWA</b> queda como primer apartado, <b>Respaldo</b> queda al final y cada nueva opción tendrá navegación clara para no convertir esto en una gaveta embrujada.</p>
       </div>
       <div class="cfg-hero-side">
         <div class="cfg-mini-stat">
-          <span class="cfg-mini-label">Secciones base</span>
-          <strong>4 carriles internos</strong>
+          <span class="cfg-mini-label">Apartados</span>
+          <strong>PWA primero · Respaldo final</strong>
         </div>
         <div class="cfg-mini-stat">
-          <span class="cfg-mini-label">Estado</span>
-          <strong>Usuarios base activos</strong>
+          <span class="cfg-mini-label">Navegación</span>
+          <strong>Inicio y regreso interno</strong>
         </div>
         <div class="cfg-mini-stat">
           <span class="cfg-mini-label">Estado Firebase</span>
@@ -46,14 +46,13 @@
       </div>
     </section>
 
-    <section class="cfg-shell cfg-card" aria-label="Arquitectura interna de Configuración">
+    <section class="cfg-shell cfg-card" aria-label="Apartados de Configuración">
       <div class="cfg-shell-head">
         <div>
-          <p class="cfg-eyebrow">Arquitectura interna</p>
-          <h2 class="cfg-shell-title">Secciones del módulo</h2>
-          <p class="cfg-shell-copy">Navegación ligera, lectura limpia y cada bloque en su sitio. Nada de pared infinita ni maquillaje inútil.</p>
+          <p class="cfg-eyebrow">Configuración</p>
+          <h2 class="cfg-shell-title">Apartados del módulo</h2>
+          <p class="cfg-shell-copy">Elegí el área que querés administrar. Cada apartado conserva salida directa al Menú principal y regreso a Configuración.</p>
         </div>
-        <span class="cfg-badge cfg-badge--soft">Etapa 3/3</span>
       </div>
 
       <div class="cfg-tabs" role="tablist" aria-label="Secciones de Configuración">
@@ -77,6 +76,10 @@
 
       <div class="cfg-panels">
         <section class="cfg-panel-view is-active" id="cfg-panel-pwa" role="tabpanel" aria-labelledby="cfg-tab-pwa" data-panel="pwa">
+          <div class="cfg-section-nav" aria-label="Navegación del apartado">
+            <button class="cfg-nav-chip cfg-nav-chip--back" type="button" data-cfg-back>← Configuración</button>
+            <a class="cfg-nav-chip cfg-nav-chip--home" href="../index.html" aria-label="Ir al Menú principal">⌂ Menú principal</a>
+          </div>
           <div class="cfg-view-grid">
             <article class="cfg-card cfg-panel cfg-panel--main" aria-labelledby="cfg-pwa-title">
               <div class="cfg-panel-head">
@@ -115,26 +118,30 @@
             <aside class="cfg-card cfg-panel cfg-side-panel" aria-labelledby="cfg-pwa-side-title">
               <div class="cfg-panel-head cfg-panel-head--stack">
                 <div>
-                  <p class="cfg-eyebrow">Alcance</p>
+                  <p class="cfg-eyebrow">Actualizaciones</p>
                   <h2 id="cfg-pwa-side-title">Motor central</h2>
                 </div>
                 <span class="cfg-badge cfg-badge--soft">Centralizado</span>
               </div>
               <ul class="cfg-list">
-                <li>Consulta los Service Workers registrados de la Suite.</li>
-                <li>Ejecuta update() cuando el navegador lo permite.</li>
-                <li>Detecta estados waiting, installing y updatefound; al aplicar, usa SKIP_WAITING y recarga de forma segura.</li>
+                <li>Busca actualizaciones disponibles para la Suite.</li>
+                <li>Permite aplicar una actualización pendiente de forma controlada.</li>
+                <li>Muestra última búsqueda, última actualización y estado actual.</li>
               </ul>
             </aside>
           </div>
         </section>
 
         <section class="cfg-panel-view" id="cfg-panel-backup" role="tabpanel" aria-labelledby="cfg-tab-backup" data-panel="backup" hidden>
+          <div class="cfg-section-nav" aria-label="Navegación del apartado">
+            <button class="cfg-nav-chip cfg-nav-chip--back" type="button" data-cfg-back>← Configuración</button>
+            <a class="cfg-nav-chip cfg-nav-chip--home" href="../index.html" aria-label="Ir al Menú principal">⌂ Menú principal</a>
+          </div>
           <div class="cfg-view-grid">
             <article class="cfg-card cfg-panel cfg-panel--main" aria-labelledby="cfg-backup-title">
               <div class="cfg-panel-head">
                 <div>
-                  <p class="cfg-eyebrow">Sección interna</p>
+                  <p class="cfg-eyebrow">Apartado</p>
                   <h2 id="cfg-backup-title">Respaldo</h2>
                 </div>
                 <span class="cfg-badge">JSON local</span>
@@ -166,22 +173,26 @@
             <aside class="cfg-card cfg-panel cfg-side-panel" aria-labelledby="cfg-backup-side-title">
               <div class="cfg-panel-head cfg-panel-head--stack">
                 <div>
-                  <p class="cfg-eyebrow">Validación rápida</p>
-                  <h2 id="cfg-backup-side-title">Regresión mínima</h2>
+                  <p class="cfg-eyebrow">Respaldo</p>
+                  <h2 id="cfg-backup-side-title">Operación segura</h2>
                 </div>
                 <span class="cfg-badge cfg-badge--soft">Operativo</span>
               </div>
               <ul class="cfg-list">
-                <li>Configuración abre como módulo independiente.</li>
-                <li>Respaldo sigue disponible desde su nueva ubicación.</li>
-                <li>El formato JSON histórico permanece intacto.</li>
-                <li>La interfaz conserva lectura sana en desktop e iPad.</li>
+                <li>Exporta respaldo JSON completo.</li>
+                <li>Importa respaldo JSON desde este navegador.</li>
+                <li>Mantiene el formato histórico del archivo.</li>
+                <li>Conserva lectura clara en desktop e iPad.</li>
               </ul>
             </aside>
           </div>
         </section>
 
         <section class="cfg-panel-view" id="cfg-panel-users" role="tabpanel" aria-labelledby="cfg-tab-users" data-panel="users" hidden>
+          <div class="cfg-section-nav" aria-label="Navegación del apartado">
+            <button class="cfg-nav-chip cfg-nav-chip--back" type="button" data-cfg-back>← Configuración</button>
+            <a class="cfg-nav-chip cfg-nav-chip--home" href="../index.html" aria-label="Ir al Menú principal">⌂ Menú principal</a>
+          </div>
           <div class="cfg-view-grid">
             <article class="cfg-card cfg-panel cfg-panel--main" aria-labelledby="cfg-users-title">
               <div class="cfg-panel-head cfg-panel-head--users">
@@ -351,11 +362,15 @@
         </section>
 
         <section class="cfg-panel-view" id="cfg-panel-settings" role="tabpanel" aria-labelledby="cfg-tab-settings" data-panel="settings" hidden>
+          <div class="cfg-section-nav" aria-label="Navegación del apartado">
+            <button class="cfg-nav-chip cfg-nav-chip--back" type="button" data-cfg-back>← Configuración</button>
+            <a class="cfg-nav-chip cfg-nav-chip--home" href="../index.html" aria-label="Ir al Menú principal">⌂ Menú principal</a>
+          </div>
           <div class="cfg-view-grid">
             <article class="cfg-card cfg-panel cfg-panel--main" aria-labelledby="cfg-settings-title">
               <div class="cfg-panel-head">
                 <div>
-                  <p class="cfg-eyebrow">Sección base</p>
+                  <p class="cfg-eyebrow">Apartado</p>
                   <h2 id="cfg-settings-title">Ajustes Generales</h2>
                 </div>
                 <span class="cfg-badge cfg-badge--soft">Marco de ajustes</span>
@@ -423,8 +438,8 @@
             <aside class="cfg-card cfg-panel cfg-side-panel" aria-labelledby="cfg-settings-side-title">
               <div class="cfg-panel-head cfg-panel-head--stack">
                 <div>
-                  <p class="cfg-eyebrow">Orden interno</p>
-                  <h2 id="cfg-settings-side-title">Principios del carril</h2>
+                  <p class="cfg-eyebrow">Ajustes</p>
+                  <h2 id="cfg-settings-side-title">Criterios</h2>
                 </div>
               </div>
               <ul class="cfg-list">
@@ -461,6 +476,6 @@
   <script src="../assets/js/a33-firebase-auth.js?v=4.20.77&r=8"></script>
   <script src="../assets/js/a33-firebase-access.js?v=4.20.77&r=9"></script>
   <script src="../assets/js/a33-module-access.js?v=4.20.77&r=1"></script>
-  <script src="script.js?v=4.20.77&r=12"></script>
+  <script src="script.js?v=4.20.77&r=13"></script>
 </body>
 </html>

@@ -2092,6 +2092,28 @@
     if (initial) setActive(initial.dataset.target);
   }
 
+  function initConfigNavigation(){
+    const shell = document.querySelector('.cfg-shell');
+    const tabs = document.querySelector('.cfg-tabs');
+    const backButtons = Array.from(document.querySelectorAll('[data-cfg-back]'));
+    backButtons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const target = shell || tabs || document.querySelector('main');
+        if (target && typeof target.scrollIntoView === 'function'){
+          try{ target.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+          catch(_){ target.scrollIntoView(); }
+        }
+        const activeTab = document.querySelector('.cfg-tab.is-active');
+        if (activeTab && typeof activeTab.focus === 'function'){
+          window.setTimeout(() => {
+            try{ activeTab.focus({ preventScroll: true }); }
+            catch(_){ activeTab.focus(); }
+          }, 180);
+        }
+      });
+    });
+  }
+
   function getFirebaseUiModel(state){
     const current = (state && typeof state === 'object') ? state : {};
     const status = String(current.status || 'disabled');
@@ -2238,6 +2260,7 @@
 
   document.addEventListener('DOMContentLoaded', () => {
     initConfigTabs();
+    initConfigNavigation();
     initPwaSection();
     initUsersSection();
     initFirebaseStatus();
