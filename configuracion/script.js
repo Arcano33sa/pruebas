@@ -2048,6 +2048,320 @@
     });
   }
 
+
+  const IDENTITY_STORAGE_KEY = 'suite_a33_identity_v1';
+  const IDENTITY_LOGO_MAX_BYTES = 2.5 * 1024 * 1024;
+  const IDENTITY_FIELD_MAP = [
+    { key: 'commercialName', id: 'cfg-identity-commercial-name', summaryId: 'cfg-identity-summary-commercial-name' },
+    { key: 'legalName', id: 'cfg-identity-legal-name', summaryId: 'cfg-identity-summary-legal-name' },
+    { key: 'taxId', id: 'cfg-identity-tax-id', summaryId: 'cfg-identity-summary-tax-id' },
+    { key: 'phone', id: 'cfg-identity-phone', summaryId: 'cfg-identity-summary-phone' },
+    { key: 'whatsapp', id: 'cfg-identity-whatsapp', summaryId: 'cfg-identity-summary-whatsapp' },
+    { key: 'email', id: 'cfg-identity-email', summaryId: 'cfg-identity-summary-email' },
+    { key: 'address', id: 'cfg-identity-address', summaryId: 'cfg-identity-summary-address' },
+    { key: 'suiteName', id: 'cfg-identity-suite-name', summaryId: 'cfg-identity-summary-suite-name' },
+    { key: 'mainBrand', id: 'cfg-identity-main-brand', summaryId: 'cfg-identity-summary-main-brand' },
+    { key: 'tagline', id: 'cfg-identity-tagline' }
+  ];
+
+  const identityRuntime = {
+    logo: null,
+    loaded: false
+  };
+
+  function buildEmptyIdentity(){
+    const out = {
+      logo: {
+        dataUrl: '',
+        name: '',
+        type: '',
+        size: 0,
+        updatedAt: ''
+      },
+      updatedAt: ''
+    };
+    IDENTITY_FIELD_MAP.forEach((field) => { out[field.key] = ''; });
+    return out;
+  }
+
+  function normalizeIdentity(raw){
+    const base = buildEmptyIdentity();
+    const src = (raw && typeof raw === 'object') ? raw : {};
+    IDENTITY_FIELD_MAP.forEach((field) => {
+      base[field.key] = (src[field.key] == null) ? '' : String(src[field.key]).trim();
+    });
+    const logo = (src.logo && typeof src.logo === 'object') ? src.logo : {};
+    const rawDataUrl = (logo.dataUrl == null) ? '' : String(logo.dataUrl).trim();
+    const isSafeImage = /^data:image\//i.test(rawDataUrl);
+    base.logo = {
+      dataUrl: isSafeImage ? rawDataUrl : '',
+      name: isSafeImage && logo.name != null ? String(logo.name).trim() : '',
+      type: isSafeImage && logo.type != null ? String(logo.type).trim() : '',
+      size: isSafeImage && Number.isFinite(Number(logo.size)) ? Number(logo.size) : 0,
+      updatedAt: isSafeImage && logo.updatedAt != null ? String(logo.updatedAt).trim() : ''
+    };
+    base.updatedAt = (src.updatedAt == null) ? '' : String(src.updatedAt).trim();
+    return base;
+  }
+
+  function readIdentityStorage(){
+    try{
+      if (window.A33Storage && typeof window.A33Storage.getJSON === 'function'){
+        return normalizeIdentity(window.A33Storage.getJSON(IDENTITY_STORAGE_KEY, buildEmptyIdentity(), 'local'));
+      }
+    }catch(_){ }
+    try{
+      const raw = localStorage.getItem(IDENTITY_STORAGE_KEY);
+      return normalizeIdentity(raw ? JSON.parse(raw) : buildEmptyIdentity());
+    }catch(_){
+      return buildEmptyIdentity();
+    }
+  }
+
+  function writeIdentityStorage(identity){
+    const clean = normalizeIdentity(identity);
+    try{
+      if (window.A33Storage && typeof window.A33Storage.setJSON === 'function'){
+        const ok = window.A33Storage.setJSON(IDENTITY_STORAGE_KEY, clean, 'local');
+        if (ok) return true;
+      }
+    }catch(_){ }
+    try{
+      localStorage.setItem(IDENTITY_STORAGE_KEY, JSON.stringify(clean));
+      return true;
+    }catch(_){
+      return false;
+    }
+  }
+
+  function setIdentityStatus(message){
+    const el = document.getElementById('cfg-identity-status');
+    if (el) el.textContent = String(message || '');
+  }
+
+  function getIdentityFieldValue(id){
+    const el = document.getElementById(id);
+    if (!el) return '';
+    return String(el.value || '').trim();
+  }
+
+  function setIdentityFieldValue(id, value){
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.value = (value == null) ? '' : String(value);
+  }
+
+  function renderIdentityLogo(logo){
+    const safeLogo = (logo && typeof logo === 'object') ? logo : buildEmptyIdentity().logo;
+    const img = document.getElementById('cfg-identity-logo-img');
+    const placeholder = document.getElementById('cfg-identity-logo-placeholder');
+    const title = document.getElementById('cfg-identity-logo-title');
+    const meta = document.getElementById('cfg-identity-logo-meta');
+    const hasLogo = /^data:image\//i.test(String(safeLogo.dataUrl || '').trim());
+
+    if (img){
+      if (hasLogo){
+        img.src = safeLogo.dataUrl;
+        img.hidden = false;
+      } else {
+        img.removeAttribute('src');
+        img.hidden = true;
+      }
+    }
+    if (placeholder) placeholder.hidden = hasLogo;
+    if (title) title.textContent = hasLogo ? (safeLogo.name || 'Logo cargado') : 'Sin logo cargado';
+    if (meta){
+      if (hasLogo){
+        const sizeText = safeLogo.size ? formatBytes(safeLogo.size) : 'tamaño no disponible';
+        const typeText = safeLogo.type || 'imagen';
+        meta.textContent = `${typeText} · ${sizeText} · guardado localmente al presionar Guardar.`;
+      } else {
+        meta.textContent = 'Podés subir una imagen común compatible con navegador. Se guardará localmente junto con la Identidad.';
+      }
+    }
+  }
+
+
+  function identityDisplayValue(value){
+    const clean = String(value || '').trim();
+    return clean || '—';
+  }
+
+  function identityHasContent(data){
+    const hasText = IDENTITY_FIELD_MAP.some((field) => String(data[field.key] || '').trim());
+    const hasLogo = /^data:image\//i.test(String(data.logo && data.logo.dataUrl || '').trim());
+    return hasText || hasLogo;
+  }
+
+  function setIdentitySummaryText(id, value){
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = identityDisplayValue(value);
+    el.classList.toggle('is-empty', !String(value || '').trim());
+  }
+
+  function renderIdentitySummary(identity){
+    const data = normalizeIdentity(identity);
+    const hasAnyContent = identityHasContent(data);
+    const hasLogo = /^data:image\//i.test(String(data.logo && data.logo.dataUrl || '').trim());
+    const state = document.getElementById('cfg-identity-summary-state');
+    const empty = document.getElementById('cfg-identity-summary-empty');
+    const list = document.getElementById('cfg-identity-summary-list');
+    const heroName = document.getElementById('cfg-identity-summary-name');
+    const heroTagline = document.getElementById('cfg-identity-summary-tagline');
+    const updated = document.getElementById('cfg-identity-summary-updated');
+    const summaryImg = document.getElementById('cfg-identity-summary-logo-img');
+    const summaryPlaceholder = document.getElementById('cfg-identity-summary-logo-placeholder');
+
+    if (state) state.textContent = hasAnyContent ? 'Guardada' : 'Vacía';
+    if (empty) empty.hidden = hasAnyContent;
+    if (list) list.hidden = !hasAnyContent;
+
+    if (heroName){
+      const preferredName = data.commercialName || data.mainBrand || data.suiteName || 'Sin nombre comercial';
+      heroName.textContent = preferredName;
+      heroName.classList.toggle('is-empty', !hasAnyContent);
+    }
+    if (heroTagline){
+      const text = data.tagline || (hasAnyContent ? 'Resumen de identidad general guardada localmente.' : 'La identidad aparecerá aquí cuando guardés los datos.');
+      heroTagline.textContent = text;
+      heroTagline.classList.toggle('is-empty', !String(data.tagline || '').trim());
+    }
+
+    if (summaryImg){
+      if (hasLogo){
+        summaryImg.src = data.logo.dataUrl;
+        summaryImg.hidden = false;
+      } else {
+        summaryImg.removeAttribute('src');
+        summaryImg.hidden = true;
+      }
+    }
+    if (summaryPlaceholder) summaryPlaceholder.hidden = hasLogo;
+
+    IDENTITY_FIELD_MAP.forEach((field) => {
+      if (!field.summaryId) return;
+      setIdentitySummaryText(field.summaryId, data[field.key]);
+    });
+    if (updated) updated.textContent = data.updatedAt ? formatPwaTimestamp(data.updatedAt) : 'Sin registros';
+  }
+
+  function populateIdentityForm(identity){
+    const data = normalizeIdentity(identity);
+    IDENTITY_FIELD_MAP.forEach((field) => {
+      setIdentityFieldValue(field.id, data[field.key]);
+    });
+    identityRuntime.logo = { ...data.logo };
+    renderIdentityLogo(identityRuntime.logo);
+    renderIdentitySummary(data);
+    if (data.updatedAt){
+      setIdentityStatus(`Identidad cargada. Último guardado: ${formatPwaTimestamp(data.updatedAt)}.`);
+    } else {
+      setIdentityStatus('Los campos empiezan vacíos. Al guardar, la Identidad queda conservada en este navegador.');
+    }
+  }
+
+  function collectIdentityForm(){
+    const data = buildEmptyIdentity();
+    IDENTITY_FIELD_MAP.forEach((field) => {
+      data[field.key] = getIdentityFieldValue(field.id);
+    });
+    data.logo = normalizeIdentity({ logo: identityRuntime.logo }).logo;
+    data.updatedAt = formatPwaDateForStorage(new Date());
+    return data;
+  }
+
+  function readFileAsDataUrl(file){
+    return new Promise((resolve, reject) => {
+      if (typeof FileReader !== 'function'){
+        reject(new Error('FileReader no disponible.'));
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(reader.error || new Error('No se pudo leer el archivo.'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function handleIdentityLogoFile(file){
+    if (!file) return;
+    const type = String(file.type || '').toLowerCase();
+    const name = String(file.name || '').toLowerCase();
+    const looksImage = type.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg|bmp|ico)$/i.test(name);
+    if (!looksImage){
+      showToast('El logo debe ser una imagen compatible.');
+      return;
+    }
+    if (Number(file.size || 0) > IDENTITY_LOGO_MAX_BYTES){
+      showToast('El logo es demasiado pesado para guardarlo localmente. Probá con una imagen más liviana.');
+      return;
+    }
+    try{
+      const dataUrl = await readFileAsDataUrl(file);
+      if (!/^data:image\//i.test(dataUrl || '')){
+        showToast('No se pudo preparar la imagen seleccionada.');
+        return;
+      }
+      identityRuntime.logo = {
+        dataUrl,
+        name: String(file.name || 'logo'),
+        type: String(file.type || 'image/*'),
+        size: Number(file.size || 0),
+        updatedAt: formatPwaDateForStorage(new Date())
+      };
+      renderIdentityLogo(identityRuntime.logo);
+      setIdentityStatus('Logo cargado en previsualización. Presioná Guardar para conservarlo.');
+    }catch(_){
+      showToast('No se pudo leer el logo seleccionado.');
+    }
+  }
+
+  function saveIdentityFromForm(event){
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    const data = collectIdentityForm();
+    const ok = writeIdentityStorage(data);
+    if (!ok){
+      setIdentityStatus('No se pudo guardar la Identidad en este navegador.');
+      showToast('No se pudo guardar Identidad.');
+      return;
+    }
+    populateIdentityForm(data);
+    setIdentityStatus(`Identidad guardada localmente: ${formatPwaTimestamp(data.updatedAt)}.`);
+    showToast('Identidad guardada.');
+  }
+
+  function initIdentitySection(){
+    const form = document.getElementById('cfg-identity-form');
+    if (!form) return;
+    const saveBtn = document.getElementById('cfg-identity-save');
+    const logoBtn = document.getElementById('cfg-identity-logo-button');
+    const logoInput = document.getElementById('cfg-identity-logo-input');
+
+    populateIdentityForm(readIdentityStorage());
+    identityRuntime.loaded = true;
+
+    form.addEventListener('submit', saveIdentityFromForm);
+    if (saveBtn){
+      saveBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        saveIdentityFromForm(event);
+      });
+    }
+    if (logoBtn && logoInput){
+      logoBtn.addEventListener('click', () => {
+        logoInput.value = '';
+        logoInput.click();
+      });
+      logoInput.addEventListener('change', () => {
+        const file = logoInput.files && logoInput.files[0];
+        handleIdentityLogoFile(file).catch(() => {
+          showToast('No se pudo cargar el logo.');
+        });
+      });
+    }
+  }
+
   function initConfigTabs(){
     const cards = Array.from(document.querySelectorAll('.cfg-tab[data-target]'));
     const panels = Array.from(document.querySelectorAll('.cfg-panel-view[data-panel]'));
@@ -2305,6 +2619,7 @@
     initConfigTabs();
     initConfigNavigation();
     initPwaSection();
+    initIdentitySection();
     initUsersSection();
     initFirebaseStatus();
 

@@ -13,7 +13,7 @@
 <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&amp;family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
 <link href="../assets/css/a33-header.css?v=4.20.77&amp;r=2" rel="stylesheet"/>
-<link href="style.css?v=4.20.77&amp;r=11" rel="stylesheet"/>
+<link href="style.css?v=4.20.77&amp;r=13" rel="stylesheet"/>
 </head>
 <body>
 <header class="a33-header" role="banner">
@@ -98,30 +98,110 @@
 <p class="cfg-eyebrow">Apartado</p>
 <h2 id="identity-title">Identidad</h2>
 </div>
-<span class="cfg-badge cfg-badge--soft">Preparado</span>
+<span class="cfg-badge cfg-badge--soft">Guardado local</span>
 </div>
-<p class="cfg-copy">Apartado reservado para identidad de la Suite, datos generales, marca y presentación institucional.</p>
-<div class="cfg-note-grid cfg-note-grid--dual">
-<div class="cfg-note-card">
-<strong>Estado</strong>
-<p>El espacio queda ordenado dentro de Configuración para desarrollarlo sin ensuciar otros módulos.</p>
+<p class="cfg-copy">Datos generales de identidad del negocio y de la Suite. En esta fase se guardan localmente para conservarse al recargar la app, sin alimentar reportes, PDFs, POS, Finanzas ni otros módulos.</p>
+<form aria-label="Formulario de Identidad" class="cfg-identity-form" id="cfg-identity-form" novalidate="">
+<div class="cfg-identity-grid">
+<label class="cfg-field">
+<span>Nombre comercial</span>
+<input autocomplete="organization" class="cfg-input" id="cfg-identity-commercial-name" maxlength="120" placeholder="Ingrese el nombre comercial" type="text"/>
+</label>
+<label class="cfg-field">
+<span>Nombre legal</span>
+<input autocomplete="organization" class="cfg-input" id="cfg-identity-legal-name" maxlength="160" placeholder="Ingrese el nombre legal" type="text"/>
+</label>
+<label class="cfg-field">
+<span>RUC / identificación fiscal</span>
+<input class="cfg-input" id="cfg-identity-tax-id" maxlength="60" placeholder="Ingrese identificación fiscal" type="text"/>
+</label>
+<label class="cfg-field">
+<span>Teléfono</span>
+<input autocomplete="tel" class="cfg-input" id="cfg-identity-phone" inputmode="tel" maxlength="40" placeholder="Ingrese teléfono" type="tel"/>
+</label>
+<label class="cfg-field">
+<span>WhatsApp</span>
+<input autocomplete="tel" class="cfg-input" id="cfg-identity-whatsapp" inputmode="tel" maxlength="40" placeholder="Ingrese WhatsApp" type="tel"/>
+</label>
+<label class="cfg-field">
+<span>Correo</span>
+<input autocomplete="email" class="cfg-input" id="cfg-identity-email" maxlength="120" placeholder="Ingrese correo" type="email"/>
+</label>
+<label class="cfg-field cfg-field--full">
+<span>Dirección</span>
+<textarea class="cfg-input cfg-textarea" id="cfg-identity-address" maxlength="240" placeholder="Ingrese dirección" rows="3"></textarea>
+</label>
+<label class="cfg-field">
+<span>Nombre de la Suite</span>
+<input class="cfg-input" id="cfg-identity-suite-name" maxlength="120" placeholder="Ingrese nombre de la Suite" type="text"/>
+</label>
+<label class="cfg-field">
+<span>Marca principal</span>
+<input class="cfg-input" id="cfg-identity-main-brand" maxlength="120" placeholder="Ingrese marca principal" type="text"/>
+</label>
+<label class="cfg-field cfg-field--full">
+<span>Descripción corta / lema</span>
+<textarea class="cfg-input cfg-textarea" id="cfg-identity-tagline" maxlength="220" placeholder="Ingrese descripción corta o lema" rows="3"></textarea>
+</label>
+<div aria-labelledby="cfg-identity-logo-label" class="cfg-field cfg-field--full cfg-logo-field" role="group">
+<span id="cfg-identity-logo-label">Logo principal</span>
+<div class="cfg-logo-shell">
+<div class="cfg-logo-preview" id="cfg-identity-logo-preview" aria-hidden="true">
+<span class="cfg-logo-placeholder" id="cfg-identity-logo-placeholder">◇</span>
+<img alt="Previsualización del logo principal" id="cfg-identity-logo-img" hidden=""/>
 </div>
-<div class="cfg-note-card">
-<strong>Navegación</strong>
-<p>Desde aquí podés volver al listado de Configuración o salir directo al Menú principal.</p>
+<div>
+<strong id="cfg-identity-logo-title">Sin logo cargado</strong>
+<p id="cfg-identity-logo-meta">Podés subir una imagen común compatible con navegador. Se guardará localmente junto con la Identidad.</p>
+</div>
+<button class="cfg-btn cfg-btn-ghost cfg-btn-compact" id="cfg-identity-logo-button" type="button">Subir logo</button>
+<input accept="image/*" id="cfg-identity-logo-input" type="file"/>
 </div>
 </div>
+</div>
+<div class="cfg-form-actions cfg-identity-actions">
+<button class="cfg-btn cfg-btn-primary" id="cfg-identity-save" type="submit">Guardar</button>
+</div>
+<div class="cfg-form-hint" id="cfg-identity-status">Los campos empiezan vacíos. Al guardar, la Identidad queda conservada en este navegador.</div>
+</form>
 </article>
-<aside aria-labelledby="identity-side-title" class="cfg-card cfg-panel cfg-side-panel">
+<aside aria-labelledby="identity-side-title" class="cfg-card cfg-panel cfg-side-panel cfg-identity-summary-card">
 <div class="cfg-panel-head cfg-panel-head--stack">
 <div>
-<p class="cfg-eyebrow">Contenido previsto</p>
-<h2 id="identity-side-title">Identidad</h2>
+<p class="cfg-eyebrow">Vista resumen</p>
+<h2 id="identity-side-title">Identidad guardada</h2>
+</div>
+<span class="cfg-badge cfg-badge--soft" id="cfg-identity-summary-state">Vacía</span>
+</div>
+<div class="cfg-identity-summary-hero" aria-label="Resumen visual de Identidad">
+<div class="cfg-identity-summary-logo" aria-hidden="true">
+<span id="cfg-identity-summary-logo-placeholder">◇</span>
+<img alt="" id="cfg-identity-summary-logo-img" hidden=""/>
+</div>
+<div class="cfg-identity-summary-titlebox">
+<strong id="cfg-identity-summary-name">Sin nombre comercial</strong>
+<p id="cfg-identity-summary-tagline">La identidad aparecerá aquí cuando guardés los datos.</p>
 </div>
 </div>
-<ul class="cfg-list">
-<li>Datos generales de la Suite.</li><li>Identidad visual y textos base.</li><li>Información institucional reutilizable.</li>
-</ul>
+<div class="cfg-identity-summary-empty" id="cfg-identity-summary-empty">Aún no hay datos guardados. La tarjeta está lista; solo falta alimentar al dragón.</div>
+<dl class="cfg-identity-summary-list" id="cfg-identity-summary-list">
+<div><dt>Nombre comercial</dt><dd id="cfg-identity-summary-commercial-name">—</dd></div>
+<div><dt>Nombre legal</dt><dd id="cfg-identity-summary-legal-name">—</dd></div>
+<div><dt>RUC / identificación fiscal</dt><dd id="cfg-identity-summary-tax-id">—</dd></div>
+<div><dt>Teléfono</dt><dd id="cfg-identity-summary-phone">—</dd></div>
+<div><dt>WhatsApp</dt><dd id="cfg-identity-summary-whatsapp">—</dd></div>
+<div><dt>Correo</dt><dd id="cfg-identity-summary-email">—</dd></div>
+<div><dt>Dirección</dt><dd id="cfg-identity-summary-address">—</dd></div>
+<div><dt>Nombre de la Suite</dt><dd id="cfg-identity-summary-suite-name">—</dd></div>
+<div><dt>Marca principal</dt><dd id="cfg-identity-summary-main-brand">—</dd></div>
+</dl>
+<div class="cfg-identity-summary-footer">
+<span>Último guardado</span>
+<strong id="cfg-identity-summary-updated">Sin registros</strong>
+</div>
+<div class="cfg-identity-summary-note">
+<p>Este resumen solo vive en Configuración → Identidad. No alimenta reportes, PDFs, POS, Finanzas ni otros módulos todavía.</p>
+</div>
 </aside>
 </div>
 </section><section aria-hidden="true" aria-labelledby="cfg-tab-appearance" class="cfg-panel-view" data-panel="appearance" hidden="" id="cfg-panel-appearance" role="tabpanel">
@@ -467,6 +547,6 @@
 <script src="../assets/js/a33-firebase-auth.js?v=4.20.77&amp;r=8"></script>
 <script src="../assets/js/a33-firebase-access.js?v=4.20.77&amp;r=9"></script>
 <script src="../assets/js/a33-module-access.js?v=4.20.77&amp;r=1"></script>
-<script src="script.js?v=4.20.77&amp;r=15"></script>
+<script src="script.js?v=4.20.77&amp;r=17"></script>
 </body>
 </html>
