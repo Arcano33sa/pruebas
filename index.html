@@ -369,6 +369,33 @@
       gap:1rem;
       margin-top:0.75rem;
     }
+    .config-pwa-status{
+      display:grid;
+      gap:0.45rem;
+      margin:0.75rem 0 0.9rem;
+      padding:0.75rem;
+      border-radius:16px;
+      border:1px solid rgba(221,191,100,0.18);
+      background:rgba(0,0,0,0.22);
+    }
+    .config-pwa-row{
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:0.75rem;
+      color:var(--muted);
+      font-size:0.78rem;
+      line-height:1.35;
+    }
+    .config-pwa-row strong{
+      color:var(--text);
+      text-align:right;
+      word-break:break-word;
+    }
+    .config-pwa-card .link-btn{
+      min-height:44px;
+      justify-content:center;
+    }
     @media(max-width:560px){
       .config-topbar{ align-items:flex-start; flex-direction:column; }
       .config-back-btn{ width:100%; justify-content:center; }
@@ -496,7 +523,7 @@
         <h2 class="menu-title">NÚCLEO A33</h2>
         <div class="grid support-grid" id="support-grid">
 
-          <article class="card" id="card-config-hub">
+          <article class="card" id="card-config-hub" data-link="configuracion/index.html">
             <div class="pill"><span>⚙️</span><span>Configuración</span></div>
             <h2>Configuración</h2>
             <p>Ajustes, respaldo y opciones generales de la Suite.</p>
@@ -555,10 +582,25 @@
         </div>
 
         <p class="config-lead">
-          Centro interno para ordenar opciones generales de la Suite. En esta etapa se mueve aquí el respaldo existente, sin cambiar datos, JSON ni llaves históricas.
+          Centro interno para ordenar opciones generales de la Suite. El primer apartado concentra el control PWA; Respaldo queda después, sin cambiar datos, JSON ni llaves históricas.
         </p>
 
         <div class="config-grid">
+          <article class="card config-pwa-card" id="card-config-pwa">
+            <div class="pill"><span>📲</span><span>PWA</span></div>
+            <h2>PWA</h2>
+            <p>Actualización y control de la versión instalada de la Suite.</p>
+            <div class="config-pwa-status" aria-label="Estado PWA">
+              <div class="config-pwa-row"><span>Estado</span><strong id="cfg-pwa-status">Sin revisar</strong></div>
+              <div class="config-pwa-row"><span>Última búsqueda</span><strong id="cfg-pwa-last-check">Sin registros</strong></div>
+              <div class="config-pwa-row"><span>Última actualización</span><strong id="cfg-pwa-last-update">Sin registros</strong></div>
+            </div>
+            <div class="footer-row">
+              <span>Control central</span>
+              <button id="cfg-pwa-check" class="link-btn secondary" type="button"><span>Buscar actualizaciones</span></button>
+            </div>
+          </article>
+
           <article class="card" id="card-config-backup">
             <div class="pill"><span>🗄️</span><span>Respaldo</span></div>
             <h2>Respaldo</h2>
@@ -1480,6 +1522,8 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
+      renderPwaCard();
+      registerPwaCheckClick();
 
       // Navegación: tarjetas del menú principal
       document.querySelectorAll('[data-link]').forEach(card => {
@@ -1516,6 +1560,69 @@
         });
       }
 
+      const PWA_KEYS = {
+        lastCheck: 'suite_a33_pwa_last_check_at',
+        lastUpdate: 'suite_a33_pwa_last_update_at',
+        status: 'suite_a33_pwa_update_status'
+      };
+
+      function pwaStorageGet(key){
+        try{
+          if (window.A33Storage && typeof window.A33Storage.getItem === 'function'){
+            const v = window.A33Storage.getItem(key);
+            if (v !== undefined && v !== null && String(v).trim() !== '') return String(v);
+          }
+        }catch(_){ }
+        try{
+          const v = localStorage.getItem(key);
+          return (v && String(v).trim()) ? String(v) : '';
+        }catch(_){ return ''; }
+      }
+
+      function pwaStorageSet(key, value){
+        try{
+          if (window.A33Storage && typeof window.A33Storage.setItem === 'function'){
+            window.A33Storage.setItem(key, String(value));
+            return;
+          }
+        }catch(_){ }
+        try{ localStorage.setItem(key, String(value)); }catch(_){ }
+      }
+
+      function formatPwaTimestamp(value){
+        const raw = String(value || '').trim();
+        if (!raw) return 'Sin registros';
+        let date = null;
+        const num = Number(raw);
+        if (Number.isFinite(num) && num > 0) date = new Date(num);
+        if (!date || Number.isNaN(date.getTime())) date = new Date(raw);
+        if (!date || Number.isNaN(date.getTime())) return raw;
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+      }
+
+      function renderPwaCard(){
+        const statusEl = document.getElementById('cfg-pwa-status');
+        const lastCheckEl = document.getElementById('cfg-pwa-last-check');
+        const lastUpdateEl = document.getElementById('cfg-pwa-last-update');
+        const status = pwaStorageGet(PWA_KEYS.status) || 'Sin revisar';
+        const lastCheck = pwaStorageGet(PWA_KEYS.lastCheck);
+        const lastUpdate = pwaStorageGet(PWA_KEYS.lastUpdate);
+        if (statusEl) statusEl.textContent = status;
+        if (lastCheckEl) lastCheckEl.textContent = formatPwaTimestamp(lastCheck);
+        if (lastUpdateEl) lastUpdateEl.textContent = formatPwaTimestamp(lastUpdate);
+      }
+
+      function registerPwaCheckClick(){
+        const btn = document.getElementById('cfg-pwa-check');
+        if (!btn) return;
+        btn.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          window.location.href = 'configuracion/index.html';
+        });
+      }
+
       function showHomeView(){
         const homeView = document.getElementById('home-view');
         const configView = document.getElementById('config-view');
@@ -1534,8 +1641,10 @@
 
       // Card: Configuración (hub)
       const configHubCard = document.getElementById('card-config-hub');
-      if (configHubCard){
-        configHubCard.addEventListener('click', showConfigView);
+      if (configHubCard && !configHubCard.getAttribute('data-link')){
+        configHubCard.addEventListener('click', () => {
+          window.location.href = 'configuracion/index.html';
+        });
       }
 
       const configBackHome = document.getElementById('btn-config-back-home');

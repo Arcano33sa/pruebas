@@ -185,6 +185,546 @@
     return `${v.toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
   }
 
+  const PWA_KEYS = {
+    lastCheck: 'suite_a33_pwa_last_check_at',
+    lastUpdate: 'suite_a33_pwa_last_update_at',
+    status: 'suite_a33_pwa_update_status',
+    reloadGuard: 'suite_a33_pwa_apply_reload_guard_v1'
+  };
+
+  const PWA_STATUS = {
+    idle: 'Sin revisar',
+    checking: 'Buscando actualizaciones...',
+    current: 'Suite actualizada',
+    available: 'Actualización disponible',
+    applying: 'Aplicando actualización...',
+    applied: 'Actualización aplicada',
+    noPending: 'No hay actualización pendiente',
+    searchError: 'Error al buscar actualización',
+    applyError: 'Error al aplicar actualización'
+  };
+
+  const PWA_SUITE_SCOPE_HINTS = [
+    '/pos/',
+    '/inventario/',
+    '/lotes/',
+    '/pedidos/',
+    '/centro_mando/',
+    '/centro-mando/',
+    '/finanzas/',
+    '/calculadora/',
+    '/calculadora_a33/',
+    '/calculadora_temporal/',
+    '/agenda/',
+    '/analitica/',
+    '/configuracion/'
+  ];
+
+  const pwaRuntime = {
+    checking: false,
+    applying: false,
+    updateAvailable: false,
+    lastResults: []
+  };
+
+  function pwaStorageGet(key){
+    try{
+      if (window.A33Storage && typeof window.A33Storage.getItem === 'function'){
+        const v = window.A33Storage.getItem(key);
+        if (v !== undefined && v !== null && String(v).trim() !== '') return String(v);
+      }
+    }catch(_){ }
+    try{
+      const v = localStorage.getItem(key);
+      return (v && String(v).trim()) ? String(v) : '';
+    }catch(_){ return ''; }
+  }
+
+  function pwaStorageSet(key, value){
+    try{
+      if (window.A33Storage && typeof window.A33Storage.setItem === 'function'){
+        window.A33Storage.setItem(key, String(value));
+        return;
+      }
+    }catch(_){ }
+    try{ localStorage.setItem(key, String(value)); }catch(_){ }
+  }
+
+  function pwaSessionGet(key){
+    try{ return sessionStorage.getItem(key) || ''; }catch(_){ return ''; }
+  }
+
+  function pwaSessionSet(key, value){
+    try{ sessionStorage.setItem(key, String(value)); }catch(_){ }
+  }
+
+  function pwaPad2(value){
+    return String(value).padStart(2, '0');
+  }
+
+  function formatPwaDateForStorage(date){
+    const d = (date instanceof Date) ? date : new Date();
+    return `${pwaPad2(d.getDate())}/${pwaPad2(d.getMonth() + 1)}/${d.getFullYear()} ${pwaPad2(d.getHours())}:${pwaPad2(d.getMinutes())}`;
+  }
+
+  function formatPwaTimestamp(value){
+    const raw = String(value || '').trim();
+    if (!raw) return 'Sin registros';
+    if (/^\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}$/.test(raw)) return raw;
+    let date = null;
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) date = new Date(n);
+    if (!date || Number.isNaN(date.getTime())) date = new Date(raw);
+    if (!date || Number.isNaN(date.getTime())) return raw;
+    return formatPwaDateForStorage(date);
+  }
+
+  function normalizePwaStatus(status){
+    const s = String(status || '').trim();
+    if (!s) return PWA_STATUS.idle;
+    if (s === 'Suite actualizada / No se encontraron actualizaciones') return PWA_STATUS.current;
+    if (s === 'Error al buscar actualizaciones') return PWA_STATUS.searchError;
+    if (s === 'Búsqueda registrada') return PWA_STATUS.idle;
+    return s;
+  }
+
+  function getPwaStateKey(status){
+    const s = normalizePwaStatus(status);
+    if (s === PWA_STATUS.checking) return 'checking';
+    if (s === PWA_STATUS.available) return 'available';
+    if (s === PWA_STATUS.applying) return 'applying';
+    if (s === PWA_STATUS.applied) return 'applied';
+    if (s === PWA_STATUS.noPending) return 'nopending';
+    if (s === PWA_STATUS.searchError || s === PWA_STATUS.applyError) return 'error';
+    if (s === PWA_STATUS.current) return 'current';
+    return 'idle';
+  }
+
+  function isPwaUpdateAvailableStatus(status){
+    return getPwaStateKey(status) === 'available';
+  }
+
+  function getWorkerUrl(reg){
+    try{
+      const worker = reg && (reg.waiting || reg.installing || reg.active);
+      return worker && worker.scriptURL ? String(worker.scriptURL) : '';
+    }catch(_){ return ''; }
+  }
+
+  function isSuiteServiceWorkerRegistration(reg){
+    try{
+      if (!reg) return false;
+      const scopeUrl = reg.scope ? new URL(reg.scope, window.location.href) : null;
+      const scriptUrl = getWorkerUrl(reg) ? new URL(getWorkerUrl(reg), window.location.href) : null;
+      if (scopeUrl && scopeUrl.origin !== window.location.origin) return false;
+      if (scriptUrl && scriptUrl.origin !== window.location.origin) return false;
+      const scriptPath = scriptUrl ? String(scriptUrl.pathname || '').toLowerCase() : '';
+      const scopePath = scopeUrl ? String(scopeUrl.pathname || '').toLowerCase() : '';
+      if (scriptPath.endsWith('/sw.js')) return true;
+      return PWA_SUITE_SCOPE_HINTS.some((hint) => scopePath.includes(String(hint || '').toLowerCase()));
+    }catch(_){
+      return false;
+    }
+  }
+
+  function hasPwaPendingWorker(reg){
+    try{ return !!(reg && (reg.waiting || reg.installing)); }catch(_){ return false; }
+  }
+
+  async function getSuitePwaRegistrations(){
+    if (!('serviceWorker' in navigator) || !navigator.serviceWorker || typeof navigator.serviceWorker.getRegistrations !== 'function'){
+      throw new Error('Este navegador no permite consultar Service Workers.');
+    }
+    const rawRegs = await navigator.serviceWorker.getRegistrations();
+    return (Array.isArray(rawRegs) ? rawRegs : []).filter(isSuiteServiceWorkerRegistration);
+  }
+
+  function waitForPwaUpdateSignal(reg, timeoutMs){
+    return new Promise((resolve) => {
+      if (!reg){ resolve(false); return; }
+      if (hasPwaPendingWorker(reg)){ resolve(true); return; }
+
+      let done = false;
+      let timer = null;
+      let observedWorker = null;
+
+      const cleanup = () => {
+        try{ if (timer) clearTimeout(timer); }catch(_){ }
+        try{ reg.removeEventListener('updatefound', onUpdateFound); }catch(_){ }
+        try{ if (observedWorker && typeof observedWorker.removeEventListener === 'function') observedWorker.removeEventListener('statechange', onStateChange); }catch(_){ }
+      };
+
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        cleanup();
+        resolve(!!value);
+      };
+
+      const onStateChange = () => {
+        const st = String((observedWorker && observedWorker.state) || '').toLowerCase();
+        if (hasPwaPendingWorker(reg) || st === 'installed'){
+          finish(true);
+          return;
+        }
+        if (st === 'activated' || st === 'redundant'){
+          finish(hasPwaPendingWorker(reg));
+        }
+      };
+
+      const onUpdateFound = () => {
+        try{
+          observedWorker = reg.installing || null;
+          if (!observedWorker){
+            finish(hasPwaPendingWorker(reg));
+            return;
+          }
+          if (String(observedWorker.state || '').toLowerCase() === 'installed'){
+            finish(true);
+            return;
+          }
+          if (typeof observedWorker.addEventListener === 'function'){
+            observedWorker.addEventListener('statechange', onStateChange);
+          }
+        }catch(_){ }
+      };
+
+      try{
+        if (typeof reg.addEventListener === 'function'){
+          reg.addEventListener('updatefound', onUpdateFound, { once: true });
+        } else {
+          reg.onupdatefound = onUpdateFound;
+        }
+      }catch(_){ }
+
+      timer = setTimeout(() => finish(hasPwaPendingWorker(reg)), Number(timeoutMs) || 1800);
+    });
+  }
+
+  async function inspectPwaRegistration(reg){
+    const result = {
+      scope: '',
+      scriptURL: '',
+      beforePending: false,
+      afterPending: false,
+      updateFound: false,
+      error: ''
+    };
+
+    try{ result.scope = String(reg && reg.scope ? reg.scope : ''); }catch(_){ }
+    try{ result.scriptURL = getWorkerUrl(reg); }catch(_){ }
+    result.beforePending = hasPwaPendingWorker(reg);
+
+    const signalPromise = waitForPwaUpdateSignal(reg, 1800);
+    try{
+      if (reg && typeof reg.update === 'function'){
+        await reg.update();
+      }
+    }catch(err){
+      result.error = String(err && err.message ? err.message : err || 'No se pudo consultar este Service Worker.');
+    }
+
+    try{ result.updateFound = await signalPromise; }catch(_){ result.updateFound = false; }
+    result.afterPending = hasPwaPendingWorker(reg);
+    return result;
+  }
+
+  async function checkSuitePwaUpdates(){
+    const regs = await getSuitePwaRegistrations();
+    if (!regs.length){
+      return { available: false, checked: 0, errors: [], results: [] };
+    }
+
+    const results = await Promise.all(regs.map((reg) => inspectPwaRegistration(reg)));
+    const available = results.some((item) => item.beforePending || item.afterPending || item.updateFound);
+    const errors = results.filter((item) => item.error).map((item) => item.error);
+    return { available, checked: results.length, errors, results };
+  }
+
+  function waitForWorkerState(worker, states, timeoutMs){
+    return new Promise((resolve) => {
+      const wanted = new Set((Array.isArray(states) ? states : [states]).map((s) => String(s || '').toLowerCase()));
+      if (!worker){ resolve(''); return; }
+      const current = String(worker.state || '').toLowerCase();
+      if (wanted.has(current)){ resolve(current); return; }
+
+      let done = false;
+      let timer = null;
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        try{ if (timer) clearTimeout(timer); }catch(_){ }
+        try{ worker.removeEventListener('statechange', onStateChange); }catch(_){ }
+        resolve(value || String(worker.state || '').toLowerCase());
+      };
+      const onStateChange = () => {
+        const st = String(worker.state || '').toLowerCase();
+        if (wanted.has(st) || st === 'redundant') finish(st);
+      };
+      try{ worker.addEventListener('statechange', onStateChange); }catch(_){ }
+      timer = setTimeout(() => finish(String(worker.state || '').toLowerCase()), Number(timeoutMs) || 3000);
+    });
+  }
+
+  async function resolvePwaWaitingWorker(reg){
+    try{
+      if (reg && reg.waiting) return reg.waiting;
+      const installing = reg && reg.installing;
+      if (!installing) return null;
+      const state = String(installing.state || '').toLowerCase();
+      if (state === 'installed' && reg.waiting) return reg.waiting;
+      await waitForWorkerState(installing, ['installed', 'activated', 'redundant'], 3500);
+      return reg.waiting || (String(installing.state || '').toLowerCase() === 'activated' ? installing : null);
+    }catch(_){ return null; }
+  }
+
+  function sendPwaSkipWaiting(worker){
+    try{
+      if (worker && typeof worker.postMessage === 'function'){
+        worker.postMessage({ type: 'SKIP_WAITING' });
+        return true;
+      }
+    }catch(_){ }
+    return false;
+  }
+
+  function waitForPwaControllerChange(timeoutMs){
+    return new Promise((resolve) => {
+      if (!navigator.serviceWorker || typeof navigator.serviceWorker.addEventListener !== 'function'){
+        resolve(false);
+        return;
+      }
+      let done = false;
+      let timer = null;
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        try{ if (timer) clearTimeout(timer); }catch(_){ }
+        try{ navigator.serviceWorker.removeEventListener('controllerchange', onChange); }catch(_){ }
+        resolve(!!value);
+      };
+      const onChange = () => finish(true);
+      try{ navigator.serviceWorker.addEventListener('controllerchange', onChange, { once: true }); }catch(_){ }
+      timer = setTimeout(() => finish(false), Number(timeoutMs) || 6500);
+    });
+  }
+
+  function waitForPwaRegistrationActivation(reg, worker, timeoutMs){
+    return new Promise((resolve) => {
+      if (!reg){ resolve(false); return; }
+      const target = worker || reg.waiting || reg.installing;
+      const targetUrl = target && target.scriptURL ? String(target.scriptURL) : '';
+      let done = false;
+      let timer = null;
+      let interval = null;
+
+      const isActivated = () => {
+        try{
+          if (target && String(target.state || '').toLowerCase() === 'activated') return true;
+          if (reg.active && targetUrl && String(reg.active.scriptURL || '') === targetUrl && !reg.waiting) return true;
+          if (!targetUrl && reg.active && !reg.waiting && !reg.installing) return true;
+        }catch(_){ }
+        return false;
+      };
+
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        try{ if (timer) clearTimeout(timer); }catch(_){ }
+        try{ if (interval) clearInterval(interval); }catch(_){ }
+        try{ if (target && typeof target.removeEventListener === 'function') target.removeEventListener('statechange', onStateChange); }catch(_){ }
+        resolve(!!value);
+      };
+
+      const onStateChange = () => {
+        if (isActivated()) finish(true);
+        else if (target && String(target.state || '').toLowerCase() === 'redundant') finish(!reg.waiting);
+      };
+
+      if (isActivated()){
+        finish(true);
+        return;
+      }
+
+      try{ if (target && typeof target.addEventListener === 'function') target.addEventListener('statechange', onStateChange); }catch(_){ }
+      interval = setInterval(() => {
+        if (isActivated()) finish(true);
+      }, 180);
+      timer = setTimeout(() => finish(isActivated()), Number(timeoutMs) || 6500);
+    });
+  }
+
+  async function collectPendingPwaRegistrations(){
+    const regs = await getSuitePwaRegistrations();
+    const pending = [];
+    for (const reg of regs){
+      if (!hasPwaPendingWorker(reg)) continue;
+      const worker = await resolvePwaWaitingWorker(reg);
+      if (worker || hasPwaPendingWorker(reg)) pending.push({ reg, worker: worker || reg.waiting || reg.installing || null });
+    }
+    return pending;
+  }
+
+  async function applySuitePwaUpdate(){
+    let pending = await collectPendingPwaRegistrations();
+
+    if (!pending.length){
+      const summary = await checkSuitePwaUpdates();
+      pwaRuntime.lastResults = Array.isArray(summary.results) ? summary.results : [];
+      pending = await collectPendingPwaRegistrations();
+    }
+
+    if (!pending.length){
+      return { applied: false, noPending: true };
+    }
+
+    const controllerChangePromise = waitForPwaControllerChange(7500);
+    const activationPromises = pending.map(async ({ reg, worker }) => {
+      const target = worker || await resolvePwaWaitingWorker(reg);
+      if (target && String(target.state || '').toLowerCase() !== 'activated'){
+        sendPwaSkipWaiting(target);
+      }
+      return waitForPwaRegistrationActivation(reg, target, 7000);
+    });
+
+    const activationResults = await Promise.all(activationPromises.map((p) => p.catch(() => false)));
+    const activated = activationResults.some(Boolean);
+    const controllerChanged = activated ? false : await controllerChangePromise.catch(() => false);
+
+    if (!activated && !controllerChanged){
+      throw new Error('No se confirmó la activación del Service Worker pendiente.');
+    }
+
+    return { applied: true, activated, controllerChanged };
+  }
+
+  function reloadAfterPwaApply(){
+    const now = Date.now();
+    const previous = Number(pwaSessionGet(PWA_KEYS.reloadGuard) || 0);
+    if (Number.isFinite(previous) && previous > 0 && (now - previous) < 12000){
+      return;
+    }
+    pwaSessionSet(PWA_KEYS.reloadGuard, String(now));
+    setTimeout(() => {
+      try{ window.location.reload(); }
+      catch(_){ try{ window.location.href = window.location.href; }catch(__){ } }
+    }, 900);
+  }
+
+  function renderPwaSection(){
+    const statusEl = document.getElementById('cfg-pwa-status');
+    const lastCheckEl = document.getElementById('cfg-pwa-last-check');
+    const lastUpdateEl = document.getElementById('cfg-pwa-last-update');
+    const btn = document.getElementById('cfg-pwa-check');
+    const dashboard = document.querySelector('.cfg-pwa-dashboard');
+    const storedStatus = normalizePwaStatus(pwaStorageGet(PWA_KEYS.status));
+    const status = pwaRuntime.checking ? PWA_STATUS.checking : (pwaRuntime.applying ? PWA_STATUS.applying : storedStatus);
+    const stateKey = getPwaStateKey(status);
+
+    if (statusEl){
+      statusEl.textContent = status;
+      try{ statusEl.closest('.cfg-status-card')?.setAttribute('data-pwa-state', stateKey); }catch(_){ }
+    }
+    if (dashboard) dashboard.setAttribute('data-pwa-state', stateKey);
+    if (lastCheckEl) lastCheckEl.textContent = formatPwaTimestamp(pwaStorageGet(PWA_KEYS.lastCheck));
+    if (lastUpdateEl) lastUpdateEl.textContent = formatPwaTimestamp(pwaStorageGet(PWA_KEYS.lastUpdate));
+
+    if (btn){
+      const available = pwaRuntime.updateAvailable || isPwaUpdateAvailableStatus(status);
+      const busy = !!(pwaRuntime.checking || pwaRuntime.applying);
+      btn.textContent = pwaRuntime.applying ? 'Aplicando...' : (pwaRuntime.checking ? 'Buscando...' : (available ? 'Aplicar actualización' : 'Buscar actualizaciones'));
+      btn.disabled = busy;
+      btn.setAttribute('data-pwa-action', available ? 'apply' : 'check');
+      btn.classList.toggle('cfg-btn-pwa-apply', !!available && !busy);
+      btn.classList.toggle('cfg-btn-pwa-checking', !!pwaRuntime.checking);
+      btn.classList.toggle('cfg-btn-pwa-applying', !!pwaRuntime.applying);
+    }
+  }
+
+  async function handlePwaCheck(){
+    if (pwaRuntime.checking || pwaRuntime.applying) return;
+
+    pwaRuntime.checking = true;
+    pwaRuntime.updateAvailable = false;
+    pwaStorageSet(PWA_KEYS.lastCheck, formatPwaDateForStorage(new Date()));
+    pwaStorageSet(PWA_KEYS.status, PWA_STATUS.checking);
+    renderPwaSection();
+
+    try{
+      const summary = await checkSuitePwaUpdates();
+      pwaRuntime.lastResults = Array.isArray(summary.results) ? summary.results : [];
+      pwaRuntime.updateAvailable = !!summary.available;
+
+      if (summary.available){
+        pwaStorageSet(PWA_KEYS.status, PWA_STATUS.available);
+        showToast('Actualización disponible para la Suite.');
+      } else if (summary.errors && summary.errors.length){
+        pwaStorageSet(PWA_KEYS.status, PWA_STATUS.searchError);
+        showToast('No se pudo completar la búsqueda PWA.');
+      } else {
+        pwaStorageSet(PWA_KEYS.status, PWA_STATUS.current);
+        showToast('Suite actualizada. No se encontraron actualizaciones.');
+      }
+    }catch(err){
+      pwaRuntime.updateAvailable = false;
+      pwaStorageSet(PWA_KEYS.status, PWA_STATUS.searchError);
+      showToast(err && err.message ? err.message : 'Error al buscar actualización.');
+    }finally{
+      pwaRuntime.checking = false;
+      renderPwaSection();
+    }
+  }
+
+  async function handlePwaApply(){
+    if (pwaRuntime.checking || pwaRuntime.applying) return;
+
+    pwaRuntime.applying = true;
+    pwaStorageSet(PWA_KEYS.status, PWA_STATUS.applying);
+    renderPwaSection();
+
+    try{
+      const result = await applySuitePwaUpdate();
+      if (result && result.noPending){
+        pwaRuntime.updateAvailable = false;
+        pwaStorageSet(PWA_KEYS.status, PWA_STATUS.noPending);
+        showToast('No hay actualización pendiente.');
+        return;
+      }
+
+      pwaRuntime.updateAvailable = false;
+      pwaStorageSet(PWA_KEYS.lastUpdate, formatPwaDateForStorage(new Date()));
+      pwaStorageSet(PWA_KEYS.status, PWA_STATUS.applied);
+      renderPwaSection();
+      showToast('Actualización aplicada. Recargando Suite...');
+      reloadAfterPwaApply();
+    }catch(err){
+      pwaRuntime.updateAvailable = true;
+      pwaStorageSet(PWA_KEYS.status, PWA_STATUS.applyError);
+      showToast(err && err.message ? err.message : 'Error al aplicar actualización.');
+    }finally{
+      pwaRuntime.applying = false;
+      renderPwaSection();
+    }
+  }
+
+  function initPwaSection(){
+    const storedStatus = normalizePwaStatus(pwaStorageGet(PWA_KEYS.status));
+    pwaRuntime.updateAvailable = isPwaUpdateAvailableStatus(storedStatus);
+    if (storedStatus !== pwaStorageGet(PWA_KEYS.status)){
+      pwaStorageSet(PWA_KEYS.status, storedStatus);
+    }
+    renderPwaSection();
+    const btn = document.getElementById('cfg-pwa-check');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      if (btn.getAttribute('data-pwa-action') === 'apply'){
+        handlePwaApply();
+        return;
+      }
+      handlePwaCheck();
+    });
+  }
+
   function reqToPromise(req){
     return new Promise((resolve, reject) => {
       req.onsuccess = () => resolve(req.result);
@@ -1698,6 +2238,7 @@
 
   document.addEventListener('DOMContentLoaded', () => {
     initConfigTabs();
+    initPwaSection();
     initUsersSection();
     initFirebaseStatus();
 

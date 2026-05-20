@@ -149,7 +149,7 @@ textarea{
   position:relative;
   z-index:1;
   display:grid;
-  grid-template-columns:repeat(3, minmax(0, 1fr));
+  grid-template-columns:repeat(4, minmax(0, 1fr));
   gap:12px;
   margin-bottom:18px;
 }
@@ -266,6 +266,27 @@ textarea{
   margin:18px 0 20px;
 }
 
+.cfg-actions--pwa{
+  margin-bottom:0;
+}
+
+.cfg-pwa-dashboard{
+  position:relative;
+  z-index:1;
+  display:grid;
+  grid-template-columns:repeat(3, minmax(0, 1fr));
+  gap:12px;
+  margin:18px 0 14px;
+}
+
+.cfg-pwa-stat{
+  min-height:132px;
+}
+
+.cfg-pwa-stat strong{
+  word-break:break-word;
+}
+
 .cfg-btn{
   display:inline-flex;
   align-items:center;
@@ -291,6 +312,37 @@ textarea{
   background:rgba(255,255,255,0.04);
   color:var(--cfg-text);
   border-color:rgba(221,191,100,0.22);
+}
+
+.cfg-status-card[data-pwa-state="checking"],
+.cfg-status-card[data-pwa-state="applying"]{
+  border-color:rgba(221,191,100,0.42);
+}
+
+.cfg-status-card[data-pwa-state="available"]{
+  border-color:rgba(221,191,100,0.58);
+  box-shadow:0 14px 30px rgba(221,191,100,0.08);
+}
+
+.cfg-status-card[data-pwa-state="current"],
+.cfg-status-card[data-pwa-state="applied"],
+.cfg-status-card[data-pwa-state="nopending"]{
+  border-color:rgba(129,180,113,0.42);
+}
+
+.cfg-status-card[data-pwa-state="error"]{
+  border-color:rgba(190,55,55,0.62);
+}
+
+.cfg-btn-pwa-apply{
+  background:linear-gradient(180deg, rgba(221,191,100,0.98), rgba(177,134,43,1));
+  color:#160e05;
+  box-shadow:0 12px 26px rgba(221,191,100,0.22);
+}
+
+.cfg-btn-pwa-checking,
+.cfg-btn-pwa-applying{
+  cursor:progress;
 }
 
 .cfg-btn-modal{
@@ -844,7 +896,8 @@ details summary{ cursor:pointer; color:var(--cfg-gold); margin-top:0.35rem; }
     grid-template-columns:repeat(2, minmax(0, 1fr));
   }
 
-  .cfg-firebase-grid{
+  .cfg-firebase-grid,
+  .cfg-pwa-dashboard{
     grid-template-columns:1fr;
   }
 }

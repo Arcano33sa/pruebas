@@ -14,7 +14,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
 
   <link rel="stylesheet" href="../assets/css/a33-header.css?v=4.20.77&r=2" />
-  <link rel="stylesheet" href="style.css?v=4.20.77&r=5" />
+  <link rel="stylesheet" href="style.css?v=4.20.77&r=8" />
 </head>
 <body>
   <header class="a33-header" role="banner">
@@ -28,12 +28,12 @@
       <div class="cfg-hero-copy">
         <span class="cfg-kicker">Núcleo A33</span>
         <h1 id="cfg-title">Configuración</h1>
-        <p class="cfg-lead">Módulo contenedor para ordenar la operación interna de la Suite A33. Ahora <b>Respaldo</b>, <b>Usuarios y Roles</b> y <b>Ajustes Generales</b> viven dentro de una arquitectura clara, compacta y lista para crecer sin hacerse un cajón de sastre.</p>
+        <p class="cfg-lead">Módulo contenedor para ordenar la operación interna de la Suite A33. Ahora <b>PWA</b> entra como primer apartado central; <b>Respaldo</b> queda al final y la arquitectura queda lista para crecer sin hacerse un cajón de sastre.</p>
       </div>
       <div class="cfg-hero-side">
         <div class="cfg-mini-stat">
           <span class="cfg-mini-label">Secciones base</span>
-          <strong>3 carriles internos</strong>
+          <strong>4 carriles internos</strong>
         </div>
         <div class="cfg-mini-stat">
           <span class="cfg-mini-label">Estado</span>
@@ -53,13 +53,13 @@
           <h2 class="cfg-shell-title">Secciones del módulo</h2>
           <p class="cfg-shell-copy">Navegación ligera, lectura limpia y cada bloque en su sitio. Nada de pared infinita ni maquillaje inútil.</p>
         </div>
-        <span class="cfg-badge cfg-badge--soft">Etapa 5/11</span>
+        <span class="cfg-badge cfg-badge--soft">Etapa 3/3</span>
       </div>
 
       <div class="cfg-tabs" role="tablist" aria-label="Secciones de Configuración">
-        <button class="cfg-tab is-active" id="cfg-tab-backup" type="button" role="tab" aria-selected="true" aria-controls="cfg-panel-backup" data-target="backup">
-          <span class="cfg-tab-title">Respaldo</span>
-          <span class="cfg-tab-meta">Exportar e importar JSON</span>
+        <button class="cfg-tab is-active" id="cfg-tab-pwa" type="button" role="tab" aria-selected="true" aria-controls="cfg-panel-pwa" data-target="pwa">
+          <span class="cfg-tab-title">PWA</span>
+          <span class="cfg-tab-meta">Actualización de la Suite</span>
         </button>
         <button class="cfg-tab" id="cfg-tab-users" type="button" role="tab" aria-selected="false" aria-controls="cfg-panel-users" data-target="users" tabindex="-1">
           <span class="cfg-tab-title">Usuarios y Roles</span>
@@ -69,10 +69,67 @@
           <span class="cfg-tab-title">Ajustes Generales</span>
           <span class="cfg-tab-meta">Marco de preferencias</span>
         </button>
+        <button class="cfg-tab" id="cfg-tab-backup" type="button" role="tab" aria-selected="false" aria-controls="cfg-panel-backup" data-target="backup" tabindex="-1">
+          <span class="cfg-tab-title">Respaldo</span>
+          <span class="cfg-tab-meta">Exportar e importar JSON</span>
+        </button>
       </div>
 
       <div class="cfg-panels">
-        <section class="cfg-panel-view is-active" id="cfg-panel-backup" role="tabpanel" aria-labelledby="cfg-tab-backup" data-panel="backup">
+        <section class="cfg-panel-view is-active" id="cfg-panel-pwa" role="tabpanel" aria-labelledby="cfg-tab-pwa" data-panel="pwa">
+          <div class="cfg-view-grid">
+            <article class="cfg-card cfg-panel cfg-panel--main" aria-labelledby="cfg-pwa-title">
+              <div class="cfg-panel-head">
+                <div>
+                  <p class="cfg-eyebrow">Primer apartado</p>
+                  <h2 id="cfg-pwa-title">PWA</h2>
+                </div>
+                <span class="cfg-badge">Motor central</span>
+              </div>
+
+              <p class="cfg-copy">Actualización y control de la versión instalada de la Suite. Este apartado ejecuta la búsqueda central de Service Workers registrados, guarda la última búsqueda, detecta si hay actualización pendiente y permite aplicarla de forma controlada.</p>
+
+              <div class="cfg-pwa-dashboard" aria-label="Estado PWA de la Suite">
+                <article class="cfg-status-card cfg-pwa-stat">
+                  <span class="cfg-status-label">Estado</span>
+                  <strong id="cfg-pwa-status">Sin revisar</strong>
+                  <p class="cfg-status-copy">Estado central de revisión PWA.</p>
+                </article>
+                <article class="cfg-status-card cfg-pwa-stat">
+                  <span class="cfg-status-label">Última búsqueda</span>
+                  <strong id="cfg-pwa-last-check">Sin registros</strong>
+                  <p class="cfg-status-copy">Se mostrará en formato DD/MM/AAAA HH:mm.</p>
+                </article>
+                <article class="cfg-status-card cfg-pwa-stat">
+                  <span class="cfg-status-label">Última actualización</span>
+                  <strong id="cfg-pwa-last-update">Sin registros</strong>
+                  <p class="cfg-status-copy">Solo cambia cuando se aplique correctamente una actualización.</p>
+                </article>
+              </div>
+
+              <div class="cfg-actions cfg-actions--pwa">
+                <button id="cfg-pwa-check" class="cfg-btn cfg-btn-primary" type="button">Buscar actualizaciones</button>
+              </div>
+            </article>
+
+            <aside class="cfg-card cfg-panel cfg-side-panel" aria-labelledby="cfg-pwa-side-title">
+              <div class="cfg-panel-head cfg-panel-head--stack">
+                <div>
+                  <p class="cfg-eyebrow">Alcance</p>
+                  <h2 id="cfg-pwa-side-title">Motor central</h2>
+                </div>
+                <span class="cfg-badge cfg-badge--soft">Centralizado</span>
+              </div>
+              <ul class="cfg-list">
+                <li>Consulta los Service Workers registrados de la Suite.</li>
+                <li>Ejecuta update() cuando el navegador lo permite.</li>
+                <li>Detecta estados waiting, installing y updatefound; al aplicar, usa SKIP_WAITING y recarga de forma segura.</li>
+              </ul>
+            </aside>
+          </div>
+        </section>
+
+        <section class="cfg-panel-view" id="cfg-panel-backup" role="tabpanel" aria-labelledby="cfg-tab-backup" data-panel="backup" hidden>
           <div class="cfg-view-grid">
             <article class="cfg-card cfg-panel cfg-panel--main" aria-labelledby="cfg-backup-title">
               <div class="cfg-panel-head">
@@ -358,7 +415,7 @@
                 <span class="cfg-pill">Parámetros globales</span>
                 <span class="cfg-pill">Valores por defecto</span>
                 <span class="cfg-pill">Mantenimiento futuro</span>
-                <span class="cfg-pill">Compatibilidad PWA</span>
+                <span class="cfg-pill">Mantenimiento programado</span>
                 <span class="cfg-pill">Ajustes administrativos</span>
               </div>
             </article>
@@ -404,6 +461,6 @@
   <script src="../assets/js/a33-firebase-auth.js?v=4.20.77&r=8"></script>
   <script src="../assets/js/a33-firebase-access.js?v=4.20.77&r=9"></script>
   <script src="../assets/js/a33-module-access.js?v=4.20.77&r=1"></script>
-  <script src="script.js?v=4.20.77&r=9"></script>
+  <script src="script.js?v=4.20.77&r=12"></script>
 </body>
 </html>
