@@ -1522,9 +1522,6 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
-      renderPwaCard();
-      registerPwaCheckClick();
-
       // Navegación: tarjetas del menú principal
       document.querySelectorAll('[data-link]').forEach(card => {
         card.addEventListener('click', () => {
@@ -1622,6 +1619,11 @@
           window.location.href = 'configuracion/index.html';
         });
       }
+
+      // PWA: renderizar tarjeta después de declarar constantes y helpers.
+      // Esto evita cortar el DOMContentLoaded antes de registrar la navegación del menú.
+      renderPwaCard();
+      registerPwaCheckClick();
 
       function showHomeView(){
         const homeView = document.getElementById('home-view');
