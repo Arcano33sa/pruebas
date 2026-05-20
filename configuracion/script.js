@@ -1874,7 +1874,7 @@
       if (result && result.created && result.temporaryPassword){
         showModal({
           title: 'Usuario creado',
-          bodyHtml: `<div>✅ ${escapeHtml(result.message || 'Usuario creado correctamente.')}</div><div class="cfg-user-password-card"><strong>Contraseña temporal</strong><br /><code>${escapeHtml(result.temporaryPassword)}</code><div class="small-note">Muéstrala una sola vez al usuario o cámbiala en la siguiente etapa.</div></div>`,
+          bodyHtml: `<div>✅ ${escapeHtml(result.message || 'Usuario creado correctamente.')}</div><div class="cfg-user-password-card"><strong>Contraseña temporal</strong><br /><code>${escapeHtml(result.temporaryPassword)}</code><div class="small-note">Muéstrala una sola vez al usuario o cámbiala luego desde Seguridad.</div></div>`,
           primaryText: 'Cerrar',
           onPrimary: hideModal,
           disableCancel: true
@@ -2049,66 +2049,118 @@
   }
 
   function initConfigTabs(){
-    const tabs = Array.from(document.querySelectorAll('.cfg-tab[data-target]'));
+    const cards = Array.from(document.querySelectorAll('.cfg-tab[data-target]'));
     const panels = Array.from(document.querySelectorAll('.cfg-panel-view[data-panel]'));
-    if (!tabs.length || !panels.length) return;
+    const panelsWrap = document.querySelector('.cfg-panels');
+    const tabsWrap = document.querySelector('.cfg-tabs');
+    const shell = document.querySelector('.cfg-shell');
+    const shellHead = document.querySelector('.cfg-shell-head');
+    const hero = document.querySelector('.cfg-hero');
+    if (!cards.length || !panels.length) return;
 
-    const setActive = (target, { focus = false } = {}) => {
-      let nextTab = null;
-      tabs.forEach((tab) => {
-        const active = tab.dataset.target === target;
-        tab.classList.toggle('is-active', active);
-        tab.setAttribute('aria-selected', active ? 'true' : 'false');
-        tab.setAttribute('tabindex', active ? '0' : '-1');
-        if (active) nextTab = tab;
+    let lastTarget = '';
+
+    const setCardState = (target) => {
+      cards.forEach((card) => {
+        const active = !!target && card.dataset.target === target;
+        card.classList.toggle('is-active', active);
+        card.setAttribute('aria-expanded', active ? 'true' : 'false');
       });
-
-      panels.forEach((panel) => {
-        const active = panel.dataset.panel === target;
-        panel.classList.toggle('is-active', active);
-        panel.hidden = !active;
-      });
-
-      if (focus && nextTab) nextTab.focus();
     };
 
-    tabs.forEach((tab) => {
-      tab.addEventListener('click', () => setActive(tab.dataset.target));
-      tab.addEventListener('keydown', (event) => {
-        const idx = tabs.indexOf(tab);
+    const setPanelState = (target) => {
+      panels.forEach((panel) => {
+        const active = !!target && panel.dataset.panel === target;
+        panel.classList.toggle('is-active', active);
+        panel.hidden = !active;
+        panel.setAttribute('aria-hidden', active ? 'false' : 'true');
+      });
+    };
+
+    const showOverview = ({ focus = false } = {}) => {
+      shell?.classList.remove('is-section-open');
+      if (panelsWrap) panelsWrap.hidden = true;
+      if (tabsWrap) tabsWrap.hidden = false;
+      if (shellHead) shellHead.hidden = false;
+      if (hero) hero.hidden = false;
+      setPanelState('');
+      setCardState('');
+
+      if (focus){
+        const targetCard = cards.find((card) => card.dataset.target === lastTarget) || cards[0];
+        if (targetCard && typeof targetCard.focus === 'function'){
+          window.setTimeout(() => {
+            try{ targetCard.focus({ preventScroll: true }); }
+            catch(_){ targetCard.focus(); }
+          }, 80);
+        }
+      }
+    };
+
+    const openSection = (target, { focusPanel = false } = {}) => {
+      const panel = panels.find((item) => item.dataset.panel === target);
+      if (!panel) return;
+      lastTarget = target;
+      shell?.classList.add('is-section-open');
+      if (panelsWrap) panelsWrap.hidden = false;
+      if (tabsWrap) tabsWrap.hidden = true;
+      if (shellHead) shellHead.hidden = true;
+      if (hero) hero.hidden = true;
+      setCardState(target);
+      setPanelState(target);
+
+      if (focusPanel){
+        const navButton = panel.querySelector('[data-cfg-back]');
+        const focusTarget = navButton || panel;
+        if (focusTarget && typeof focusTarget.focus === 'function'){
+          window.setTimeout(() => {
+            try{ focusTarget.focus({ preventScroll: true }); }
+            catch(_){ focusTarget.focus(); }
+          }, 80);
+        }
+      }
+
+      try{ window.scrollTo({ top: 0, behavior: 'smooth' }); }
+      catch(_){ window.scrollTo(0, 0); }
+    };
+
+    cards.forEach((card) => {
+      card.addEventListener('click', () => openSection(card.dataset.target, { focusPanel: true }));
+      card.addEventListener('keydown', (event) => {
+        const idx = cards.indexOf(card);
         if (idx < 0) return;
         let nextIdx = null;
-        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIdx = (idx + 1) % tabs.length;
-        if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIdx = (idx - 1 + tabs.length) % tabs.length;
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIdx = (idx + 1) % cards.length;
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIdx = (idx - 1 + cards.length) % cards.length;
         if (event.key === 'Home') nextIdx = 0;
-        if (event.key === 'End') nextIdx = tabs.length - 1;
+        if (event.key === 'End') nextIdx = cards.length - 1;
         if (nextIdx === null) return;
         event.preventDefault();
-        setActive(tabs[nextIdx].dataset.target, { focus: true });
+        const nextCard = cards[nextIdx];
+        if (nextCard && typeof nextCard.focus === 'function') nextCard.focus();
       });
     });
 
-    const initial = tabs.find((tab) => tab.classList.contains('is-active')) || tabs[0];
-    if (initial) setActive(initial.dataset.target);
+    window.A33ConfigNavigation = {
+      openSection,
+      showOverview
+    };
+
+    showOverview();
   }
 
   function initConfigNavigation(){
-    const shell = document.querySelector('.cfg-shell');
-    const tabs = document.querySelector('.cfg-tabs');
     const backButtons = Array.from(document.querySelectorAll('[data-cfg-back]'));
     backButtons.forEach((btn) => {
       btn.addEventListener('click', () => {
-        const target = shell || tabs || document.querySelector('main');
+        if (window.A33ConfigNavigation && typeof window.A33ConfigNavigation.showOverview === 'function'){
+          window.A33ConfigNavigation.showOverview({ focus: true });
+          return;
+        }
+        const target = document.querySelector('.cfg-tabs') || document.querySelector('main');
         if (target && typeof target.scrollIntoView === 'function'){
           try{ target.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
           catch(_){ target.scrollIntoView(); }
-        }
-        const activeTab = document.querySelector('.cfg-tab.is-active');
-        if (activeTab && typeof activeTab.focus === 'function'){
-          window.setTimeout(() => {
-            try{ activeTab.focus({ preventScroll: true }); }
-            catch(_){ activeTab.focus(); }
-          }, 180);
         }
       });
     });
