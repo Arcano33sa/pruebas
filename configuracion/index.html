@@ -33,7 +33,7 @@
 <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&amp;family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
 <link href="../assets/css/a33-header.css?v=4.20.77&amp;r=7" rel="stylesheet"/>
-<link href="style.css?v=4.20.77&amp;r=7" rel="stylesheet"/>
+<link href="style.css?v=4.20.77&amp;r=11" rel="stylesheet"/>
 <link rel="stylesheet" href="/assets/css/a33-theme.css?v=4.20.77&r=7" />
 </head>
 <body>
@@ -311,37 +311,247 @@
 <button class="cfg-nav-chip cfg-nav-chip--back" data-cfg-back="" type="button">← Configuración</button>
 <a aria-label="Ir al Menú principal" class="cfg-nav-chip cfg-nav-chip--home" href="../index.html">⌂ Menú principal</a>
 </div>
-<div class="cfg-view-grid">
-<article aria-labelledby="reports-title" class="cfg-card cfg-panel cfg-panel--main">
+<div class="cfg-view-grid cfg-reports-view">
+<article aria-labelledby="reports-title" class="cfg-card cfg-panel cfg-panel--main cfg-reports-panel">
 <div class="cfg-panel-head">
 <div>
 <p class="cfg-eyebrow">Apartado</p>
 <h2 id="reports-title">Reportes</h2>
 </div>
-<span class="cfg-badge cfg-badge--soft">Preparado</span>
+<span class="cfg-badge cfg-badge--soft" id="cfg-reports-save-state">Preferencias generales</span>
 </div>
-<p class="cfg-copy">Apartado reservado para preferencias globales de reportes, formatos y salidas futuras.</p>
-<div class="cfg-note-grid cfg-note-grid--dual">
-<div class="cfg-note-card">
-<strong>Estado</strong>
-<p>El espacio queda ordenado dentro de Configuración para desarrollarlo sin ensuciar otros módulos.</p>
+<p class="cfg-copy">Configuración inicial para reportes futuros: Identidad, formato, exportaciones, privacidad, POS y vista previa controlada.</p>
+<div class="cfg-reports-hero" aria-label="Estado funcional de Reportes">
+<div>
+<span class="cfg-report-mini-label">Guardado funcional</span>
+<strong>Preferencias generales listas para conservarse</strong>
+<p>Estos ajustes solo preparan la base futura de reportes. No modifican PDFs, Excel, POS, Finanzas ni exportaciones reales.</p>
 </div>
-<div class="cfg-note-card">
-<strong>Navegación</strong>
-<p>Desde aquí podés volver al listado de Configuración o salir directo al Menú principal.</p>
+<span class="cfg-report-seal">A33</span>
+</div>
+<form aria-label="Preferencias generales de Reportes" class="cfg-reports-form" id="cfg-reports-form" novalidate="">
+<section class="cfg-report-card cfg-report-card--wide" aria-labelledby="reports-identity-title">
+<div class="cfg-report-card-head">
+<span class="cfg-report-icon">◇</span>
+<div>
+<h3 id="reports-identity-title">Identidad en reportes</h3>
+<p>Elegí qué datos de Configuración → Identidad podrán usarse en reportes futuros. Todas las opciones inician activadas.</p>
 </div>
 </div>
+<div class="cfg-report-options" aria-label="Datos de Identidad permitidos en reportes futuros">
+<label class="cfg-report-option" for="cfg-reports-identity-logo"><input id="cfg-reports-identity-logo" data-reports-identity-field="logo" type="checkbox"/><span><strong>Logo principal</strong><small>Imagen principal de la marca.</small></span></label>
+<label class="cfg-report-option" for="cfg-reports-identity-commercial-name"><input id="cfg-reports-identity-commercial-name" data-reports-identity-field="commercialName" type="checkbox"/><span><strong>Nombre comercial</strong><small>Nombre público del negocio.</small></span></label>
+<label class="cfg-report-option" for="cfg-reports-identity-legal-name"><input id="cfg-reports-identity-legal-name" data-reports-identity-field="legalName" type="checkbox"/><span><strong>Nombre legal</strong><small>Razón o nombre legal.</small></span></label>
+<label class="cfg-report-option" for="cfg-reports-identity-tax-id"><input id="cfg-reports-identity-tax-id" data-reports-identity-field="taxId" type="checkbox"/><span><strong>RUC / identificación fiscal</strong><small>Dato fiscal registrado.</small></span></label>
+<label class="cfg-report-option" for="cfg-reports-identity-phone"><input id="cfg-reports-identity-phone" data-reports-identity-field="phone" type="checkbox"/><span><strong>Teléfono</strong><small>Número general de contacto.</small></span></label>
+<label class="cfg-report-option" for="cfg-reports-identity-whatsapp"><input id="cfg-reports-identity-whatsapp" data-reports-identity-field="whatsapp" type="checkbox"/><span><strong>WhatsApp</strong><small>Contacto directo comercial.</small></span></label>
+<label class="cfg-report-option" for="cfg-reports-identity-email"><input id="cfg-reports-identity-email" data-reports-identity-field="email" type="checkbox"/><span><strong>Correo</strong><small>Correo de contacto.</small></span></label>
+<label class="cfg-report-option" for="cfg-reports-identity-address"><input id="cfg-reports-identity-address" data-reports-identity-field="address" type="checkbox"/><span><strong>Dirección</strong><small>Dirección registrada.</small></span></label>
+<label class="cfg-report-option" for="cfg-reports-identity-tagline"><input id="cfg-reports-identity-tagline" data-reports-identity-field="tagline" type="checkbox"/><span><strong>Descripción corta / lema</strong><small>Frase o descripción breve.</small></span></label>
+</div>
+<div class="cfg-report-reference" aria-label="Referencia compacta de Identidad actual">
+<div class="cfg-report-reference-head">
+<strong>Referencia actual de Identidad</strong>
+<span>No editable desde Reportes</span>
+</div>
+<div class="cfg-report-reference-body">
+<div class="cfg-report-logo-ref" aria-label="Logo principal configurado">
+<img alt="Logo principal de Identidad" hidden="" id="cfg-reports-ref-logo-img"/>
+<span id="cfg-reports-ref-logo-placeholder">A33</span>
+<small id="cfg-reports-ref-logo-text">No configurado</small>
+</div>
+<dl class="cfg-report-ref-list">
+<div><dt>Nombre comercial</dt><dd id="cfg-reports-ref-commercial-name">No configurado</dd></div>
+<div><dt>Nombre legal</dt><dd id="cfg-reports-ref-legal-name">No configurado</dd></div>
+<div><dt>RUC / identificación fiscal</dt><dd id="cfg-reports-ref-tax-id">No configurado</dd></div>
+<div><dt>Teléfono</dt><dd id="cfg-reports-ref-phone">No configurado</dd></div>
+<div><dt>WhatsApp</dt><dd id="cfg-reports-ref-whatsapp">No configurado</dd></div>
+<div><dt>Correo</dt><dd id="cfg-reports-ref-email">No configurado</dd></div>
+<div><dt>Dirección</dt><dd id="cfg-reports-ref-address">No configurado</dd></div>
+<div><dt>Descripción corta / lema</dt><dd id="cfg-reports-ref-tagline">No configurado</dd></div>
+</dl>
+</div>
+</div>
+</section>
+<section class="cfg-report-card cfg-report-card--wide" aria-labelledby="reports-format-title">
+<div class="cfg-report-card-head">
+<span class="cfg-report-icon">◷</span>
+<div>
+<h3 id="reports-format-title">Formato general</h3>
+<p>Estándar protegido para toda la base futura de reportes. Sin selector por ahora: menos invento, más orden.</p>
+</div>
+</div>
+<div class="cfg-report-format-grid" aria-label="Formato general fijo de reportes">
+<div class="cfg-report-format-item"><span>Fecha</span><strong>DD/MM/AAAA</strong><small>Formato estándar</small></div>
+<div class="cfg-report-format-item"><span>Fecha y hora</span><strong>DD/MM/AAAA HH:mm</strong><small>Hora militar</small></div>
+<div class="cfg-report-format-item"><span>AM/PM</span><strong>No usar</strong><small>Sin AM/PM</small></div>
+</div>
+</section>
+<section class="cfg-report-card cfg-report-card--wide" aria-labelledby="reports-export-title">
+<div class="cfg-report-card-head">
+<span class="cfg-report-icon">⇩</span>
+<div>
+<h3 id="reports-export-title">Exportaciones y nombre de archivos</h3>
+<p>Preferencias futuras para nombrar archivos y ordenar formatos por módulo, sin activar exportadores reales todavía.</p>
+</div>
+</div>
+<div class="cfg-report-file-grid" aria-label="Nombre base futuro de archivos exportados">
+<label class="cfg-report-field" for="cfg-reports-file-base-name">
+<span>Nombre base de archivos</span>
+<input autocomplete="off" id="cfg-reports-file-base-name" maxlength="64" name="reportsFileBaseName" type="text"/>
+<small id="cfg-reports-file-base-hint">Se recomienda usar el Nombre comercial de Identidad. Si no existe, se usa SuiteA33.</small>
+</label>
+<div class="cfg-report-file-example" aria-live="polite">
+<span>Ejemplo futuro</span>
+<strong id="cfg-reports-file-example">SuiteA33_Modulo_TipoReporte_2026-05-21.xlsx</strong>
+<small>Vista conceptual. No cambia nombres reales ni genera archivos desde Reportes.</small>
+</div>
+</div>
+<div class="cfg-report-finance-rule" aria-label="Regla fija de Finanzas">
+<div>
+<span class="cfg-report-mini-label">Regla fija protegida</span>
+<strong>Finanzas: exportaciones exclusivamente en Excel.</strong>
+<p>No se permite TXT ni CSV para reportes financieros. Esto queda protegido como preferencia base futura.</p>
+</div>
+<span class="cfg-report-protected-pill">Protegido</span>
+</div>
+<div class="cfg-report-module-grid" aria-label="Preferencias futuras de formatos por módulo">
+<div class="cfg-report-module-card cfg-report-module-card--locked" data-report-module-card="finances">
+<div class="cfg-report-module-head"><strong>Finanzas</strong><span>Excel exclusivo</span></div>
+<div class="cfg-report-format-chips">
+<label class="cfg-report-format-chip cfg-report-format-chip--locked"><input checked="" disabled="" id="cfg-reports-format-finances-excel" type="checkbox"/>Excel</label>
+<span class="cfg-report-format-chip cfg-report-format-chip--blocked">Sin CSV/TXT</span>
+</div>
+</div>
+<div class="cfg-report-module-card" data-report-module-card="pos">
+<div class="cfg-report-module-head"><strong>POS</strong><span>Preferencia futura</span></div>
+<div class="cfg-report-format-chips">
+<label class="cfg-report-format-chip"><input data-report-format="excel" data-report-module="pos" id="cfg-reports-format-pos-excel" type="checkbox"/>Excel</label>
+<label class="cfg-report-format-chip"><input data-report-format="pdf" data-report-module="pos" id="cfg-reports-format-pos-pdf" type="checkbox"/>PDF</label>
+<label class="cfg-report-format-chip"><input data-report-format="preview" data-report-module="pos" id="cfg-reports-format-pos-preview" type="checkbox"/>Vista previa</label>
+</div>
+</div>
+<div class="cfg-report-module-card" data-report-module-card="inventory">
+<div class="cfg-report-module-head"><strong>Inventario</strong><span>Preferencia futura</span></div>
+<div class="cfg-report-format-chips">
+<label class="cfg-report-format-chip"><input data-report-format="excel" data-report-module="inventory" id="cfg-reports-format-inventory-excel" type="checkbox"/>Excel</label>
+<label class="cfg-report-format-chip"><input data-report-format="pdf" data-report-module="inventory" id="cfg-reports-format-inventory-pdf" type="checkbox"/>PDF</label>
+<label class="cfg-report-format-chip"><input data-report-format="preview" data-report-module="inventory" id="cfg-reports-format-inventory-preview" type="checkbox"/>Vista previa</label>
+</div>
+</div>
+<div class="cfg-report-module-card" data-report-module-card="repack">
+<div class="cfg-report-module-head"><strong>Reempaque</strong><span>Preferencia futura</span></div>
+<div class="cfg-report-format-chips">
+<label class="cfg-report-format-chip"><input data-report-format="excel" data-report-module="repack" id="cfg-reports-format-repack-excel" type="checkbox"/>Excel</label>
+<label class="cfg-report-format-chip"><input data-report-format="pdf" data-report-module="repack" id="cfg-reports-format-repack-pdf" type="checkbox"/>PDF</label>
+<label class="cfg-report-format-chip"><input data-report-format="preview" data-report-module="repack" id="cfg-reports-format-repack-preview" type="checkbox"/>Vista previa</label>
+</div>
+</div>
+<div class="cfg-report-module-card" data-report-module-card="calculator">
+<div class="cfg-report-module-head"><strong>Calculadora</strong><span>Preferencia futura</span></div>
+<div class="cfg-report-format-chips">
+<label class="cfg-report-format-chip"><input data-report-format="pdf" data-report-module="calculator" id="cfg-reports-format-calculator-pdf" type="checkbox"/>PDF</label>
+<label class="cfg-report-format-chip"><input data-report-format="excel" data-report-module="calculator" id="cfg-reports-format-calculator-excel" type="checkbox"/>Excel</label>
+<label class="cfg-report-format-chip"><input data-report-format="preview" data-report-module="calculator" id="cfg-reports-format-calculator-preview" type="checkbox"/>Vista previa</label>
+</div>
+</div>
+<div class="cfg-report-module-card" data-report-module-card="agenda">
+<div class="cfg-report-module-head"><strong>Agenda</strong><span>Preferencia futura</span></div>
+<div class="cfg-report-format-chips">
+<label class="cfg-report-format-chip"><input data-report-format="pdf" data-report-module="agenda" id="cfg-reports-format-agenda-pdf" type="checkbox"/>PDF</label>
+<label class="cfg-report-format-chip"><input data-report-format="excel" data-report-module="agenda" id="cfg-reports-format-agenda-excel" type="checkbox"/>Excel</label>
+<label class="cfg-report-format-chip"><input data-report-format="preview" data-report-module="agenda" id="cfg-reports-format-agenda-preview" type="checkbox"/>Vista previa</label>
+</div>
+</div>
+<div class="cfg-report-module-card" data-report-module-card="suite">
+<div class="cfg-report-module-head"><strong>Base general</strong><span>Respaldo técnico futuro</span></div>
+<div class="cfg-report-format-chips">
+<label class="cfg-report-format-chip"><input data-report-format="json" data-report-module="suite" id="cfg-reports-format-suite-json" type="checkbox"/>JSON</label>
+<label class="cfg-report-format-chip"><input data-report-format="preview" data-report-module="suite" id="cfg-reports-format-suite-preview" type="checkbox"/>Impresión futura</label>
+</div>
+</div>
+</div>
+</section>
+<section class="cfg-report-card cfg-report-card--wide" aria-labelledby="reports-privacy-title">
+<div class="cfg-report-card-head">
+<span class="cfg-report-icon">◆</span>
+<div>
+<h3 id="reports-privacy-title">Privacidad / Información sensible</h3>
+<p>Preferencias futuras para controlar datos delicados. Costos y utilidad inician ocultos; comisiones internas quedan protegidas por regla fija.</p>
+</div>
+</div>
+<div class="cfg-report-options cfg-report-options--sensitive" aria-label="Preferencias de privacidad para reportes futuros">
+<label class="cfg-report-option" for="cfg-reports-privacy-show-costs"><input id="cfg-reports-privacy-show-costs" data-reports-privacy="showCosts" type="checkbox"/><span><strong>Mostrar costos en reportes futuros</strong><small>Desactivado por defecto. Solo se usará cuando una etapa futura conecte reportes reales.</small></span></label>
+<label class="cfg-report-option" for="cfg-reports-privacy-show-profit"><input id="cfg-reports-privacy-show-profit" data-reports-privacy="showProfit" type="checkbox"/><span><strong>Mostrar utilidad en reportes futuros</strong><small>Desactivado por defecto. Se guarda como preferencia, no cambia cálculos actuales.</small></span></label>
+<label class="cfg-report-option cfg-report-option--protected" for="cfg-reports-privacy-protect-commissions"><input id="cfg-reports-privacy-protect-commissions" data-reports-privacy="protectInternalCommissions" checked="" disabled="" type="checkbox"/><span><strong>Comisiones internas protegidas</strong><small>Regla fija: pueden existir como lógica interna, pero no se exponen desde Reportes.</small></span><em>Protegido</em></label>
+<label class="cfg-report-option cfg-report-option--protected" for="cfg-reports-privacy-hide-commission-sale"><input id="cfg-reports-privacy-hide-commission-sale" data-reports-privacy="hideCommissionPerSale" checked="" disabled="" type="checkbox"/><span><strong>Ocultar comisión por venta</strong><small>Regla fija: no se crea opción para mostrar comisión usada por venta.</small></span><em>Protegido</em></label>
+</div>
+<div class="cfg-report-protected-note" aria-label="Regla protegida de comisiones">
+<strong>Comisiones de tarjeta</strong>
+<p>No se muestran por venta, no se agregan a registros visibles y no se toca la lógica existente de bancos o tarjeta.</p>
+</div>
+</section>
+<section class="cfg-report-card cfg-report-card--wide" aria-labelledby="reports-pos-title">
+<div class="cfg-report-card-head">
+<span class="cfg-report-icon">▣</span>
+<div>
+<h3 id="reports-pos-title">POS en reportes futuros</h3>
+<p>Opciones futuras para reportes POS. Todas inician activadas y no modifican ventas, resumen, cierres ni reportes reales todavía.</p>
+</div>
+</div>
+<div class="cfg-report-options" aria-label="Preferencias POS para reportes futuros">
+<label class="cfg-report-option" for="cfg-reports-pos-discounts"><input id="cfg-reports-pos-discounts" data-reports-pos="includeDiscounts" type="checkbox"/><span><strong>Incluir descuentos</strong><small>Preferencia futura para reportes POS.</small></span></label>
+<label class="cfg-report-option" for="cfg-reports-pos-courtesy"><input id="cfg-reports-pos-courtesy" data-reports-pos="includeCourtesy" type="checkbox"/><span><strong>Incluir cortesías</strong><small>Preferencia futura para reportes POS.</small></span></label>
+<label class="cfg-report-option" for="cfg-reports-pos-bank-transfers"><input id="cfg-reports-pos-bank-transfers" data-reports-pos="includeBankTransfers" type="checkbox"/><span><strong>Incluir transferencias por banco</strong><small>Preferencia futura para consolidar transferencias por banco.</small></span></label>
+<label class="cfg-report-option" for="cfg-reports-pos-payment-method"><input id="cfg-reports-pos-payment-method" data-reports-pos="includePaymentMethod" type="checkbox"/><span><strong>Incluir método de pago</strong><small>Preferencia futura para reportar efectivo, transferencia, tarjeta o crédito.</small></span></label>
+</div>
+</section>
+<section class="cfg-report-card cfg-report-card--wide" aria-labelledby="reports-preview-title">
+<div class="cfg-report-card-head">
+<span class="cfg-report-icon">◈</span>
+<div>
+<h3 id="reports-preview-title">Vista previa</h3>
+<p>Preferencia futura para revisar reportes antes de exportar. Queda activada por defecto, sin implementar motor real todavía.</p>
+</div>
+</div>
+<div class="cfg-report-options cfg-report-options--single" aria-label="Preferencia futura de vista previa">
+<label class="cfg-report-option" for="cfg-reports-preview-before-export"><input id="cfg-reports-preview-before-export" data-reports-preview="beforeExport" type="checkbox"/><span><strong>Vista previa antes de exportar</strong><small>Activada por defecto. No genera reportes ni archivos desde esta sección.</small></span></label>
+</div>
+</section>
+<div class="cfg-report-final-note" aria-label="Cierre funcional de Reportes">
+<strong>Aplicación futura por módulos</strong>
+<p>Reportes actualmente guarda preferencias generales. La aplicación real en POS, Finanzas, Inventario y otros módulos se hará en etapas específicas para evitar romper partes sensibles.</p>
+</div>
+<div class="cfg-actions cfg-reports-actions">
+<button class="cfg-btn cfg-btn-primary" id="cfg-reports-save" type="submit">Guardar preferencias</button>
+<p class="cfg-action-inline-note" id="cfg-reports-status">Preferencias listas. Se guardan únicamente al presionar el botón.</p>
+</div>
+</form>
 </article>
-<aside aria-labelledby="reports-side-title" class="cfg-card cfg-panel cfg-side-panel">
+<aside aria-labelledby="reports-side-title" class="cfg-card cfg-panel cfg-side-panel cfg-reports-side">
 <div class="cfg-panel-head cfg-panel-head--stack">
 <div>
-<p class="cfg-eyebrow">Contenido previsto</p>
+<p class="cfg-eyebrow">Alcance protegido</p>
 <h2 id="reports-side-title">Reportes</h2>
 </div>
+<span class="cfg-badge cfg-badge--soft" id="cfg-reports-side-badge">Base local</span>
 </div>
 <ul class="cfg-list">
-<li>Preferencias de reportes.</li><li>Formato de salida.</li><li>Criterios visuales reutilizables.</li>
+<li>Guarda preferencias de Reportes en una clave aislada.</li>
+<li>Lee Identidad solo como referencia compacta.</li>
+<li>Mantiene fecha DD/MM/AAAA y fecha-hora DD/MM/AAAA HH:mm.</li>
+<li>Prepara nombre base de archivos usando Identidad o fallback SuiteA33.</li>
+<li>Protege Finanzas como Excel exclusivo, sin CSV ni TXT.</li>
+<li>Guarda privacidad sensible: costos, utilidad y comisiones internas.</li>
+<li>Prepara preferencias POS: descuentos, cortesías, transferencias y método de pago.</li>
+<li>Mantiene vista previa futura activada por defecto.</li>
+<li>No toca reportes reales, exportaciones, POS, Finanzas ni módulos sensibles.</li>
+<li>Respeta Oscuro, Claro y Automático/Sistema.</li>
 </ul>
+<div class="cfg-report-lockbox">
+<strong>Regla de oro</strong>
+<p>Reportes queda funcional para guardar preferencias generales, sin abrir todavía la puerta de los módulos delicados. Candado puesto; llave guardada.</p>
+</div>
 </aside>
 </div>
 </section><section aria-hidden="true" aria-labelledby="cfg-tab-currency" class="cfg-panel-view" data-panel="currency" hidden="" id="cfg-panel-currency" role="tabpanel">
@@ -611,6 +821,6 @@
 <script src="../assets/js/a33-firebase-auth.js?v=4.20.77&amp;r=7"></script>
 <script src="../assets/js/a33-firebase-access.js?v=4.20.77&amp;r=7"></script>
 <script src="../assets/js/a33-module-access.js?v=4.20.77&amp;r=7"></script>
-<script src="script.js?v=4.20.77&amp;r=7"></script>
+<script src="script.js?v=4.20.77&amp;r=11"></script>
 </body>
 </html>

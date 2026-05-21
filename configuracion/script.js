@@ -2327,6 +2327,7 @@
       return;
     }
     populateIdentityForm(data);
+    if (typeof renderReportsIdentityReference === 'function') renderReportsIdentityReference(data);
     setIdentityStatus(`Identidad guardada localmente: ${formatPwaTimestamp(data.updatedAt)}.`);
     showToast('Identidad guardada.');
   }
@@ -2821,12 +2822,409 @@
     }
   }
 
+
+  const REPORTS_STORAGE_KEY = 'suite_a33_reports_preferences_v1';
+  const REPORTS_IDENTITY_FIELDS = [
+    { key: 'logo', checkboxId: 'cfg-reports-identity-logo', label: 'Logo principal' },
+    { key: 'commercialName', checkboxId: 'cfg-reports-identity-commercial-name', refId: 'cfg-reports-ref-commercial-name', label: 'Nombre comercial' },
+    { key: 'legalName', checkboxId: 'cfg-reports-identity-legal-name', refId: 'cfg-reports-ref-legal-name', label: 'Nombre legal' },
+    { key: 'taxId', checkboxId: 'cfg-reports-identity-tax-id', refId: 'cfg-reports-ref-tax-id', label: 'RUC / identificación fiscal' },
+    { key: 'phone', checkboxId: 'cfg-reports-identity-phone', refId: 'cfg-reports-ref-phone', label: 'Teléfono' },
+    { key: 'whatsapp', checkboxId: 'cfg-reports-identity-whatsapp', refId: 'cfg-reports-ref-whatsapp', label: 'WhatsApp' },
+    { key: 'email', checkboxId: 'cfg-reports-identity-email', refId: 'cfg-reports-ref-email', label: 'Correo' },
+    { key: 'address', checkboxId: 'cfg-reports-identity-address', refId: 'cfg-reports-ref-address', label: 'Dirección' },
+    { key: 'tagline', checkboxId: 'cfg-reports-identity-tagline', refId: 'cfg-reports-ref-tagline', label: 'Descripción corta / lema' }
+  ];
+  const REPORTS_EXPORT_MODULES = [
+    { key: 'finances', locked: true, defaults: { excel: true, pdf: false, json: false, preview: false } },
+    { key: 'pos', defaults: { excel: true, pdf: true, json: false, preview: true } },
+    { key: 'inventory', defaults: { excel: true, pdf: true, json: false, preview: true } },
+    { key: 'repack', defaults: { excel: true, pdf: true, json: false, preview: true } },
+    { key: 'calculator', defaults: { excel: true, pdf: true, json: false, preview: true } },
+    { key: 'agenda', defaults: { excel: true, pdf: true, json: false, preview: true } },
+    { key: 'suite', defaults: { excel: false, pdf: false, json: true, preview: true } }
+  ];
+  const REPORTS_EXPORT_FORMATS = ['excel', 'pdf', 'json', 'preview'];
+
+  function buildDefaultReportsModuleFormats(){
+    const out = {};
+    REPORTS_EXPORT_MODULES.forEach((module) => {
+      out[module.key] = {};
+      REPORTS_EXPORT_FORMATS.forEach((format) => {
+        out[module.key][format] = !!(module.defaults && module.defaults[format]);
+      });
+      if (module.locked){
+        out[module.key].excel = true;
+        out[module.key].pdf = false;
+        out[module.key].json = false;
+        out[module.key].preview = false;
+      }
+    });
+    return out;
+  }
+
+  function buildDefaultReportsPreferences(){
+    const identityFields = {};
+    REPORTS_IDENTITY_FIELDS.forEach((field) => { identityFields[field.key] = true; });
+    return {
+      version: 3,
+      identityFields,
+      format: {
+        date: 'DD/MM/AAAA',
+        dateTime: 'DD/MM/AAAA HH:mm',
+        militaryTime: true,
+        amPm: false
+      },
+      exports: {
+        fileBaseName: '',
+        fileDateMode: 'iso',
+        financeFormat: 'excel',
+        moduleFormats: buildDefaultReportsModuleFormats()
+      },
+      privacy: {
+        showCosts: false,
+        showProfit: false,
+        protectInternalCommissions: true,
+        hideCommissionPerSale: true
+      },
+      pos: {
+        includeDiscounts: true,
+        includeCourtesy: true,
+        includeBankTransfers: true,
+        includePaymentMethod: true
+      },
+      preview: {
+        beforeExport: true
+      },
+      updatedAt: ''
+    };
+  }
+
+  function normalizeReportsModuleFormats(raw){
+    const base = buildDefaultReportsModuleFormats();
+    const src = (raw && typeof raw === 'object') ? raw : {};
+    REPORTS_EXPORT_MODULES.forEach((module) => {
+      const moduleRaw = (src[module.key] && typeof src[module.key] === 'object') ? src[module.key] : {};
+      REPORTS_EXPORT_FORMATS.forEach((format) => {
+        if (module.locked){
+          base[module.key][format] = format === 'excel';
+        } else if (typeof moduleRaw[format] === 'boolean'){
+          base[module.key][format] = moduleRaw[format];
+        }
+      });
+    });
+    return base;
+  }
+
+  function normalizeReportsPreferences(raw){
+    const base = buildDefaultReportsPreferences();
+    const src = (raw && typeof raw === 'object') ? raw : {};
+    const identityFields = (src.identityFields && typeof src.identityFields === 'object') ? src.identityFields : {};
+    REPORTS_IDENTITY_FIELDS.forEach((field) => {
+      base.identityFields[field.key] = identityFields[field.key] === false ? false : true;
+    });
+    const exportsPrefs = (src.exports && typeof src.exports === 'object') ? src.exports : {};
+    base.exports.fileBaseName = exportsPrefs.fileBaseName == null ? '' : String(exportsPrefs.fileBaseName).trim().slice(0, 64);
+    base.exports.fileDateMode = 'iso';
+    base.exports.financeFormat = 'excel';
+    base.exports.moduleFormats = normalizeReportsModuleFormats(exportsPrefs.moduleFormats);
+
+    const privacyPrefs = (src.privacy && typeof src.privacy === 'object') ? src.privacy : {};
+    base.privacy.showCosts = privacyPrefs.showCosts === true;
+    base.privacy.showProfit = privacyPrefs.showProfit === true;
+    base.privacy.protectInternalCommissions = true;
+    base.privacy.hideCommissionPerSale = true;
+
+    const posPrefs = (src.pos && typeof src.pos === 'object') ? src.pos : {};
+    base.pos.includeDiscounts = posPrefs.includeDiscounts === false ? false : true;
+    base.pos.includeCourtesy = posPrefs.includeCourtesy === false ? false : true;
+    base.pos.includeBankTransfers = posPrefs.includeBankTransfers === false ? false : true;
+    base.pos.includePaymentMethod = posPrefs.includePaymentMethod === false ? false : true;
+
+    const previewPrefs = (src.preview && typeof src.preview === 'object') ? src.preview : {};
+    base.preview.beforeExport = previewPrefs.beforeExport === false ? false : true;
+
+    base.updatedAt = src.updatedAt == null ? '' : String(src.updatedAt).trim();
+    return base;
+  }
+
+  function readReportsPreferences(){
+    try{
+      if (window.A33Storage && typeof window.A33Storage.getJSON === 'function'){
+        return normalizeReportsPreferences(window.A33Storage.getJSON(REPORTS_STORAGE_KEY, buildDefaultReportsPreferences(), 'local'));
+      }
+    }catch(_){ }
+    try{
+      const raw = localStorage.getItem(REPORTS_STORAGE_KEY);
+      return normalizeReportsPreferences(raw ? JSON.parse(raw) : buildDefaultReportsPreferences());
+    }catch(_){
+      return buildDefaultReportsPreferences();
+    }
+  }
+
+  function writeReportsPreferences(preferences){
+    const clean = normalizeReportsPreferences(preferences);
+    try{
+      if (window.A33Storage && typeof window.A33Storage.setJSON === 'function'){
+        const ok = window.A33Storage.setJSON(REPORTS_STORAGE_KEY, clean, 'local');
+        if (ok) return true;
+      }
+    }catch(_){ }
+    try{
+      localStorage.setItem(REPORTS_STORAGE_KEY, JSON.stringify(clean));
+      return true;
+    }catch(_){
+      return false;
+    }
+  }
+
+  function setReportsStatus(message){
+    const el = document.getElementById('cfg-reports-status');
+    if (el) el.textContent = String(message || '');
+  }
+
+  function setReportsBadge(text){
+    const main = document.getElementById('cfg-reports-save-state');
+    const side = document.getElementById('cfg-reports-side-badge');
+    [main, side].forEach((el) => {
+      if (el) el.textContent = String(text || 'Base local');
+    });
+  }
+
+  function getReportsCommercialName(){
+    const identity = normalizeIdentity(readIdentityStorage());
+    return String(identity.commercialName || '').trim();
+  }
+
+  function getReportsRecommendedBaseName(){
+    return getReportsCommercialName() || 'SuiteA33';
+  }
+
+  function sanitizeReportsFileSegment(value){
+    const clean = String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 64);
+    return clean || 'SuiteA33';
+  }
+
+  function getReportsIsoDateForFile(){
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  function updateReportsFileNamePreview(){
+    const input = document.getElementById('cfg-reports-file-base-name');
+    const example = document.getElementById('cfg-reports-file-example');
+    const hint = document.getElementById('cfg-reports-file-base-hint');
+    const recommended = getReportsRecommendedBaseName();
+    const rawBase = input && String(input.value || '').trim() ? input.value : recommended;
+    const fileBase = sanitizeReportsFileSegment(rawBase);
+    if (example) example.textContent = `${fileBase}_Modulo_TipoReporte_${getReportsIsoDateForFile()}.xlsx`;
+    if (hint){
+      hint.textContent = `Recomendado desde Identidad: ${recommended}. Si no existe Nombre comercial, se usa SuiteA33.`;
+    }
+  }
+
+  function applyReportsModuleFormats(moduleFormats){
+    const cleanFormats = normalizeReportsModuleFormats(moduleFormats);
+    REPORTS_EXPORT_MODULES.forEach((module) => {
+      REPORTS_EXPORT_FORMATS.forEach((format) => {
+        const input = document.querySelector(`[data-report-module="${module.key}"][data-report-format="${format}"]`);
+        if (!input) return;
+        input.checked = !!(cleanFormats[module.key] && cleanFormats[module.key][format]);
+        input.disabled = !!module.locked;
+      });
+    });
+    const financesExcel = document.getElementById('cfg-reports-format-finances-excel');
+    if (financesExcel){
+      financesExcel.checked = true;
+      financesExcel.disabled = true;
+    }
+  }
+
+  function collectReportsModuleFormats(){
+    const out = buildDefaultReportsModuleFormats();
+    REPORTS_EXPORT_MODULES.forEach((module) => {
+      REPORTS_EXPORT_FORMATS.forEach((format) => {
+        if (module.locked){
+          out[module.key][format] = format === 'excel';
+          return;
+        }
+        const input = document.querySelector(`[data-report-module="${module.key}"][data-report-format="${format}"]`);
+        if (input) out[module.key][format] = !!input.checked;
+      });
+    });
+    return out;
+  }
+
+  function setReportsCheckbox(id, checked, disabled){
+    const input = document.getElementById(id);
+    if (!input) return;
+    input.checked = !!checked;
+    if (typeof disabled === 'boolean') input.disabled = disabled;
+  }
+
+  function applyReportsPreferencesToForm(preferences){
+    const clean = normalizeReportsPreferences(preferences);
+    REPORTS_IDENTITY_FIELDS.forEach((field) => {
+      const input = document.getElementById(field.checkboxId);
+      if (input) input.checked = clean.identityFields[field.key] !== false;
+    });
+    const baseInput = document.getElementById('cfg-reports-file-base-name');
+    if (baseInput){
+      baseInput.value = clean.exports.fileBaseName || getReportsRecommendedBaseName();
+    }
+    applyReportsModuleFormats(clean.exports.moduleFormats);
+    setReportsCheckbox('cfg-reports-privacy-show-costs', clean.privacy.showCosts, false);
+    setReportsCheckbox('cfg-reports-privacy-show-profit', clean.privacy.showProfit, false);
+    setReportsCheckbox('cfg-reports-privacy-protect-commissions', true, true);
+    setReportsCheckbox('cfg-reports-privacy-hide-commission-sale', true, true);
+    setReportsCheckbox('cfg-reports-pos-discounts', clean.pos.includeDiscounts, false);
+    setReportsCheckbox('cfg-reports-pos-courtesy', clean.pos.includeCourtesy, false);
+    setReportsCheckbox('cfg-reports-pos-bank-transfers', clean.pos.includeBankTransfers, false);
+    setReportsCheckbox('cfg-reports-pos-payment-method', clean.pos.includePaymentMethod, false);
+    setReportsCheckbox('cfg-reports-preview-before-export', clean.preview.beforeExport, false);
+    updateReportsFileNamePreview();
+    if (clean.updatedAt){
+      setReportsStatus(`Preferencias cargadas. Último guardado: ${formatPwaTimestamp(clean.updatedAt)}.`);
+      setReportsBadge('Guardado local');
+    } else {
+      setReportsStatus('Preferencias listas. Se guardan únicamente al presionar el botón.');
+      setReportsBadge('Base local');
+    }
+  }
+
+  function collectReportsPreferencesFromForm(){
+    const current = readReportsPreferences();
+    const data = normalizeReportsPreferences(current);
+    REPORTS_IDENTITY_FIELDS.forEach((field) => {
+      const input = document.getElementById(field.checkboxId);
+      data.identityFields[field.key] = input ? !!input.checked : true;
+    });
+    const baseInput = document.getElementById('cfg-reports-file-base-name');
+    const baseValue = baseInput ? String(baseInput.value || '').trim() : '';
+    data.format = buildDefaultReportsPreferences().format;
+    data.exports.fileBaseName = baseValue || getReportsRecommendedBaseName();
+    data.exports.fileDateMode = 'iso';
+    data.exports.financeFormat = 'excel';
+    data.exports.moduleFormats = collectReportsModuleFormats();
+    data.exports.moduleFormats.finances = { excel: true, pdf: false, json: false, preview: false };
+    data.privacy.showCosts = !!(document.getElementById('cfg-reports-privacy-show-costs') || {}).checked;
+    data.privacy.showProfit = !!(document.getElementById('cfg-reports-privacy-show-profit') || {}).checked;
+    data.privacy.protectInternalCommissions = true;
+    data.privacy.hideCommissionPerSale = true;
+    data.pos.includeDiscounts = !!(document.getElementById('cfg-reports-pos-discounts') || {}).checked;
+    data.pos.includeCourtesy = !!(document.getElementById('cfg-reports-pos-courtesy') || {}).checked;
+    data.pos.includeBankTransfers = !!(document.getElementById('cfg-reports-pos-bank-transfers') || {}).checked;
+    data.pos.includePaymentMethod = !!(document.getElementById('cfg-reports-pos-payment-method') || {}).checked;
+    data.preview.beforeExport = !!(document.getElementById('cfg-reports-preview-before-export') || {}).checked;
+    data.updatedAt = formatPwaDateForStorage(new Date());
+    return data;
+  }
+
+  function reportsRefValue(value){
+    const clean = String(value || '').trim();
+    return clean || 'No configurado';
+  }
+
+  function setReportsReferenceText(id, value){
+    const el = document.getElementById(id);
+    if (!el) return;
+    const clean = String(value || '').trim();
+    el.textContent = reportsRefValue(clean);
+    el.classList.toggle('is-empty', !clean);
+  }
+
+  function renderReportsIdentityReference(identity){
+    const data = normalizeIdentity(identity);
+    const hasLogo = /^data:image\//i.test(String(data.logo && data.logo.dataUrl || '').trim());
+    const img = document.getElementById('cfg-reports-ref-logo-img');
+    const placeholder = document.getElementById('cfg-reports-ref-logo-placeholder');
+    const logoText = document.getElementById('cfg-reports-ref-logo-text');
+    if (img){
+      if (hasLogo){
+        img.src = data.logo.dataUrl;
+        img.hidden = false;
+      } else {
+        img.removeAttribute('src');
+        img.hidden = true;
+      }
+    }
+    if (placeholder) placeholder.hidden = hasLogo;
+    if (logoText){
+      logoText.textContent = hasLogo ? (data.logo.name || 'Logo configurado') : 'No configurado';
+      logoText.classList.toggle('is-empty', !hasLogo);
+    }
+    REPORTS_IDENTITY_FIELDS.forEach((field) => {
+      if (!field.refId) return;
+      setReportsReferenceText(field.refId, data[field.key]);
+    });
+    updateReportsFileNamePreview();
+  }
+
+  function saveReportsPreferences(event){
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    const data = collectReportsPreferencesFromForm();
+    const ok = writeReportsPreferences(data);
+    if (!ok){
+      setReportsStatus('No se pudo guardar Reportes en este navegador.');
+      setReportsBadge('Error local');
+      showToast('No se pudo guardar Reportes.');
+      return;
+    }
+    applyReportsPreferencesToForm(data);
+    renderReportsIdentityReference(readIdentityStorage());
+    setReportsStatus(`Preferencias de Reportes guardadas: ${formatPwaTimestamp(data.updatedAt)}.`);
+    setReportsBadge('Guardado local');
+    showToast('Preferencias de Reportes guardadas.');
+  }
+
+  function markReportsDirty(){
+    updateReportsFileNamePreview();
+    setReportsStatus('Hay cambios sin guardar. Presioná Guardar preferencias para conservarlos.');
+    setReportsBadge('Cambios pendientes');
+  }
+
+  function initReportsSection(){
+    const form = document.getElementById('cfg-reports-form');
+    if (!form) return;
+    applyReportsPreferencesToForm(readReportsPreferences());
+    renderReportsIdentityReference(readIdentityStorage());
+    form.addEventListener('submit', saveReportsPreferences);
+    const saveBtn = document.getElementById('cfg-reports-save');
+    if (saveBtn){
+      saveBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        saveReportsPreferences(event);
+      });
+    }
+    REPORTS_IDENTITY_FIELDS.forEach((field) => {
+      const input = document.getElementById(field.checkboxId);
+      if (input) input.addEventListener('change', markReportsDirty);
+    });
+    const baseInput = document.getElementById('cfg-reports-file-base-name');
+    if (baseInput) baseInput.addEventListener('input', markReportsDirty);
+    document.querySelectorAll('[data-report-module][data-report-format]').forEach((input) => {
+      input.addEventListener('change', markReportsDirty);
+    });
+    document.querySelectorAll('[data-reports-privacy], [data-reports-pos], [data-reports-preview]').forEach((input) => {
+      input.addEventListener('change', markReportsDirty);
+    });
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     initConfigTabs();
     initConfigNavigation();
     initPwaSection();
     initIdentitySection();
     initAppearanceSection();
+    initReportsSection();
     initUsersSection();
     initFirebaseStatus();
 
