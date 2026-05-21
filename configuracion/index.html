@@ -7,13 +7,34 @@
 <title>Suite A33 · Configuración</title>
 <meta content="Módulo Configuración de Suite A33. Organiza PWA, Identidad, Apariencia, Reportes, Moneda, Seguridad y Respaldo en un solo lugar." name="description"/>
 <meta content="#7b1818" name="theme-color"/>
+
+<script src="/assets/js/a33-theme.js?v=4.20.77&r=7"></script>
 <link href="../icon-a33-192.png" rel="icon" sizes="192x192" type="image/png"/>
 <link href="../icon-a33-192.png" rel="apple-touch-icon"/>
+<script>
+(function(){
+  try{
+    var key = 'suite_a33_appearance_preference';
+    var pref = localStorage.getItem(key) || 'dark';
+    if (pref !== 'dark' && pref !== 'light' && pref !== 'auto') pref = 'dark';
+    var resolved = pref;
+    if (pref === 'auto'){
+      resolved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+    }
+    document.documentElement.setAttribute('data-a33-theme-preference', pref);
+    document.documentElement.setAttribute('data-theme', resolved);
+  }catch(_){
+    document.documentElement.setAttribute('data-a33-theme-preference', 'dark');
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }
+})();
+</script>
 <link href="https://fonts.googleapis.com" rel="preconnect"/>
 <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&amp;family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
-<link href="../assets/css/a33-header.css?v=4.20.77&amp;r=2" rel="stylesheet"/>
-<link href="style.css?v=4.20.77&amp;r=13" rel="stylesheet"/>
+<link href="../assets/css/a33-header.css?v=4.20.77&amp;r=7" rel="stylesheet"/>
+<link href="style.css?v=4.20.77&amp;r=7" rel="stylesheet"/>
+<link rel="stylesheet" href="/assets/css/a33-theme.css?v=4.20.77&r=7" />
 </head>
 <body>
 <header class="a33-header" role="banner">
@@ -216,29 +237,72 @@
 <p class="cfg-eyebrow">Apartado</p>
 <h2 id="appearance-title">Apariencia</h2>
 </div>
-<span class="cfg-badge cfg-badge--soft">Preparado</span>
+<span class="cfg-badge cfg-badge--soft" id="cfg-theme-badge">Modo oscuro</span>
 </div>
-<p class="cfg-copy">Apartado reservado para modo claro, modo oscuro y opción automática según el sistema.</p>
-<div class="cfg-note-grid cfg-note-grid--dual">
-<div class="cfg-note-card">
-<strong>Estado</strong>
-<p>El espacio queda ordenado dentro de Configuración para desarrollarlo sin ensuciar otros módulos.</p>
+<p class="cfg-copy">Personaliza el modo visual de Suite A33.</p>
+<div class="cfg-appearance-status" aria-live="polite">
+<span>Modo actual</span>
+<strong id="cfg-theme-current">Modo actual: Oscuro</strong>
+<p id="cfg-theme-resolved">Tema aplicado: Oscuro.</p>
 </div>
-<div class="cfg-note-card">
-<strong>Navegación</strong>
-<p>Desde aquí podés volver al listado de Configuración o salir directo al Menú principal.</p>
+<div aria-label="Selector de modo visual" class="cfg-theme-selector" role="radiogroup">
+<button aria-checked="false" class="cfg-theme-option" data-theme-pref="dark" role="radio" type="button">
+<span class="cfg-theme-preview cfg-theme-preview--dark" aria-hidden="true">
+<span class="cfg-theme-preview-top"></span>
+<span class="cfg-theme-preview-card"></span>
+<span class="cfg-theme-preview-line"></span>
+</span>
+<span class="cfg-theme-option-copy">
+<strong>Oscuro</strong>
+<small>Modo A33 clásico, negro premium con acentos dorados y rojo A33.</small>
+</span>
+</button>
+<button aria-checked="false" class="cfg-theme-option" data-theme-pref="light" role="radio" type="button">
+<span class="cfg-theme-preview cfg-theme-preview--light" aria-hidden="true">
+<span class="cfg-theme-preview-top"></span>
+<span class="cfg-theme-preview-card"></span>
+<span class="cfg-theme-preview-line"></span>
+</span>
+<span class="cfg-theme-option-copy">
+<strong>Claro</strong>
+<small>Crema premium, texto oscuro y acentos A33. Nada de blanco quirúrgico.</small>
+</span>
+</button>
+<button aria-checked="false" class="cfg-theme-option" data-theme-pref="auto" role="radio" type="button">
+<span class="cfg-theme-preview cfg-theme-preview--auto" aria-hidden="true">
+<span class="cfg-theme-preview-split cfg-theme-preview-split--dark"></span>
+<span class="cfg-theme-preview-split cfg-theme-preview-split--light"></span>
+<span class="cfg-theme-preview-card"></span>
+<span class="cfg-theme-preview-line"></span>
+</span>
+<span class="cfg-theme-option-copy">
+<strong>Automático</strong>
+<small>Usa la preferencia visual del dispositivo o navegador.</small>
+</span>
+</button>
 </div>
-</div>
+<p class="cfg-inline-note cfg-theme-save-note">La selección se guarda automáticamente al tocar una opción. Sin botón adicional: un toque y listo.</p>
 </article>
 <aside aria-labelledby="appearance-side-title" class="cfg-card cfg-panel cfg-side-panel">
 <div class="cfg-panel-head cfg-panel-head--stack">
 <div>
-<p class="cfg-eyebrow">Contenido previsto</p>
-<h2 id="appearance-side-title">Apariencia</h2>
+<p class="cfg-eyebrow">Vista previa</p>
+<h2 id="appearance-side-title">Base global</h2>
+</div>
+<span class="cfg-badge cfg-badge--soft" id="cfg-theme-resolved-badge">Aplicado</span>
+</div>
+<div class="cfg-theme-live-preview" id="cfg-theme-live-preview" aria-label="Vista previa visual del tema actual">
+<div class="cfg-theme-live-top"></div>
+<div class="cfg-theme-live-card">
+<strong>Suite A33</strong>
+<p>Tarjeta premium con acento dorado, rojo A33 y lectura clara.</p>
+<span>Vista previa</span>
 </div>
 </div>
-<ul class="cfg-list">
-<li>Modo claro.</li><li>Modo oscuro.</li><li>Automático según el sistema.</li>
+<ul class="cfg-list cfg-theme-list">
+<li>Oscuro conserva la base visual actual de la Suite.</li>
+<li>Claro usa crema premium, no blanco puro.</li>
+<li>Automático responde a cambios del sistema cuando el navegador lo permite.</li>
 </ul>
 </aside>
 </div>
@@ -540,13 +604,13 @@
 </div>
 <input accept="application/json" id="backup-file-input" style="display:none;" type="file"/>
 <div aria-live="polite" class="a33-toast" id="a33-toast"></div>
-<script src="../assets/js/a33-release.js?v=4.20.77&amp;r=6"></script>
-<script src="../assets/js/a33-storage.js?v=4.20.77&amp;r=2"></script>
+<script src="../assets/js/a33-release.js?v=4.20.77&amp;r=7"></script>
+<script src="../assets/js/a33-storage.js?v=4.20.77&amp;r=7"></script>
 <script src="../assets/js/a33-firebase-config.js?v=4.20.77&amp;r=7"></script>
-<script src="../assets/js/a33-firebase-core.js?v=4.20.77&amp;r=8"></script>
-<script src="../assets/js/a33-firebase-auth.js?v=4.20.77&amp;r=8"></script>
-<script src="../assets/js/a33-firebase-access.js?v=4.20.77&amp;r=9"></script>
-<script src="../assets/js/a33-module-access.js?v=4.20.77&amp;r=1"></script>
-<script src="script.js?v=4.20.77&amp;r=17"></script>
+<script src="../assets/js/a33-firebase-core.js?v=4.20.77&amp;r=7"></script>
+<script src="../assets/js/a33-firebase-auth.js?v=4.20.77&amp;r=7"></script>
+<script src="../assets/js/a33-firebase-access.js?v=4.20.77&amp;r=7"></script>
+<script src="../assets/js/a33-module-access.js?v=4.20.77&amp;r=7"></script>
+<script src="script.js?v=4.20.77&amp;r=7"></script>
 </body>
 </html>

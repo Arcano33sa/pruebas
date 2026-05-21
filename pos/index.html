@@ -4,14 +4,36 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.77&r=32">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.77&r=7">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0f0f0f"/>
-<link rel="stylesheet" href="styles.css?v=4.20.77&r=32">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.77&r=32" />
+  <!-- Etapa 4/5 — aplicar Apariencia antes del CSS para evitar parpadeos -->
+<script>
+  (function(){
+    try{
+      var key = 'suite_a33_appearance_preference';
+      var pref = localStorage.getItem(key) || 'dark';
+      if (!/^(dark|light|auto)$/.test(pref)) pref = 'dark';
+      var resolved = pref === 'auto'
+        ? ((window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light')
+        : pref;
+      document.documentElement.setAttribute('data-a33-theme-preference', pref);
+      document.documentElement.setAttribute('data-theme', resolved);
+      var meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute('content', resolved === 'light' ? '#f4ead8' : '#060606');
+    }catch(_){
+      document.documentElement.setAttribute('data-a33-theme-preference', 'dark');
+      document.documentElement.setAttribute('data-theme', 'dark');
+    }
+  })();
+</script>
+<link rel="stylesheet" href="styles.css?v=4.20.77&r=7">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.77&r=7" />
+  <link rel="stylesheet" href="/assets/css/a33-theme.css?v=4.20.77&r=7" />
+  <script src="/assets/js/a33-theme.js?v=4.20.77&r=7"></script>
 </head>
 <body>
   <header class="a33-header" role="banner">
@@ -1812,17 +1834,17 @@
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
-  <script src="/assets/js/a33-release.js?v=4.20.77&r=31"></script>
+  <script src="/assets/js/a33-release.js?v=4.20.77&r=7"></script>
 
-<script src="/assets/js/a33-storage.js?v=4.20.77&r=31"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.77&r=32"></script>
-<script src="/assets/js/a33-build.js?v=4.20.77&r=32"></script>
+<script src="/assets/js/a33-storage.js?v=4.20.77&r=7"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.77&r=7"></script>
+<script src="/assets/js/a33-build.js?v=4.20.77&r=7"></script>
 <script>
   (function(){
     try{
       const relObj = (window.A33_RELEASE || {});
       const v = (relObj && relObj.suiteVersion) ? String(relObj.suiteVersion) : '4.20.77';
-      const rev = '32'; // POS cache bump local — Configuración PWA base visual
+      const rev = (relObj && relObj.rev !== undefined && relObj.rev !== null) ? String(relObj.rev) : '7'; // POS cache bump local — Apariencia Etapa 5 global
       try{ window.A33_VERSION = v; }catch(_){ }
       try{ window.A33_ASSET_REV = rev; }catch(_){ }
       try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r'+rev).toString(); }catch(_){ }
@@ -1842,12 +1864,12 @@
   })();
 </script>
 
-<script src="app.js?v=4.20.77&r=32"></script>
-<script src="/assets/js/a33-input-ux.js?v=4.20.77&r=32"></script>
+<script src="app.js?v=4.20.77&r=7"></script>
+<script src="/assets/js/a33-input-ux.js?v=4.20.77&r=7"></script>
 <script>
   (function(){
     const BUILD = (window.A33_VERSION || '4.20.77').toString();
-    const REV = (window.A33_ASSET_REV || '32').toString();
+    const REV = (window.A33_ASSET_REV || '7').toString();
     const SW_URL = './sw.js?v=' + encodeURIComponent(BUILD) + '&r=' + encodeURIComponent(REV);
     if (!('serviceWorker' in navigator)) return;
     navigator.serviceWorker.register(SW_URL).then((reg) => {

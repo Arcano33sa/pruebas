@@ -2362,6 +2362,212 @@
     }
   }
 
+
+  const APPEARANCE_STORAGE_KEY = 'suite_a33_appearance_preference';
+  const APPEARANCE_DEFAULT = 'dark';
+  const APPEARANCE_OPTIONS = {
+    dark: { label: 'Oscuro', badge: 'Modo oscuro' },
+    light: { label: 'Claro', badge: 'Modo claro' },
+    auto: { label: 'Automático', badge: 'Modo automático' }
+  };
+
+  const appearanceRuntime = {
+    preference: APPEARANCE_DEFAULT,
+    resolved: 'dark',
+    mql: null,
+    listening: false
+  };
+
+  function normalizeAppearancePreference(value){
+    const v = String(value || '').trim().toLowerCase();
+    return Object.prototype.hasOwnProperty.call(APPEARANCE_OPTIONS, v) ? v : APPEARANCE_DEFAULT;
+  }
+
+  function getAppearanceSystemTheme(){
+    try{
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
+    }catch(_){ }
+    return 'light';
+  }
+
+  function resolveAppearanceTheme(preference){
+    const pref = normalizeAppearancePreference(preference);
+    return pref === 'auto' ? getAppearanceSystemTheme() : pref;
+  }
+
+  function readAppearancePreference(){
+    try{
+      if (window.A33Storage && typeof window.A33Storage.getItem === 'function'){
+        const v = window.A33Storage.getItem(APPEARANCE_STORAGE_KEY);
+        if (v !== undefined && v !== null && String(v).trim() !== '') return normalizeAppearancePreference(v);
+      }
+    }catch(_){ }
+    try{
+      return normalizeAppearancePreference(localStorage.getItem(APPEARANCE_STORAGE_KEY));
+    }catch(_){ return APPEARANCE_DEFAULT; }
+  }
+
+  function writeAppearancePreference(preference){
+    const pref = normalizeAppearancePreference(preference);
+    let ok = false;
+    try{
+      if (window.A33Storage && typeof window.A33Storage.setItem === 'function'){
+        window.A33Storage.setItem(APPEARANCE_STORAGE_KEY, pref);
+        ok = true;
+      }
+    }catch(_){ }
+    try{
+      localStorage.setItem(APPEARANCE_STORAGE_KEY, pref);
+      ok = true;
+    }catch(_){ }
+    return ok;
+  }
+
+  function updateAppearanceMetaColor(resolved){
+    try{
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute('content', resolved === 'light' ? '#f4ead8' : '#060606');
+    }catch(_){ }
+  }
+
+  function publishAppearanceApi(){
+    try{
+      window.A33Theme = {
+        storageKey: APPEARANCE_STORAGE_KEY,
+        getPreference: () => appearanceRuntime.preference,
+        getResolvedTheme: () => appearanceRuntime.resolved,
+        setPreference: (preference) => {
+          const pref = normalizeAppearancePreference(preference);
+          writeAppearancePreference(pref);
+          applyAppearanceTheme(pref, { render: true, notify: true });
+          return pref;
+        },
+        apply: () => applyAppearanceTheme(readAppearancePreference(), { render: true, notify: true })
+      };
+    }catch(_){ }
+  }
+
+  function applyAppearanceTheme(preference, options = {}){
+    const pref = normalizeAppearancePreference(preference);
+    const resolved = resolveAppearanceTheme(pref);
+    appearanceRuntime.preference = pref;
+    appearanceRuntime.resolved = resolved;
+
+    try{
+      document.documentElement.setAttribute('data-a33-theme-preference', pref);
+      document.documentElement.setAttribute('data-theme', resolved);
+      if (document.body){
+        document.body.setAttribute('data-a33-theme-preference', pref);
+        document.body.setAttribute('data-theme', resolved);
+      }
+    }catch(_){ }
+
+    updateAppearanceMetaColor(resolved);
+    publishAppearanceApi();
+
+    if (options.render !== false) renderAppearanceSection();
+    if (options.notify !== false){
+      try{
+        window.dispatchEvent(new CustomEvent('a33:theme-change', {
+          detail: { preference: pref, resolved }
+        }));
+      }catch(_){ }
+    }
+
+    return { preference: pref, resolved };
+  }
+
+  function getAppearancePreferenceLabel(preference){
+    const pref = normalizeAppearancePreference(preference);
+    return APPEARANCE_OPTIONS[pref].label;
+  }
+
+  function getAppearanceResolvedLabel(resolved){
+    return resolved === 'light' ? 'Claro' : 'Oscuro';
+  }
+
+  function renderAppearanceSection(){
+    const pref = normalizeAppearancePreference(appearanceRuntime.preference || readAppearancePreference());
+    const resolved = resolveAppearanceTheme(pref);
+    appearanceRuntime.preference = pref;
+    appearanceRuntime.resolved = resolved;
+
+    const current = document.getElementById('cfg-theme-current');
+    if (current) current.textContent = `Modo actual: ${getAppearancePreferenceLabel(pref)}`;
+
+    const resolvedText = document.getElementById('cfg-theme-resolved');
+    if (resolvedText){
+      resolvedText.textContent = pref === 'auto'
+        ? `Tema aplicado: ${getAppearanceResolvedLabel(resolved)} según el sistema.`
+        : `Tema aplicado: ${getAppearanceResolvedLabel(resolved)}.`;
+    }
+
+    const badge = document.getElementById('cfg-theme-badge');
+    if (badge) badge.textContent = APPEARANCE_OPTIONS[pref].badge;
+
+    const resolvedBadge = document.getElementById('cfg-theme-resolved-badge');
+    if (resolvedBadge) resolvedBadge.textContent = `Aplicado: ${getAppearanceResolvedLabel(resolved)}`;
+
+    const options = Array.from(document.querySelectorAll('[data-theme-pref]'));
+    options.forEach((option) => {
+      const active = normalizeAppearancePreference(option.dataset.themePref) === pref;
+      option.classList.toggle('is-active', active);
+      option.setAttribute('aria-checked', active ? 'true' : 'false');
+    });
+  }
+
+  function setupAppearanceSystemListener(){
+    if (appearanceRuntime.listening) return;
+    appearanceRuntime.listening = true;
+    try{
+      if (!window.matchMedia) return;
+      const mql = window.matchMedia('(prefers-color-scheme: dark)');
+      appearanceRuntime.mql = mql;
+      const handler = () => {
+        if (appearanceRuntime.preference === 'auto'){
+          applyAppearanceTheme('auto', { render: true, notify: true });
+        }
+      };
+      if (typeof mql.addEventListener === 'function') mql.addEventListener('change', handler);
+      else if (typeof mql.addListener === 'function') mql.addListener(handler);
+    }catch(_){ }
+  }
+
+  function initAppearanceSection(){
+    const options = Array.from(document.querySelectorAll('[data-theme-pref]'));
+    if (!options.length){
+      applyAppearanceTheme(readAppearancePreference(), { render: false, notify: false });
+      return;
+    }
+
+    options.forEach((option) => {
+      option.addEventListener('click', () => {
+        const pref = normalizeAppearancePreference(option.dataset.themePref);
+        const ok = writeAppearancePreference(pref);
+        applyAppearanceTheme(pref, { render: true, notify: true });
+        showToast(ok ? `Apariencia: ${getAppearancePreferenceLabel(pref)}.` : 'No se pudo guardar Apariencia en este navegador.');
+      });
+      option.addEventListener('keydown', (event) => {
+        const idx = options.indexOf(option);
+        if (idx < 0) return;
+        let nextIdx = null;
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIdx = (idx + 1) % options.length;
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIdx = (idx - 1 + options.length) % options.length;
+        if (event.key === 'Home') nextIdx = 0;
+        if (event.key === 'End') nextIdx = options.length - 1;
+        if (nextIdx === null) return;
+        event.preventDefault();
+        const next = options[nextIdx];
+        if (next && typeof next.focus === 'function') next.focus();
+      });
+    });
+
+    setupAppearanceSystemListener();
+    applyAppearanceTheme(readAppearancePreference(), { render: true, notify: false });
+  }
+
+  applyAppearanceTheme(readAppearancePreference(), { render: false, notify: false });
+
   function initConfigTabs(){
     const cards = Array.from(document.querySelectorAll('.cfg-tab[data-target]'));
     const panels = Array.from(document.querySelectorAll('.cfg-panel-view[data-panel]'));
@@ -2620,6 +2826,7 @@
     initConfigNavigation();
     initPwaSection();
     initIdentitySection();
+    initAppearanceSection();
     initUsersSection();
     initFirebaseStatus();
 
