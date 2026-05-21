@@ -33,7 +33,7 @@
 <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&amp;family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
 <link href="../assets/css/a33-header.css?v=4.20.77&amp;r=7" rel="stylesheet"/>
-<link href="style.css?v=4.20.77&amp;r=11" rel="stylesheet"/>
+<link href="style.css?v=4.20.77&amp;r=14" rel="stylesheet"/>
 <link rel="stylesheet" href="/assets/css/a33-theme.css?v=4.20.77&r=7" />
 </head>
 <body>
@@ -320,7 +320,7 @@
 </div>
 <span class="cfg-badge cfg-badge--soft" id="cfg-reports-save-state">Preferencias generales</span>
 </div>
-<p class="cfg-copy">Configuración inicial para reportes futuros: Identidad, formato, exportaciones, privacidad, POS y vista previa controlada.</p>
+<p class="cfg-copy">Configuración inicial para reportes futuros: Identidad, formato, Moneda, exportaciones, privacidad, POS y vista previa controlada.</p>
 <div class="cfg-reports-hero" aria-label="Estado funcional de Reportes">
 <div>
 <span class="cfg-report-mini-label">Guardado funcional</span>
@@ -386,6 +386,22 @@
 <div class="cfg-report-format-item"><span>Fecha y hora</span><strong>DD/MM/AAAA HH:mm</strong><small>Hora militar</small></div>
 <div class="cfg-report-format-item"><span>AM/PM</span><strong>No usar</strong><small>Sin AM/PM</small></div>
 </div>
+</section>
+<section class="cfg-report-card cfg-report-card--wide cfg-reports-currency-card" aria-labelledby="reports-currency-title">
+<div class="cfg-report-card-head">
+<span class="cfg-report-icon">C$</span>
+<div>
+<h3 id="reports-currency-title">Moneda para reportes</h3>
+<p>Referencia segura leída desde Configuración → Moneda. Prepara reportes futuros sin recalcular montos ni tocar exportaciones reales.</p>
+</div>
+</div>
+<div class="cfg-currency-preview-grid cfg-reports-currency-grid" aria-label="Referencia monetaria para reportes futuros">
+<div class="cfg-currency-preview-item"><span>Moneda principal</span><strong id="cfg-reports-currency-primary">C$ / NIO</strong><small id="cfg-reports-currency-primary-name">Córdoba nicaragüense</small></div>
+<div class="cfg-currency-preview-item"><span>Moneda secundaria</span><strong id="cfg-reports-currency-secondary">US$ / USD</strong><small id="cfg-reports-currency-secondary-name">Dólar estadounidense</small></div>
+<div class="cfg-currency-preview-item"><span>T/C actual</span><strong id="cfg-reports-currency-rate">No configurado</strong><small id="cfg-reports-currency-rate-state">Estado seguro: sin conversiones automáticas.</small></div>
+<div class="cfg-currency-preview-item"><span>Última actualización</span><strong id="cfg-reports-currency-updated-at">Sin registros</strong><small>Fecha/hora proveniente de Moneda.</small></div>
+</div>
+<div class="cfg-report-currency-note" aria-live="polite" id="cfg-reports-currency-note">Estos valores provienen de Configuración → Moneda.</div>
 </section>
 <section class="cfg-report-card cfg-report-card--wide" aria-labelledby="reports-export-title">
 <div class="cfg-report-card-head">
@@ -520,7 +536,7 @@
 </section>
 <div class="cfg-report-final-note" aria-label="Cierre funcional de Reportes">
 <strong>Aplicación futura por módulos</strong>
-<p>Reportes actualmente guarda preferencias generales. La aplicación real en POS, Finanzas, Inventario y otros módulos se hará en etapas específicas para evitar romper partes sensibles.</p>
+<p>Reportes actualmente guarda preferencias generales y lee Moneda como referencia segura. La aplicación real en POS, Finanzas, Inventario y otros módulos se hará en etapas específicas para evitar romper partes sensibles.</p>
 </div>
 <div class="cfg-actions cfg-reports-actions">
 <button class="cfg-btn cfg-btn-primary" id="cfg-reports-save" type="submit">Guardar preferencias</button>
@@ -539,6 +555,7 @@
 <ul class="cfg-list">
 <li>Guarda preferencias de Reportes en una clave aislada.</li>
 <li>Lee Identidad solo como referencia compacta.</li>
+<li>Lee Moneda como referencia segura: C$ / NIO, US$ / USD, T/C y última actualización.</li>
 <li>Mantiene fecha DD/MM/AAAA y fecha-hora DD/MM/AAAA HH:mm.</li>
 <li>Prepara nombre base de archivos usando Identidad o fallback SuiteA33.</li>
 <li>Protege Finanzas como Excel exclusivo, sin CSV ni TXT.</li>
@@ -559,37 +576,122 @@
 <button class="cfg-nav-chip cfg-nav-chip--back" data-cfg-back="" type="button">← Configuración</button>
 <a aria-label="Ir al Menú principal" class="cfg-nav-chip cfg-nav-chip--home" href="../index.html">⌂ Menú principal</a>
 </div>
-<div class="cfg-view-grid">
-<article aria-labelledby="currency-title" class="cfg-card cfg-panel cfg-panel--main">
+<div class="cfg-view-grid cfg-currency-view">
+<article aria-labelledby="currency-title" class="cfg-card cfg-panel cfg-panel--main cfg-currency-panel">
 <div class="cfg-panel-head">
 <div>
 <p class="cfg-eyebrow">Apartado</p>
 <h2 id="currency-title">Moneda</h2>
 </div>
-<span class="cfg-badge cfg-badge--soft">Preparado</span>
+<span class="cfg-badge cfg-badge--soft" id="cfg-currency-save-state">Base local</span>
 </div>
-<p class="cfg-copy">Apartado reservado para parámetros monetarios globales y criterios de visualización.</p>
-<div class="cfg-note-grid cfg-note-grid--dual">
-<div class="cfg-note-card">
-<strong>Estado</strong>
-<p>El espacio queda ordenado dentro de Configuración para desarrollarlo sin ensuciar otros módulos.</p>
+<p class="cfg-copy">Configuración inicial de moneda para Suite A33: Córdoba nicaragüense como moneda principal, dólar estadounidense como moneda secundaria y tipo de cambio manual guardado localmente.</p>
+<div class="cfg-currency-hero" aria-label="Estado funcional de Moneda">
+<div>
+<span class="cfg-report-mini-label">Tipo de cambio manual</span>
+<strong>Último T/C guardado: <span id="cfg-currency-hero-rate">Sin configurar</span></strong>
+<p id="cfg-currency-hero-copy">Este apartado guarda el parámetro monetario base y lo lee desde el motor central seguro. La conexión con POS, Finanzas y demás módulos queda para etapas posteriores.</p>
 </div>
-<div class="cfg-note-card">
-<strong>Navegación</strong>
-<p>Desde aquí podés volver al listado de Configuración o salir directo al Menú principal.</p>
+<span class="cfg-currency-seal">C$ / US$</span>
+</div>
+<form aria-label="Configuración de Moneda" class="cfg-currency-form" id="cfg-currency-form" novalidate="">
+<section class="cfg-currency-card" aria-labelledby="cfg-currency-primary-title">
+<div class="cfg-report-card-head">
+<span class="cfg-report-icon">C$</span>
+<div>
+<h3 id="cfg-currency-primary-title">Moneda principal</h3>
+<p>Moneda fija para la operación base de la Suite.</p>
 </div>
 </div>
+<div class="cfg-currency-info-grid" aria-label="Datos de moneda principal">
+<div><span>Nombre</span><strong>Córdoba nicaragüense</strong></div>
+<div><span>Símbolo</span><strong>C$</strong></div>
+<div><span>Código</span><strong>NIO</strong></div>
+</div>
+</section>
+<section class="cfg-currency-card" aria-labelledby="cfg-currency-secondary-title">
+<div class="cfg-report-card-head">
+<span class="cfg-report-icon">US$</span>
+<div>
+<h3 id="cfg-currency-secondary-title">Moneda secundaria</h3>
+<p>Moneda fija para referencias en dólares estadounidenses.</p>
+</div>
+</div>
+<div class="cfg-currency-info-grid" aria-label="Datos de moneda secundaria">
+<div><span>Nombre</span><strong>Dólar estadounidense</strong></div>
+<div><span>Símbolo</span><strong>US$</strong></div>
+<div><span>Código</span><strong>USD</strong></div>
+</div>
+</section>
+<section class="cfg-currency-card cfg-currency-card--wide" aria-labelledby="cfg-currency-rate-title">
+<div class="cfg-report-card-head">
+<span class="cfg-report-icon">⇄</span>
+<div>
+<h3 id="cfg-currency-rate-title">Tipo de cambio</h3>
+<p>Manual, editable y guardado únicamente al presionar Guardar. Debe ser mayor que 0 y tener máximo 2 decimales.</p>
+</div>
+</div>
+<div class="cfg-currency-rate-grid">
+<label class="cfg-report-field cfg-currency-rate-field" for="cfg-currency-rate-input">
+<span>T/C manual</span>
+<input autocomplete="off" id="cfg-currency-rate-input" inputmode="decimal" maxlength="12" name="currencyRate" placeholder="Ej. 36.80" type="text"/>
+<small>Usá punto o coma decimal. Al guardar se mostrará siempre con 2 decimales.</small>
+</label>
+<div class="cfg-currency-last-update" aria-live="polite">
+<span>Última actualización</span>
+<strong id="cfg-currency-updated-at">Sin registros</strong>
+<small>No cambia si el guardado falla.</small>
+</div>
+</div>
+<div class="cfg-currency-message" id="cfg-currency-status" role="status" aria-live="polite">El T/C inicia vacío si aún no hay dato guardado.</div>
+</section>
+<section class="cfg-currency-card cfg-currency-card--wide" aria-labelledby="cfg-currency-preview-title">
+<div class="cfg-report-card-head">
+<span class="cfg-report-icon">◈</span>
+<div>
+<h3 id="cfg-currency-preview-title">Vista previa monetaria</h3>
+<p>Ejemplo visual del formato base. Es solo referencia de Configuración en esta etapa.</p>
+</div>
+</div>
+<div class="cfg-currency-preview-grid" aria-label="Vista previa de moneda">
+<div class="cfg-currency-preview-item"><span>Córdoba</span><strong id="cfg-currency-preview-primary">C$1,250.00</strong><small>Formato principal</small></div>
+<div class="cfg-currency-preview-item"><span>Dólar</span><strong id="cfg-currency-preview-secondary">US$35.50</strong><small>Formato secundario</small></div>
+<div class="cfg-currency-preview-item"><span>Tipo de cambio</span><strong id="cfg-currency-preview-rate">T/C no configurado</strong><small id="cfg-currency-preview-note">Configurá un T/C válido para activar la vista previa.</small></div>
+</div>
+</section>
+<div class="cfg-report-final-note cfg-currency-safe-note" aria-label="Alcance protegido de Moneda">
+<strong>Alcance de esta etapa</strong>
+<p>Moneda queda funcional para guardar el último T/C, sin conectar todavía POS, Ventas, Caja Chica, Finanzas, Reportes reales, Inventario, Reempaque, Calculadora ni Agenda/Pedidos.</p>
+</div>
+<div class="cfg-actions cfg-currency-actions">
+<button class="cfg-btn cfg-btn-primary" id="cfg-currency-save" type="submit">Guardar</button>
+<p class="cfg-action-inline-note" id="cfg-currency-inline-note">Solo se guarda el último T/C. Sin historial, sin automatismos y sin tocar otros módulos.</p>
+</div>
+</form>
 </article>
-<aside aria-labelledby="currency-side-title" class="cfg-card cfg-panel cfg-side-panel">
+<aside aria-labelledby="currency-side-title" class="cfg-card cfg-panel cfg-side-panel cfg-currency-side">
 <div class="cfg-panel-head cfg-panel-head--stack">
 <div>
-<p class="cfg-eyebrow">Contenido previsto</p>
+<p class="cfg-eyebrow">Base monetaria</p>
 <h2 id="currency-side-title">Moneda</h2>
 </div>
+<span class="cfg-badge cfg-badge--soft" id="cfg-currency-side-badge">Aislado</span>
 </div>
 <ul class="cfg-list">
-<li>Moneda principal.</li><li>Formato de importes.</li><li>Parámetros generales de tipo de cambio.</li>
+<li>Moneda principal fija: Córdoba nicaragüense, C$, NIO.</li>
+<li>Moneda secundaria fija: Dólar estadounidense, US$, USD.</li>
+<li>T/C manual editable desde Configuración.</li>
+<li>Motor central disponible para lectura, formato y conversión segura.</li>
+<li>Guardado con botón Guardar.</li>
+<li>Solo conserva el último T/C, sin historial.</li>
+<li>Última actualización en formato DD/MM/AAAA HH:mm.</li>
+<li>No conecta todavía con módulos reales.</li>
+<li>Respeta Oscuro, Claro y Automático/Sistema.</li>
 </ul>
+<div class="cfg-report-lockbox cfg-currency-lockbox">
+<strong>Regla de seguridad</strong>
+<p>Esta etapa prepara la llave; todavía no abre la bóveda de POS ni Finanzas. Paso firme, sin patinar en córdobas.</p>
+</div>
 </aside>
 </div>
 </section><section aria-hidden="true" aria-labelledby="cfg-tab-users" class="cfg-panel-view" data-panel="security" hidden="" id="cfg-panel-users" role="tabpanel">
@@ -814,13 +916,15 @@
 </div>
 <input accept="application/json" id="backup-file-input" style="display:none;" type="file"/>
 <div aria-live="polite" class="a33-toast" id="a33-toast"></div>
-<script src="../assets/js/a33-release.js?v=4.20.77&amp;r=7"></script>
+<script src="../assets/js/a33-release.js?v=4.20.77&amp;r=10"></script>
 <script src="../assets/js/a33-storage.js?v=4.20.77&amp;r=7"></script>
+<script src="../assets/js/a33-currency.js?v=4.20.77&amp;r=14"></script>
+<script src="../assets/js/a33-export-currency.js?v=4.20.77&amp;r=2"></script>
 <script src="../assets/js/a33-firebase-config.js?v=4.20.77&amp;r=7"></script>
 <script src="../assets/js/a33-firebase-core.js?v=4.20.77&amp;r=7"></script>
 <script src="../assets/js/a33-firebase-auth.js?v=4.20.77&amp;r=7"></script>
 <script src="../assets/js/a33-firebase-access.js?v=4.20.77&amp;r=7"></script>
 <script src="../assets/js/a33-module-access.js?v=4.20.77&amp;r=7"></script>
-<script src="script.js?v=4.20.77&amp;r=11"></script>
+<script src="script.js?v=4.20.77&amp;r=14"></script>
 </body>
 </html>

@@ -2676,3 +2676,285 @@ html[data-theme="light"] .cfg-report-final-note{
     justify-self:start;
   }
 }
+
+/* Configuración → Moneda: Etapa 1 estructura visual, T/C manual y guardado base */
+.cfg-currency-view{
+  align-items:start;
+}
+
+.cfg-currency-panel{
+  overflow:visible;
+}
+
+.cfg-currency-form,
+.cfg-currency-hero,
+.cfg-currency-card,
+.cfg-currency-lockbox{
+  position:relative;
+  z-index:1;
+}
+
+.cfg-currency-hero{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:18px;
+  margin:18px 0;
+  padding:18px;
+  border-radius:22px;
+  border:1px solid rgba(221,191,100,0.22);
+  background:
+    radial-gradient(circle at top right, rgba(221,191,100,0.12), transparent 36%),
+    linear-gradient(180deg, rgba(123,24,24,0.18), rgba(12,12,12,0.96));
+}
+
+.cfg-currency-hero strong{
+  display:block;
+  margin-bottom:6px;
+  color:var(--cfg-gold);
+  font-size:1.05rem;
+}
+
+.cfg-currency-hero p{
+  margin:0;
+  color:var(--cfg-muted);
+  line-height:1.55;
+}
+
+.cfg-currency-seal{
+  flex:0 0 auto;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:86px;
+  height:68px;
+  padding:0 14px;
+  border-radius:999px;
+  border:1px solid rgba(221,191,100,0.36);
+  background:rgba(0,0,0,0.28);
+  color:var(--cfg-gold);
+  font-family:"Cinzel", ui-serif, Georgia, serif;
+  font-weight:800;
+  letter-spacing:0.05em;
+  box-shadow:0 14px 30px rgba(0,0,0,0.22);
+  white-space:nowrap;
+}
+
+.cfg-currency-form{
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+}
+
+.cfg-currency-card{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+  min-height:0;
+  padding:16px;
+  border-radius:20px;
+  border:1px solid rgba(221,191,100,0.16);
+  background:linear-gradient(180deg, rgba(18,18,18,0.96), rgba(10,10,10,0.98));
+}
+
+.cfg-currency-info-grid,
+.cfg-currency-preview-grid{
+  display:grid;
+  grid-template-columns:repeat(3, minmax(0, 1fr));
+  gap:10px;
+}
+
+.cfg-currency-info-grid div,
+.cfg-currency-preview-item,
+.cfg-currency-last-update{
+  min-height:96px;
+  padding:14px;
+  border-radius:18px;
+  border:1px solid rgba(221,191,100,0.16);
+  background:rgba(255,255,255,0.035);
+}
+
+.cfg-currency-info-grid span,
+.cfg-currency-preview-item span,
+.cfg-currency-last-update span{
+  display:block;
+  color:var(--cfg-muted);
+  font-size:0.78rem;
+  font-weight:800;
+  text-transform:uppercase;
+  letter-spacing:0.07em;
+}
+
+.cfg-currency-info-grid strong,
+.cfg-currency-preview-item strong,
+.cfg-currency-last-update strong{
+  display:block;
+  margin:8px 0;
+  color:var(--cfg-gold);
+  font-size:1rem;
+  line-height:1.35;
+  overflow-wrap:anywhere;
+}
+
+.cfg-currency-preview-item small,
+.cfg-currency-last-update small{
+  display:block;
+  color:var(--cfg-muted);
+  line-height:1.35;
+}
+
+.cfg-currency-rate-grid{
+  display:grid;
+  grid-template-columns:minmax(0, 1.05fr) minmax(0, .95fr);
+  gap:12px;
+  align-items:stretch;
+}
+
+.cfg-currency-rate-field input{
+  font-weight:800;
+  letter-spacing:0.03em;
+}
+
+.cfg-currency-message{
+  min-height:42px;
+  padding:11px 13px;
+  border-radius:16px;
+  border:1px solid rgba(221,191,100,0.14);
+  background:rgba(255,255,255,0.035);
+  color:var(--cfg-muted);
+  line-height:1.45;
+  font-size:0.88rem;
+}
+
+.cfg-currency-message[data-state="ok"]{
+  border-color:rgba(129,180,113,0.42);
+  color:#b9e6c3;
+}
+
+.cfg-currency-message[data-state="error"]{
+  border-color:rgba(190,55,55,0.62);
+  color:#ffcdcd;
+}
+
+.cfg-currency-actions{
+  align-items:center;
+  margin-bottom:0;
+}
+
+.cfg-currency-actions .cfg-action-inline-note{
+  flex:1 1 260px;
+  margin:0;
+}
+
+.cfg-currency-side .cfg-list{
+  margin-bottom:16px;
+}
+
+html[data-theme="light"] .cfg-currency-hero{
+  background:
+    radial-gradient(circle at top right, rgba(157,111,31,0.14), transparent 38%),
+    linear-gradient(180deg, rgba(123,24,24,0.08), rgba(255,248,234,0.96));
+  border-color:rgba(139,98,30,0.24);
+}
+
+html[data-theme="light"] .cfg-currency-seal{
+  background:rgba(255,255,255,0.42);
+  border-color:rgba(139,98,30,0.28);
+  box-shadow:0 14px 28px rgba(92,62,24,0.12);
+}
+
+html[data-theme="light"] .cfg-currency-card,
+html[data-theme="light"] .cfg-currency-info-grid div,
+html[data-theme="light"] .cfg-currency-preview-item,
+html[data-theme="light"] .cfg-currency-last-update,
+html[data-theme="light"] .cfg-currency-message{
+  background:rgba(255,255,255,0.46);
+  border-color:rgba(139,98,30,0.16);
+  color:var(--cfg-text);
+}
+
+html[data-theme="light"] .cfg-currency-message[data-state="ok"]{
+  border-color:rgba(57,134,80,0.36);
+  color:#2b6e3d;
+}
+
+html[data-theme="light"] .cfg-currency-message[data-state="error"]{
+  border-color:rgba(160,44,44,0.46);
+  color:#8e2222;
+}
+
+@media (max-width: 980px){
+  .cfg-currency-info-grid,
+  .cfg-currency-preview-grid,
+  .cfg-currency-rate-grid{
+    grid-template-columns:1fr;
+  }
+}
+
+@media (max-width: 560px){
+  .cfg-currency-hero{
+    align-items:flex-start;
+    flex-direction:column;
+  }
+
+  .cfg-currency-seal{
+    min-width:0;
+    width:auto;
+    height:58px;
+  }
+}
+
+.cfg-reports-currency-card{
+  position: relative;
+}
+
+.cfg-reports-currency-grid{
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.cfg-report-currency-note{
+  margin-top: 12px;
+  border: 1px solid rgba(212, 175, 55, .22);
+  border-radius: 16px;
+  padding: 12px 14px;
+  color: rgba(255,255,255,.78);
+  background: rgba(255,255,255,.04);
+  font-size: .9rem;
+  line-height: 1.45;
+}
+
+.cfg-report-currency-note[data-state="ok"]{
+  border-color: rgba(212, 175, 55, .36);
+  background: rgba(212, 175, 55, .08);
+}
+
+.cfg-reports-currency-card .is-empty{
+  color: rgba(255,255,255,.58);
+}
+
+html[data-theme="light"] .cfg-report-currency-note{
+  color: rgba(47, 32, 23, .74);
+  background: rgba(255,255,255,.66);
+  border-color: rgba(96, 51, 32, .14);
+}
+
+html[data-theme="light"] .cfg-report-currency-note[data-state="ok"]{
+  border-color: rgba(153, 111, 29, .26);
+  background: rgba(212, 175, 55, .13);
+}
+
+html[data-theme="light"] .cfg-reports-currency-card .is-empty{
+  color: rgba(47, 32, 23, .55);
+}
+
+@media (max-width: 980px){
+  .cfg-reports-currency-grid{
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px){
+  .cfg-reports-currency-grid{
+    grid-template-columns: 1fr;
+  }
+}

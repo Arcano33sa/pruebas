@@ -4,14 +4,14 @@
 */
 
 // A33_RELEASE (fuente única)
-try { importScripts('/assets/js/a33-release.js?v=4.20.77&r=7'); } catch (e) {}
+try { importScripts('/assets/js/a33-release.js?v=4.20.77&r=10'); } catch (e) {}
 
 const SW_VERSION = (self.A33_RELEASE && (self.A33_RELEASE.suiteVersion || self.A33_RELEASE.SuiteVersion))
   ? String(self.A33_RELEASE.suiteVersion || self.A33_RELEASE.SuiteVersion)
   : '4.20.77';
 const SW_REV = (self.A33_RELEASE && (self.A33_RELEASE.rev !== undefined && self.A33_RELEASE.rev !== null))
   ? String(self.A33_RELEASE.rev)
-  : '2';
+  : '10';
 
 const MODULE = 'centro_mando';
 const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}-r${SW_REV}`;
@@ -24,7 +24,7 @@ const PRECACHE_URLS = [
   './manifest.webmanifest?v=4.20.77&r=7',
   './offline.html',
   './offline.html?v=4.20.77&r=7',
-  '/assets/js/a33-release.js?v=4.20.77&r=7'
+  '/assets/js/a33-release.js?v=4.20.77&r=10'
 ];
 
 function sameOrigin(url){

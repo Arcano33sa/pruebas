@@ -1015,12 +1015,19 @@
     const cleanIndexed = sanitizeIndexedDbPayload(dataIndexedDB, dbSchemas, dbVersions);
 
     const backup = {
-      meta: {
-        appName: BACKUP_APP_NAME,
-        exportedAt: new Date().toISOString(),
-        dbVersions: cleanIndexed.versions,
-        dbSchemas: cleanIndexed.schemas
-      },
+      meta: (window.A33ExportCurrency && typeof window.A33ExportCurrency.decorateJsonMeta === 'function')
+        ? window.A33ExportCurrency.decorateJsonMeta({
+          appName: BACKUP_APP_NAME,
+          exportedAt: new Date().toISOString(),
+          dbVersions: cleanIndexed.versions,
+          dbSchemas: cleanIndexed.schemas
+        })
+        : {
+          appName: BACKUP_APP_NAME,
+          exportedAt: new Date().toISOString(),
+          dbVersions: cleanIndexed.versions,
+          dbSchemas: cleanIndexed.schemas
+        },
       data: {
         indexedDB: cleanIndexed.data,
         localStorage: sanitizeSuiteLocalStorageMap(lsSnap.data)
@@ -2626,6 +2633,7 @@
       if (shellHead) shellHead.hidden = true;
       setCardState(target);
       setPanelState(target);
+      if (target === 'reports') renderReportsCurrencyReference();
 
       if (focusPanel){
         const navButton = panel.querySelector('[data-cfg-back]');
@@ -3141,6 +3149,106 @@
     el.classList.toggle('is-empty', !clean);
   }
 
+  function getReportsCurrencyState(){
+    const fallbackSettings = {
+      primary: { name: 'Córdoba nicaragüense', symbol: 'C$', code: 'NIO' },
+      secondary: { name: 'Dólar estadounidense', symbol: 'US$', code: 'USD' },
+      exchangeRate: '',
+      updatedAt: ''
+    };
+    try{
+      if (window.A33Currency && typeof window.A33Currency.getState === 'function'){
+        return window.A33Currency.getState();
+      }
+    }catch(_){ }
+    try{
+      const key = (window.A33Currency && window.A33Currency.storageKey) || 'suite_a33_currency_settings_v1';
+      const raw = localStorage.getItem(key);
+      const parsed = raw ? JSON.parse(raw) : fallbackSettings;
+      const exchangeRate = String(parsed && parsed.exchangeRate || '').trim();
+      const normalizedRate = exchangeRate && window.A33Currency && typeof window.A33Currency.normalizeExchangeRateValue === 'function'
+        ? window.A33Currency.normalizeExchangeRateValue(exchangeRate)
+        : exchangeRate;
+      return {
+        ok: true,
+        settings: {
+          ...fallbackSettings,
+          ...(parsed && typeof parsed === 'object' ? parsed : {}),
+          primary: fallbackSettings.primary,
+          secondary: fallbackSettings.secondary,
+          exchangeRate: normalizedRate,
+          updatedAt: String(parsed && parsed.updatedAt || '').trim()
+        },
+        primary: fallbackSettings.primary,
+        secondary: fallbackSettings.secondary,
+        exchangeRate: normalizedRate ? Number(normalizedRate) : null,
+        exchangeRateText: normalizedRate ? `T/C ${normalizedRate}` : 'T/C no configurado',
+        hasExchangeRate: !!normalizedRate,
+        storageKey: key,
+        engineVersion: 0
+      };
+    }catch(_){
+      return {
+        ok: false,
+        settings: fallbackSettings,
+        primary: fallbackSettings.primary,
+        secondary: fallbackSettings.secondary,
+        exchangeRate: null,
+        exchangeRateText: 'T/C no configurado',
+        hasExchangeRate: false,
+        storageKey: 'suite_a33_currency_settings_v1',
+        engineVersion: 0
+      };
+    }
+  }
+
+  function renderReportsCurrencyReference(){
+    const state = getReportsCurrencyState();
+    const settings = state && state.settings ? state.settings : {};
+    const primary = state && state.primary ? state.primary : (settings.primary || {});
+    const secondary = state && state.secondary ? state.secondary : (settings.secondary || {});
+    const primaryText = `${String(primary.symbol || 'C$').trim()} / ${String(primary.code || 'NIO').trim()}`;
+    const secondaryText = `${String(secondary.symbol || 'US$').trim()} / ${String(secondary.code || 'USD').trim()}`;
+    const rateText = state && state.hasExchangeRate
+      ? String(settings.exchangeRate || state.exchangeRate || '').trim()
+      : 'No configurado';
+    const updatedText = state && state.hasExchangeRate ? formatPwaTimestamp(settings.updatedAt) : 'Sin registros';
+
+    const primaryEl = document.getElementById('cfg-reports-currency-primary');
+    const primaryNameEl = document.getElementById('cfg-reports-currency-primary-name');
+    const secondaryEl = document.getElementById('cfg-reports-currency-secondary');
+    const secondaryNameEl = document.getElementById('cfg-reports-currency-secondary-name');
+    const rateEl = document.getElementById('cfg-reports-currency-rate');
+    const rateStateEl = document.getElementById('cfg-reports-currency-rate-state');
+    const updatedEl = document.getElementById('cfg-reports-currency-updated-at');
+    const noteEl = document.getElementById('cfg-reports-currency-note');
+
+    if (primaryEl) primaryEl.textContent = primaryText;
+    if (primaryNameEl) primaryNameEl.textContent = String(primary.name || 'Córdoba nicaragüense');
+    if (secondaryEl) secondaryEl.textContent = secondaryText;
+    if (secondaryNameEl) secondaryNameEl.textContent = String(secondary.name || 'Dólar estadounidense');
+    if (rateEl){
+      rateEl.textContent = rateText;
+      rateEl.classList.toggle('is-empty', !(state && state.hasExchangeRate));
+    }
+    if (rateStateEl){
+      rateStateEl.textContent = state && state.hasExchangeRate
+        ? 'T/C listo para reportes futuros. No recalcula reportes reales todavía.'
+        : 'Estado seguro: sin conversiones automáticas.';
+    }
+    if (updatedEl){
+      updatedEl.textContent = updatedText;
+      updatedEl.classList.toggle('is-empty', !(state && state.hasExchangeRate));
+    }
+    if (noteEl){
+      noteEl.textContent = state && state.hasExchangeRate
+        ? `Estos valores provienen de Configuración → Moneda. Última actualización: ${updatedText}.`
+        : 'Estos valores provienen de Configuración → Moneda. Falta configurar T/C para activar referencias futuras completas.';
+      noteEl.dataset.state = state && state.hasExchangeRate ? 'ok' : 'missing-rate';
+    }
+    return state;
+  }
+
   function renderReportsIdentityReference(identity){
     const data = normalizeIdentity(identity);
     const hasLogo = /^data:image\//i.test(String(data.logo && data.logo.dataUrl || '').trim());
@@ -3180,6 +3288,7 @@
     }
     applyReportsPreferencesToForm(data);
     renderReportsIdentityReference(readIdentityStorage());
+    renderReportsCurrencyReference();
     setReportsStatus(`Preferencias de Reportes guardadas: ${formatPwaTimestamp(data.updatedAt)}.`);
     setReportsBadge('Guardado local');
     showToast('Preferencias de Reportes guardadas.');
@@ -3196,6 +3305,7 @@
     if (!form) return;
     applyReportsPreferencesToForm(readReportsPreferences());
     renderReportsIdentityReference(readIdentityStorage());
+    renderReportsCurrencyReference();
     form.addEventListener('submit', saveReportsPreferences);
     const saveBtn = document.getElementById('cfg-reports-save');
     if (saveBtn){
@@ -3216,6 +3326,302 @@
     document.querySelectorAll('[data-reports-privacy], [data-reports-pos], [data-reports-preview]').forEach((input) => {
       input.addEventListener('change', markReportsDirty);
     });
+    window.addEventListener('storage', (event) => {
+      const key = (window.A33Currency && window.A33Currency.storageKey) || 'suite_a33_currency_settings_v1';
+      if (!event || event.key === key) renderReportsCurrencyReference();
+    });
+    window.A33ReportsConfig = Object.assign({}, window.A33ReportsConfig || {}, {
+      storageKey: REPORTS_STORAGE_KEY,
+      read: () => normalizeReportsPreferences(readReportsPreferences()),
+      currency: () => getReportsCurrencyState()
+    });
+  }
+
+
+  const CURRENCY_STORAGE_KEY = (window.A33Currency && window.A33Currency.storageKey) || 'suite_a33_currency_settings_v1';
+
+  function buildDefaultCurrencySettings(){
+    return window.A33Currency && typeof window.A33Currency.defaults === 'function'
+      ? window.A33Currency.defaults()
+      : {
+          version: 1,
+          mode: 'manual',
+          primary: { name: 'Córdoba nicaragüense', symbol: 'C$', code: 'NIO' },
+          secondary: { name: 'Dólar estadounidense', symbol: 'US$', code: 'USD' },
+          exchangeRate: '',
+          updatedAt: ''
+        };
+  }
+
+  function normalizeCurrencyRateValue(value){
+    if (window.A33Currency && typeof window.A33Currency.normalizeExchangeRateValue === 'function'){
+      return window.A33Currency.normalizeExchangeRateValue(value);
+    }
+    const raw = String(value ?? '').trim().replace(',', '.');
+    if (!raw) return '';
+    if (!/^\d+(?:\.\d{0,2})?$/.test(raw)) return '';
+    const num = Number(raw);
+    if (!Number.isFinite(num) || num <= 0) return '';
+    return num.toFixed(2);
+  }
+
+  function normalizeCurrencySettings(settings){
+    if (window.A33Currency && typeof window.A33Currency.normalizeSettings === 'function'){
+      return window.A33Currency.normalizeSettings(settings);
+    }
+    const base = buildDefaultCurrencySettings();
+    const src = (settings && typeof settings === 'object') ? settings : {};
+    return {
+      ...base,
+      exchangeRate: normalizeCurrencyRateValue(src.exchangeRate),
+      updatedAt: String(src.updatedAt || '').trim()
+    };
+  }
+
+  function readCurrencyStorage(){
+    if (window.A33Currency && typeof window.A33Currency.readSettings === 'function'){
+      return window.A33Currency.readSettings();
+    }
+    let raw = '';
+    try{
+      if (window.A33Storage && typeof window.A33Storage.getItem === 'function'){
+        const v = window.A33Storage.getItem(CURRENCY_STORAGE_KEY);
+        if (v !== undefined && v !== null) raw = String(v);
+      }
+    }catch(_){ }
+    if (!raw){
+      try{ raw = localStorage.getItem(CURRENCY_STORAGE_KEY) || ''; }catch(_){ raw = ''; }
+    }
+    if (!raw) return buildDefaultCurrencySettings();
+    try{
+      const parsed = JSON.parse(raw);
+      return normalizeCurrencySettings(parsed);
+    }catch(_){
+      return normalizeCurrencySettings({ exchangeRate: raw });
+    }
+  }
+
+  function writeCurrencyStorage(settings){
+    if (window.A33Currency && typeof window.A33Currency.saveSettings === 'function'){
+      const result = window.A33Currency.saveSettings(settings);
+      return !!(result && result.ok);
+    }
+    const data = normalizeCurrencySettings(settings);
+    const payload = JSON.stringify(data);
+    try{
+      if (window.A33Storage && typeof window.A33Storage.setItem === 'function'){
+        window.A33Storage.setItem(CURRENCY_STORAGE_KEY, payload);
+      } else {
+        localStorage.setItem(CURRENCY_STORAGE_KEY, payload);
+      }
+      return true;
+    }catch(_){
+      try{
+        localStorage.setItem(CURRENCY_STORAGE_KEY, payload);
+        return true;
+      }catch(__){ return false; }
+    }
+  }
+
+  function sanitizeCurrencyInputValue(value){
+    if (window.A33Currency && typeof window.A33Currency.sanitizeExchangeRateInput === 'function'){
+      return window.A33Currency.sanitizeExchangeRateInput(value);
+    }
+    let raw = String(value ?? '').replace(/,/g, '.').replace(/\s+/g, '');
+    const negative = raw.startsWith('-');
+    raw = raw.replace(/[^\d.]/g, '');
+    const firstDot = raw.indexOf('.');
+    let integerPart = '';
+    let decimalPart = '';
+    let hasDot = false;
+    if (firstDot >= 0){
+      hasDot = true;
+      integerPart = raw.slice(0, firstDot).replace(/\./g, '');
+      decimalPart = raw.slice(firstDot + 1).replace(/\./g, '').slice(0, 2);
+    } else {
+      integerPart = raw.replace(/\./g, '');
+    }
+    if (hasDot && !integerPart) integerPart = '0';
+    let out = (negative ? '-' : '') + integerPart;
+    if (hasDot) out += '.' + decimalPart;
+    return out;
+  }
+
+  function validateCurrencyRate(rawValue){
+    if (window.A33Currency && typeof window.A33Currency.validateExchangeRate === 'function'){
+      return window.A33Currency.validateExchangeRate(rawValue);
+    }
+    const raw = String(rawValue ?? '').trim().replace(',', '.');
+    if (!raw){
+      return { ok: false, message: 'Ingresá un T/C válido antes de guardar.' };
+    }
+    if (raw.includes('-')){
+      return { ok: false, message: 'El T/C no puede ser negativo.' };
+    }
+    if (!/^\d+(?:\.\d{0,2})?$/.test(raw)){
+      return { ok: false, message: 'El T/C debe ser numérico y tener máximo 2 decimales.' };
+    }
+    const value = Number(raw);
+    if (!Number.isFinite(value)){
+      return { ok: false, message: 'El T/C debe ser un número válido.' };
+    }
+    if (value <= 0){
+      return { ok: false, message: 'El T/C debe ser mayor que 0.' };
+    }
+    return { ok: true, value: value.toFixed(2), message: '' };
+  }
+
+  function setCurrencyStatus(message, state){
+    const el = document.getElementById('cfg-currency-status');
+    if (!el) return;
+    el.textContent = String(message || '');
+    if (state) el.dataset.state = state;
+    else delete el.dataset.state;
+  }
+
+  function setCurrencyBadge(message){
+    const main = document.getElementById('cfg-currency-save-state');
+    const side = document.getElementById('cfg-currency-side-badge');
+    if (main) main.textContent = message;
+    if (side) side.textContent = message;
+  }
+
+  function formatCurrencyRateForDisplay(rateText){
+    if (window.A33Currency && typeof window.A33Currency.formatExchangeRate === 'function'){
+      return window.A33Currency.formatExchangeRate(rateText);
+    }
+    return rateText ? `T/C ${rateText}` : 'T/C no configurado';
+  }
+
+  function renderCurrencySettings(settings, options = {}){
+    const data = normalizeCurrencySettings(settings);
+    const currencyState = (window.A33Currency && typeof window.A33Currency.getState === 'function')
+      ? window.A33Currency.getState(data)
+      : { hasExchangeRate: !!data.exchangeRate, exchangeRateText: data.exchangeRate ? `T/C ${data.exchangeRate}` : 'T/C no configurado' };
+    const input = document.getElementById('cfg-currency-rate-input');
+    const rateText = data.exchangeRate || '';
+    if (input && !options.keepInput) input.value = rateText;
+
+    const heroRate = document.getElementById('cfg-currency-hero-rate');
+    if (heroRate) heroRate.textContent = rateText ? formatCurrencyRateForDisplay(rateText) : 'Sin configurar';
+
+    const updatedAt = document.getElementById('cfg-currency-updated-at');
+    if (updatedAt) updatedAt.textContent = data.updatedAt ? formatPwaTimestamp(data.updatedAt) : 'Sin registros';
+
+    const previewPrimary = document.getElementById('cfg-currency-preview-primary');
+    if (previewPrimary){
+      previewPrimary.textContent = window.A33Currency && typeof window.A33Currency.formatCordobas === 'function'
+        ? window.A33Currency.formatCordobas(1250)
+        : 'C$1,250.00';
+    }
+
+    const previewSecondary = document.getElementById('cfg-currency-preview-secondary');
+    if (previewSecondary){
+      previewSecondary.textContent = window.A33Currency && typeof window.A33Currency.formatDollars === 'function'
+        ? window.A33Currency.formatDollars(35.50)
+        : 'US$35.50';
+    }
+
+    const previewRate = document.getElementById('cfg-currency-preview-rate');
+    if (previewRate) previewRate.textContent = currencyState.exchangeRateText || (rateText ? `T/C ${rateText}` : 'T/C no configurado');
+
+    const previewNote = document.getElementById('cfg-currency-preview-note');
+    if (previewNote){
+      previewNote.textContent = currencyState.hasExchangeRate
+        ? 'Vista previa activa usando el motor central de Moneda.'
+        : 'Configurá un T/C válido para activar la vista previa.';
+    }
+
+    const heroCopy = document.getElementById('cfg-currency-hero-copy');
+    if (heroCopy){
+      heroCopy.textContent = currencyState.hasExchangeRate
+        ? 'El último tipo de cambio quedó guardado localmente y disponible en el motor central. La conexión con módulos reales queda para etapas posteriores.'
+        : 'Este apartado lee una estructura segura de Moneda. Sin T/C configurado, el motor no hace conversiones silenciosas ni rompe la Suite.';
+    }
+
+    if (currencyState.hasExchangeRate){
+      setCurrencyBadge('Motor seguro');
+      if (!options.silent) setCurrencyStatus(`T/C cargado: ${rateText}. Última actualización: ${formatPwaTimestamp(data.updatedAt)}.`, 'ok');
+    } else {
+      setCurrencyBadge('Base segura');
+      if (!options.silent) setCurrencyStatus('El T/C no está configurado. El motor central queda en estado seguro.');
+    }
+  }
+
+  function handleCurrencyInput(event){
+    const input = event && event.currentTarget ? event.currentTarget : document.getElementById('cfg-currency-rate-input');
+    if (!input) return;
+    const before = input.value;
+    const after = sanitizeCurrencyInputValue(before);
+    if (before !== after){
+      input.value = after;
+      if (/\.\d{3,}/.test(before.replace(',', '.'))){
+        setCurrencyStatus('Solo se permiten 2 decimales; el campo fue ajustado.', 'error');
+        setCurrencyBadge('Cambios pendientes');
+        return;
+      }
+    }
+    setCurrencyStatus('Cambios sin guardar. Presioná Guardar para conservar el T/C.', '');
+    setCurrencyBadge('Cambios pendientes');
+  }
+
+  function saveCurrencySettings(event){
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    const input = document.getElementById('cfg-currency-rate-input');
+    const validation = validateCurrencyRate(input ? input.value : '');
+    if (!validation.ok){
+      setCurrencyStatus(validation.message, 'error');
+      setCurrencyBadge('Error local');
+      showToast(validation.message);
+      return;
+    }
+    const data = normalizeCurrencySettings({
+      ...buildDefaultCurrencySettings(),
+      exchangeRate: validation.value,
+      updatedAt: formatPwaDateForStorage(new Date())
+    });
+    const ok = writeCurrencyStorage(data);
+    if (!ok){
+      setCurrencyStatus('No se pudo guardar Moneda en este navegador.', 'error');
+      setCurrencyBadge('Error local');
+      showToast('No se pudo guardar Moneda.');
+      return;
+    }
+    renderCurrencySettings(data, { silent: true });
+    renderReportsCurrencyReference();
+    setCurrencyStatus(`Moneda guardada correctamente: T/C ${validation.value}.`, 'ok');
+    setCurrencyBadge('Motor seguro');
+    showToast('Moneda guardada correctamente.');
+  }
+
+  function initCurrencySection(){
+    const form = document.getElementById('cfg-currency-form');
+    if (!form) return;
+    renderCurrencySettings(readCurrencyStorage());
+    form.addEventListener('submit', saveCurrencySettings);
+    const input = document.getElementById('cfg-currency-rate-input');
+    if (input){
+      input.addEventListener('input', handleCurrencyInput);
+      input.addEventListener('blur', () => {
+        const validation = validateCurrencyRate(input.value);
+        if (validation.ok) input.value = validation.value;
+      });
+    }
+    const saveBtn = document.getElementById('cfg-currency-save');
+    if (saveBtn){
+      saveBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        saveCurrencySettings(event);
+      });
+    }
+    window.A33CurrencyConfig = Object.assign({}, window.A33CurrencyConfig || {}, {
+      read: () => normalizeCurrencySettings(readCurrencyStorage()),
+      state: () => window.A33Currency && typeof window.A33Currency.getState === 'function'
+        ? window.A33Currency.getState(readCurrencyStorage())
+        : { settings: normalizeCurrencySettings(readCurrencyStorage()), hasExchangeRate: !!normalizeCurrencySettings(readCurrencyStorage()).exchangeRate },
+      storageKey: CURRENCY_STORAGE_KEY,
+      engine: window.A33Currency || null
+    });
   }
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -3225,6 +3631,7 @@
     initIdentitySection();
     initAppearanceSection();
     initReportsSection();
+    initCurrencySection();
     initUsersSection();
     initFirebaseStatus();
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.77&r=7">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.77&r=10">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -30,10 +30,10 @@
     }
   })();
 </script>
-<link rel="stylesheet" href="styles.css?v=4.20.77&r=7">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.77&r=7" />
-  <link rel="stylesheet" href="/assets/css/a33-theme.css?v=4.20.77&r=7" />
-  <script src="/assets/js/a33-theme.js?v=4.20.77&r=7"></script>
+<link rel="stylesheet" href="styles.css?v=4.20.77&r=10">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.77&r=10" />
+  <link rel="stylesheet" href="/assets/css/a33-theme.css?v=4.20.77&r=10" />
+  <script src="/assets/js/a33-theme.js?v=4.20.77&r=10"></script>
 </head>
 <body>
   <header class="a33-header" role="banner">
@@ -480,12 +480,13 @@
 
           <div class="reempaque-card soft">
             <div class="reempaque-title">Costos</div>
+            <div id="rp-currency-note" class="reempaque-currency-note" aria-live="polite">Moneda: C$ / NIO · T/C no configurado en Moneda.</div>
             <label>Costo adicional unitario</label>
             <input id="rp-extra-cost" class="a33-num" data-a33-default="0" type="number" inputmode="decimal" min="0" step="0.01" placeholder="Ej: 8">
             <small class="muted">Se multiplicará por la cantidad destino.</small>
-            <div class="reempaque-kv"><span>Costo adicional unitario</span><b id="rp-cost-additional-unit">C$ 0.00</b></div>
+            <div class="reempaque-kv"><span>Costo adicional unitario</span><b id="rp-cost-additional-unit">C$0.00</b></div>
             <div class="reempaque-kv"><span>Cantidad destino</span><b id="rp-cost-target-qty">—</b></div>
-            <div class="reempaque-kv"><span>Costo adicional total</span><b id="rp-cost-additional-total">C$ 0.00</b></div>
+            <div class="reempaque-kv"><span>Costo adicional total</span><b id="rp-cost-additional-total">C$0.00</b></div>
             <div class="reempaque-kv"><span>Costo líquido distribuido</span><b id="rp-cost-liquid-distributed">N/D</b></div>
             <div class="reempaque-kv"><span>Costo líquido unitario</span><b id="rp-cost-liquid-unit">N/D</b></div>
             <div class="reempaque-kv"><span>Costo final unitario estimado</span><b id="rp-cost-unit-target">N/D</b></div>
@@ -521,12 +522,13 @@
 
             <div class="reempaque-card soft">
               <div class="reempaque-title">Resumen múltiple</div>
+              <div id="rp-multi-currency-note" class="reempaque-currency-note" aria-live="polite">Moneda: C$ / NIO · T/C no configurado en Moneda.</div>
               <div class="reempaque-kv"><span>Volumen total origen</span><b id="rp-multi-volume-origin">—</b></div>
               <div class="reempaque-kv"><span>Volumen distribuido</span><b id="rp-multi-volume-distributed">—</b></div>
               <div class="reempaque-kv"><span>Volumen sobrante/merma</span><b id="rp-multi-volume-left">—</b></div>
               <div class="reempaque-kv"><span>Costo total origen</span><b id="rp-multi-cost-origin">N/D</b></div>
               <div class="reempaque-kv"><span>Costo líquido distribuido</span><b id="rp-multi-cost-distributed">N/D</b></div>
-              <div class="reempaque-kv"><span>Costo adicional destinos</span><b id="rp-multi-cost-additional">C$ 0.00</b></div>
+              <div class="reempaque-kv"><span>Costo adicional destinos</span><b id="rp-multi-cost-additional">C$0.00</b></div>
               <div class="reempaque-kv"><span>Costo final destinos</span><b id="rp-multi-cost-final">N/D</b></div>
               <div class="reempaque-kv"><span>Costo sobrante/merma</span><b id="rp-multi-cost-left">N/D</b></div>
               <div id="rp-multi-warning" class="reempaque-warning muted">Sin advertencias.</div>
@@ -1834,17 +1836,18 @@
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=0.18.5"></script>
-  <script src="/assets/js/a33-release.js?v=4.20.77&r=7"></script>
+  <script src="/assets/js/a33-release.js?v=4.20.77&r=10"></script>
 
-<script src="/assets/js/a33-storage.js?v=4.20.77&r=7"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.77&r=7"></script>
-<script src="/assets/js/a33-build.js?v=4.20.77&r=7"></script>
+<script src="/assets/js/a33-storage.js?v=4.20.77&r=10"></script>
+  <script src="/assets/js/a33-currency.js?v=4.20.77&r=14"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.77&r=10"></script>
+<script src="/assets/js/a33-build.js?v=4.20.77&r=10"></script>
 <script>
   (function(){
     try{
       const relObj = (window.A33_RELEASE || {});
       const v = (relObj && relObj.suiteVersion) ? String(relObj.suiteVersion) : '4.20.77';
-      const rev = (relObj && relObj.rev !== undefined && relObj.rev !== null) ? String(relObj.rev) : '7'; // POS cache bump local — Apariencia Etapa 5 global
+      const rev = (relObj && relObj.rev !== undefined && relObj.rev !== null) ? String(relObj.rev) : '10'; // POS cache bump local — Moneda Etapa 9 cierre final
       try{ window.A33_VERSION = v; }catch(_){ }
       try{ window.A33_ASSET_REV = rev; }catch(_){ }
       try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r'+rev).toString(); }catch(_){ }
@@ -1864,12 +1867,12 @@
   })();
 </script>
 
-<script src="app.js?v=4.20.77&r=7"></script>
-<script src="/assets/js/a33-input-ux.js?v=4.20.77&r=7"></script>
+<script src="app.js?v=4.20.77&r=10"></script>
+<script src="/assets/js/a33-input-ux.js?v=4.20.77&r=10"></script>
 <script>
   (function(){
     const BUILD = (window.A33_VERSION || '4.20.77').toString();
-    const REV = (window.A33_ASSET_REV || '7').toString();
+    const REV = (window.A33_ASSET_REV || '8').toString();
     const SW_URL = './sw.js?v=' + encodeURIComponent(BUILD) + '&r=' + encodeURIComponent(REV);
     if (!('serviceWorker' in navigator)) return;
     navigator.serviceWorker.register(SW_URL).then((reg) => {

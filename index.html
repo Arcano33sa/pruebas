@@ -788,8 +788,10 @@
   <input id="calc-only-file-input" type="file" accept="application/json" style="display:none;">
   <div id="a33-toast" class="a33-toast" aria-live="polite"></div>
 
-  <script src="/assets/js/a33-release.js?v=4.20.77&r=7"></script>
+  <script src="/assets/js/a33-release.js?v=4.20.77&r=10"></script>
   <script src="assets/js/a33-storage.js?v=4.20.77&r=7"></script>
+  <script src="assets/js/a33-currency.js?v=4.20.77&r=14"></script>
+  <script src="assets/js/a33-export-currency.js?v=4.20.77&r=2"></script>
   <script>
 
     // --- Apariencia global: leer la preferencia creada en Configuración → Apariencia ---
@@ -1513,12 +1515,19 @@
       const cleanIndexed = sanitizeIndexedDbPayload(dataIndexedDB, dbSchemas, dbVersions);
 
       const backup = {
-        meta: {
-          appName: BACKUP_APP_NAME,
-          exportedAt: new Date().toISOString(),
-          dbVersions: cleanIndexed.versions,
-          dbSchemas: cleanIndexed.schemas
-        },
+        meta: (window.A33ExportCurrency && typeof window.A33ExportCurrency.decorateJsonMeta === 'function')
+          ? window.A33ExportCurrency.decorateJsonMeta({
+            appName: BACKUP_APP_NAME,
+            exportedAt: new Date().toISOString(),
+            dbVersions: cleanIndexed.versions,
+            dbSchemas: cleanIndexed.schemas
+          })
+          : {
+            appName: BACKUP_APP_NAME,
+            exportedAt: new Date().toISOString(),
+            dbVersions: cleanIndexed.versions,
+            dbSchemas: cleanIndexed.schemas
+          },
         data: {
           indexedDB: cleanIndexed.data,
           localStorage: sanitizeSuiteLocalStorageMap(lsSnap.data)
