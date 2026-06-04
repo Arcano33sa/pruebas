@@ -370,10 +370,9 @@
   }
 
   function normalizeCustomerKey(value){
-    return sanitizeCustomerDisplay(value)
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase();
+    let s = sanitizeCustomerDisplay(value);
+    try { if (s.normalize) s = s.normalize('NFD'); } catch (_) {}
+    return s.replace(/[\u0300-\u036f]/g, '').toLowerCase();
   }
 
   function sortCustomerObjectsAZ(list){
@@ -409,6 +408,12 @@
         createdAt: Date.now(),
         updatedAt: null,
         normalizedName,
+        celular: '',
+        telefono: '',
+        whatsapp: '',
+        correo: '',
+        direccion: '',
+        notas: '',
         aliases: [],
         nameHistory: [],
         mergedIntoId: null,
@@ -474,10 +479,21 @@
     const updatedAt = Number(item.updatedAt);
     const mergedAt = Number(item.mergedAt);
 
+    const celular = sanitizeCustomerDisplay(item.celular || item.cellular || item.mobile || item.movil || item.whatsapp || item.wa || item.whatsApp || item.telefono || item.phone || item.telefonoCliente || '');
+
     return {
+      ...item,
       id,
       name,
+      nombre: sanitizeCustomerDisplay(item.nombre || name),
+      celular,
+      telefono: celular,
+      whatsapp: '',
+      correo: sanitizeCustomerDisplay(item.correo || item.email || item.mail || ''),
+      direccion: sanitizeCustomerDisplay(item.direccion || item.address || ''),
+      notas: String(item.notas || item.notes || '').trim(),
       isActive: item.isActive !== false && item.active !== false,
+      active: item.isActive !== false && item.active !== false,
       createdAt: Number.isFinite(createdAt) && createdAt > 0 ? createdAt : Date.now(),
       updatedAt: Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : null,
       normalizedName,
@@ -653,6 +669,7 @@
     const finalIds = new Set();
     const output = [];
 
+    const seenNames = new Set();
     fullCatalog.forEach(function(customer){
       if (!customer || customer.isActive === false) return;
       const ownId = String(customer.id || '').trim();
@@ -660,11 +677,15 @@
       const finalId = resolver.resolveFinalId(ownId);
       if (!finalId || finalId !== ownId) return;
       if (finalIds.has(finalId)) return;
+      const displayName = resolver.getDisplayName(finalId) || customer.name;
+      const nameKey = normalizeCustomerKey(displayName);
+      if (nameKey && seenNames.has(nameKey)) return;
       finalIds.add(finalId);
+      if (nameKey) seenNames.add(nameKey);
       output.push({
         ...customer,
         id: finalId,
-        name: resolver.getDisplayName(finalId) || customer.name
+        name: displayName
       });
     });
 
@@ -690,9 +711,12 @@
   function getSelectedClientData(){
     const option = getSelectedClientOption();
     if (!option || !option.value || option.value === CLIENT_SELECT_NEW_VALUE) return null;
+    const rawValue = String(option.value || '').trim();
+    const isLegacy = rawValue.indexOf('legacy:') === 0;
     return {
-      id: String(option.value || '').trim(),
-      name: sanitizeCustomerDisplay(option.dataset.clientName || option.textContent || '')
+      id: isLegacy ? '' : rawValue,
+      name: sanitizeCustomerDisplay(option.dataset.clientName || option.textContent || ''),
+      isLegacy
     };
   }
 
@@ -866,6 +890,12 @@
       createdAt: Date.now(),
       updatedAt: null,
       normalizedName: normalizeCustomerKey(typedName),
+      celular: '',
+      telefono: '',
+      whatsapp: '',
+      correo: '',
+      direccion: '',
+      notas: '',
       aliases: [],
       nameHistory: [],
       mergedIntoId: null,

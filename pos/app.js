@@ -4,7 +4,7 @@ const DB_VER = 34; // Catálogos Etapa 3: Extras maestros + Bancos centralizados
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.77';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.80';
 
 
 const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r12');
@@ -4687,8 +4687,8 @@ function saleFingerprintPOS(sale){
       bankId: (sale.bankId == null ? null : Number(sale.bankId)),
       courtesy: !!sale.courtesy,
       isReturn: !!sale.isReturn,
-      customerId: (sale.customerId == null ? null : Number(sale.customerId)),
-      customerName: String(sale.customerName || sale.customer || ''),
+      customerId: (sale.customerId == null ? null : String(sale.customerId)),
+      customerName: getSaleCustomerSnapshotNamePOS(sale),
       courtesyTo: String(sale.courtesyTo || ''),
       notes: String(sale.notes || '')
     };
@@ -5146,14 +5146,287 @@ async function ensureFinanzasDB() {
   }
 }
 
-// Mapea forma de pago del POS a cuenta contable
+
+
+function posFinNormCode(code){
+  return String(code ?? '').trim();
+}
+
+function posFinNormText(value){
+  let out = String(value ?? '').toLowerCase().trim();
+  try { out = out.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch(_){ }
+  return out.replace(/[^a-z0-9$]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+async function posFinGetAllAccountsPOS(){
+  const dbFin = await openFinanzasDB();
+  return await new Promise((resolve) => {
+    try{
+      const tx = dbFin.transaction(['accounts'], 'readonly');
+      const store = tx.objectStore('accounts');
+      const req = store.getAll();
+      req.onsuccess = () => resolve(Array.isArray(req.result) ? req.result : []);
+      req.onerror = () => resolve([]);
+      tx.onerror = () => resolve([]);
+    }catch(_){ resolve([]); }
+  });
+}
+
+function posFinAccountCodePOS(acc){
+  return posFinNormCode(acc && (acc.code ?? acc.codigo ?? acc.accountCode));
+}
+
+function posFinAccountNamePOS(acc){
+  return String(acc && (acc.name || acc.nombre || acc.label || acc.descripcion) || '').trim();
+}
+
+function posFinAccountTypePOS(acc){
+  return posFinNormText(acc && (acc.type || acc.tipo || acc.rootType || acc.nature || acc.naturaleza));
+}
+
+function posFinAccountByCodePOS(accounts, code){
+  const wanted = posFinNormCode(code);
+  return (accounts || []).find(acc => posFinAccountCodePOS(acc) === wanted) || null;
+}
+
+function posFinAccountHasChildrenPOS(accounts, code){
+  const wanted = posFinNormCode(code);
+  if (!wanted) return false;
+  return (accounts || []).some(acc => {
+    if (!acc) return false;
+    const parent = posFinNormCode(acc.parentId ?? acc.parentCode ?? acc.parent ?? acc.padreCodigo ?? acc.parent_account_code);
+    return parent === wanted;
+  });
+}
+
+function posFinIsPostableAccountPOS(acc, accounts){
+  if (!acc) return false;
+  if (acc.isActive === false || acc.active === false || acc.estado === false) return false;
+  const code = posFinAccountCodePOS(acc);
+  if (!code) return false;
+  if (acc.isRoot === true || acc.root === true) return false;
+  if (acc.isPostable === false || acc.postable === false) return false;
+  const mode = posFinNormText(acc.accountMode || acc.mode || acc.tipoCuenta || acc.claseCuenta);
+  if (mode.includes('group') || mode.includes('agrup') || mode.includes('raiz') || mode.includes('root')) return false;
+  if (acc.isGrouping === true || acc.grouping === true || acc.agrupadora === true) return false;
+  if (posFinAccountHasChildrenPOS(accounts, code) && acc.isPostable !== true) return false;
+  return true;
+}
+
+function posFinAccountCurrencyPOS(acc){
+  const explicit = String(acc && (acc.currency || acc.moneda || acc.currencyCode || acc.currency_code) || '').trim().toUpperCase();
+  if (explicit === 'USD' || explicit === 'US$') return 'USD';
+  if (explicit === 'NIO' || explicit === 'C$' || explicit === 'CORDOBA' || explicit === 'CÓRDOBA') return 'NIO';
+  const code = posFinAccountCodePOS(acc);
+  const name = posFinNormText(posFinAccountNamePOS(acc));
+  if (name.includes('usd') || name.includes('us$') || name.includes('dolar') || name.includes('dolares')) return 'USD';
+  const n = Number(code);
+  if (Number.isFinite(n)) {
+    if (n >= 1201 && n <= 1999) {
+      const rem = (n - 1201) % 10;
+      if (rem === 1) return 'USD';
+      if (rem === 0) return 'NIO';
+    }
+    if (String(code).endsWith('2')) return 'USD';
+    if (String(code).endsWith('1')) return 'NIO';
+  }
+  return 'NIO';
+}
+
+function posFinMatchesWordsPOS(acc, words){
+  const hay = `${posFinNormText(posFinAccountNamePOS(acc))} ${posFinNormText(posFinAccountCodePOS(acc))} ${posFinAccountTypePOS(acc)}`;
+  return (words || []).every(w => hay.includes(posFinNormText(w)));
+}
+
+function posFinResolvePostableAccountPOS(accounts, opts){
+  const cfg = opts || {};
+  const currencyWanted = String(cfg.currency || '').trim().toUpperCase();
+  const types = (cfg.types || []).map(posFinNormText).filter(Boolean);
+  const codes = (cfg.codes || []).map(posFinNormCode).filter(Boolean);
+  const wordSets = cfg.wordSets || [];
+  const acceptable = (acc) => {
+    if (!posFinIsPostableAccountPOS(acc, accounts)) return false;
+    if (currencyWanted && posFinAccountCurrencyPOS(acc) !== currencyWanted) return false;
+    if (types.length) {
+      const t = posFinAccountTypePOS(acc);
+      if (!types.some(type => t.includes(type))) return false;
+    }
+    return true;
+  };
+
+  for (const code of codes) {
+    const acc = posFinAccountByCodePOS(accounts, code);
+    if (acceptable(acc)) return posFinAccountCodePOS(acc);
+  }
+
+  for (const words of wordSets) {
+    const acc = (accounts || []).find(a => acceptable(a) && posFinMatchesWordsPOS(a, Array.isArray(words) ? words : [words]));
+    if (acc) return posFinAccountCodePOS(acc);
+  }
+
+  const fallback = (accounts || []).find(acceptable);
+  if (fallback) return posFinAccountCodePOS(fallback);
+
+  const label = cfg.label || 'cuenta contable';
+  const cur = currencyWanted ? ` ${currencyWanted}` : '';
+  throw new Error(`Falta ${label}${cur}: debe existir una cuenta activa, posteable y no agrupadora en Finanzas.`);
+}
+
+function posFinResolveCashAccountPOS(accounts, currency){
+  const c = String(currency || 'NIO').toUpperCase() === 'USD' ? 'USD' : 'NIO';
+  return posFinResolvePostableAccountPOS(accounts, {
+    label: 'cuenta de Caja para POS', currency: c, types: ['activo'],
+    codes: c === 'USD' ? ['1122','1112','1102','1110'] : ['1121','1111','1101','1110','1100'],
+    wordSets: [['caja','eventos'], ['caja','general'], ['caja']]
+  });
+}
+
+function posFinResolveBankAccountPOS(accounts, currency, payment){
+  const c = String(currency || 'NIO').toUpperCase() === 'USD' ? 'USD' : 'NIO';
+  const pay = normalizePaymentMethodPOS(payment || 'transferencia');
+  return posFinResolvePostableAccountPOS(accounts, {
+    label: pay === 'tarjeta' ? 'cuenta bancaria para tarjeta POS' : 'cuenta bancaria para transferencia POS',
+    currency: c, types: ['activo'],
+    codes: c === 'USD' ? ['1212','1222','1202','1200'] : ['1211','1221','1201','1200'],
+    wordSets: pay === 'tarjeta'
+      ? [['banco','tarjeta'], ['bancos','tarjeta'], ['banco']]
+      : [['banco','transferencia'], ['bancos'], ['banco']]
+  });
+}
+
+function posFinResolveCreditAccountPOS(accounts, currency){
+  const c = String(currency || 'NIO').toUpperCase() === 'USD' ? 'USD' : 'NIO';
+  return posFinResolvePostableAccountPOS(accounts, {
+    label: 'cuenta por cobrar para crédito POS', currency: c, types: ['activo'],
+    codes: c === 'USD' ? ['1312','1302','1300'] : ['1311','1301','1300'],
+    wordSets: [['cuentas','cobrar'], ['clientes'], ['credito']]
+  });
+}
+
+function posFinResolveIncomeAccountPOS(accounts){
+  return posFinResolvePostableAccountPOS(accounts, {
+    label: 'cuenta de ingresos operativos POS', types: ['ingreso'],
+    codes: ['4211','4111','4101','4100'],
+    wordSets: [['ventas','pos'], ['ventas','directas'], ['ingresos','operativos'], ['ventas']]
+  });
+}
+
+function posFinProductKeyPOS(name){
+  const n = posFinNormText(name);
+  if (!n) return '';
+  if (n.includes('vaso')) return 'vaso';
+  if (n.includes('pulso')) return 'pulso';
+  if (n.includes('media')) return 'media';
+  if (n.includes('djeba')) return 'djeba';
+  if (n.includes('litro')) return 'litro';
+  if (n.includes('galon')) return 'galon';
+  return '';
+}
+
+function posFinResolveProductAccountPOS(accounts, productName, side){
+  const key = posFinProductKeyPOS(productName);
+  const maps = {
+    vaso: { cost: ['5131','5216','5101','5100'], inv: ['1441','1425','1501','1500'], wordsCost: [['vasos'], ['costo','ventas']], wordsInv: [['vasos'], ['inventario','producto']] },
+    pulso: { cost: ['5215','5101','5100'], inv: ['1425','1501','1500'], wordsCost: [['costo','pulso'], ['costo','ventas']], wordsInv: [['pulso'], ['inventario','producto']] },
+    media: { cost: ['5214','5101','5100'], inv: ['1424','1501','1500'], wordsCost: [['costo','media'], ['costo','ventas']], wordsInv: [['media'], ['inventario','producto']] },
+    djeba: { cost: ['5213','5101','5100'], inv: ['1423','1501','1500'], wordsCost: [['costo','djeba'], ['costo','ventas']], wordsInv: [['djeba'], ['inventario','producto']] },
+    litro: { cost: ['5212','5101','5100'], inv: ['1422','1501','1500'], wordsCost: [['costo','litro'], ['costo','ventas']], wordsInv: [['litro'], ['inventario','producto']] },
+    galon: { cost: ['5211','5101','5100'], inv: ['1421','1501','1500'], wordsCost: [['costo','galon'], ['costo','ventas']], wordsInv: [['galon'], ['inventario','producto']] }
+  };
+  const m = maps[key] || maps.galon;
+  if (side === 'inventory') {
+    return posFinResolvePostableAccountPOS(accounts, { label: 'cuenta de inventario POS', types: ['activo'], codes: m.inv, wordSets: m.wordsInv });
+  }
+  return posFinResolvePostableAccountPOS(accounts, { label: 'cuenta de costo POS', types: ['costo'], codes: m.cost, wordSets: m.wordsCost });
+}
+
+function posFinResolveCourtesyExpenseAccountPOS(accounts){
+  return posFinResolvePostableAccountPOS(accounts, {
+    label: 'cuenta posteable para cortesías POS', types: ['gasto','costo','ingreso'],
+    codes: ['6113','6123','6105','4312'],
+    wordSets: [['degustaciones'], ['muestras'], ['cortesias'], ['cortesia'], ['descuentos']]
+  });
+}
+
+function posFinLinePOS(accountCode, debe, haber){
+  return { accountCode: posFinNormCode(accountCode), debe: round2(debe || 0), haber: round2(haber || 0) };
+}
+
+function posFinResolveCollectionAccountPOS(sale, accounts){
+  const pay = normalizePaymentMethodPOS(sale && sale.payment || 'efectivo');
+  const currency = String((sale && (sale.currency || sale.moneda || sale.paymentCurrency)) || 'NIO').toUpperCase() === 'USD' ? 'USD' : 'NIO';
+  if (pay === 'efectivo') return posFinResolveCashAccountPOS(accounts, currency);
+  if (pay === 'credito') return posFinResolveCreditAccountPOS(accounts, currency);
+  return posFinResolveBankAccountPOS(accounts, currency, pay);
+}
+
+function posFinBuildSaleAutoLinesPOS(sale, accounts, amounts){
+  const amount = round2(amounts && amounts.amount);
+  const amountCost = round2(amounts && amounts.amountCost);
+  const isCourtesy = !!(amounts && amounts.isCourtesy);
+  const isReturn = !!(amounts && amounts.isReturn);
+  const lines = [];
+  if (isCourtesy) {
+    if (amountCost > 0) {
+      const courtesyCode = posFinResolveCourtesyExpenseAccountPOS(accounts);
+      const inventoryCode = posFinResolveProductAccountPOS(accounts, sale && sale.productName, 'inventory');
+      if (!isReturn) {
+        lines.push(posFinLinePOS(courtesyCode, amountCost, 0));
+        lines.push(posFinLinePOS(inventoryCode, 0, amountCost));
+      } else {
+        lines.push(posFinLinePOS(inventoryCode, amountCost, 0));
+        lines.push(posFinLinePOS(courtesyCode, 0, amountCost));
+      }
+    }
+    return lines;
+  }
+  const collectionCode = amount > 0 ? posFinResolveCollectionAccountPOS(sale, accounts) : null;
+  const incomeCode = amount > 0 ? posFinResolveIncomeAccountPOS(accounts) : null;
+  const costCode = amountCost > 0 ? posFinResolveProductAccountPOS(accounts, sale && sale.productName, 'cost') : null;
+  const inventoryCode = amountCost > 0 ? posFinResolveProductAccountPOS(accounts, sale && sale.productName, 'inventory') : null;
+  if (!isReturn) {
+    if (amount > 0) {
+      lines.push(posFinLinePOS(collectionCode, amount, 0));
+      lines.push(posFinLinePOS(incomeCode, 0, amount));
+    }
+    if (amountCost > 0) {
+      lines.push(posFinLinePOS(costCode, amountCost, 0));
+      lines.push(posFinLinePOS(inventoryCode, 0, amountCost));
+    }
+  } else {
+    if (amount > 0) {
+      lines.push(posFinLinePOS(incomeCode, amount, 0));
+      lines.push(posFinLinePOS(collectionCode, 0, amount));
+    }
+    if (amountCost > 0) {
+      lines.push(posFinLinePOS(inventoryCode, amountCost, 0));
+      lines.push(posFinLinePOS(costCode, 0, amountCost));
+    }
+  }
+  return lines;
+}
+
+function posFinValidateAutoLinesPOS(lines, accounts){
+  const errors = [];
+  (lines || []).forEach((line, idx) => {
+    const code = posFinNormCode(line && line.accountCode);
+    const acc = posFinAccountByCodePOS(accounts, code);
+    if (!posFinIsPostableAccountPOS(acc, accounts)) {
+      errors.push(`Línea ${idx + 1}: cuenta ${code || '(vacía)'} no existe o no es posteable.`);
+    }
+  });
+  const debe = round2((lines || []).reduce((s, l) => s + round2(l && l.debe), 0));
+  const haber = round2((lines || []).reduce((s, l) => s + round2(l && l.haber), 0));
+  if (Math.abs(debe - haber) > 0.009) errors.push(`Debe/Haber no cuadra (Debe ${debe}, Haber ${haber}).`);
+  return { ok: !errors.length, errors, debe, haber };
+}
+
+// Mapea forma de pago del POS a cuenta contable posteable sugerida (solo compatibilidad legacy).
 function mapSaleToCuentaCobro(sale) {
   const pay = normalizePaymentMethodPOS(sale && sale.payment || 'efectivo');
-  if (pay === 'efectivo') return '1100';   // Caja
-  if (pay === 'transferencia') return '1200'; // Banco
-  if (pay === 'tarjeta') return '1200';       // Banco / POS bancario
-  if (pay === 'credito') return '1300';    // Clientes
-  return '1200'; // Otros métodos similares a banco
+  if (pay === 'efectivo') return '1121';
+  if (pay === 'credito') return '1311';
+  return '1211';
 }
 
 // Crea/actualiza asiento automático en Finanzas por una venta / devolución del POS
@@ -5165,10 +5438,10 @@ async function createJournalEntryForSalePOS(sale) {
   // - Venta normal: ingreso + COGS
   // - Cortesía: SOLO costo (gasto por cortesía), nunca ingreso
   // - Devolución: asiento inverso
+  // - Etapa Tablero 3/3: solo usa cuentas activas, posteables y no agrupadoras.
 
   if (!sale) return;
 
-  // Nos aseguramos de tener un ID (origenId) para vincular el asiento
   const saleId = (sale.id != null) ? sale.id : (sale.createdAt != null ? sale.createdAt : null);
   if (saleId == null) {
     console.warn('Venta sin id/createdAt, no se genera asiento automático.');
@@ -5178,14 +5451,11 @@ async function createJournalEntryForSalePOS(sale) {
   try {
     await ensureFinanzasDB();
 
-    // --- Datos base ---
     const isCourtesy = !!sale.courtesy;
     const isReturn = !!sale.isReturn;
     const amount = round2(Math.abs(Number(sale.total || 0)));
-
     const qtyAbs = Math.abs(Number(sale.qty || 0)) || 0;
 
-    // Preferimos lineCost si existe (más robusto). Si no, lo calculamos por costo unitario.
     let amountCost = 0;
     const lc = Number(sale.lineCost);
     if (Number.isFinite(lc) && Math.abs(lc) > 0.000001) {
@@ -5196,23 +5466,22 @@ async function createJournalEntryForSalePOS(sale) {
       amountCost = round2((unitCost > 0 ? unitCost : 0) * qtyAbs);
     }
 
-    // Si no hay nada que registrar, salimos.
-    // (Venta sin monto y sin costo no aporta asiento.)
     if (!(amount > 0) && !(amountCost > 0)) return;
 
-    // Selección de cuenta de caja/banco según método de pago
-    const payment = normalizePaymentMethodPOS(sale.payment || 'efectivo');
-    let cashAccount = '1100';
-    if (payment === 'transferencia') cashAccount = '1200';
-    if (payment === 'tarjeta') cashAccount = '1200';
-    if (payment === 'credito') cashAccount = '1300';
+    const finAccounts = await posFinGetAllAccountsPOS();
+    const autoLines = posFinBuildSaleAutoLinesPOS(sale, finAccounts, { amount, amountCost, isCourtesy, isReturn });
+    const autoValidation = posFinValidateAutoLinesPOS(autoLines, finAccounts);
+    if (!autoValidation.ok) {
+      const msg = '⚠️ POS no generó asiento en Finanzas: ' + autoValidation.errors.join(' ');
+      console.warn(msg);
+      notifyFinanzasBridge(msg, { force: true });
+      return;
+    }
 
-    // Descripción / tipo
     const prodName = (sale.productName || '').toString();
     const eventName = (sale.eventName || '').toString();
     const courtesyTo = (sale.courtesyTo || '').toString().trim();
-    // Etapa 5: referencia de cliente (NO CxC / no afecta montos ni cuentas)
-    const customerName = (sale.customerName || '').toString().trim();
+    const customerName = getSaleCustomerSnapshotNamePOS(sale);
 
     const baseParts = [];
     if (prodName) baseParts.push(prodName);
@@ -5235,20 +5504,9 @@ async function createJournalEntryForSalePOS(sale) {
     }
 
     const evento = eventName || 'General';
+    const totalsDebe = autoValidation.debe;
+    const totalsHaber = autoValidation.haber;
 
-    // Totales del asiento
-    let totalsDebe = 0;
-    let totalsHaber = 0;
-
-    if (isCourtesy) {
-      totalsDebe = amountCost;
-      totalsHaber = amountCost;
-    } else {
-      totalsDebe = amount + amountCost;
-      totalsHaber = amount + amountCost;
-    }
-
-    // --- Crear o actualizar el journalEntry (mismo origenId) ---
     let entryId = null;
     let existingEntry = null;
 
@@ -5268,32 +5526,28 @@ async function createJournalEntryForSalePOS(sale) {
       const txWrite = finDb.transaction(['journalEntries'], 'readwrite');
       const storeWrite = txWrite.objectStore('journalEntries');
 
-      if (existingEntry) {
-        existingEntry.fecha = sale.date;
-        existingEntry.date = sale.date;
-        existingEntry.descripcion = descripcion;
-        existingEntry.tipoMovimiento = tipoMovimiento;
-        existingEntry.evento = evento;
-        existingEntry.origen = 'POS';
-        existingEntry.origenId = saleId;
-        existingEntry.totalDebe = totalsDebe;
-        existingEntry.totalHaber = totalsHaber;
+      const entryBase = {
+        fecha: sale.date,
+        date: sale.date,
+        descripcion,
+        tipoMovimiento,
+        evento,
+        origen: 'POS',
+        origenId: saleId,
+        totalDebe: totalsDebe,
+        totalHaber: totalsHaber,
+        source: 'pos_per_sale',
+        isAutomatic: true,
+        locked: true,
+        validation: { postableAccounts: true, balanced: true }
+      };
 
+      if (existingEntry) {
+        Object.assign(existingEntry, entryBase);
         const reqPut = storeWrite.put(existingEntry);
         reqPut.onsuccess = () => { entryId = existingEntry.id; };
       } else {
-        const entry = {
-          fecha: sale.date,
-          date: sale.date,
-          descripcion,
-          tipoMovimiento,
-          evento,
-          origen: 'POS',
-          origenId: saleId,
-          totalDebe: totalsDebe,
-          totalHaber: totalsHaber
-        };
-        const reqAdd = storeWrite.add(entry);
+        const reqAdd = storeWrite.add(entryBase);
         reqAdd.onsuccess = (ev) => { entryId = ev.target.result; };
       }
 
@@ -5312,7 +5566,6 @@ async function createJournalEntryForSalePOS(sale) {
       return;
     }
 
-    // --- Borrar líneas anteriores de este asiento (evita duplicados) ---
     await new Promise((resolve) => {
       const txDel = finDb.transaction(['journalLines'], 'readwrite');
       const storeDel = txDel.objectStore('journalLines');
@@ -5321,88 +5574,25 @@ async function createJournalEntryForSalePOS(sale) {
         const lines = reqLines.result || [];
         lines
           .filter((l) => String(l.entryId) === String(entryId) || String(l.idEntry) === String(entryId))
-          .forEach((l) => {
-            try { storeDel.delete(l.id); } catch (err) {}
-          });
+          .forEach((l) => { try { storeDel.delete(l.id); } catch (err) {} });
       };
       txDel.oncomplete = () => resolve();
       txDel.onerror = () => resolve();
     });
 
-    // --- Crear nuevas líneas ---
     await new Promise((resolve) => {
       const txLines = finDb.transaction(['journalLines'], 'readwrite');
       const storeLines = txLines.objectStore('journalLines');
-
-      const addLine = (data) => {
-        try {
-          // Guardamos ambos campos: idEntry (lo que Finanzas espera) y entryId (compatibilidad)
-          storeLines.add(Object.assign({ idEntry: entryId, entryId }, data));
-        } catch (err) {
-          console.error('Error guardando línea contable POS', err);
-        }
-      };
-
-      if (isCourtesy) {
-        // Cortesía: SOLO costo
-        //   DEBE: 6105 POS Cortesía
-        //   HABER: 1500 Inventario
-        if (!isReturn) {
-          if (amountCost > 0) {
-            addLine({ accountCode: '6105', debe: amountCost, haber: 0 });
-            addLine({ accountCode: '1500', debe: 0, haber: amountCost });
-          }
-        } else {
-          // Reverso (por si alguna vez se usa):
-          //   DEBE: 1500
-          //   HABER: 6105
-          if (amountCost > 0) {
-            addLine({ accountCode: '1500', debe: amountCost, haber: 0 });
-            addLine({ accountCode: '6105', debe: 0, haber: amountCost });
-          }
-        }
-
-        txLines.oncomplete = () => resolve();
-        txLines.onerror = () => resolve();
-        return;
-      }
-
-      if (!isReturn) {
-        // Venta normal:
-        // Ingreso:
-        //   DEBE: Caja/Banco/Clientes
-        //   HABER: 4100 Ingresos
-        if (amount > 0) {
-          addLine({ accountCode: cashAccount, debe: amount, haber: 0 });
-          addLine({ accountCode: '4100', debe: 0, haber: amount });
-        }
-
-        // Costo de venta (si hay costo disponible):
-        //   DEBE: 5100 Costo de ventas
-        //   HABER: 1500 Inventario
-        if (amountCost > 0) {
-          addLine({ accountCode: '5100', debe: amountCost, haber: 0 });
-          addLine({ accountCode: '1500', debe: 0, haber: amountCost });
-        }
-      } else {
-        // Devolución: asiento inverso
-        if (amount > 0) {
-          addLine({ accountCode: '4100', debe: amount, haber: 0 });
-          addLine({ accountCode: cashAccount, debe: 0, haber: amount });
-        }
-
-        // Costo inverso:
-        if (amountCost > 0) {
-          addLine({ accountCode: '1500', debe: amountCost, haber: 0 });
-          addLine({ accountCode: '5100', debe: 0, haber: amountCost });
-        }
-      }
-
+      autoLines.forEach((line) => {
+        try { storeLines.add(Object.assign({ idEntry: entryId, entryId }, line)); }
+        catch (err) { console.error('Error guardando línea contable POS', err); }
+      });
       txLines.oncomplete = () => resolve();
       txLines.onerror = () => resolve();
     });
   } catch (err) {
     console.error('Error general creando/actualizando asiento automático desde POS', err);
+    notifyFinanzasBridge('⚠️ POS no generó asiento en Finanzas: ' + (err && err.message ? err.message : 'validación contable fallida.'), { force: true });
   }
 }
 
@@ -6395,7 +6585,7 @@ const HIDDEN_GROUPS_KEY = 'a33_pos_hiddenGroups';
 const GROUP_CATALOG_KEY = 'a33_pos_groupCatalog_v1';
 
 
-// --- Ventas: Cliente (Clientes v2: picker propio + pegajoso + gestión)
+// --- Ventas: Cliente (selector + pegajoso; administración en Catálogos)
 // Etapa 2 (Datos): catálogo con customerId + migración suave. Analítica sigue usando customerName.
 const CUSTOMER_CATALOG_KEY = 'a33_pos_customersCatalog';
 const CUSTOMER_DISABLED_KEY = 'a33_pos_customersDisabled'; // legado (Etapa 1). En Etapa 2 se mantiene sincronizado.
@@ -6479,6 +6669,12 @@ function coerceCustomerObjectPOS(raw, disabledSet, existingIds){
       createdAt: Date.now(),
       updatedAt: null,
       normalizedName,
+      celular: '',
+      telefono: '',
+      whatsapp: '',
+      correo: '',
+      direccion: '',
+      notas: '',
       // Clientes v3 (Identidad): campos opcionales (migración suave)
       aliases: [],
       nameHistory: [],
@@ -6549,10 +6745,21 @@ function coerceCustomerObjectPOS(raw, disabledSet, existingIds){
   const mergedAt = (Number.isFinite(mergedAtNum) && mergedAtNum > 0) ? mergedAtNum : null;
   const mergeReason = sanitizeCustomerDisplayPOS(raw.mergeReason || '');
 
+  const celular = sanitizeCustomerDisplayPOS(raw.celular || raw.cellular || raw.mobile || raw.movil || raw.whatsapp || raw.wa || raw.whatsApp || raw.telefono || raw.phone || raw.telefonoCliente || '');
+
   return {
+    ...raw,
     id,
     name,
+    nombre: sanitizeCustomerDisplayPOS(raw.nombre || name),
+    celular,
+    telefono: celular,
+    whatsapp: '',
+    correo: sanitizeCustomerDisplayPOS(raw.correo || raw.email || raw.mail || ''),
+    direccion: sanitizeCustomerDisplayPOS(raw.direccion || raw.address || ''),
+    notas: String(raw.notas || raw.notes || '').trim(),
     isActive: !!isActive,
+    active: !!isActive,
     createdAt,
     updatedAt,
     normalizedName,
@@ -6658,7 +6865,6 @@ function migrateCustomerCatalogToObjectsPOS(){
   const disabled = loadCustomerDisabledSetPOS();
 
   const existingIds = new Set();
-  const seenNorm = new Set();
   const out = [];
   let changed = false;
 
@@ -6667,17 +6873,9 @@ function migrateCustomerCatalogToObjectsPOS(){
       const obj = coerceCustomerObjectPOS(item, disabled, existingIds);
       if (!obj) { if (item) changed = true; continue; }
 
-      if (seenNorm.has(obj.normalizedName)){
-        // Merge: mantener el primero, pero si alguno está activo, se queda activo.
-        const prev = out.find(x => x.normalizedName === obj.normalizedName);
-        if (prev && prev.isActive === false && obj.isActive === true) prev.isActive = true;
-        changed = true;
-        continue;
-      }
-
-      seenNorm.add(obj.normalizedName);
-
-      // Si el raw ya era objeto pero faltaba normalizedName/isActive/id, marcamos changed
+      // Etapa 3/3: migración conservadora.
+      // No fusionar ni borrar duplicados por nombre: se preservan IDs y datos existentes.
+      // El selector operativo deduplica visualmente cuando puede hacerlo sin destruir información.
       if (typeof item === 'string') changed = true;
       else {
         if (!item.id || item.normalizedName !== obj.normalizedName || typeof item.isActive !== 'boolean' || typeof item.createdAt !== 'number') changed = true;
@@ -6888,6 +7086,50 @@ function clearCustomerSelectionUI_POS(){
   if (inp.dataset) delete inp.dataset.customerId;
 }
 
+function getSaleCustomerSnapshotNamePOS(s){
+  // Snapshot conservador: histórico primero. Nunca reescribe por nombre actual del catálogo.
+  return sanitizeCustomerDisplayPOS(s && (s.customerName || s.customer || ''));
+}
+
+function dedupeSelectableCustomersPOS(list){
+  const out = [];
+  const seen = new Set();
+  for (const c of (Array.isArray(list) ? list : [])){
+    if (!c || c.isActive === false || c.mergedIntoId) continue;
+    const key = normalizeCustomerKeyPOS(c.name || c.normalizedName || '');
+    const id = (c.id != null) ? String(c.id).trim() : '';
+    const dedupeKey = key || ('id:' + id);
+    if (dedupeKey && seen.has(dedupeKey)) continue;
+    if (dedupeKey) seen.add(dedupeKey);
+    out.push(c);
+  }
+  return sortCustomerObjectsAZ_POS(out);
+}
+
+function validateCurrentCustomerSelectionPOS({ updateName = true } = {}){
+  const inp = document.getElementById('sale-customer');
+  if (!inp) return false;
+  const rawName = sanitizeCustomerDisplayPOS(inp.value || '');
+  const rawId = (inp.dataset) ? String(inp.dataset.customerId || '').trim() : '';
+  if (!rawName && !rawId){
+    persistCustomerLastPOS('');
+    return false;
+  }
+
+  const resolved = resolveCustomerIdForSalePOS(rawName, rawId || null);
+  if (resolved && resolved.id){
+    const displayName = resolved.displayName || rawName;
+    if (updateName) setCustomerSelectionUI_POS({ id: String(resolved.id), name: displayName });
+    if (isCustomerStickyPOS()) persistCustomerLastPOS(displayName);
+    return true;
+  }
+
+  // Cliente desactivado/eliminado/fusionado inválido: fallback seguro.
+  clearCustomerSelectionUI_POS();
+  persistCustomerLastPOS('');
+  return false;
+}
+
 
 // Etapa 2 (POS): al cambiar de evento, limpiar cliente seleccionado (UI + persistencia)
 function clearCustomerSelectionOnEventSwitchPOS(){
@@ -7003,35 +7245,42 @@ function resolveCustomerIdForSalePOS(customerName, uiHintId){
 
   const catalog = loadCustomerCatalogPOS();
   const resolver = buildCustomerResolverPOS(catalog);
+  const isSelectable = (finalId)=>{
+    const fid = finalId ? String(finalId).trim() : '';
+    if (!fid) return false;
+    const c = resolver.byId.get(fid);
+    return !!(c && c.isActive !== false && !c.mergedIntoId);
+  };
 
-  // 1) Hint de UI: si existe el ID, lo respetamos (y resolvemos merges)
+  // 1) Hint de UI: si existe el ID, lo respetamos solo si el destino final está activo.
   if (uiHintId){
     const hid = String(uiHintId).trim();
     if (hid && resolver.byId.has(hid)){
       const finalId = resolver.resolveFinalId(hid);
-      const displayName = resolver.getDisplayName(finalId) || name;
-      return { id: String(finalId), displayName, isNew: false };
+      if (isSelectable(finalId)){
+        const displayName = resolver.getDisplayName(finalId) || name;
+        return { id: String(finalId), displayName, isNew: false };
+      }
     }
   }
 
-  // 2) Match robusto por nombre (name / aliases / nameHistory / clientes fusionados)
+  // 2) Match robusto por nombre (name / aliases / nameHistory / clientes fusionados), pero solo para clientes activos.
   const finalId2 = resolver.matchNameToFinalId(name);
-  if (finalId2){
+  if (finalId2 && isSelectable(finalId2)){
     const displayName = resolver.getDisplayName(finalId2) || name;
     return { id: String(finalId2), displayName, isNew: false };
   }
 
-  // 3) Nuevo (se agregará al catálogo al completar la venta)
-  const existingIds = new Set(catalog.map(c => c && c.id).filter(Boolean).map(String));
-  const newId = generateCustomerIdPOS(existingIds);
-  return { id: String(newId), displayName: name, isNew: true };
+  // Etapa 2/3: POS no crea clientes desde Vender. Si no existe/está inactivo, se registra sin ID.
+  return { id: null, displayName: '', isNew: false };
 }
 
 // Venta sin cliente (Etapa 1): confirmación antes de registrar
 function isNoCustomerSelectedForSalePOS(){
   const name = getCustomerNameFromUI_POS();
   const hint = getCustomerIdHintFromUI_POS();
-  return !name && !hint;
+  const resolved = resolveCustomerIdForSalePOS(name, hint);
+  return !(resolved && resolved.id);
 }
 
 function confirmProceedSaleWithoutCustomerPOS(){
@@ -7108,7 +7357,7 @@ function ensureCustomerInCatalogPOS(name, preferredId){
 
 function getActiveCustomersPOS(){
   const all = loadCustomerCatalogPOS();
-  return all.filter(c => c && c.isActive !== false);
+  return dedupeSelectableCustomersPOS(all);
 }
 
 function addCustomerToCatalogPOS(name, preferredId){
@@ -7599,14 +7848,15 @@ function renderCustomerManageListPOS(){
 }
 
 function refreshCustomerUI_POS(){
-  // Migración suave: al refrescar UI aseguramos que el catálogo esté en formato objeto
+  // Migración suave: al refrescar UI aseguramos que el catálogo esté en formato objeto.
+  // Etapa 2/3: POS solo selecciona clientes; la administración vive en Catálogos.
   loadCustomerCatalogPOS();
 
-  // Si el picker está abierto, re-render para respetar desactivados/búsqueda
-  if (isCustomerPickerOpenPOS()) renderCustomerPickerListPOS();
+  // Etapa 3/3: si el cliente seleccionado fue desactivado/invalidado fuera del POS, se limpia sin tocar pagos/productos/totales.
+  try{ validateCurrentCustomerSelectionPOS({ updateName: true }); }catch(_){ }
 
-  // Si la gestión existe (y esté abierto o no), render listo para cuando se abra
-  renderCustomerManageListPOS();
+  // Si el picker está abierto, re-render para respetar activos/búsqueda.
+  if (isCustomerPickerOpenPOS()) renderCustomerPickerListPOS();
 }
 
 function toggleCustomerManagePanelPOS(){
@@ -7864,27 +8114,26 @@ function initCustomerUXPOS(){
   const sticky = document.getElementById('sale-customer-sticky');
   const clearBtn = document.getElementById('btn-clear-customer');
   const pickBtn = document.getElementById('btn-pick-customer');
-  const manageBtn = document.getElementById('btn-toggle-customer-manage');
 
   if (!inp || !sticky) return;
 
+  // Etapa 2/3: POS solo selecciona clientes activos; no administra ni crea clientes.
+  try{ inp.setAttribute('readonly', 'readonly'); inp.setAttribute('aria-readonly', 'true'); }catch(_){ }
   setupCustomerPickerModalPOS();
-  setupCustomerEditModalPOS();
-  setupCustomerMergeModalPOS();
   refreshCustomerUI_POS();
 
-  // Estado pegajoso + último cliente
+  // Estado pegajoso + último cliente: restaurar solo si todavía existe y está activo.
   const stickyOn = (A33Storage.getItem(CUSTOMER_STICKY_KEY) === '1');
   sticky.checked = stickyOn;
   if (stickyOn){
     const last = A33Storage.getItem(CUSTOMER_LAST_KEY) || '';
     if (last){
-      inp.value = sanitizeCustomerDisplayPOS(last);
-      // restaurar customerId si existe por match normalizado
-      const r = resolveCustomerIdForSalePOS(inp.value, null);
-      if (r && r.id && inp.dataset){
-        inp.dataset.customerId = String(r.id);
-        if (!r.isNew && r.displayName) inp.value = r.displayName;
+      const r = resolveCustomerIdForSalePOS(last, null);
+      if (r && r.id){
+        setCustomerSelectionUI_POS({ id: String(r.id), name: r.displayName || last });
+      } else {
+        clearCustomerSelectionUI_POS();
+        persistCustomerLastPOS('');
       }
     }
   }
@@ -7896,21 +8145,28 @@ function initCustomerUXPOS(){
     }
   });
 
-  // Si el usuario teclea, invalidamos el hint de id (se re-resuelve al vender)
+  // Defensa: si algo externo cambia el input, solo se acepta si resuelve a cliente activo.
   inp.addEventListener('input', ()=>{
-    if (inp.dataset) delete inp.dataset.customerId;
-    if (isCustomerStickyPOS()) persistCustomerLastPOS(inp.value || '');
+    const raw = sanitizeCustomerDisplayPOS(inp.value || '');
+    const r = resolveCustomerIdForSalePOS(raw, null);
+    if (r && r.id){
+      setCustomerSelectionUI_POS({ id: String(r.id), name: r.displayName || raw });
+      if (isCustomerStickyPOS()) persistCustomerLastPOS(r.displayName || raw);
+    } else {
+      if (inp.dataset) delete inp.dataset.customerId;
+    }
   });
 
-  // Si el usuario escribe un alias / nombre viejo / cliente fusionado, lo resolvemos al destino final
   inp.addEventListener('blur', ()=>{
     const raw = sanitizeCustomerDisplayPOS(inp.value || '');
     if (!raw) return;
-    const r = resolveCustomerIdForSalePOS(raw, null);
-    if (r && r.id && !r.isNew){
-      if (inp.dataset) inp.dataset.customerId = String(r.id);
-      if (r.displayName) inp.value = r.displayName;
-      if (isCustomerStickyPOS()) persistCustomerLastPOS(inp.value || '');
+    const r = resolveCustomerIdForSalePOS(raw, getCustomerIdHintFromUI_POS());
+    if (r && r.id){
+      setCustomerSelectionUI_POS({ id: String(r.id), name: r.displayName || raw });
+      if (isCustomerStickyPOS()) persistCustomerLastPOS(r.displayName || raw);
+    } else {
+      clearCustomerSelectionUI_POS();
+      persistCustomerLastPOS('');
     }
   });
 
@@ -7918,7 +8174,7 @@ function initCustomerUXPOS(){
     clearBtn.addEventListener('click', ()=>{
       clearCustomerSelectionUI_POS();
       persistCustomerLastPOS('');
-      inp.focus();
+      try{ pickBtn ? pickBtn.focus() : inp.focus(); }catch(_){ }
     });
   }
 
@@ -7926,117 +8182,33 @@ function initCustomerUXPOS(){
     pickBtn.addEventListener('click', ()=> openCustomerPickerPOS());
   }
 
-  if (manageBtn){
-    manageBtn.addEventListener('click', ()=> toggleCustomerManagePanelPOS());
-  }
-
-  // Gestión: agregar cliente sin venta
-  const addInp = document.getElementById('customer-add-name');
-  const addBtn = document.getElementById('customer-add-save');
-  const addMsg = document.getElementById('customer-add-msg');
-  if (addBtn && addInp){
-    const save = ()=>{
-      const name = sanitizeCustomerDisplayPOS(addInp.value || '');
-      if (!name){
-        if (addMsg) addMsg.textContent = 'Escribe un nombre.';
-        addInp.focus();
-        return;
+  // Catálogos vive fuera de POS: si otra pantalla cambia clientes, POS se auto-blinda.
+  try{
+    window.addEventListener('storage', (ev)=>{
+      if (!ev || ev.key === CUSTOMER_CATALOG_KEY || ev.key === CUSTOMER_DISABLED_KEY){
+        refreshCustomerUI_POS();
       }
-      const res = addCustomerToCatalogPOS(name);
-      if (!res || !res.ok){
-        if (res && res.reason === 'exists'){
-          // Si existe pero estaba desactivado, reactivar
-          const list2 = loadCustomerCatalogPOS();
-          const ex = list2.find(c => c && String(c.id) === String(res.id));
-          if (ex && ex.isActive === false && !ex.mergedIntoId){
-            setCustomerActiveByIdPOS(ex.id, true);
-            if (addMsg) addMsg.textContent = 'Ya existía (reactivado).';
-          } else {
-            if (addMsg) addMsg.textContent = 'Ya existe.';
-          }
-          return;
-        }
-        if (addMsg) addMsg.textContent = 'No se pudo guardar.';
-        return;
-      }
-
-      addInp.value = '';
-      if (addMsg) addMsg.textContent = 'Guardado.';
-      renderCustomerManageListPOS();
-      if (isCustomerPickerOpenPOS()) renderCustomerPickerListPOS();
-      addInp.focus();
-    };
-
-    addBtn.addEventListener('click', save);
-    addInp.addEventListener('keydown', (e)=>{
-      if (e.key === 'Enter') save();
     });
-  }
-
-  // Gestión: buscador
-  const manageSearch = document.getElementById('customer-manage-search');
-  if (manageSearch){
-    manageSearch.addEventListener('input', ()=> renderCustomerManageListPOS());
-  }
-
-  // Gestión: filtros + compacto + expandir/colapsar
-  const filterActiveBtn = document.getElementById('customer-manage-filter-active');
-  const filterAllBtn = document.getElementById('customer-manage-filter-all');
-  const compactChk = document.getElementById('customer-manage-compact');
-  const collapseAllBtn = document.getElementById('customer-manage-collapse-all');
-  const expandAllBtn = document.getElementById('customer-manage-expand-all');
-
-  if (filterActiveBtn){
-    filterActiveBtn.addEventListener('click', ()=>{
-      setCustomerManageFilterPOS('active');
-      // no forzamos colapsar/expandir; mantenemos preferencia actual
-      renderCustomerManageListPOS();
-      manageSearch?.focus();
-    });
-  }
-  if (filterAllBtn){
-    filterAllBtn.addEventListener('click', ()=>{
-      setCustomerManageFilterPOS('all');
-      renderCustomerManageListPOS();
-      manageSearch?.focus();
-    });
-  }
-  if (compactChk){
-    // estado inicial
-    compactChk.checked = isCustomerManageCompactPOS();
-    compactChk.addEventListener('change', ()=>{
-      setCustomerManageCompactPOS(!!compactChk.checked);
-      renderCustomerManageListPOS();
-    });
-  }
-  if (collapseAllBtn){
-    collapseAllBtn.addEventListener('click', ()=>{
-      setAllCustomerManageGroupsPOS(false);
-      renderCustomerManageListPOS();
-    });
-  }
-  if (expandAllBtn){
-    expandAllBtn.addEventListener('click', ()=>{
-      setAllCustomerManageGroupsPOS(true);
-      renderCustomerManageListPOS();
-    });
-  }
-
-  // Estado inicial visual (botones activos / clase compacto)
-  applyCustomerManageUIStatePOS();
+  }catch(_){ }
 }
 
 function afterSaleCustomerHousekeepingPOS(customerName, customerId){
   const n = sanitizeCustomerDisplayPOS(customerName);
-  if (n){
-    // asegurar catálogo con ID (si es nuevo, se crea con el ID ya usado en la venta)
-    ensureCustomerInCatalogPOS(n, customerId || null);
-    persistCustomerLastPOS(n);
-  } else {
+  const resolved = resolveCustomerIdForSalePOS(n, customerId || getCustomerIdHintFromUI_POS());
+
+  // Etapa 3/3: pegajoso seguro. Si el cliente ya no está activo, vuelve a cliente por defecto sin tocar pago/productos/extras/totales.
+  if (!(resolved && resolved.id)){
     persistCustomerLastPOS('');
+    clearCustomerSelectionUI_POS();
+    return;
   }
 
-  if (!isCustomerStickyPOS()){
+  const displayName = resolved.displayName || n;
+  persistCustomerLastPOS(displayName);
+
+  if (isCustomerStickyPOS()){
+    setCustomerSelectionUI_POS({ id: String(resolved.id), name: displayName });
+  } else {
     clearCustomerSelectionUI_POS();
   }
 }
@@ -17218,7 +17390,7 @@ async function renderDay(){
         <td><span class="tag ${payClass}" title="${escapeHtml(tenderDetail)}">${payTxt}</span>${tenderDetail ? `<div class="muted"><small>${escapeHtml(tenderDetail)}</small></div>` : ''}</td>
         <td>${s.courtesy?'✓':''}</td>
         <td>${s.isReturn?'✓':''}</td>
-        <td>${s.customerName||s.customer||''}</td>
+        <td>${escapeHtml(getSaleCustomerSnapshotNamePOS(s))}</td>
         <td>${s.courtesyTo||''}</td>
         <td><button data-id="${s.id}" title="Eliminar venta" class="btn-danger btn-mini del-sale">Eliminar</button></td>`;
       tbody.appendChild(tr);
@@ -17320,23 +17492,17 @@ function syncSummaryCustomerFilterUI_POS(filter, resolver){
 
 function deriveSaleCustomerIdentityForSummaryPOS(s, resolver){
   let finalId = '';
+  const rawName = getSaleCustomerSnapshotNamePOS(s);
   try{
     const rawId = (s && s.customerId != null) ? String(s.customerId).trim() : '';
     if (rawId){
       finalId = resolver ? (resolver.resolveFinalId(rawId) || rawId) : rawId;
-    } else {
-      const nm = sanitizeCustomerDisplayPOS(s && s.customerName || '');
-      if (nm && resolver){
-        finalId = resolver.matchNameToFinalId(nm) || '';
-      }
     }
+    // Etapa 3/3: ventas antiguas solo con nombre NO se vinculan por coincidencia.
+    // Así se evita asociarlas a un cliente incorrecto tras renombres/duplicados.
   }catch(_){ }
 
-  const rawName = sanitizeCustomerDisplayPOS(s && s.customerName || '');
-  let displayName = rawName;
-  if (finalId && resolver){
-    displayName = resolver.getDisplayName(finalId) || rawName || displayName;
-  }
+  const displayName = rawName || (finalId && resolver ? resolver.getDisplayName(finalId) : '') || '';
   const nameKey = normalizeCustomerKeyPOS(displayName || rawName);
   const hasCustomer = !!(finalId || rawName);
   return { finalId, displayName, nameKey, rawName, hasCustomer };
@@ -18106,10 +18272,11 @@ async function renderSummary(){
       let custName = '';
 
       if (ident && ident.finalId){
-        custKey = 'id:' + ident.finalId;
+        const snapKey = normalizeCustomerKeyPOS(ident.rawName || ident.displayName || '');
+        custKey = 'id:' + ident.finalId + (snapKey ? (':snap:' + snapKey) : '');
         custFilterType = 'id';
         custFilterValue = ident.finalId;
-        custName = (resolver ? (resolver.getDisplayName(ident.finalId) || '') : '') || ident.rawName || ident.displayName || 'Cliente';
+        custName = ident.rawName || ident.displayName || (resolver ? (resolver.getDisplayName(ident.finalId) || '') : '') || 'Cliente';
       } else {
         const nk = normalizeCustomerKeyPOS((ident && (ident.rawName || ident.displayName)) || '');
         if (nk){
@@ -21405,7 +21572,7 @@ async function openEventView(eventId){
   // Más reciente primero
   sales.sort((a,b)=> (saleSortKeyPOS(b) - saleSortKeyPOS(a))).forEach(s=>{
     const payLabel = getSalePaymentLabelPOS(s, bankMap);
-    const tr=document.createElement('tr'); tr.innerHTML = `<td>${getSaleSeqDisplayPOS(s)}</td><td>${s.date}</td><td>${getSaleTimeTextPOS(s)}</td><td>${escapeHtml(uiProductNamePOS(s.productName))}</td><td>${s.qty}</td><td>${fmt(s.unitPrice)}</td><td>${fmt(getSaleDiscountTotalPOS(s))}</td><td>${fmt(s.total)}</td><td>${payLabel}</td><td>${s.courtesy?'✓':''}</td><td>${s.isReturn?'✓':''}</td><td>${s.customerName||s.customer||''}</td><td>${s.courtesyTo||''}</td><td>${s.notes||''}</td>`;
+    const tr=document.createElement('tr'); tr.innerHTML = `<td>${getSaleSeqDisplayPOS(s)}</td><td>${s.date}</td><td>${getSaleTimeTextPOS(s)}</td><td>${escapeHtml(uiProductNamePOS(s.productName))}</td><td>${s.qty}</td><td>${fmt(s.unitPrice)}</td><td>${fmt(getSaleDiscountTotalPOS(s))}</td><td>${fmt(s.total)}</td><td>${payLabel}</td><td>${s.courtesy?'✓':''}</td><td>${s.isReturn?'✓':''}</td><td>${escapeHtml(getSaleCustomerSnapshotNamePOS(s))}</td><td>${s.courtesyTo||''}</td><td>${s.notes||''}</td>`;
     tb.appendChild(tr);
   });
 
@@ -21425,7 +21592,7 @@ async function exportEventSalesCSV(eventId){
   const ordered = [...sales].sort((a,b)=> (saleSortKeyPOS(b) - saleSortKeyPOS(a)));
   for (const s of ordered){
     const bank = isBankPaymentMethodPOS(s.payment) ? getSaleBankLabel(s, bankMap) : '';
-    rows.push([ (s.seqId || ''), s.id, s.date, getSaleTimeTextPOS(s), uiProductNamePOS(s.productName), s.qty, s.unitPrice, getSaleDiscountTotalPOS(s), s.total, getPaymentMethodLabelPOS(s.payment), bank, s.courtesy?1:0, s.isReturn?1:0, s.courtesyTo||'', s.notes||'', s.customerName||s.customer||'']);
+    rows.push([ (s.seqId || ''), s.id, s.date, getSaleTimeTextPOS(s), uiProductNamePOS(s.productName), s.qty, s.unitPrice, getSaleDiscountTotalPOS(s), s.total, getPaymentMethodLabelPOS(s.payment), bank, s.courtesy?1:0, s.isReturn?1:0, s.courtesyTo||'', s.notes||'', getSaleCustomerSnapshotNamePOS(s)]);
   }
   const safeName = (ev?ev.name:'evento').replace(/[^a-z0-9_\- ]/gi,'_');
   downloadExcel(`ventas_${safeName}.xlsx`, 'Ventas', rows);
@@ -21506,7 +21673,7 @@ async function generateCorteCSV(eventId){
   for (const s of sales){
     const bank = isBankPaymentMethodPOS(s.payment) ? getSaleBankLabel(s, bankMap) : '';
     const tp = getSaleCashTenderPartsPOS(s);
-    rows.push([s.id, s.date, getSaleTimeTextPOS(s), uiProductNamePOS(s.productName), s.qty, s.unitPrice, getSaleDiscountTotalPOS(s), s.total, getPaymentMethodLabelPOS(s.payment), tp.fx || '', tp.usd || '', tp.change || '', tp.equivalent || '', bank, s.courtesy?1:0, s.isReturn?1:0, s.courtesyTo||'', s.notes||'', s.customerName||s.customer||'']);
+    rows.push([s.id, s.date, getSaleTimeTextPOS(s), uiProductNamePOS(s.productName), s.qty, s.unitPrice, getSaleDiscountTotalPOS(s), s.total, getPaymentMethodLabelPOS(s.payment), tp.fx || '', tp.usd || '', tp.change || '', tp.equivalent || '', bank, s.courtesy?1:0, s.isReturn?1:0, s.courtesyTo||'', s.notes||'', getSaleCustomerSnapshotNamePOS(s)]);
   }
   const safeName = ev.name.replace(/[^a-z0-9_\- ]/gi,'_');
   downloadExcel(`corte_${safeName}.xlsx`, 'Corte', rows);
@@ -21613,7 +21780,7 @@ async function exportEventExcel(eventId){
       s.isReturn ? 1 : 0,
       s.courtesyTo || '',
       s.notes || '',
-      s.customerName || s.customer || ''
+      getSaleCustomerSnapshotNamePOS(s)
     ]);
   }
   const wsVentas = XLSX.utils.aoa_to_sheet(ventasRows);
@@ -22443,8 +22610,8 @@ async function addSale(){
   const isReturn = $('#sale-return').checked;
   const customerInputName = getCustomerNameFromUI_POS();
   const customerResolved = resolveCustomerIdForSalePOS(customerInputName, getCustomerIdHintFromUI_POS());
-  const customerId = customerResolved ? customerResolved.id : null;
-  const customerName = (customerResolved && customerResolved.displayName) ? customerResolved.displayName : customerInputName;
+  const customerId = (customerResolved && customerResolved.id) ? customerResolved.id : null;
+  const customerName = (customerResolved && customerResolved.id && customerResolved.displayName) ? customerResolved.displayName : '';
   const courtesyTo = $('#sale-courtesy-to').value || '';
   const notes = $('#sale-notes').value || '';
   if (!date || !productId || !qty) { alert('Completa fecha, producto y cantidad'); return; }
@@ -22703,8 +22870,8 @@ async function addExtraSale(extraId){
   const isReturn = $('#sale-return').checked;
   const customerInputName = getCustomerNameFromUI_POS();
   const customerResolved = resolveCustomerIdForSalePOS(customerInputName, getCustomerIdHintFromUI_POS());
-  const customerId = customerResolved ? customerResolved.id : null;
-  const customerName = (customerResolved && customerResolved.displayName) ? customerResolved.displayName : customerInputName;
+  const customerId = (customerResolved && customerResolved.id) ? customerResolved.id : null;
+  const customerName = (customerResolved && customerResolved.id && customerResolved.displayName) ? customerResolved.displayName : '';
   const courtesyTo = $('#sale-courtesy-to').value || '';
   const notes = $('#sale-notes').value || '';
 
