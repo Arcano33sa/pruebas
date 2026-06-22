@@ -1009,12 +1009,12 @@
       id: 'catalogos',
       label: 'Catálogos',
       parts: [
-        { id: 'productos', label: 'Productos', stores: [{ db: 'a33-pos', store: 'products' }] },
-        { id: 'envases', label: 'Envases / Botellas', keyNeedles: ['a33_catalog_envases'] },
-        { id: 'tapas', label: 'Tapas / Corchos', keyNeedles: ['a33_catalog_tapas'] },
-        { id: 'extras', label: 'Extras', stores: [{ db: 'a33-pos', store: 'extras' }] },
-        { id: 'bancos', label: 'Bancos', stores: [{ db: 'a33-pos', store: 'banks' }], keyNeedles: ['bank', 'banco'] },
-        { id: 'clientes', label: 'Clientes', keyNeedles: ['a33_pos_customers'], stores: [{ db: 'a33-pos', store: 'customers' }] },
+        { id: 'productos', label: 'Productos', stores: [{ db: 'a33-pos', store: 'products' }], keyNeedles: ['a33_catalog_deleted_products'] },
+        { id: 'envases', label: 'Envases / Botellas', keyNeedles: ['a33_catalog_envases', 'a33_catalog_deleted_envases'] },
+        { id: 'tapas', label: 'Tapas / Corchos', keyNeedles: ['a33_catalog_tapas', 'a33_catalog_deleted_tapas'] },
+        { id: 'extras', label: 'Extras', stores: [{ db: 'a33-pos', store: 'extras' }], keyNeedles: ['a33_catalog_deleted_extras'] },
+        { id: 'bancos', label: 'Bancos', stores: [{ db: 'a33-pos', store: 'banks' }], keyNeedles: ['bank', 'banco', 'a33_catalog_deleted_banks'] },
+        { id: 'clientes', label: 'Clientes', keyNeedles: ['a33_pos_customers', 'a33_catalog_deleted_customers'], stores: [{ db: 'a33-pos', store: 'customers' }] },
         { id: 'proveedores', label: 'Proveedores', stores: [{ db: 'finanzasDB', store: 'suppliers' }] },
         { id: 'productosProveedor', label: 'Productos de proveedor', stores: [{ db: 'finanzasDB', store: 'suppliers' }] }
       ]

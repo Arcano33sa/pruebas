@@ -8971,7 +8971,56 @@ const SEED = [
   {name:'Litro 1000ml', price:330, manageStock:true, active:true, receta:true, letra:'L', pos:true, envaseId:'envase_litro', tapaId:'tapa_pulso_litro'},
   {name:'Galón 3750 ml', price:DEFAULT_GALON_PRICE_POS, manageStock:true, active:true, receta:true, letra:'G', pos:true, envaseId:'envase_galon', tapaId:'tapa_galon'},
 ];
+const CATALOG_DELETED_KEYS_POS = {
+  products:'a33_catalog_deleted_products_v1',
+  banks:'a33_catalog_deleted_banks_v1'
+};
 const DEFAULT_EVENTS = [{name:'General'}];
+
+function readCatalogDeletedKeysPOS(kind){
+  const storageKey = CATALOG_DELETED_KEYS_POS[kind];
+  if (!storageKey) return new Set();
+  try{
+    const raw = localStorage.getItem(storageKey);
+    const arr = JSON.parse(raw || '[]');
+    return new Set((Array.isArray(arr) ? arr : []).map(v => String(v || '').trim()).filter(Boolean));
+  }catch(_){ return new Set(); }
+}
+
+function writeCatalogDeletedKeysPOS(kind, keys){
+  const storageKey = CATALOG_DELETED_KEYS_POS[kind];
+  if (!storageKey) return false;
+  try{
+    const arr = Array.from(keys || []).map(v => String(v || '').trim()).filter(Boolean).sort();
+    localStorage.setItem(storageKey, JSON.stringify(arr));
+    return true;
+  }catch(_){ return false; }
+}
+
+function clearCatalogDeletedPOS(kind){
+  const storageKey = CATALOG_DELETED_KEYS_POS[kind];
+  if (!storageKey) return;
+  try{ localStorage.removeItem(storageKey); }catch(_){ }
+}
+
+function catalogDeletedKeyPOS(kind, row){
+  const r = row && typeof row === 'object' ? row : {};
+  if (kind === 'banks') return `${normBankName(r.name || '')}::${normalizeBankTypePOS(r.type || r.bankType || 'transferencia')}`;
+  return normKeyPOS(r.name || r.nombre || '');
+}
+
+function rememberCatalogDeletedPOS(kind, row){
+  const keys = readCatalogDeletedKeysPOS(kind);
+  const main = catalogDeletedKeyPOS(kind, row);
+  if (main) keys.add(main);
+  if (kind === 'products' && mapProductNameToFinishedIdPOS(row && row.name) === 'galon') keys.add(normKeyPOS('Galón 3750 ml'));
+  writeCatalogDeletedKeysPOS(kind, keys);
+}
+
+function wasCatalogSeedDeletedPOS(kind, row){
+  const key = catalogDeletedKeyPOS(kind, row);
+  return !!(key && readCatalogDeletedKeysPOS(kind).has(key));
+}
 
 function isValidCatalogPricePOS(value){
   const n = Number(value);
@@ -9173,7 +9222,8 @@ function applyProductSaleCatalogDefaultsPOS(product, seed){
   return changed;
 }
 
-async function seedMissingDefaults(force=false){
+async function seedMissingDefaults(force=false, options={}){
+  const restoreDeleted = !!(options && options.restoreDeleted);
   const list = await getAll('products');
   const keys = new Set(list.map(p=>normKeyPOS(p.name)));
 
@@ -9184,11 +9234,14 @@ async function seedMissingDefaults(force=false){
 
   for (const s of SEED){
     const k = normKeyPOS(s.name);
+    const seedDeleted = wasCatalogSeedDeletedPOS('products', s);
     let existing = list.find(p=>normKeyPOS(p.name)===k);
     if (!existing && k === normKeyPOS(CANON_GALON_LABEL)){
       // Si solo existe el Galón legacy (3800 ml u otra variante), usarlo como existente y no crear duplicado.
       existing = list.find(p => p && legacyGallonVendibleNamePOS(p.name || ''));
     }
+
+    if (!existing && seedDeleted && !restoreDeleted) continue;
 
     if (force || !existing){
       if (existing){
@@ -9220,7 +9273,6 @@ async function seedMissingDefaults(force=false){
     }
   }
 }
-
 
 // UI helpers
 const $ = s => document.querySelector(s);
@@ -10708,7 +10760,7 @@ async function ensureDefaults(){
   await normalizeLegacyGallonProductPOS();
   products = await getAll('products');
   if (!products.length){
-    for (const p of SEED) await put('products', p);
+    await seedMissingDefaults(false);
   } else {
     for (const p of products){
       let changed = false;
@@ -10817,7 +10869,9 @@ async function ensureBanksDefaults(){
     if (!banks.length){
       const now = new Date().toISOString();
       for (const name of BANKS_SEED){
-        await put('banks', { name, isActive: true, type: 'transferencia', commissionPct: 0, createdAt: now });
+        const seed = { name, isActive: true, type: 'transferencia', commissionPct: 0, createdAt: now };
+        if (wasCatalogSeedDeletedPOS('banks', seed)) continue;
+        await put('banks', seed);
       }
       banks = await getAllBanksSafe();
     }
@@ -11435,6 +11489,11 @@ document.addEventListener('click', async (e)=>{
   if (delBtn){
     const id = parseInt(delBtn.dataset.id,10);
     if (!confirm('¿Eliminar este producto? Esto no borra ventas pasadas.')) return;
+    try{
+      const all = await getAll('products');
+      const product = all.find(p => p && Number(p.id) === Number(id));
+      if (product) rememberCatalogDeletedPOS('products', product);
+    }catch(_){ }
     await del('products', id);
     await renderProductos(); await refreshProductSelect(); await renderInventario();
     try{ await reempaquePopulateSelectorsPOS(); }catch(_){ }
@@ -22545,7 +22604,8 @@ async function deleteEvent(eventId){
 
 // Botón Restaurar productos base (A33)
 async function restoreSeed(){
-  await seedMissingDefaults(true);
+  clearCatalogDeletedPOS('products');
+  await seedMissingDefaults(true, { restoreDeleted:true });
   await renderProductos(); await refreshProductSelect(); await renderInventario();
   toast('Productos base restaurados');
 }

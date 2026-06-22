@@ -228,6 +228,7 @@ html[data-theme="light"] .cat-btn{background:rgba(255,255,255,0.56);}
 .cat-btn:hover{transform:translateY(-1px);border-color:rgba(221,191,100,0.68);box-shadow:0 10px 22px rgba(0,0,0,0.20);}
 .cat-btn-ok{background:linear-gradient(180deg, rgba(41,102,57,0.96), rgba(31,81,44,0.96));border-color:rgba(160,220,150,0.34);}
 .cat-btn-warn{background:linear-gradient(180deg, rgba(123,24,24,0.92), rgba(83,17,17,0.96));}
+.cat-btn-danger{background:linear-gradient(180deg, rgba(154,28,28,0.96), rgba(91,15,15,0.98));border-color:rgba(255,156,156,0.36);}
 .cat-btn-secondary{background:linear-gradient(180deg, rgba(44,44,44,0.92), rgba(24,24,24,0.96));}
 html[data-theme="light"] .cat-btn-secondary{background:linear-gradient(180deg, rgba(241,224,193,0.96), rgba(225,205,168,0.98));}
 .cat-status{

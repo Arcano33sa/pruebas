@@ -32,6 +32,14 @@
   const CUSTOMER_SCHEMA_VERSION = 1;
   const FIN_DB_NAME_CAT = 'finanzasDB';
   const FIN_DB_VERSION_CAT = 6;
+  const CATALOG_DELETED_KEYS = {
+    products:'a33_catalog_deleted_products_v1',
+    extras:'a33_catalog_deleted_extras_v1',
+    banks:'a33_catalog_deleted_banks_v1',
+    envases:'a33_catalog_deleted_envases_v1',
+    tapas:'a33_catalog_deleted_tapas_v1',
+    customers:'a33_catalog_deleted_customers_v1'
+  };
 
   const ENVASES_CATALOG_KEY = 'a33_catalog_envases_v1';
   const ENVASES_SCHEMA_VERSION = 1;
@@ -105,7 +113,7 @@
   function registerServiceWorker(){
     if (!('serviceWorker' in navigator)) return;
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./sw.js?v=4.20.84&r=15').then((reg)=>{
+      navigator.serviceWorker.register('./sw.js?v=4.20.84&r=18').then((reg)=>{
         try{ reg.update(); }catch(_){ }
       }).catch(() => {});
     }, { once:true });
@@ -267,11 +275,11 @@
     };
   }
 
-  function catalogNameById(list, id){
+  function catalogNameById(list, id, missingLabel){
     const key = String(id || '').trim();
     if (!key) return '';
     const row = (Array.isArray(list) ? list : []).find(x => x && String(x.id || '').trim() === key);
-    return row ? String(row.name || row.nombre || '').trim() : '';
+    return row ? String(row.name || row.nombre || '').trim() : (missingLabel || 'Eliminado');
   }
 
   function findCatalogIdByName(list, names, activeFn){
@@ -387,6 +395,9 @@
     const rows = activeRows.slice();
     if (selectedRow && !rows.some(x => String(x.id || '') === selected)) rows.push(selectedRow);
     const opts = [`<option value="">${escapeHtml(emptyLabel || 'Sin asignar')}</option>`];
+    if (selected && !selectedRow){
+      opts.push(`<option value="${escapeHtml(selected)}" selected>Eliminado (${escapeHtml(selected)})</option>`);
+    }
     for (const row of rows){
       const id = String(row.id || '').trim();
       if (!id) continue;
@@ -715,6 +726,63 @@
     });
   }
 
+  async function deleteRecord(store, key){
+    if (!db) await openDB();
+    if (!db.objectStoreNames.contains(store)) return false;
+    return new Promise((resolve, reject)=>{
+      const tx = db.transaction(store, 'readwrite');
+      const req = tx.objectStore(store).delete(key);
+      req.onsuccess = ()=>resolve(true);
+      req.onerror = ()=>reject(req.error || tx.error);
+      tx.onerror = ()=>reject(tx.error || req.error);
+    });
+  }
+
+  function readCatalogDeletedKeys(kind){
+    const storageKey = CATALOG_DELETED_KEYS[kind];
+    if (!storageKey) return new Set();
+    try{
+      const raw = localStorage.getItem(storageKey);
+      const arr = JSON.parse(raw || '[]');
+      return new Set((Array.isArray(arr) ? arr : []).map(v => String(v || '').trim()).filter(Boolean));
+    }catch(_){ return new Set(); }
+  }
+
+  function writeCatalogDeletedKeys(kind, keys){
+    const storageKey = CATALOG_DELETED_KEYS[kind];
+    if (!storageKey) return false;
+    try{
+      const arr = Array.from(keys || []).map(v => String(v || '').trim()).filter(Boolean).sort();
+      localStorage.setItem(storageKey, JSON.stringify(arr));
+      return true;
+    }catch(_){ return false; }
+  }
+
+  function catalogDeletedKey(kind, row){
+    const r = row && typeof row === 'object' ? row : {};
+    if (kind === 'banks') return `${normBankName(r.name || '')}::${normalizeBankType(r.type || r.bankType || 'transferencia')}`;
+    return normKey(r.name || r.nombre || '');
+  }
+
+  function rememberCatalogDeleted(kind, row){
+    const keys = readCatalogDeletedKeys(kind);
+    const main = catalogDeletedKey(kind, row);
+    if (main) keys.add(main);
+    if (kind === 'products' && mapProductNameToFinishedId(row && row.name) === 'galon') keys.add(normKey(CANON_GALON_LABEL));
+    writeCatalogDeletedKeys(kind, keys);
+  }
+
+  function clearCatalogDeleted(kind){
+    const storageKey = CATALOG_DELETED_KEYS[kind];
+    if (!storageKey) return;
+    try{ localStorage.removeItem(storageKey); }catch(_){ }
+  }
+
+  function findCatalogById(list, id){
+    const target = String(id ?? '').trim();
+    return (Array.isArray(list) ? list : []).find(row => row && String(row.id ?? '').trim() === target) || null;
+  }
+
   function setStatus(message, kind){
     const el = byId('cat-products-status');
     if (!el) return;
@@ -731,6 +799,11 @@
     toast._t = setTimeout(()=>el.classList.remove('show'), 2200);
   }
 
+  function warnCatalogDeleteError(context, err){
+    try{ console.warn('[Suite A33] No se pudo completar borrado en Catálogos:', context, err); }catch(_){ }
+    toast('No se pudo borrar. Actualiza e intenta de nuevo.');
+  }
+
   function setEditMsg(message, kind){
     const el = byId('cat-edit-msg');
     if (!el) return;
@@ -739,6 +812,8 @@
   }
 
   async function seedMissingDefaults(force){
+    if (force) clearCatalogDeleted('products');
+    const deletedSeedKeys = readCatalogDeletedKeys('products');
     const list = await getAll('products');
     const keys = new Set((list || []).map(p => normKey(p && p.name)));
     if (keys.has(normKey('Galón 3800ml')) || keys.has(normKey('Galón 3800 ml'))) keys.add(normKey(CANON_GALON_LABEL));
@@ -768,6 +843,7 @@
         if (!existing.updatedAt && changed) existing.updatedAt = new Date().toISOString();
         if (changed) await put('products', existing);
       } else {
+        if (!force && deletedSeedKeys.has(k)) continue;
         const now = new Date().toISOString();
         await put('products', { ...seed, createdAt:now, updatedAt:now, updatedFrom:'catalogos_productos_seed' });
       }
@@ -898,6 +974,7 @@
           <div class="cat-product-actions">
             <button class="cat-btn cat-btn-ok cat-edit-product" data-id="${escapeHtml(String(p.id))}" type="button">Editar</button>
             <button class="cat-btn ${active ? 'cat-btn-warn' : 'cat-btn-secondary'} cat-toggle-product" data-id="${escapeHtml(String(p.id))}" type="button">${active ? 'Inactivar' : 'Activar'}</button>
+            <button class="cat-btn cat-btn-danger cat-delete-product" data-id="${escapeHtml(String(p.id))}" type="button">Borrar</button>
           </div>
         `;
         wrap.appendChild(card);
@@ -936,8 +1013,14 @@
       if (!Number.isFinite(unitCost) || unitCost < 0) return { ok:false, msg:'Costo unitario inválido.' };
     }
     if (receta && !letra) return { ok:false, msg:'Letra es obligatoria cuando Receta está marcada.' };
-    if (envaseId && !catalogHasId(readEnvaseCatalog(), envaseId)) return { ok:false, msg:'Envase inválido o eliminado.' };
-    if (tapaId && !catalogHasId(readTapaCatalog(), tapaId)) return { ok:false, msg:'Tapa inválida o eliminada.' };
+    // Si una asociación histórica fue borrada del catálogo maestro, se conserva el ID para no romper productos ni snapshots.
+    // El listado lo mostrará como Eliminado/No encontrado hasta que el usuario asigne otra opción vigente.
+    if (envaseId && !catalogHasId(readEnvaseCatalog(), envaseId)) {
+      /* asociación histórica eliminada: permitida */
+    }
+    if (tapaId && !catalogHasId(readTapaCatalog(), tapaId)) {
+      /* asociación histórica eliminada: permitida */
+    }
     const incompleteProduction = !!(receta && (!letra || !envaseId || !tapaId));
     return { ok:true, name, price:round2(price), capacity: capRaw ? qty(capacity) : 0, unitCost:round2(unitCost), active, manage, receta, letra, pos, envaseId, tapaId, incompleteProduction };
   }
@@ -1119,7 +1202,7 @@
 
   async function toggleProduct(id){
     const all = await getAll('products');
-    const product = (all || []).find(p => Number(p && p.id) === Number(id));
+    const product = findCatalogById(all || [], id);
     if (!product) return;
     product.active = product.active === false;
     product.updatedAt = new Date().toISOString();
@@ -1127,6 +1210,24 @@
     await put('products', product);
     await renderProducts();
     toast(product.active === false ? 'Producto inactivado' : 'Producto activado');
+  }
+
+  async function deleteProductMaster(id){
+    try{
+      const all = await getAll('products');
+      const product = findCatalogById(all || [], id);
+      if (!product){ toast('Producto no encontrado'); return; }
+      const name = product.name || 'Producto sin nombre';
+      const ok = confirm(`¿Borrar el producto "${name}"?\n\nSolo se borrará del catálogo maestro. No se borrarán ventas, inventario, lotes ni snapshots históricos.`);
+      if (!ok) return;
+      rememberCatalogDeleted('products', product);
+      await deleteRecord('products', product.id);
+      if (currentEditId != null && String(currentEditId) === String(product.id)) closeProductModal();
+      await renderProducts();
+      toast('Producto borrado');
+    }catch(err){
+      warnCatalogDeleteError('productos', err);
+    }
   }
 
   function setStatusById(id, message, kind){
@@ -1159,6 +1260,7 @@
   }
 
   async function seedExtrasFromEventSnapshots(){
+    const deletedExtraKeys = readCatalogDeletedKeys('extras');
     const existing = await getAll('extras');
     const keys = new Set((existing || []).map(x => normKey(x && x.name)).filter(Boolean));
     const events = await getAll('events');
@@ -1168,7 +1270,7 @@
       const extras = sanitizeEventExtrasForMasters(ev && ev.extras);
       for (const x of extras){
         const key = normKey(x.name);
-        if (!key || keys.has(key)) continue;
+        if (!key || keys.has(key) || deletedExtraKeys.has(key)) continue;
         await put('extras', {
           name:x.name,
           basePrice:x.basePrice,
@@ -1342,6 +1444,7 @@
           <div class="cat-product-actions">
             <button class="cat-btn cat-btn-ok cat-edit-extra" data-id="${escapeHtml(String(x.id))}" type="button">Editar</button>
             <button class="cat-btn ${active ? 'cat-btn-warn' : 'cat-btn-secondary'} cat-toggle-extra" data-id="${escapeHtml(String(x.id))}" type="button">${active ? 'Inactivar' : 'Activar'}</button>
+            <button class="cat-btn cat-btn-danger cat-delete-extra" data-id="${escapeHtml(String(x.id))}" type="button">Borrar</button>
           </div>
         `;
         wrap.appendChild(card);
@@ -1389,7 +1492,7 @@
 
   async function toggleExtraMaster(id){
     const all = await getAll('extras');
-    const x = (all || []).find(e => Number(e && e.id) === Number(id));
+    const x = findCatalogById(all || [], id);
     if (!x) return;
     x.active = !activeBool(x.active);
     x.updatedAt = new Date().toISOString();
@@ -1399,12 +1502,38 @@
     toast(x.active === false ? 'Extra inactivado' : 'Extra activado');
   }
 
-  async function ensureBanksDefaultsCatalog(){
+  async function deleteExtraMaster(id){
+    try{
+      const all = await getAll('extras');
+      const x = findCatalogById(all || [], id);
+      if (!x){ toast('Extra no encontrado'); return; }
+      const name = x.name || 'Extra sin nombre';
+      const ok = confirm(`¿Borrar el extra "${name}"?\n\nSolo se borrará del catálogo maestro. No se borrarán ventas ni snapshots históricos.`);
+      if (!ok) return;
+      rememberCatalogDeleted('extras', x);
+      await deleteRecord('extras', x.id);
+      if (currentExtraEditId != null && String(currentExtraEditId) === String(x.id)) closeExtraModalCAT();
+      await renderExtras();
+      toast('Extra borrado');
+    }catch(err){
+      warnCatalogDeleteError('extras', err);
+    }
+  }
+
+  async function ensureBanksDefaultsCatalog(force){
+    if (force) clearCatalogDeleted('banks');
     const banks = await getAll('banks');
-    if ((banks || []).length) return;
+    const defaults = ['BAC','BANPRO','LAFISE','BDF'].map(name => ({ name, isActive:true, active:true, type:'transferencia', currency:'NIO', accountReference:'', commissionPct:0 }));
+    if ((banks || []).length && !force) return;
+    const existingKeys = new Set((banks || []).map(b => catalogDeletedKey('banks', b)).filter(Boolean));
+    const deletedBankKeys = readCatalogDeletedKeys('banks');
     const now = new Date().toISOString();
-    for (const name of ['BAC','BANPRO','LAFISE','BDF']){
-      await put('banks', { name, isActive:true, active:true, type:'transferencia', currency:'NIO', accountReference:'', commissionPct:0, createdAt:now, updatedAt:now, updatedFrom:'catalogos_bancos_seed' });
+    for (const row of defaults){
+      const key = catalogDeletedKey('banks', row);
+      if (existingKeys.has(key)) continue;
+      if (!force && deletedBankKeys.has(key)) continue;
+      await put('banks', { ...row, bankType:row.type, paymentType:row.type, reference:'', createdAt:now, updatedAt:now, updatedFrom:'catalogos_bancos_seed' });
+      existingKeys.add(key);
     }
   }
 
@@ -1560,6 +1689,7 @@
           <div class="cat-product-actions">
             <button class="cat-btn cat-btn-ok cat-edit-bank" data-id="${escapeHtml(String(b.id))}" type="button">Editar</button>
             <button class="cat-btn ${active ? 'cat-btn-warn' : 'cat-btn-secondary'} cat-toggle-bank" data-id="${escapeHtml(String(b.id))}" type="button">${active ? 'Inactivar' : 'Activar'}</button>
+            <button class="cat-btn cat-btn-danger cat-delete-bank" data-id="${escapeHtml(String(b.id))}" type="button">Borrar</button>
           </div>
         `;
         wrap.appendChild(card);
@@ -1609,7 +1739,7 @@
 
   async function toggleBankMaster(id){
     const all = await getAll('banks');
-    const b = (all || []).find(x => Number(x && x.id) === Number(id));
+    const b = findCatalogById(all || [], id);
     if (!b) return;
     const next = !bankActive(b);
     b.isActive = next;
@@ -1619,6 +1749,25 @@
     await put('banks', b);
     await renderBanks();
     toast(next ? 'Banco activado' : 'Banco inactivado');
+  }
+
+  async function deleteBankMaster(id){
+    try{
+      const all = await getAll('banks');
+      const b = findCatalogById(all || [], id);
+      if (!b){ toast('Banco no encontrado'); return; }
+      const name = b.name || 'Banco sin nombre';
+      const typeLabel = bankTypeLabel(normalizeBankType(b.type || b.bankType));
+      const ok = confirm(`¿Borrar el banco "${name}" (${typeLabel})?\n\nSolo se borrará del catálogo maestro. No se borrarán pagos, cobros, ventas ni movimientos históricos.`);
+      if (!ok) return;
+      rememberCatalogDeleted('banks', b);
+      await deleteRecord('banks', b.id);
+      if (currentBankEditId != null && String(currentBankEditId) === String(b.id)) closeBankModalCAT();
+      await renderBanks();
+      toast('Banco borrado');
+    }catch(err){
+      warnCatalogDeleteError('bancos', err);
+    }
   }
 
 
@@ -1718,6 +1867,8 @@
   }
 
   function ensureEnvasesDefaults(force){
+    if (force) clearCatalogDeleted('envases');
+    const deleted = readCatalogDeletedKeys('envases');
     const list = readEnvaseCatalog();
     const byName = new Map(list.map(x => [normalizeEnvaseKey(x.name), x]));
     const byId = new Set(list.map(x => String(x.id || '')));
@@ -1726,6 +1877,7 @@
 
     for (const seed of ENVASES_SEED){
       const key = normalizeEnvaseKey(seed.name);
+      if (!force && deleted.has(key)) continue;
       const existing = byName.get(key);
       if (existing){
         let ch = false;
@@ -1914,6 +2066,7 @@
           <div class="cat-product-actions">
             <button class="cat-btn cat-btn-ok cat-edit-envase" data-id="${escapeHtml(String(x.id))}" type="button">Editar</button>
             <button class="cat-btn ${active ? 'cat-btn-warn' : 'cat-btn-secondary'} cat-toggle-envase" data-id="${escapeHtml(String(x.id))}" type="button">${active ? 'Inactivar' : 'Activar'}</button>
+            <button class="cat-btn cat-btn-danger cat-delete-envase" data-id="${escapeHtml(String(x.id))}" type="button">Borrar</button>
           </div>
         `;
         wrap.appendChild(card);
@@ -1983,14 +2136,38 @@
     toast(row.active === false ? 'Envase inactivado' : 'Envase activado');
   }
 
+  async function deleteEnvaseMaster(id){
+    const target = String(id || '').trim();
+    if (!target) return;
+    const list = readEnvaseCatalog();
+    const row = list.find(x => x && String(x.id) === target);
+    if (!row){ toast('Envase no encontrado'); return; }
+    const name = row.name || row.nombre || 'Envase sin nombre';
+    const ok = confirm(`¿Borrar el envase "${name}"?
+
+Solo se quitará del catálogo maestro. No se borrarán productos asociados, producción, inventario, lotes ni históricos.`);
+    if (!ok) return;
+    rememberCatalogDeleted('envases', row);
+    const next = list.filter(x => !(x && String(x.id) === target));
+    if (!saveEnvaseCatalog(next)){ toast('No se pudo borrar'); return; }
+    if (currentEnvaseEditId && String(currentEnvaseEditId) === target) closeEnvaseModalCAT();
+    resetEnvaseForm();
+    await renderEnvases();
+    refreshProductPackagingSelects();
+    await renderProducts();
+    toast('Envase borrado');
+  }
+
   function bindEnvaseUi(){
     const list = byId('cat-envases-list');
     if (list){
       list.addEventListener('click', async (e)=>{
         const edit = e.target.closest('.cat-edit-envase');
         const toggle = e.target.closest('.cat-toggle-envase');
+        const del = e.target.closest('.cat-delete-envase');
         if (edit){ await editEnvaseMaster(edit.dataset.id); return; }
         if (toggle){ await toggleEnvaseMaster(toggle.dataset.id); return; }
+        if (del){ await deleteEnvaseMaster(del.dataset.id); return; }
       });
     }
     byId('cat-save-envase')?.addEventListener('click', ()=>saveEnvaseMaster().catch(err=>{ console.error(err); setEnvaseMsg('No se pudo guardar el envase.', 'warn'); }));
@@ -2089,6 +2266,8 @@
   }
 
   function ensureTapasDefaults(force){
+    if (force) clearCatalogDeleted('tapas');
+    const deleted = readCatalogDeletedKeys('tapas');
     const list = readTapaCatalog();
     const byName = new Map(list.map(x => [normalizeTapaKey(x.name), x]));
     const byId = new Set(list.map(x => String(x.id || '')));
@@ -2097,6 +2276,7 @@
 
     for (const seed of TAPAS_SEED){
       const key = normalizeTapaKey(seed.name);
+      if (!force && deleted.has(key)) continue;
       const existing = byName.get(key);
       if (existing){
         let ch = false;
@@ -2260,6 +2440,7 @@
           <div class="cat-product-actions">
             <button class="cat-btn cat-btn-ok cat-edit-tapa" data-id="${escapeHtml(String(x.id))}" type="button">Editar</button>
             <button class="cat-btn ${active ? 'cat-btn-warn' : 'cat-btn-secondary'} cat-toggle-tapa" data-id="${escapeHtml(String(x.id))}" type="button">${active ? 'Inactivar' : 'Activar'}</button>
+            <button class="cat-btn cat-btn-danger cat-delete-tapa" data-id="${escapeHtml(String(x.id))}" type="button">Borrar</button>
           </div>
         `;
         wrap.appendChild(card);
@@ -2327,14 +2508,38 @@
     toast(row.active === false ? 'Tapa inactivada' : 'Tapa activada');
   }
 
+  async function deleteTapaMaster(id){
+    const target = String(id || '').trim();
+    if (!target) return;
+    const list = readTapaCatalog();
+    const row = list.find(x => x && String(x.id) === target);
+    if (!row){ toast('Tapa no encontrada'); return; }
+    const name = row.name || row.nombre || 'Tapa sin nombre';
+    const ok = confirm(`¿Borrar la tapa/corcho "${name}"?
+
+Solo se quitará del catálogo maestro. No se borrarán productos asociados, producción, inventario, lotes ni históricos.`);
+    if (!ok) return;
+    rememberCatalogDeleted('tapas', row);
+    const next = list.filter(x => !(x && String(x.id) === target));
+    if (!saveTapaCatalog(next)){ toast('No se pudo borrar'); return; }
+    if (currentTapaEditId && String(currentTapaEditId) === target) closeTapaModalCAT();
+    resetTapaForm();
+    await renderTapas();
+    refreshProductPackagingSelects();
+    await renderProducts();
+    toast('Tapa borrada');
+  }
+
   function bindTapaUi(){
     const list = byId('cat-tapas-list');
     if (list){
       list.addEventListener('click', async (e)=>{
         const edit = e.target.closest('.cat-edit-tapa');
         const toggle = e.target.closest('.cat-toggle-tapa');
+        const del = e.target.closest('.cat-delete-tapa');
         if (edit){ await editTapaMaster(edit.dataset.id); return; }
         if (toggle){ await toggleTapaMaster(toggle.dataset.id); return; }
+        if (del){ await deleteTapaMaster(del.dataset.id); return; }
       });
     }
     byId('cat-save-tapa')?.addEventListener('click', ()=>saveTapaMaster().catch(err=>{ console.error(err); setTapaMsg('No se pudo guardar la tapa.', 'warn'); }));
@@ -2588,6 +2793,26 @@
     return ok;
   }
 
+  function replaceCustomerCatalogCAT(list){
+    const safe = normalizeCustomersCatalogCAT(Array.isArray(list) ? list : []);
+    let ok = false;
+    try{
+      if (window.A33Storage && typeof A33Storage.sharedRead === 'function' && typeof A33Storage.sharedSet === 'function'){
+        const r0 = A33Storage.sharedRead(CUSTOMER_CATALOG_KEY, [], 'local');
+        const baseRev = (r0 && r0.meta && typeof r0.meta.rev === 'number') ? r0.meta.rev : null;
+        const r = A33Storage.sharedSet(CUSTOMER_CATALOG_KEY, safe, { source:'catalogos_clientes_delete', baseRev });
+        ok = !!(r && r.ok);
+      } else if (window.A33Storage && typeof A33Storage.sharedSet === 'function'){
+        const r = A33Storage.sharedSet(CUSTOMER_CATALOG_KEY, safe, { source:'catalogos_clientes_delete' });
+        ok = !!(r && r.ok);
+      } else {
+        ok = writeJSONLocalCAT(CUSTOMER_CATALOG_KEY, safe);
+      }
+    }catch(_){ ok = writeJSONLocalCAT(CUSTOMER_CATALOG_KEY, safe); }
+    if (ok) syncCustomerDisabledLegacyCAT(safe);
+    return ok;
+  }
+
   function customerSearchTextCAT(c){
     if (!c) return '';
     const parts = [c.name, c.nombre, getCustomerCellularCAT(c), c.correo, c.direccion, c.notas];
@@ -2714,6 +2939,7 @@
           <div class="cat-product-actions">
             <button class="cat-btn cat-btn-ok cat-edit-customer" data-id="${escapeHtml(String(c.id))}" type="button" ${isMerged ? 'disabled' : ''}>Editar</button>
             <button class="cat-btn ${active ? 'cat-btn-warn' : 'cat-btn-secondary'} cat-toggle-customer" data-id="${escapeHtml(String(c.id))}" type="button" ${isMerged ? 'disabled' : ''}>${active ? 'Inactivar' : 'Activar'}</button>
+            <button class="cat-btn cat-btn-danger cat-delete-customer" data-id="${escapeHtml(String(c.id))}" type="button">Borrar</button>
           </div>
         `;
         wrap.appendChild(card);
@@ -2802,6 +3028,26 @@
     toast(next ? 'Cliente activado' : 'Cliente inactivado');
   }
 
+  async function deleteCustomerMaster(id){
+    const cid = id != null ? String(id).trim() : '';
+    if (!cid) return;
+    const list = readCustomerCatalogCAT();
+    const row = list.find(c => c && String(c.id) === cid);
+    if (!row){ toast('Cliente no encontrado'); return; }
+    const name = row.name || row.nombre || 'Cliente sin nombre';
+    const ok = confirm(`¿Borrar el cliente "${name}"?
+
+Solo se quitará del catálogo maestro/lista seleccionable. No se borrarán ventas, POS, agenda, pedidos ni históricos.`);
+    if (!ok) return;
+    rememberCatalogDeleted('customers', row);
+    const next = list.filter(c => !(c && String(c.id) === cid));
+    if (!replaceCustomerCatalogCAT(next)){ toast('No se pudo borrar'); return; }
+    if (currentCustomerEditId && String(currentCustomerEditId) === cid) closeCustomerModalCAT();
+    resetCustomerFormCAT();
+    await renderCustomers();
+    toast('Cliente borrado');
+  }
+
   function setEditCustomerMsgCAT(message, kind){
     const el = byId('cat-edit-customer-msg');
     if (!el) return;
@@ -2847,8 +3093,10 @@
       list.addEventListener('click', async (e)=>{
         const edit = e.target.closest('.cat-edit-customer');
         const toggle = e.target.closest('.cat-toggle-customer');
+        const del = e.target.closest('.cat-delete-customer');
         if (edit && !edit.disabled){ editCustomerMaster(edit.dataset.id); return; }
         if (toggle && !toggle.disabled){ await toggleCustomerMaster(toggle.dataset.id); return; }
+        if (del){ await deleteCustomerMaster(del.dataset.id); return; }
       });
     }
     byId('cat-save-customer')?.addEventListener('click', ()=>saveCustomerMaster().catch(err=>{ console.error(err); setCustomerMsgCAT('No se pudo guardar el cliente.', 'warn'); }));
@@ -3218,7 +3466,7 @@
           <div class="cat-product-actions">
             <button class="cat-btn cat-btn-secondary cat-supplier-products" data-id="${escapeHtml(String(s.id))}" type="button">Productos</button>
             <button class="cat-btn cat-btn-ok cat-edit-supplier" data-id="${escapeHtml(String(s.id))}" type="button">Editar</button>
-            <button class="cat-btn cat-btn-warn cat-delete-supplier" data-id="${escapeHtml(String(s.id))}" type="button">Eliminar</button>
+            <button class="cat-btn cat-btn-danger cat-delete-supplier" data-id="${escapeHtml(String(s.id))}" type="button">Borrar</button>
           </div>
         `;
         wrap.appendChild(card);
@@ -3292,15 +3540,21 @@
   }
 
   async function deleteSupplierCAT(id){
-    const sid = Number(id || 0);
-    if (!Number.isFinite(sid) || sid <= 0) return;
-    const ok = confirm('¿Eliminar este proveedor? Las compras históricas se mantienen.');
-    if (!ok) return;
-    await finDeleteCAT('suppliers', sid);
-    if (currentSupplierProductsIdCAT && Number(currentSupplierProductsIdCAT) === sid) closeSupplierProductsModalCAT();
-    if (currentSupplierEditIdCAT && Number(currentSupplierEditIdCAT) === sid) closeSupplierModalCAT();
-    await renderSuppliersCAT();
-    toast('Proveedor eliminado');
+    try{
+      const sid = Number(id || 0);
+      if (!Number.isFinite(sid) || sid <= 0) return;
+      const supplier = await getSupplierByIdCAT(sid).catch(()=>null);
+      const name = supplier && supplier.nombre ? ` "${supplier.nombre}"` : '';
+      const ok = confirm(`¿Borrar el proveedor${name}?\n\nLas compras históricas se mantienen.`);
+      if (!ok) return;
+      await finDeleteCAT('suppliers', sid);
+      if (currentSupplierProductsIdCAT && Number(currentSupplierProductsIdCAT) === sid) closeSupplierProductsModalCAT();
+      if (currentSupplierEditIdCAT && Number(currentSupplierEditIdCAT) === sid) closeSupplierModalCAT();
+      await renderSuppliersCAT();
+      toast('Proveedor borrado');
+    }catch(err){
+      warnCatalogDeleteError('proveedores', err);
+    }
   }
 
   function supplierProductTypeLabelCAT(tipo){
@@ -3375,7 +3629,7 @@
         </div>
         <div class="cat-product-actions">
           <button class="cat-btn cat-btn-ok cat-edit-supplier-product" data-pid="${escapeHtml(String(p.id))}" type="button">Editar</button>
-          <button class="cat-btn cat-btn-warn cat-delete-supplier-product" data-pid="${escapeHtml(String(p.id))}" type="button">Borrar</button>
+          <button class="cat-btn cat-btn-danger cat-delete-supplier-product" data-pid="${escapeHtml(String(p.id))}" type="button">Borrar</button>
         </div>
       `;
       list.appendChild(card);
@@ -3477,20 +3731,25 @@
   }
 
   async function deleteSupplierProductCAT(productId){
-    const sid = Number(currentSupplierProductsIdCAT || 0);
-    const pid = String(productId || '').trim();
-    if (!Number.isFinite(sid) || sid <= 0 || !pid) return;
-    const ok = confirm('¿Borrar este producto del proveedor? Las compras históricas se mantienen.');
-    if (!ok) return;
-    const supplierRaw = await finGetCAT('suppliers', sid);
-    if (!supplierRaw){ toast('Proveedor no encontrado'); return; }
-    const arr = Array.isArray(supplierRaw.productos) ? supplierRaw.productos : [];
-    const updated = arr.filter(p => String((p && p.id) || '') !== pid);
-    await finPutCAT('suppliers', { ...supplierRaw, productos:updated, updatedAt:new Date().toISOString(), updatedFrom:'catalogos_proveedores_productos_borrar' });
-    if (currentSupplierProductEditIdCAT && String(currentSupplierProductEditIdCAT) === pid) closeSupplierProductModalCAT();
-    await renderSupplierProductsModalCAT();
-    await renderSuppliersCAT();
-    toast('Producto borrado');
+    try{
+      const sid = Number(currentSupplierProductsIdCAT || 0);
+      const pid = String(productId || '').trim();
+      if (!Number.isFinite(sid) || sid <= 0 || !pid) return;
+      const ok = confirm('¿Borrar este producto del proveedor? Las compras históricas se mantienen.');
+      if (!ok) return;
+      const supplierRaw = await finGetCAT('suppliers', sid);
+      if (!supplierRaw){ toast('Proveedor no encontrado'); return; }
+      const arr = Array.isArray(supplierRaw.productos) ? supplierRaw.productos : [];
+      const updated = arr.filter(p => String((p && p.id) || '') !== pid);
+      if (updated.length === arr.length){ toast('Producto no encontrado'); return; }
+      await finPutCAT('suppliers', { ...supplierRaw, productos:updated, updatedAt:new Date().toISOString(), updatedFrom:'catalogos_proveedores_productos_borrar' });
+      if (currentSupplierProductEditIdCAT && String(currentSupplierProductEditIdCAT) === pid) closeSupplierProductModalCAT();
+      await renderSupplierProductsModalCAT();
+      await renderSuppliersCAT();
+      toast('Producto borrado');
+    }catch(err){
+      warnCatalogDeleteError('productos de proveedor', err);
+    }
   }
 
   function bindSupplierUi(){
@@ -3558,8 +3817,10 @@
       extrasList.addEventListener('click', async (e)=>{
         const edit = e.target.closest('.cat-edit-extra');
         const toggle = e.target.closest('.cat-toggle-extra');
+        const del = e.target.closest('.cat-delete-extra');
         if (edit){ await editExtraMaster(edit.dataset.id); return; }
         if (toggle){ await toggleExtraMaster(toggle.dataset.id); return; }
+        if (del){ await deleteExtraMaster(del.dataset.id); return; }
       });
     }
     const banksList = byId('cat-banks-list');
@@ -3567,8 +3828,10 @@
       banksList.addEventListener('click', async (e)=>{
         const edit = e.target.closest('.cat-edit-bank');
         const toggle = e.target.closest('.cat-toggle-bank');
+        const del = e.target.closest('.cat-delete-bank');
         if (edit){ await editBankMaster(edit.dataset.id); return; }
         if (toggle){ await toggleBankMaster(toggle.dataset.id); return; }
+        if (del){ await deleteBankMaster(del.dataset.id); return; }
       });
     }
     byId('cat-save-extra')?.addEventListener('click', ()=>saveExtraMaster().catch(err=>{ console.error(err); alert('No se pudo guardar el extra.'); }));
@@ -3579,7 +3842,7 @@
     byId('cat-edit-bank-save')?.addEventListener('click', ()=>saveBankEditMaster().catch(err=>{ console.error(err); setBankEditMsg('No se pudo guardar el banco.', 'warn'); }));
     byId('cat-cancel-bank')?.addEventListener('click', resetBankForm);
     byId('cat-refresh-banks')?.addEventListener('click', async ()=>{ await renderBanks(); toast('Bancos actualizados'); });
-    byId('cat-restore-banks')?.addEventListener('click', async ()=>{ await ensureBanksDefaultsCatalog(); await renderBanks(); toast('Bancos base revisados'); });
+    byId('cat-restore-banks')?.addEventListener('click', async ()=>{ await ensureBanksDefaultsCatalog(true); await renderBanks(); toast('Bancos base revisados'); });
   }
 
   async function initMasterCatalogs(){
@@ -3596,8 +3859,10 @@
       list.addEventListener('click', async (e)=>{
         const edit = e.target.closest('.cat-edit-product');
         const toggle = e.target.closest('.cat-toggle-product');
+        const del = e.target.closest('.cat-delete-product');
         if (edit){ await openProductModal(edit.dataset.id); return; }
-        if (toggle){ await toggleProduct(toggle.dataset.id); }
+        if (toggle){ await toggleProduct(toggle.dataset.id); return; }
+        if (del){ await deleteProductMaster(del.dataset.id); return; }
       });
     }
     ['cat-new-letra','cat-edit-letra'].forEach((id)=>{
