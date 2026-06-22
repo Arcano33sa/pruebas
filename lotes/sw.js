@@ -17,9 +17,9 @@ const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}-r${SW_REV}`;
 
 const PRECACHE_URLS = [
   './',
-  './index.html?v=4.20.84&r=12',
+  './index.html?v=4.20.84&r=13',
   './style.css?v=4.20.84&r=10',
-  './script.js?v=4.20.84&r=12',
+  './script.js?v=4.20.84&r=13',
   './manifest.webmanifest?v=4.20.84&r=10',
   './offline.html',
   './images/logo.png',
@@ -94,7 +94,7 @@ async function handleNavigate(request){
     const cache = await caches.open(CACHE_NAME);
     return (
       (await cache.match(request)) ||
-      (await cache.match('./index.html?v=4.20.84&r=12')) ||
+      (await cache.match('./index.html?v=4.20.84&r=13')) ||
       (await cache.match('./index.html')) ||
       (await cache.match('./offline.html')) ||
       (await cache.match('./')) ||
