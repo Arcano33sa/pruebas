@@ -31,12 +31,12 @@
   })();
 </script>
 <link rel="stylesheet" href="styles.css?v=4.20.84&r=14">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.84&r=13" />
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.84&r=17" />
   <link rel="stylesheet" href="/assets/css/a33-theme.css?v=4.20.84&r=13" />
   <script src="/assets/js/a33-theme.js?v=4.20.84&r=13"></script>
 </head>
 <body>
-  <header class="a33-header" role="banner">
+  <header class="a33-header a33-header--sticky" role="banner">
     <a class="a33-btn-menu" href="../index.html" aria-label="Volver al Menú principal">← Menú principal</a>
     <div class="a33-title">POS · Eventos</div>
     <div class="a33-right">
@@ -1698,7 +1698,7 @@
 </nav>
 
 <script src="./vendor/xlsx.full.min.js?v=4.20.84&r=13"></script>
-  <script src="/assets/js/a33-release.js?v=4.20.84&r=48"></script>
+  <script src="/assets/js/a33-release.js?v=4.20.84&r=49"></script>
 
 <script src="/assets/js/a33-storage.js?v=4.20.84&r=13"></script>
   <script src="/assets/js/a33-currency.js?v=4.20.84&r=14"></script>
@@ -1709,7 +1709,7 @@
     try{
       const relObj = (window.A33_RELEASE || {});
       const v = (relObj && relObj.suiteVersion) ? String(relObj.suiteVersion) : '4.20.84';
-      const rev = (relObj && relObj.rev !== undefined && relObj.rev !== null) ? String(relObj.rev) : '2'; // POS cache bump local — Tablero operativo Etapa 2
+      const rev = (relObj && relObj.rev !== undefined && relObj.rev !== null) ? String(relObj.rev) : '10'; // POS cache bump local — Encabezado Sticky Final
       try{ window.A33_VERSION = v; }catch(_){ }
       try{ window.A33_ASSET_REV = rev; }catch(_){ }
       try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r'+rev).toString(); }catch(_){ }

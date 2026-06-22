@@ -39,11 +39,15 @@ body.fin-body {
 /* Header */
 
 .fin-header {
+  position: -webkit-sticky;
+  position: sticky;
+  top: 0;
+  z-index: 40;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 12px 16px 16px;
-  border-radius: 18px;
+  padding: calc(12px + env(safe-area-inset-top)) 16px 16px;
+  border-radius: 0 0 18px 18px;
   background: linear-gradient(135deg, rgba(10,12,20,0.95), rgba(10,10,10,0.98));
   border: 1px solid rgba(212,175,55,0.45);
   box-shadow:
@@ -1298,6 +1302,31 @@ body.fin-body {
 }
 
 /* Responsive */
+
+
+
+/* Etapa 2/2 — Encabezado Finanzas sticky conservador.
+   Se conserva la navegación superior completa y se mantiene debajo de modales. */
+.fin-header{
+  max-width: 100%;
+  isolation: isolate;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transform: translateZ(0);
+}
+
+.fin-header a,
+.fin-header button{
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+@media (max-width: 768px){
+  .fin-header{
+    top: 0;
+    border-radius: 0 0 16px 16px;
+  }
+}
 
 @media (max-width: 768px) {
   .fin-app {

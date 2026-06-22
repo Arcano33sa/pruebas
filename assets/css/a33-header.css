@@ -4,14 +4,17 @@
 
 :root{
   --a33-header-base: 64px; /* altura base (sin safe-area) */
+  --a33-header-z: 40; /* sobre contenido, debajo de modales/ventanas */
   --a33-header-sticky-offset: calc(var(--a33-header-base) + env(safe-area-inset-top));
   --a33-header-fixed-offset: calc(var(--a33-header-base) + env(safe-area-inset-top));
 }
 
-.a33-header{
+.a33-header,
+.a33-header--sticky{
+  position: -webkit-sticky;
   position: sticky;
   top: 0;
-  z-index: 999;
+  z-index: var(--a33-header-z, 40);
   display: flex;
   align-items: center;
   gap: 12px;
@@ -24,16 +27,42 @@
   padding-right: calc(14px + env(safe-area-inset-right));
   min-height: var(--a33-header-base);
   box-sizing: border-box;
-  width: 100vw;
-  margin-left: calc(50% - 50vw);
-  margin-right: calc(50% - 50vw);
+  width: 100%;
+  max-width: 100%;
+  margin-left: 0;
+  margin-right: 0;
+  flex-shrink: 0;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
+  isolation: isolate;
 }
 
-.a33-header::after{
+.a33-header--sticky{
+  /* Clase explícita para módulos que ya tienen encabezado superior A33.
+     Mantiene el header en flujo normal para no tapar contenido inicial. */
+}
+
+.a33-header :where(.a33-btn-menu, .a33-title, .a33-version, .a33-right){
+  position: relative;
+  z-index: 1;
+}
+
+.a33-right{
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+:where([id]){
+  scroll-margin-top: calc(var(--a33-header-sticky-offset, 64px) + 12px);
+}
+
+.a33-header::after,
+.a33-header--sticky::after{
   content: "";
   position: absolute;
   left: 0;
@@ -100,6 +129,16 @@
   white-space: nowrap;
 }
 
+@media (max-width: 640px){
+  .a33-header,
+  .a33-header--sticky{
+    gap: 8px;
+    padding-left: calc(10px + env(safe-area-inset-left));
+    padding-right: calc(10px + env(safe-area-inset-right));
+  }
+  .a33-title{ letter-spacing: 0.06em; }
+}
+
 @media (max-width: 420px){
   .a33-title{ font-size: 13px; letter-spacing: 0.06em; }
   .a33-version{ display: none; }
@@ -107,8 +146,47 @@
 }
 
 
+/* Etapa 2/2 — aplicación por módulos y hardening final sticky
+   Mantiene el encabezado en flujo normal, visible en scroll y debajo de modales. */
+.a33-header--sticky{
+  top: 0;
+  transform: translateZ(0);
+  will-change: transform;
+  contain: layout paint;
+}
+
+.a33-header--sticky .a33-btn-menu{
+  flex: 0 0 auto;
+}
+
+.a33-header--sticky .a33-title{
+  min-width: 0;
+}
+
+@supports (padding: max(0px)){
+  .a33-header,
+  .a33-header--sticky{
+    padding-left: max(10px, calc(14px + env(safe-area-inset-left)));
+    padding-right: max(10px, calc(14px + env(safe-area-inset-right)));
+  }
+}
+
+@media (max-width: 520px){
+  .a33-header,
+  .a33-header--sticky{
+    min-height: 58px;
+  }
+  .a33-btn-menu{
+    min-height: 42px;
+    max-width: 46vw;
+    white-space: nowrap;
+  }
+}
+
+
 /* Apariencia global: encabezado premium compatible con modo claro */
-html[data-theme="light"] .a33-header{
+html[data-theme="light"] .a33-header,
+html[data-theme="light"] .a33-header--sticky{
   background:linear-gradient(180deg, rgba(255,248,234,0.94), rgba(241,226,201,0.98));
   border-bottom-color:rgba(139,98,30,0.32);
   box-shadow:0 10px 28px rgba(92,62,24,0.18);
@@ -135,7 +213,8 @@ html[data-theme="light"] .a33-btn-menu:hover{
 
 
 /* Etapa 3/5 — componentes compartidos: refinamiento del header global */
-html[data-theme="light"] .a33-header::after{
+html[data-theme="light"] .a33-header::after,
+html[data-theme="light"] .a33-header--sticky::after{
   background:linear-gradient(90deg, rgba(123,24,24,0.70), rgba(157,111,31,0.88), rgba(123,24,24,0.70));
 }
 

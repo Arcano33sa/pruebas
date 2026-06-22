@@ -4,7 +4,7 @@
 */
 
 // A33_RELEASE (fuente única)
-try { importScripts('/assets/js/a33-release.js?v=4.20.84&r=44'); } catch (e) {}
+try { importScripts('/assets/js/a33-release.js?v=4.20.84&r=49'); } catch (e) {}
 
 const SW_VERSION = (self.A33_RELEASE && (self.A33_RELEASE.suiteVersion || self.A33_RELEASE.SuiteVersion))
   ? String(self.A33_RELEASE.suiteVersion || self.A33_RELEASE.SuiteVersion)
@@ -24,7 +24,7 @@ const PRECACHE_URLS = [
   './manifest.webmanifest?v=4.20.84&r=7',
   './offline.html',
   './offline.html?v=4.20.84&r=7',
-  '/assets/js/a33-release.js?v=4.20.84&r=44'
+  '/assets/js/a33-release.js?v=4.20.84&r=49'
 ];
 
 function sameOrigin(url){
