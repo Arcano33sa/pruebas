@@ -10,16 +10,17 @@ const SW_VERSION = (self.A33_RELEASE && (self.A33_RELEASE.suiteVersion || self.A
   : '4.20.84';
 const SW_REV = (self.A33_RELEASE && (self.A33_RELEASE.rev !== undefined && self.A33_RELEASE.rev !== null))
   ? String(self.A33_RELEASE.rev)
-  : '12';
+  : '13';
 
 const MODULE = 'lotes';
-const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}-r${SW_REV}`;
+const MODULE_CACHE_REV = '14';
+const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}-r${SW_REV}-m${MODULE_CACHE_REV}`;
 
 const PRECACHE_URLS = [
   './',
-  './index.html?v=4.20.84&r=13',
+  './index.html?v=4.20.84&r=14',
   './style.css?v=4.20.84&r=10',
-  './script.js?v=4.20.84&r=13',
+  './script.js?v=4.20.84&r=14',
   './manifest.webmanifest?v=4.20.84&r=10',
   './offline.html',
   './images/logo.png',
@@ -94,7 +95,7 @@ async function handleNavigate(request){
     const cache = await caches.open(CACHE_NAME);
     return (
       (await cache.match(request)) ||
-      (await cache.match('./index.html?v=4.20.84&r=13')) ||
+      (await cache.match('./index.html?v=4.20.84&r=14')) ||
       (await cache.match('./index.html')) ||
       (await cache.match('./offline.html')) ||
       (await cache.match('./')) ||

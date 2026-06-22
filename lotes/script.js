@@ -376,13 +376,22 @@ function isRealCatalogProductItemForLotes(item){
   return !!(productId && (!legacyId || productId !== legacyId));
 }
 
+function catalogProductOverridesLegacyLetterForLotes(item){
+  const letter = normalizeProductLetter(item && (item.Letra || item.letra));
+  if (!letter || !LEGACY_LETTERS.has(letter)) return false;
+  if (!isRealCatalogProductItemForLotes(item)) return false;
+  if (item && (item.activo === false || item.receta === false)) return false;
+  return true;
+}
+
 function shouldRenderDynamicProductInputForLotes(item){
   const letter = normalizeProductLetter(item && (item.Letra || item.letra));
   if (!letter) return false;
   if (!LEGACY_LETTERS.has(letter)) return true;
-  // Si el fallback legacy fue borrado, una Letra legacy puede volver a usarse
-  // siempre que venga de un producto maestro real y activo en Catálogos.
-  return isLegacyLetterDeletedForLotes(letter) && isRealCatalogProductItemForLotes(item);
+  // Regla madre: si Catálogos trae un producto real activo con P/M/D/L/G,
+  // ese producto manda sobre el campo legacy fijo. Esto cubre productos nuevos
+  // y también productos editados (ej. Galón 3750 ml -> Galón 3720 ml).
+  return catalogProductOverridesLegacyLetterForLotes(item);
 }
 
 function getLegacyFallbackCatalogItemsForLotes(){
@@ -772,15 +781,23 @@ function updateLegacyProductFieldsUI(lote){
     const input = $(legacy.field);
     if (!input) continue;
     const field = input.closest ? input.closest('.field') : null;
+    const catalogProduct = getCatalogProductByLetter(legacy.letra);
+    const overriddenByCatalog = catalogProductOverridesLegacyLetterForLotes(catalogProduct);
     const deleted = isLegacyPresentationDeletedForLotes(legacy);
     const keepHistoricalValue = source && loteHasLetterQuantity(source, legacy.letra);
-    if (deleted && !keepHistoricalValue){
+    const hideLegacyField = overriddenByCatalog || (deleted && !keepHistoricalValue);
+
+    // Si Catálogos tiene un producto real para esta Letra, el campo dinámico es
+    // la fuente de captura. Se limpia el legacy oculto para no duplicar unidades
+    // ni dejar la G amarrada al Galón viejo.
+    if (hideLegacyField){
       input.value = '';
     }
     input.dataset.loteCatalogDeleted = deleted ? '1' : '0';
+    input.dataset.loteCatalogOverride = overriddenByCatalog ? '1' : '0';
     if (field){
-      field.style.display = deleted ? 'none' : '';
-      field.setAttribute('aria-hidden', deleted ? 'true' : 'false');
+      field.style.display = hideLegacyField ? 'none' : '';
+      field.setAttribute('aria-hidden', hideLegacyField ? 'true' : 'false');
     }
   }
 }
@@ -1015,6 +1032,14 @@ function buildProducedItemsFromForm(baseData){
   const editingCreatedByLetter = editingLoteSource ? getLoteCreatedQuantitiesByLetter(editingLoteSource) : {};
 
   for (const legacy of LEGACY_PRESENTATIONS){
+    const catalogProduct = getCatalogProductByLetter(legacy.letra);
+    const overriddenByCatalog = catalogProductOverridesLegacyLetterForLotes(catalogProduct);
+
+    // Cuando un producto real activo de Catálogos usa una Letra legacy, esa Letra
+    // se captura en el campo dinámico. El campo legacy fijo se ignora para evitar
+    // duplicados y para no bloquear ediciones como Galón 3720 ml / G.
+    if (overriddenByCatalog) continue;
+
     const input = $(legacy.field);
     const parsed = parseLoteQuantityInput(input ? input.value : (baseData ? baseData[legacy.field] : 0), legacy.nombre);
     if (!parsed.ok){ alert(parsed.message); return null; }
