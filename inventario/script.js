@@ -609,6 +609,24 @@ function collectEdits(base, local){
     if (bStock !== lStock) edits.push({ section:'bottles', id, field:'stock', value:lStock });
   });
 
+  const baseF = (base && base.finished && typeof base.finished === 'object') ? base.finished : {};
+  const localF = (local && local.finished && typeof local.finished === 'object') ? local.finished : {};
+  const idsF = new Set([...Object.keys(baseF), ...Object.keys(localF)]);
+  idsF.forEach((id)=>{
+    const bStock = getField(base, 'finished', id, 'stock');
+    const lStock = getField(local, 'finished', id, 'stock');
+    if (bStock !== lStock) edits.push({ section:'finished', id, field:'stock', value:lStock });
+  });
+
+  const baseFP = (base && base.finishedByProductId && typeof base.finishedByProductId === 'object') ? base.finishedByProductId : {};
+  const localFP = (local && local.finishedByProductId && typeof local.finishedByProductId === 'object') ? local.finishedByProductId : {};
+  const idsFP = new Set([...Object.keys(baseFP), ...Object.keys(localFP)]);
+  idsFP.forEach((id)=>{
+    const bStock = getField(base, 'finishedByProductId', id, 'stock');
+    const lStock = getField(local, 'finishedByProductId', id, 'stock');
+    if (bStock !== lStock) edits.push({ section:'finishedByProductId', id, field:'stock', value:lStock });
+  });
+
 
   const baseC = (base && base.caps && typeof base.caps === 'object') ? base.caps : {};
   const localC = (local && local.caps && typeof local.caps === 'object') ? local.caps : {};
@@ -643,6 +661,7 @@ function applyEditsToCurrent(cur, edits){
   if (!out.liquids || typeof out.liquids !== 'object') out.liquids = {};
   if (!out.bottles || typeof out.bottles !== 'object') out.bottles = {};
   if (!out.finished || typeof out.finished !== 'object') out.finished = {};
+  if (!out.finishedByProductId || typeof out.finishedByProductId !== 'object') out.finishedByProductId = {};
   if (!out.caps || typeof out.caps !== 'object') out.caps = {};
   if (!Array.isArray(out.varios)) out.varios = [];
   if (!Array.isArray(out.movimientos)) out.movimientos = [];
@@ -2082,6 +2101,7 @@ function saveInventario(inv) {
         inv.liquids = r.data.liquids;
         inv.bottles = r.data.bottles;
         inv.finished = r.data.finished;
+        inv.finishedByProductId = r.data.finishedByProductId;
         inv.caps = r.data.caps;
         inv.varios = r.data.varios;
         inv.movimientos = r.data.movimientos;
@@ -2194,6 +2214,7 @@ function attachListeners(inv) {
   const variosBody = $("inv-varios-body");
   const variosAdd = $("inv-varios-add");
   const variosSearch = $("inv-varios-search");
+  const finishedClearBtn = $("inv-finished-clear");
 
   const commitSave = (section, id) => {
     setStatus("Guardando…", "info", { sticky: true });
@@ -2204,6 +2225,7 @@ function attachListeners(inv) {
       inv.liquids = fresh.liquids;
       inv.bottles = fresh.bottles;
       inv.finished = fresh.finished;
+      inv.finishedByProductId = fresh.finishedByProductId;
       inv.caps = fresh.caps;
       inv.varios = fresh.varios;
       inv.movimientos = fresh.movimientos;
@@ -2226,6 +2248,20 @@ function attachListeners(inv) {
   };
 
   const scheduleSave = debounce((section, id) => commitSave(section, id), 220);
+
+  if (finishedClearBtn){
+    finishedClearBtn.addEventListener('click', () => {
+      const ok = window.confirm('¿Estás seguro de borrar productos terminados?');
+      if (!ok) return;
+      const changed = borrarProductosTerminados(inv);
+      const saved = commitSave('finished', '');
+      if (saved){
+        renderProductosTerminados(inv);
+        applyView('finished');
+        setStatus(changed > 0 ? 'Productos borrados.' : 'Productos ya estaban en 0.', 'ok', { timeoutMs: 1400 });
+      }
+    });
+  }
 
   // Buscador (solo UI, no altera modelo)
   if (variosSearch){
@@ -2691,6 +2727,84 @@ function calcularEstadoProductoTerminado(item) {
   return { label: `OK (${stock} unid.)`, className: "status-ok" };
 }
 
+function getFinishedStockRecord(inv, id){
+  const key = String(id || '').trim();
+  if (!key || !inv || typeof inv !== 'object') return null;
+  if (inv.finished && typeof inv.finished === 'object' && inv.finished[key] && typeof inv.finished[key] === 'object') {
+    return { section:'finished', item: inv.finished[key] };
+  }
+  if (inv.finishedByProductId && typeof inv.finishedByProductId === 'object' && inv.finishedByProductId[key] && typeof inv.finishedByProductId[key] === 'object') {
+    return { section:'finishedByProductId', item: inv.finishedByProductId[key] };
+  }
+  return null;
+}
+
+function registrarMovimientoProductoTerminado(inv, def, before){
+  try{
+    if (!inv || typeof inv !== 'object') return null;
+    const qty = Math.abs(Math.trunc(parseNumber(before)));
+    if (!qty) return null;
+    if (!Array.isArray(inv.movimientos)) inv.movimientos = [];
+    const id = String((def && (def.id || def.productId)) || '').trim();
+    if (!id) return null;
+    const mov = {
+      id: `mov_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      tipoItem: 'producto',
+      itemId: id,
+      nombreSnapshot: String((def && def.nombre) || id).trim(),
+      cantidad: qty,
+      delta: -qty,
+      tipoMovimiento: 'salida',
+      fecha: (new Date()).toISOString(),
+      nota: '',
+      origen: 'inventario/manual',
+      stockAnterior: Math.trunc(parseNumber(before)),
+      stockNuevo: 0,
+    };
+    inv.movimientos.push(mov);
+    return mov;
+  }catch(_){ return null; }
+}
+
+function borrarProductosTerminados(inv){
+  if (!inv || typeof inv !== 'object') return 0;
+  normalizeInventarioInPlace(inv);
+  const defs = buildFinishedDefs(inv);
+  const touched = new Set();
+  let changed = 0;
+
+  const zeroRecord = (section, id, def) => {
+    try{
+      const key = String(id || '').trim();
+      if (!key || touched.has(`${section}:${key}`)) return;
+      const group = inv && inv[section] && typeof inv[section] === 'object' ? inv[section] : null;
+      const item = group && group[key] && typeof group[key] === 'object' ? group[key] : null;
+      if (!item) return;
+      const before = Math.trunc(parseNumber(item.stock));
+      if (before !== 0){
+        registrarMovimientoProductoTerminado(inv, def || { id:key, nombre:key }, before);
+        item.stock = 0;
+        changed += 1;
+      }else{
+        item.stock = 0;
+      }
+      touched.add(`${section}:${key}`);
+    }catch(_){ }
+  };
+
+  defs.forEach((def) => {
+    const id = String((def && def.id) || '').trim();
+    if (!id) return;
+    zeroRecord('finished', id, def);
+    zeroRecord('finishedByProductId', id, def);
+  });
+
+  Object.keys((inv && inv.finished) || {}).forEach((id) => zeroRecord('finished', id, { id, nombre: finishedDisplayName(id, inv.finished[id]) }));
+  Object.keys((inv && inv.finishedByProductId) || {}).forEach((id) => zeroRecord('finishedByProductId', id, { id, nombre: finishedDisplayName(id, inv.finishedByProductId[id]) }));
+
+  return changed;
+}
+
 function renderProductosTerminados(inv) {
   const tbody = $("inv-productos-body");
   if (!tbody) return;
@@ -2832,7 +2946,7 @@ function installSmokeHooks(inv){
 function registerServiceWorker() {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker
-      .register("./sw.js?v=4.20.84&r=12")
+      .register("./sw.js?v=4.20.84&r=13")
       .catch((err) => console.error("SW error", err));
   }
 }

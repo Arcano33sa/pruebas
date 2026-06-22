@@ -182,8 +182,15 @@
     </section>
 
     <section class="card table-card">
-      <h2>Inventario de producto terminado</h2>
-      <p class="hint">Botellas listas de Sangría Artesanal Premium por presentación. Este inventario se actualiza automáticamente desde la Calculadora de Producción y el POS.</p>
+      <div class="table-header">
+        <div>
+          <h2>Inventario de producto terminado</h2>
+          <p class="hint">Botellas listas de Sangría Artesanal Premium por presentación. Este inventario se actualiza automáticamente desde la Calculadora de Producción y el POS.</p>
+        </div>
+        <div class="table-actions">
+          <button id="inv-finished-clear" class="btn danger btn-pill" type="button">Borrar Productos</button>
+        </div>
+      </div>
       <div class="table-wrapper">
         <table class="inv-table">
           <thead>
@@ -246,7 +253,7 @@
   <script src="/assets/js/a33-currency.js?v=4.20.84&r=14"></script>
   <script src="/assets/js/a33-presentations.js?v=4.20.84&r=8"></script>
 
-  <script src="script.js?v=4.20.84&r=11"></script>
+  <script src="script.js?v=4.20.84&r=12"></script>
   <script src="/assets/js/a33-input-ux.js?v=4.20.84&r=8"></script>
 </body>
 </html>
