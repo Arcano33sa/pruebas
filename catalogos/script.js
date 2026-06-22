@@ -105,7 +105,7 @@
   function registerServiceWorker(){
     if (!('serviceWorker' in navigator)) return;
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./sw.js?v=4.20.84&r=14').then((reg)=>{
+      navigator.serviceWorker.register('./sw.js?v=4.20.84&r=15').then((reg)=>{
         try{ reg.update(); }catch(_){ }
       }).catch(() => {});
     }, { once:true });
@@ -1196,6 +1196,13 @@
     return (all || []).find(x => x && (!currentId || Number(x.id) !== Number(currentId)) && normKey(x.name || '') === key) || null;
   }
 
+  function setExtraEditMsg(message, kind){
+    const el = byId('cat-edit-extra-msg');
+    if (!el) return;
+    el.textContent = message || '';
+    el.className = 'cat-muted cat-edit-msg' + (kind ? (' ' + kind) : '');
+  }
+
   function readExtraForm(){
     const name = String(byId('cat-extra-name')?.value || '').trim();
     const priceRaw = String(byId('cat-extra-price')?.value || '').trim();
@@ -1218,12 +1225,88 @@
     return { ok:true, name, basePrice:round2(price), unitCost:round2(unitCost), lowStockAlert:Math.max(0, Math.round(lowStockAlert)), active };
   }
 
+  function readExtraEditForm(){
+    const name = String(byId('cat-edit-extra-name')?.value || '').trim();
+    const priceRaw = String(byId('cat-edit-extra-price')?.value || '').trim();
+    const costRaw = String(byId('cat-edit-extra-cost')?.value || '').trim();
+    const lowRaw = String(byId('cat-edit-extra-low')?.value || '').trim();
+    const active = !!byId('cat-edit-extra-active')?.checked;
+    if (!name) return { ok:false, msg:'Nombre obligatorio.' };
+    const price = Number(priceRaw);
+    if (!priceRaw || !Number.isFinite(price) || price < 0) return { ok:false, msg:'Precio base inválido.' };
+    let unitCost = 0;
+    if (costRaw){
+      unitCost = Number(costRaw);
+      if (!Number.isFinite(unitCost) || unitCost < 0) return { ok:false, msg:'Costo unitario inválido.' };
+    }
+    let lowStockAlert = 5;
+    if (lowRaw){
+      lowStockAlert = Number(lowRaw);
+      if (!Number.isFinite(lowStockAlert) || lowStockAlert < 0) return { ok:false, msg:'Alerta de stock bajo inválida.' };
+    }
+    return { ok:true, name, basePrice:round2(price), unitCost:round2(unitCost), lowStockAlert:Math.max(0, Math.round(lowStockAlert)), active };
+  }
+
   function resetExtraForm(){
     currentExtraEditId = null;
     ['cat-extra-name','cat-extra-price','cat-extra-cost','cat-extra-low'].forEach(id => { const el = byId(id); if (el) el.value = ''; });
     const active = byId('cat-extra-active'); if (active) active.checked = true;
     const save = byId('cat-save-extra'); if (save) save.textContent = '+ Agregar extra';
     const cancel = byId('cat-cancel-extra'); if (cancel) cancel.hidden = true;
+  }
+
+  function resetExtraEditForm(){
+    ['cat-edit-extra-name','cat-edit-extra-price','cat-edit-extra-cost','cat-edit-extra-low'].forEach(id => { const el = byId(id); if (el) el.value = ''; });
+    const active = byId('cat-edit-extra-active'); if (active) active.checked = true;
+    const current = byId('cat-extra-current'); if (current) current.textContent = 'Extra actual: —';
+    setExtraEditMsg('', '');
+  }
+
+  async function openExtraModalCAT(id){
+    const all = await getAll('extras');
+    const x = (all || []).find(e => Number(e && e.id) === Number(id));
+    if (!x){ toast('Extra no encontrado'); return; }
+    currentExtraEditId = Number(x.id);
+    const current = byId('cat-extra-current'); if (current) current.textContent = 'Extra actual: ' + (x.name || '—');
+    const name = byId('cat-edit-extra-name'); if (name) name.value = x.name || '';
+    const price = byId('cat-edit-extra-price'); if (price) price.value = String(getExtraPrice(x));
+    const cost = byId('cat-edit-extra-cost'); if (cost) cost.value = getExtraUnitCost(x) > 0 ? String(getExtraUnitCost(x)) : '';
+    const low = byId('cat-edit-extra-low'); if (low) low.value = String(x.lowStockAlert ?? 5);
+    const active = byId('cat-edit-extra-active'); if (active) active.checked = activeBool(x.active);
+    setExtraEditMsg('', '');
+    openModalCAT('cat-extra-modal');
+    try{ name?.focus({ preventScroll:true }); name?.select(); }catch(_){ }
+  }
+
+  function closeExtraModalCAT(){
+    currentExtraEditId = null;
+    resetExtraEditForm();
+    closeModalCAT('cat-extra-modal');
+  }
+
+  async function saveExtraEditMaster(){
+    if (!currentExtraEditId){ setExtraEditMsg('No hay extra seleccionado.', 'warn'); return; }
+    const data = readExtraEditForm();
+    if (!data.ok){ setExtraEditMsg(data.msg, 'warn'); return; }
+    const dup = await ensureNoDuplicateExtraName(data.name, currentExtraEditId);
+    if (dup){ setExtraEditMsg('Ya existe un extra con ese nombre. Edita o activa el existente para evitar duplicados.', 'warn'); return; }
+    const all = await getAll('extras');
+    const row = (all || []).find(x => Number(x && x.id) === Number(currentExtraEditId));
+    if (!row){ setExtraEditMsg('El extra ya no existe.', 'warn'); closeExtraModalCAT(); await renderExtras(); return; }
+    row.name = data.name;
+    row.basePrice = data.basePrice;
+    row.price = data.basePrice;
+    row.unitPrice = data.basePrice;
+    row.unitCost = data.unitCost;
+    row.costoUnitario = data.unitCost;
+    row.lowStockAlert = data.lowStockAlert || 5;
+    row.active = data.active;
+    row.updatedAt = new Date().toISOString();
+    row.updatedFrom = 'catalogos_extras_modal';
+    await put('extras', row);
+    closeExtraModalCAT();
+    await renderExtras();
+    toast('Extra guardado');
   }
 
   async function renderExtras(){
@@ -1301,18 +1384,7 @@
   }
 
   async function editExtraMaster(id){
-    const all = await getAll('extras');
-    const x = (all || []).find(e => Number(e && e.id) === Number(id));
-    if (!x){ toast('Extra no encontrado'); return; }
-    currentExtraEditId = Number(x.id);
-    const name = byId('cat-extra-name'); if (name) name.value = x.name || '';
-    const price = byId('cat-extra-price'); if (price) price.value = String(getExtraPrice(x));
-    const cost = byId('cat-extra-cost'); if (cost) cost.value = getExtraUnitCost(x) > 0 ? String(getExtraUnitCost(x)) : '';
-    const low = byId('cat-extra-low'); if (low) low.value = String(x.lowStockAlert ?? 5);
-    const active = byId('cat-extra-active'); if (active) active.checked = activeBool(x.active);
-    const save = byId('cat-save-extra'); if (save) save.textContent = 'Guardar cambios';
-    const cancel = byId('cat-cancel-extra'); if (cancel) cancel.hidden = false;
-    try{ name?.focus({ preventScroll:true }); name?.select(); }catch(_){ }
+    await openExtraModalCAT(id);
   }
 
   async function toggleExtraMaster(id){
@@ -1343,6 +1415,13 @@
     return (all || []).find(b => b && (!currentId || Number(b.id) !== Number(currentId)) && normBankName(b.name || '') === key && normalizeBankType(b.type || b.bankType) === t) || null;
   }
 
+  function setBankEditMsg(message, kind){
+    const el = byId('cat-edit-bank-msg');
+    if (!el) return;
+    el.textContent = message || '';
+    el.className = 'cat-muted cat-edit-msg' + (kind ? (' ' + kind) : '');
+  }
+
   function readBankForm(){
     const name = String(byId('cat-bank-name')?.value || '').trim();
     const type = normalizeBankType(byId('cat-bank-type')?.value || 'transferencia');
@@ -1350,6 +1429,23 @@
     const accountReference = String(byId('cat-bank-ref')?.value || '').trim();
     const commissionRaw = String(byId('cat-bank-commission')?.value || '').trim();
     const active = !!byId('cat-bank-active')?.checked;
+    if (!name) return { ok:false, msg:'Nombre del banco obligatorio.' };
+    let commissionPct = 0;
+    if (commissionRaw){
+      commissionPct = Number(commissionRaw);
+      if (!Number.isFinite(commissionPct) || commissionPct < 0) return { ok:false, msg:'Comisión inválida.' };
+    }
+    if (type !== 'tarjeta') commissionPct = 0;
+    return { ok:true, name, type, currency, accountReference, commissionPct:round2(commissionPct), active };
+  }
+
+  function readBankEditForm(){
+    const name = String(byId('cat-edit-bank-name')?.value || '').trim();
+    const type = normalizeBankType(byId('cat-edit-bank-type')?.value || 'transferencia');
+    const currency = normalizeBankCurrency(byId('cat-edit-bank-currency')?.value || 'NIO');
+    const accountReference = String(byId('cat-edit-bank-ref')?.value || '').trim();
+    const commissionRaw = String(byId('cat-edit-bank-commission')?.value || '').trim();
+    const active = !!byId('cat-edit-bank-active')?.checked;
     if (!name) return { ok:false, msg:'Nombre del banco obligatorio.' };
     let commissionPct = 0;
     if (commissionRaw){
@@ -1368,6 +1464,65 @@
     const active = byId('cat-bank-active'); if (active) active.checked = true;
     const save = byId('cat-save-bank'); if (save) save.textContent = '+ Agregar banco';
     const cancel = byId('cat-cancel-bank'); if (cancel) cancel.hidden = true;
+  }
+
+  function resetBankEditForm(){
+    ['cat-edit-bank-name','cat-edit-bank-ref','cat-edit-bank-commission'].forEach(id => { const el = byId(id); if (el) el.value = ''; });
+    const type = byId('cat-edit-bank-type'); if (type) type.value = 'transferencia';
+    const cur = byId('cat-edit-bank-currency'); if (cur) cur.value = 'NIO';
+    const active = byId('cat-edit-bank-active'); if (active) active.checked = true;
+    const current = byId('cat-bank-current'); if (current) current.textContent = 'Banco actual: —';
+    setBankEditMsg('', '');
+  }
+
+  async function openBankModalCAT(id){
+    const all = await getAll('banks');
+    const b = (all || []).find(x => Number(x && x.id) === Number(id));
+    if (!b){ toast('Banco no encontrado'); return; }
+    currentBankEditId = Number(b.id);
+    const current = byId('cat-bank-current'); if (current) current.textContent = 'Banco actual: ' + (b.name || '—');
+    const name = byId('cat-edit-bank-name'); if (name) name.value = b.name || '';
+    const type = byId('cat-edit-bank-type'); if (type) type.value = normalizeBankType(b.type || b.bankType);
+    const cur = byId('cat-edit-bank-currency'); if (cur) cur.value = normalizeBankCurrency(b.currency);
+    const ref = byId('cat-edit-bank-ref'); if (ref) ref.value = b.accountReference || b.reference || '';
+    const commission = byId('cat-edit-bank-commission'); if (commission) commission.value = String(round2(b.commissionPct ?? b.commission ?? b.feePct ?? 0));
+    const active = byId('cat-edit-bank-active'); if (active) active.checked = bankActive(b);
+    setBankEditMsg('', '');
+    openModalCAT('cat-bank-modal');
+    try{ name?.focus({ preventScroll:true }); name?.select(); }catch(_){ }
+  }
+
+  function closeBankModalCAT(){
+    currentBankEditId = null;
+    resetBankEditForm();
+    closeModalCAT('cat-bank-modal');
+  }
+
+  async function saveBankEditMaster(){
+    if (!currentBankEditId){ setBankEditMsg('No hay banco seleccionado.', 'warn'); return; }
+    const data = readBankEditForm();
+    if (!data.ok){ setBankEditMsg(data.msg, 'warn'); return; }
+    const dup = await ensureNoDuplicateBank(data.name, data.type, currentBankEditId);
+    if (dup){ setBankEditMsg('Ya existe un banco con ese nombre y tipo. Edita o activa el existente.', 'warn'); return; }
+    const all = await getAll('banks');
+    const row = (all || []).find(x => Number(x && x.id) === Number(currentBankEditId));
+    if (!row){ setBankEditMsg('El banco ya no existe.', 'warn'); closeBankModalCAT(); await renderBanks(); return; }
+    row.name = data.name;
+    row.type = data.type;
+    row.bankType = data.type;
+    row.paymentType = data.type;
+    row.currency = data.currency;
+    row.accountReference = data.accountReference;
+    row.reference = data.accountReference;
+    row.commissionPct = data.commissionPct;
+    row.isActive = data.active;
+    row.active = data.active;
+    row.updatedAt = new Date().toISOString();
+    row.updatedFrom = 'catalogos_bancos_modal';
+    await put('banks', row);
+    closeBankModalCAT();
+    await renderBanks();
+    toast('Banco guardado');
   }
 
   async function renderBanks(){
@@ -1449,19 +1604,7 @@
   }
 
   async function editBankMaster(id){
-    const all = await getAll('banks');
-    const b = (all || []).find(x => Number(x && x.id) === Number(id));
-    if (!b){ toast('Banco no encontrado'); return; }
-    currentBankEditId = Number(b.id);
-    const name = byId('cat-bank-name'); if (name) name.value = b.name || '';
-    const type = byId('cat-bank-type'); if (type) type.value = normalizeBankType(b.type || b.bankType);
-    const cur = byId('cat-bank-currency'); if (cur) cur.value = normalizeBankCurrency(b.currency);
-    const ref = byId('cat-bank-ref'); if (ref) ref.value = b.accountReference || b.reference || '';
-    const commission = byId('cat-bank-commission'); if (commission) commission.value = String(round2(b.commissionPct ?? b.commission ?? b.feePct ?? 0));
-    const active = byId('cat-bank-active'); if (active) active.checked = bankActive(b);
-    const save = byId('cat-save-bank'); if (save) save.textContent = 'Guardar cambios';
-    const cancel = byId('cat-cancel-bank'); if (cancel) cancel.hidden = false;
-    try{ name?.focus({ preventScroll:true }); name?.select(); }catch(_){ }
+    await openBankModalCAT(id);
   }
 
   async function toggleBankMaster(id){
@@ -1628,11 +1771,33 @@
     el.className = 'cat-muted cat-edit-msg' + (kind ? (' ' + kind) : '');
   }
 
+  function setEnvaseEditMsg(message, kind){
+    const el = byId('cat-edit-envase-msg');
+    if (!el) return;
+    el.textContent = message || '';
+    el.className = 'cat-muted cat-edit-msg' + (kind ? (' ' + kind) : '');
+  }
+
   function readEnvaseForm(){
     const name = sanitizeEnvaseName(byId('cat-envase-name')?.value || '');
     const capRaw = String(byId('cat-envase-capacity')?.value || '').trim();
     const note = String(byId('cat-envase-note')?.value || '').trim().slice(0, 160);
     const active = !!byId('cat-envase-active')?.checked;
+    if (!name) return { ok:false, msg:'Nombre obligatorio.' };
+    let capacityMl = null;
+    if (capRaw){
+      const n = Number(capRaw);
+      if (!Number.isFinite(n) || n <= 0) return { ok:false, msg:'Capacidad ml inválida.' };
+      capacityMl = qty(n, 0);
+    }
+    return { ok:true, name, capacityMl, note, active };
+  }
+
+  function readEnvaseEditForm(){
+    const name = sanitizeEnvaseName(byId('cat-edit-envase-name')?.value || '');
+    const capRaw = String(byId('cat-edit-envase-capacity')?.value || '').trim();
+    const note = String(byId('cat-edit-envase-note')?.value || '').trim().slice(0, 160);
+    const active = !!byId('cat-edit-envase-active')?.checked;
     if (!name) return { ok:false, msg:'Nombre obligatorio.' };
     let capacityMl = null;
     if (capRaw){
@@ -1655,6 +1820,63 @@
   function ensureNoDuplicateEnvaseName(name, currentId){
     const key = normalizeEnvaseKey(name);
     return readEnvaseCatalog().find(x => x && String(x.id) !== String(currentId || '') && normalizeEnvaseKey(x.name) === key) || null;
+  }
+
+  function resetEnvaseEditForm(){
+    ['cat-edit-envase-name','cat-edit-envase-capacity','cat-edit-envase-note'].forEach(id => { const el = byId(id); if (el) el.value = ''; });
+    const active = byId('cat-edit-envase-active'); if (active) active.checked = true;
+    const current = byId('cat-envase-current'); if (current) current.textContent = 'Envase actual: —';
+    setEnvaseEditMsg('', '');
+  }
+
+  async function openEnvaseModalCAT(id){
+    const row = readEnvaseCatalog().find(x => x && String(x.id) === String(id));
+    if (!row){ toast('Envase no encontrado'); return; }
+    currentEnvaseEditId = String(row.id);
+    const current = byId('cat-envase-current'); if (current) current.textContent = 'Envase actual: ' + (row.name || row.nombre || '—');
+    const name = byId('cat-edit-envase-name'); if (name) name.value = row.name || row.nombre || '';
+    const cap = byId('cat-edit-envase-capacity'); if (cap) cap.value = envaseCapacity(row) > 0 ? String(envaseCapacity(row)) : '';
+    const note = byId('cat-edit-envase-note'); if (note) note.value = String(row.note || row.nota || '');
+    const active = byId('cat-edit-envase-active'); if (active) active.checked = envaseActive(row);
+    setEnvaseEditMsg('', '');
+    openModalCAT('cat-envase-modal');
+    try{ name?.focus({ preventScroll:true }); name?.select(); }catch(_){ }
+  }
+
+  function closeEnvaseModalCAT(){
+    currentEnvaseEditId = null;
+    resetEnvaseEditForm();
+    closeModalCAT('cat-envase-modal');
+  }
+
+  async function saveEnvaseEditMaster(){
+    if (!currentEnvaseEditId){ setEnvaseEditMsg('No hay envase seleccionado.', 'warn'); return; }
+    const data = readEnvaseEditForm();
+    if (!data.ok){ setEnvaseEditMsg(data.msg, 'warn'); return; }
+    const duplicate = ensureNoDuplicateEnvaseName(data.name, currentEnvaseEditId);
+    if (duplicate){ setEnvaseEditMsg('Ya existe un envase con ese nombre. Edita o activa el existente para evitar duplicados.', 'warn'); return; }
+
+    const list = readEnvaseCatalog();
+    const row = list.find(x => x && String(x.id) === String(currentEnvaseEditId));
+    if (!row){ setEnvaseEditMsg('El envase ya no existe. Actualiza e intenta de nuevo.', 'warn'); closeEnvaseModalCAT(); await renderEnvases(); return; }
+
+    row.name = data.name;
+    row.nombre = data.name;
+    row.capacityMl = data.capacityMl;
+    row.capacidadMl = data.capacityMl;
+    row.note = data.note;
+    row.nota = data.note;
+    row.active = data.active;
+    row.updatedAt = new Date().toISOString();
+    row.updatedFrom = 'catalogos_envases_modal';
+
+    if (!saveEnvaseCatalog(list)){ setEnvaseEditMsg('No se pudo guardar. Revisa almacenamiento local.', 'warn'); return; }
+    closeEnvaseModalCAT();
+    await renderEnvases();
+    await normalizeProductPackagingFields();
+    refreshProductPackagingSelects();
+    await renderProducts();
+    toast('Envase guardado');
   }
 
   async function renderEnvases(){
@@ -1744,17 +1966,7 @@
   }
 
   async function editEnvaseMaster(id){
-    const row = readEnvaseCatalog().find(x => x && String(x.id) === String(id));
-    if (!row){ toast('Envase no encontrado'); return; }
-    currentEnvaseEditId = String(row.id);
-    const name = byId('cat-envase-name'); if (name) name.value = row.name || '';
-    const cap = byId('cat-envase-capacity'); if (cap) cap.value = envaseCapacity(row) > 0 ? String(envaseCapacity(row)) : '';
-    const note = byId('cat-envase-note'); if (note) note.value = String(row.note || row.nota || '');
-    const active = byId('cat-envase-active'); if (active) active.checked = envaseActive(row);
-    const save = byId('cat-save-envase'); if (save) save.textContent = 'Guardar cambios';
-    const cancel = byId('cat-cancel-envase'); if (cancel) cancel.hidden = false;
-    setEnvaseMsg('', '');
-    try{ name?.focus({ preventScroll:true }); name?.select(); }catch(_){ }
+    await openEnvaseModalCAT(id);
   }
 
   async function toggleEnvaseMaster(id){
@@ -1782,6 +1994,7 @@
       });
     }
     byId('cat-save-envase')?.addEventListener('click', ()=>saveEnvaseMaster().catch(err=>{ console.error(err); setEnvaseMsg('No se pudo guardar el envase.', 'warn'); }));
+    byId('cat-edit-envase-save')?.addEventListener('click', ()=>saveEnvaseEditMaster().catch(err=>{ console.error(err); setEnvaseEditMsg('No se pudo guardar el envase.', 'warn'); }));
     byId('cat-cancel-envase')?.addEventListener('click', resetEnvaseForm);
     byId('cat-refresh-envases')?.addEventListener('click', async ()=>{ await renderEnvases(); toast('Envases actualizados'); });
     byId('cat-restore-envases')?.addEventListener('click', async ()=>{ ensureEnvasesDefaults(true); resetEnvaseForm(); await normalizeProductPackagingFields(); refreshProductPackagingSelects(); await renderEnvases(); await renderProducts(); toast('Envases base revisados'); });
@@ -1922,10 +2135,25 @@
     el.className = 'cat-muted cat-edit-msg' + (kind ? (' ' + kind) : '');
   }
 
+  function setTapaEditMsg(message, kind){
+    const el = byId('cat-edit-tapa-msg');
+    if (!el) return;
+    el.textContent = message || '';
+    el.className = 'cat-muted cat-edit-msg' + (kind ? (' ' + kind) : '');
+  }
+
   function readTapaForm(){
     const name = sanitizeTapaName(byId('cat-tapa-name')?.value || '');
     const note = String(byId('cat-tapa-note')?.value || '').trim().slice(0, 160);
     const active = !!byId('cat-tapa-active')?.checked;
+    if (!name) return { ok:false, msg:'Nombre obligatorio.' };
+    return { ok:true, name, note, active };
+  }
+
+  function readTapaEditForm(){
+    const name = sanitizeTapaName(byId('cat-edit-tapa-name')?.value || '');
+    const note = String(byId('cat-edit-tapa-note')?.value || '').trim().slice(0, 160);
+    const active = !!byId('cat-edit-tapa-active')?.checked;
     if (!name) return { ok:false, msg:'Nombre obligatorio.' };
     return { ok:true, name, note, active };
   }
@@ -1942,6 +2170,60 @@
   function ensureNoDuplicateTapaName(name, currentId){
     const key = normalizeTapaKey(name);
     return readTapaCatalog().find(x => x && String(x.id) !== String(currentId || '') && normalizeTapaKey(x.name) === key) || null;
+  }
+
+  function resetTapaEditForm(){
+    ['cat-edit-tapa-name','cat-edit-tapa-note'].forEach(id => { const el = byId(id); if (el) el.value = ''; });
+    const active = byId('cat-edit-tapa-active'); if (active) active.checked = true;
+    const current = byId('cat-tapa-current'); if (current) current.textContent = 'Tapa actual: —';
+    setTapaEditMsg('', '');
+  }
+
+  async function openTapaModalCAT(id){
+    const row = readTapaCatalog().find(x => x && String(x.id) === String(id));
+    if (!row){ toast('Tapa no encontrada'); return; }
+    currentTapaEditId = String(row.id);
+    const current = byId('cat-tapa-current'); if (current) current.textContent = 'Tapa actual: ' + (row.name || row.nombre || '—');
+    const name = byId('cat-edit-tapa-name'); if (name) name.value = row.name || row.nombre || '';
+    const note = byId('cat-edit-tapa-note'); if (note) note.value = String(row.note || row.nota || '');
+    const active = byId('cat-edit-tapa-active'); if (active) active.checked = tapaActive(row);
+    setTapaEditMsg('', '');
+    openModalCAT('cat-tapa-modal');
+    try{ name?.focus({ preventScroll:true }); name?.select(); }catch(_){ }
+  }
+
+  function closeTapaModalCAT(){
+    currentTapaEditId = null;
+    resetTapaEditForm();
+    closeModalCAT('cat-tapa-modal');
+  }
+
+  async function saveTapaEditMaster(){
+    if (!currentTapaEditId){ setTapaEditMsg('No hay tapa seleccionada.', 'warn'); return; }
+    const data = readTapaEditForm();
+    if (!data.ok){ setTapaEditMsg(data.msg, 'warn'); return; }
+    const duplicate = ensureNoDuplicateTapaName(data.name, currentTapaEditId);
+    if (duplicate){ setTapaEditMsg('Ya existe una tapa/corcho con ese nombre. Edita o activa el existente para evitar duplicados.', 'warn'); return; }
+
+    const list = readTapaCatalog();
+    const row = list.find(x => x && String(x.id) === String(currentTapaEditId));
+    if (!row){ setTapaEditMsg('La tapa ya no existe. Actualiza e intenta de nuevo.', 'warn'); closeTapaModalCAT(); await renderTapas(); return; }
+
+    row.name = data.name;
+    row.nombre = data.name;
+    row.note = data.note;
+    row.nota = data.note;
+    row.active = data.active;
+    row.updatedAt = new Date().toISOString();
+    row.updatedFrom = 'catalogos_tapas_modal';
+
+    if (!saveTapaCatalog(list)){ setTapaEditMsg('No se pudo guardar. Revisa almacenamiento local.', 'warn'); return; }
+    closeTapaModalCAT();
+    await renderTapas();
+    await normalizeProductPackagingFields();
+    refreshProductPackagingSelects();
+    await renderProducts();
+    toast('Tapa guardada');
   }
 
   async function renderTapas(){
@@ -2028,16 +2310,7 @@
   }
 
   async function editTapaMaster(id){
-    const row = readTapaCatalog().find(x => x && String(x.id) === String(id));
-    if (!row){ toast('Tapa no encontrada'); return; }
-    currentTapaEditId = String(row.id);
-    const name = byId('cat-tapa-name'); if (name) name.value = row.name || '';
-    const note = byId('cat-tapa-note'); if (note) note.value = String(row.note || row.nota || '');
-    const active = byId('cat-tapa-active'); if (active) active.checked = tapaActive(row);
-    const save = byId('cat-save-tapa'); if (save) save.textContent = 'Guardar cambios';
-    const cancel = byId('cat-cancel-tapa'); if (cancel) cancel.hidden = false;
-    setTapaMsg('', '');
-    try{ name?.focus({ preventScroll:true }); name?.select(); }catch(_){ }
+    await openTapaModalCAT(id);
   }
 
   async function toggleTapaMaster(id){
@@ -2065,6 +2338,7 @@
       });
     }
     byId('cat-save-tapa')?.addEventListener('click', ()=>saveTapaMaster().catch(err=>{ console.error(err); setTapaMsg('No se pudo guardar la tapa.', 'warn'); }));
+    byId('cat-edit-tapa-save')?.addEventListener('click', ()=>saveTapaEditMaster().catch(err=>{ console.error(err); setTapaEditMsg('No se pudo guardar la tapa.', 'warn'); }));
     byId('cat-cancel-tapa')?.addEventListener('click', resetTapaForm);
     byId('cat-refresh-tapas')?.addEventListener('click', async ()=>{ await renderTapas(); toast('Tapas actualizadas'); });
     byId('cat-restore-tapas')?.addEventListener('click', async ()=>{ ensureTapasDefaults(true); resetTapaForm(); await normalizeProductPackagingFields(); refreshProductPackagingSelects(); await renderTapas(); await renderProducts(); toast('Tapas base revisadas'); });
@@ -2852,6 +3126,31 @@
     updateModalBodyStateCAT();
   }
 
+  function bindMasterEditModalChromeCAT(){
+    const modals = [
+      { id:'cat-envase-modal', closeId:'cat-envase-close', cancelId:'cat-edit-envase-cancel', close:closeEnvaseModalCAT },
+      { id:'cat-tapa-modal', closeId:'cat-tapa-close', cancelId:'cat-edit-tapa-cancel', close:closeTapaModalCAT },
+      { id:'cat-extra-modal', closeId:'cat-extra-close', cancelId:'cat-edit-extra-cancel', close:closeExtraModalCAT },
+      { id:'cat-bank-modal', closeId:'cat-bank-close', cancelId:'cat-edit-bank-cancel', close:closeBankModalCAT }
+    ];
+    modals.forEach((item)=>{
+      byId(item.closeId)?.addEventListener('click', item.close);
+      byId(item.cancelId)?.addEventListener('click', item.close);
+      const modal = byId(item.id);
+      if (modal) modal.addEventListener('click', (e)=>{ if (e.target === modal) item.close(); });
+    });
+    document.addEventListener('keydown', (e)=>{
+      if (e.key !== 'Escape') return;
+      for (const item of modals.slice().reverse()){
+        const modal = byId(item.id);
+        if (modal && modal.classList.contains('show')){
+          item.close();
+          return;
+        }
+      }
+    });
+  }
+
   function resetSupplierFormCAT(){
     currentSupplierEditIdCAT = null;
     ['cat-supplier-name','cat-supplier-phone','cat-supplier-note'].forEach(id => { const el = byId(id); if (el) el.value = ''; });
@@ -3273,9 +3572,11 @@
       });
     }
     byId('cat-save-extra')?.addEventListener('click', ()=>saveExtraMaster().catch(err=>{ console.error(err); alert('No se pudo guardar el extra.'); }));
+    byId('cat-edit-extra-save')?.addEventListener('click', ()=>saveExtraEditMaster().catch(err=>{ console.error(err); setExtraEditMsg('No se pudo guardar el extra.', 'warn'); }));
     byId('cat-cancel-extra')?.addEventListener('click', resetExtraForm);
     byId('cat-refresh-extras')?.addEventListener('click', async ()=>{ await seedExtrasFromEventSnapshots(); await renderExtras(); toast('Extras actualizados'); });
     byId('cat-save-bank')?.addEventListener('click', ()=>saveBankMaster().catch(err=>{ console.error(err); alert('No se pudo guardar el banco.'); }));
+    byId('cat-edit-bank-save')?.addEventListener('click', ()=>saveBankEditMaster().catch(err=>{ console.error(err); setBankEditMsg('No se pudo guardar el banco.', 'warn'); }));
     byId('cat-cancel-bank')?.addEventListener('click', resetBankForm);
     byId('cat-refresh-banks')?.addEventListener('click', async ()=>{ await renderBanks(); toast('Bancos actualizados'); });
     byId('cat-restore-banks')?.addEventListener('click', async ()=>{ await ensureBanksDefaultsCatalog(); await renderBanks(); toast('Bancos base revisados'); });
@@ -3367,6 +3668,7 @@
     bindEnvaseUi();
     bindTapaUi();
     bindExtraBankUi();
+    bindMasterEditModalChromeCAT();
     bindCustomerUi();
     bindSupplierUi();
     activateTabFromUrl();

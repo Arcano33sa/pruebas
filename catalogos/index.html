@@ -210,7 +210,7 @@
           <article class="cat-product-form-card">
             <div>
               <p class="cat-eyebrow">Envase maestro</p>
-              <h2>Agregar / editar envase</h2>
+              <h2>Agregar envase</h2>
             </div>
             <div class="cat-product-form cat-envase-form">
               <label>Nombre
@@ -264,7 +264,7 @@
           <article class="cat-product-form-card">
             <div>
               <p class="cat-eyebrow">Tapa maestra</p>
-              <h2>Agregar / editar tapa</h2>
+              <h2>Agregar tapa</h2>
             </div>
             <div class="cat-product-form cat-tapa-form">
               <label>Nombre
@@ -314,7 +314,7 @@
           <article class="cat-product-form-card">
             <div>
               <p class="cat-eyebrow">Extra maestro</p>
-              <h2>Agregar / editar extra</h2>
+              <h2>Agregar extra</h2>
             </div>
             <div class="cat-product-form">
               <label>Nombre
@@ -370,7 +370,7 @@
           <article class="cat-product-form-card">
             <div>
               <p class="cat-eyebrow">Banco maestro</p>
-              <h2>Agregar / editar banco</h2>
+              <h2>Agregar banco</h2>
             </div>
             <div class="cat-product-form">
               <label>Nombre del banco
@@ -575,6 +575,132 @@
   </div>
 
 
+  <div id="cat-envase-modal" class="cat-modal" aria-hidden="true">
+    <div class="cat-modal-panel" role="dialog" aria-modal="true" aria-labelledby="cat-envase-modal-title">
+      <button id="cat-envase-close" class="cat-modal-close" type="button">Cerrar</button>
+      <p class="cat-eyebrow">Envase maestro</p>
+      <h2 id="cat-envase-modal-title">Editar envase</h2>
+      <p id="cat-envase-current" class="cat-muted">Envase actual: —</p>
+      <div class="cat-warn">Los cambios aplican hacia adelante. Productos y movimientos históricos conservan sus datos guardados.</div>
+
+      <div class="cat-product-form cat-product-form-modal">
+        <label>Nombre
+          <input id="cat-edit-envase-name" autocomplete="off" placeholder="Ej: Botella Catrina">
+        </label>
+        <label>Capacidad ml
+          <input id="cat-edit-envase-capacity" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Opcional">
+        </label>
+        <label class="cat-flag"><input id="cat-edit-envase-active" type="checkbox"> Activo</label>
+        <label class="cat-field-full">Observación / nota corta
+          <textarea id="cat-edit-envase-note" rows="3" maxlength="160" placeholder="Opcional"></textarea>
+        </label>
+      </div>
+      <small id="cat-edit-envase-msg" class="cat-muted cat-edit-msg"></small>
+      <div class="cat-modal-actions">
+        <button id="cat-edit-envase-save" class="cat-btn cat-btn-ok" type="button">Guardar cambios</button>
+        <button id="cat-edit-envase-cancel" class="cat-btn cat-btn-secondary" type="button">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="cat-tapa-modal" class="cat-modal" aria-hidden="true">
+    <div class="cat-modal-panel" role="dialog" aria-modal="true" aria-labelledby="cat-tapa-modal-title">
+      <button id="cat-tapa-close" class="cat-modal-close" type="button">Cerrar</button>
+      <p class="cat-eyebrow">Tapa maestra</p>
+      <h2 id="cat-tapa-modal-title">Editar tapa</h2>
+      <p id="cat-tapa-current" class="cat-muted">Tapa actual: —</p>
+      <div class="cat-warn">Los cambios aplican hacia adelante. Productos y movimientos históricos conservan sus datos guardados.</div>
+
+      <div class="cat-product-form cat-product-form-modal">
+        <label>Nombre
+          <input id="cat-edit-tapa-name" autocomplete="off" placeholder="Ej: Corcho Catrina">
+        </label>
+        <label class="cat-flag"><input id="cat-edit-tapa-active" type="checkbox"> Activo</label>
+        <label class="cat-field-full">Observación / nota corta
+          <textarea id="cat-edit-tapa-note" rows="3" maxlength="160" placeholder="Opcional"></textarea>
+        </label>
+      </div>
+      <small id="cat-edit-tapa-msg" class="cat-muted cat-edit-msg"></small>
+      <div class="cat-modal-actions">
+        <button id="cat-edit-tapa-save" class="cat-btn cat-btn-ok" type="button">Guardar cambios</button>
+        <button id="cat-edit-tapa-cancel" class="cat-btn cat-btn-secondary" type="button">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="cat-extra-modal" class="cat-modal" aria-hidden="true">
+    <div class="cat-modal-panel" role="dialog" aria-modal="true" aria-labelledby="cat-extra-modal-title">
+      <button id="cat-extra-close" class="cat-modal-close" type="button">Cerrar</button>
+      <p class="cat-eyebrow">Extra maestro</p>
+      <h2 id="cat-extra-modal-title">Editar extra</h2>
+      <p id="cat-extra-current" class="cat-muted">Extra actual: —</p>
+      <div class="cat-warn">Los cambios aplican hacia adelante. Ventas y eventos históricos conservan su snapshot.</div>
+
+      <div class="cat-product-form cat-product-form-modal">
+        <label>Nombre
+          <input id="cat-edit-extra-name" autocomplete="off" placeholder="Ej: Charcutería">
+        </label>
+        <label>Precio base (C$)
+          <input id="cat-edit-extra-price" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0.00">
+        </label>
+        <label>Costo unitario ref. (C$)
+          <input id="cat-edit-extra-cost" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Opcional">
+        </label>
+        <label>Alerta stock bajo ref.
+          <input id="cat-edit-extra-low" type="number" inputmode="numeric" step="1" min="0" placeholder="5">
+        </label>
+        <label class="cat-flag"><input id="cat-edit-extra-active" type="checkbox"> Activo</label>
+      </div>
+      <small id="cat-edit-extra-msg" class="cat-muted cat-edit-msg"></small>
+      <div class="cat-modal-actions">
+        <button id="cat-edit-extra-save" class="cat-btn cat-btn-ok" type="button">Guardar cambios</button>
+        <button id="cat-edit-extra-cancel" class="cat-btn cat-btn-secondary" type="button">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="cat-bank-modal" class="cat-modal" aria-hidden="true">
+    <div class="cat-modal-panel" role="dialog" aria-modal="true" aria-labelledby="cat-bank-modal-title">
+      <button id="cat-bank-close" class="cat-modal-close" type="button">Cerrar</button>
+      <p class="cat-eyebrow">Banco maestro</p>
+      <h2 id="cat-bank-modal-title">Editar banco</h2>
+      <p id="cat-bank-current" class="cat-muted">Banco actual: —</p>
+      <div class="cat-warn">Los cambios aplican hacia adelante. Movimientos y ventas históricas no se reescriben.</div>
+
+      <div class="cat-product-form cat-product-form-modal">
+        <label>Nombre del banco
+          <input id="cat-edit-bank-name" autocomplete="off" placeholder="Ej: BAC">
+        </label>
+        <label>Uso
+          <select id="cat-edit-bank-type">
+            <option value="transferencia">Transferencia</option>
+            <option value="tarjeta">Tarjeta</option>
+          </select>
+        </label>
+        <label>Moneda
+          <select id="cat-edit-bank-currency">
+            <option value="NIO">C$ / NIO</option>
+            <option value="USD">US$ / USD</option>
+            <option value="MIXED">Mixta</option>
+          </select>
+        </label>
+        <label>Cuenta / referencia
+          <input id="cat-edit-bank-ref" autocomplete="off" placeholder="Opcional">
+        </label>
+        <label>Comisión tarjeta %
+          <input id="cat-edit-bank-commission" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0.00">
+        </label>
+        <label class="cat-flag"><input id="cat-edit-bank-active" type="checkbox"> Activo</label>
+      </div>
+      <small id="cat-edit-bank-msg" class="cat-muted cat-edit-msg"></small>
+      <div class="cat-modal-actions">
+        <button id="cat-edit-bank-save" class="cat-btn cat-btn-ok" type="button">Guardar cambios</button>
+        <button id="cat-edit-bank-cancel" class="cat-btn cat-btn-secondary" type="button">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+
   <div id="cat-customer-modal" class="cat-modal" aria-hidden="true">
     <div class="cat-modal-panel cat-customer-modal-panel" role="dialog" aria-modal="true" aria-labelledby="cat-customer-modal-title">
       <button id="cat-customer-close" class="cat-modal-close" type="button">Cerrar</button>
@@ -691,9 +817,9 @@
   </div>
   <div id="cat-toast" class="cat-toast" role="status" aria-live="polite" aria-atomic="true">Hecho</div>
 
-  <script src="/assets/js/a33-release.js?v=4.20.84&r=46"></script>
+  <script src="/assets/js/a33-release.js?v=4.20.84&r=47"></script>
   <script src="/assets/js/a33-storage.js?v=4.20.84&r=13"></script>
-  <script src="script.js?v=4.20.84&r=14"></script>
+  <script src="script.js?v=4.20.84&r=15"></script>
   <script src="/assets/js/a33-input-ux.js?v=4.20.84&r=11"></script>
 </body>
 </html>
