@@ -413,6 +413,7 @@
     const finishedIn = isPlainObject(d.finished) ? d.finished : {};
     const finishedByProductIn = isPlainObject(d.finishedByProductId) ? d.finishedByProductId : {};
     const capsIn = isPlainObject(d.caps) ? d.caps : {};
+    const movimientosIn = Array.isArray(d.movimientos) ? d.movimientos : [];
 
     const liquids = {};
     const bottles = {};
@@ -512,7 +513,19 @@
       };
     }
 
-    return { ...d, liquids, bottles, finished, finishedByProductId, caps };
+    return { ...d, liquids, bottles, finished, finishedByProductId, caps, movimientos: movimientosIn.slice() };
+  }
+
+  function mergeInventarioMovimientosStorage(curList, nextList){
+    const out = Array.isArray(curList) ? curList.slice() : [];
+    const seen = new Set(out.map((m)=> String((m && m.id) || '')).filter(Boolean));
+    (Array.isArray(nextList) ? nextList : []).forEach((m)=>{
+      const id = String((m && m.id) || '').trim();
+      if (!id || seen.has(id)) return;
+      out.push(m);
+      seen.add(id);
+    });
+    return out;
   }
 
   function mergeInventario(cur, next){
@@ -539,6 +552,8 @@
     out.caps = mergeSection(a.caps, b.caps);
     // Varios (manual): si next trae array, se respeta; si no, preservar el actual
     if (Array.isArray(b.varios)) out.varios = b.varios.slice();
+    // Movimientos: append por id para no perder trazabilidad si otro módulo guardó en paralelo.
+    out.movimientos = mergeInventarioMovimientosStorage(a.movimientos, b.movimientos);
     return out;
   }
 

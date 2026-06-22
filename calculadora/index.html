@@ -743,6 +743,139 @@
       return a33CatalogNameById(tapas, key, key);
     }
 
+    function a33ResolveProducedItems(datos, mapUnits) {
+      if (datos && Array.isArray(datos.unidadesPorPresentacion) && datos.unidadesPorPresentacion.length) {
+        return datos.unidadesPorPresentacion.filter((item) => normQtyInt(item && item.unidades) > 0);
+      }
+      const sourceUnits = mapUnits || {};
+      return PRESENTACIONES.map((p) => ({ ...p, unidades: normQtyInt(sourceUnits[p.id]) }))
+        .filter((x) => normQtyInt(x.unidades) > 0);
+    }
+
+    function a33BuildPackagingConsumptionPlan(items) {
+      const envasesCatalog = a33ReadEnvasesCatalog();
+      const tapasCatalog = a33ReadTapasCatalog();
+      const plan = { bottles: {}, caps: {}, lines: [] };
+      (Array.isArray(items) ? items : []).forEach((item) => {
+        const qty = normQtyInt(item && item.unidades);
+        if (qty <= 0) return;
+        const productName = String((item && (item.nombre || item.name || item.id)) || "Producto").trim();
+        const bottleKey = a33EnvaseInventoryKey(item);
+        const capKey = a33TapaInventoryKey(item);
+
+        if (bottleKey) {
+          if (!plan.bottles[bottleKey]) {
+            plan.bottles[bottleKey] = {
+              key: bottleKey,
+              required: 0,
+              nombre: a33InventoryNameForBottleKey(bottleKey, envasesCatalog),
+              products: []
+            };
+          }
+          plan.bottles[bottleKey].required += qty;
+          plan.bottles[bottleKey].products.push(productName + " × " + qty);
+        }
+
+        if (capKey) {
+          if (!plan.caps[capKey]) {
+            plan.caps[capKey] = {
+              key: capKey,
+              required: 0,
+              nombre: a33InventoryNameForCapKey(capKey, tapasCatalog),
+              products: []
+            };
+          }
+          plan.caps[capKey].required += qty;
+          plan.caps[capKey].products.push(productName + " × " + qty);
+        }
+      });
+      return plan;
+    }
+
+    function a33GetStockFromSection(section, key, fallbackShape) {
+      if (!section || typeof section !== "object") return { entry: fallbackShape || { stock: 0 }, stock: 0 };
+      const entry = section[key] && typeof section[key] === "object" ? section[key] : (fallbackShape || { stock: 0 });
+      return { entry, stock: invParseNumber(entry.stock) };
+    }
+
+    function a33ValidateInventoryForPackaging(inv, items) {
+      const problems = [];
+      const plan = a33BuildPackagingConsumptionPlan(items);
+      const stockInv = inv && typeof inv === "object" ? inv : invDefault();
+      if (!stockInv.bottles || typeof stockInv.bottles !== "object") stockInv.bottles = {};
+      if (!stockInv.caps || typeof stockInv.caps !== "object") stockInv.caps = {};
+
+      Object.keys(plan.bottles).forEach((key) => {
+        const row = plan.bottles[key];
+        const current = a33GetStockFromSection(stockInv.bottles, key, { stock: 0 }).stock;
+        const required = Math.trunc(invParseNumber(row.required));
+        if (current - required < 0) {
+          problems.push("• " + row.nombre + ": disponible " + Math.trunc(current) + ", requiere " + required + " (faltan " + Math.max(0, required - Math.trunc(current)) + ")");
+        }
+      });
+
+      Object.keys(plan.caps).forEach((key) => {
+        const row = plan.caps[key];
+        const current = a33GetStockFromSection(stockInv.caps, key, { stock: 0, min: 0 }).stock;
+        const required = Math.trunc(invParseNumber(row.required));
+        if (current - required < 0) {
+          problems.push("• " + row.nombre + ": disponible " + Math.trunc(current) + ", requiere " + required + " (faltan " + Math.max(0, required - Math.trunc(current)) + ")");
+        }
+      });
+
+      if (!problems.length) return { ok: true, message: "", plan };
+      return {
+        ok: false,
+        message: "No se guardó la producción porque el inventario de envases/tapas es insuficiente.\n\n" + problems.join("\n") + "\n\nCarga o ajusta existencias en Inventario antes de guardar producción.",
+        plan
+      };
+    }
+
+    function a33LoadInventoryForValidation() {
+      try {
+        if (window.A33Storage && typeof A33Storage.sharedGet === "function") {
+          const data = A33Storage.sharedGet(STORAGE_KEY_INVENTARIO, invDefault());
+          return data && typeof data === "object" ? data : invDefault();
+        }
+      } catch (e) {}
+      return invLoad();
+    }
+
+    function a33RegistrarMovimientoInventarioProduccion(inv, opts) {
+      if (!inv || typeof inv !== "object") return null;
+      if (!Array.isArray(inv.movimientos)) inv.movimientos = [];
+      const o = opts && typeof opts === "object" ? opts : {};
+      const itemId = String(o.id || "").trim();
+      if (!itemId) return null;
+      const kind = String(o.kind || "").trim();
+      const tipoItem = kind === "bottle" ? "envase" : (kind === "cap" ? "tapa" : String(o.tipoItem || "item"));
+      const qty = Math.max(0, Math.trunc(invParseNumber(o.cantidad)));
+      const before = Math.trunc(invParseNumber(o.stockAnterior));
+      const after = Math.trunc(invParseNumber(o.stockNuevo));
+      const producto = String(o.producto || "").trim();
+      const loteCode = normalizarCodigoLote(o.lote || "");
+      const notaParts = ["Consumo automático por Calculadora de Producción"];
+      if (producto) notaParts.push("Producto: " + producto);
+      if (loteCode) notaParts.push("Lote: " + loteCode);
+      const mov = {
+        id: "mov_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
+        tipoItem,
+        itemId,
+        nombreSnapshot: String(o.nombreSnapshot || itemId).trim(),
+        cantidad: qty,
+        delta: Number.isFinite(+o.delta) ? Math.trunc(+o.delta) : (after - before),
+        tipoMovimiento: "consumo_produccion",
+        fecha: (new Date()).toISOString(),
+        fechaProduccion: String(o.fechaProduccion || "").trim(),
+        origen: "calculadora-produccion",
+        nota: notaParts.join(" · "),
+        stockAnterior: before,
+        stockNuevo: after
+      };
+      inv.movimientos.push(mov);
+      return mov;
+    }
+
     function a33NumberOrNull(value) {
       const n = Number(String(value ?? "").replace(",", "."));
       return Number.isFinite(n) && n > 0 ? n : null;
@@ -1338,7 +1471,7 @@
       return lines;
     }
 
-    function aplicarConsumoInventarioDesdeLote(datos, mapUnits) {
+    function aplicarConsumoInventarioDesdeLote(datos, mapUnits, codigoLoteOperacion) {
       if (!datos || !datos.totalesIngredientes) return true;
 
       // Leer con meta (anti-pisadas)
@@ -1378,13 +1511,17 @@
         inv.caps[k].min = Math.max(0, Math.trunc(invParseNumber(inv.caps[k].min)));
       });
 
-      const producedItems = (Array.isArray(datos.unidadesPorPresentacion) && datos.unidadesPorPresentacion.length)
-        ? datos.unidadesPorPresentacion
-        : PRESENTACIONES.map((p) => ({ ...p, unidades: normQtyInt((mapUnits || {})[p.id]) })).filter((x) => normQtyInt(x.unidades) > 0);
+      const producedItems = a33ResolveProducedItems(datos, mapUnits);
+      const stockCheck = a33ValidateInventoryForPackaging(inv, producedItems);
+      if (!stockCheck.ok) {
+        throw new Error(stockCheck.message || "Inventario insuficiente de envases/tapas.");
+      }
 
       const envasesCatalog = a33ReadEnvasesCatalog();
       const tapasCatalog = a33ReadTapasCatalog();
       const packagingLog = [];
+      const codigoLote = normalizarCodigoLote(codigoLoteOperacion || (datos && (datos.codigoLote || datos.loteNombre)) || "");
+      const fechaProduccion = (datos && datos.fechaProdStr) || hoyLocalISO();
 
       producedItems.forEach((item) => {
         const qty = normQtyInt(item && item.unidades);
@@ -1392,14 +1529,30 @@
 
         const bottleKey = a33EnvaseInventoryKey(item);
         const capKey = a33TapaInventoryKey(item);
+        const productName = String((item && (item.nombre || item.name || item.id)) || "Producto").trim();
 
         if (bottleKey) {
           if (!inv.bottles[bottleKey] || typeof inv.bottles[bottleKey] !== "object") {
             inv.bottles[bottleKey] = { stock: 0 };
           }
-          const before = invParseNumber(inv.bottles[bottleKey].stock);
-          inv.bottles[bottleKey].stock = before - qty;
-          packagingLog.push("Envase: " + (item.nombre || item.id) + " × " + qty + " → " + a33InventoryNameForBottleKey(bottleKey, envasesCatalog));
+          const before = Math.trunc(invParseNumber(inv.bottles[bottleKey].stock));
+          const after = before - qty;
+          if (after < 0) throw new Error("Inventario insuficiente de " + a33InventoryNameForBottleKey(bottleKey, envasesCatalog) + ".");
+          inv.bottles[bottleKey].stock = after;
+          const bottleName = a33InventoryNameForBottleKey(bottleKey, envasesCatalog);
+          a33RegistrarMovimientoInventarioProduccion(inv, {
+            kind: "bottle",
+            id: bottleKey,
+            nombreSnapshot: bottleName,
+            producto: productName,
+            lote: codigoLote,
+            fechaProduccion,
+            cantidad: qty,
+            delta: -qty,
+            stockAnterior: before,
+            stockNuevo: after
+          });
+          packagingLog.push("Envase: " + productName + " × " + qty + " → " + bottleName);
         }
 
         if (capKey) {
@@ -1407,14 +1560,29 @@
             inv.caps[capKey] = { stock: 0, min: 0 };
           }
           const before = Math.trunc(invParseNumber(inv.caps[capKey].stock));
-          inv.caps[capKey].stock = before - qty;
+          const after = before - qty;
+          if (after < 0) throw new Error("Inventario insuficiente de " + a33InventoryNameForCapKey(capKey, tapasCatalog) + ".");
+          inv.caps[capKey].stock = after;
           if (!Number.isFinite(invParseNumber(inv.caps[capKey].min))) inv.caps[capKey].min = 0;
-          packagingLog.push("Tapa: " + (item.nombre || item.id) + " × " + qty + " → " + a33InventoryNameForCapKey(capKey, tapasCatalog));
+          const capName = a33InventoryNameForCapKey(capKey, tapasCatalog);
+          a33RegistrarMovimientoInventarioProduccion(inv, {
+            kind: "cap",
+            id: capKey,
+            nombreSnapshot: capName,
+            producto: productName,
+            lote: codigoLote,
+            fechaProduccion,
+            cantidad: qty,
+            delta: -qty,
+            stockAnterior: before,
+            stockNuevo: after
+          });
+          packagingLog.push("Tapa: " + productName + " × " + qty + " → " + capName);
         }
 
-        const finishedApplied = a33AddFinishedProductStock(inv, item, qty, datos.fechaProdStr || hoyLocalISO());
+        const finishedApplied = a33AddFinishedProductStock(inv, item, qty, fechaProduccion);
         if (finishedApplied) {
-          packagingLog.push("Producto terminado: " + (item.nombre || item.id) + " × " + qty + " → productId " + (finishedApplied.productKey || "—"));
+          packagingLog.push("Producto terminado: " + productName + " × " + qty + " → productId " + (finishedApplied.productKey || "—"));
         }
       });
 
@@ -2528,6 +2696,12 @@ function a33WireNumericInput(el, mode) {
         return;
       }
 
+      const inventoryPreflight = a33ValidateInventoryForPackaging(a33LoadInventoryForValidation(), datos.unidadesPorPresentacion);
+      if (!inventoryPreflight.ok) {
+        alert(inventoryPreflight.message);
+        return;
+      }
+
       let lotes = [];
       try {
         if (window.A33Storage && typeof A33Storage.sharedRead === 'function'){
@@ -2787,7 +2961,7 @@ const loteInput = document.getElementById("lote");
 
       let invOk = true;
       try {
-        aplicarConsumoInventarioDesdeLote(datos, mapUnits);
+        aplicarConsumoInventarioDesdeLote(datos, mapUnits, batchCode);
       } catch (e) {
         invOk = false;
         console.warn('No se pudo aplicar consumo a Inventario desde Calculadora:', e);

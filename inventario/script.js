@@ -40,13 +40,246 @@ const CAPS = [
   { id: 'vasos12oz', nombre: 'Vasos 12oz' },
 ];
 
+// Catálogos dinámicos — Inventario solo lee/visualiza. Producción sigue consumiendo.
+const ENVASES_CATALOG_KEY = 'a33_catalog_envases_v1';
+const TAPAS_CATALOG_KEY = 'a33_catalog_tapas_v1';
+
+const ENVASE_ID_TO_INVENTORY_KEY = {
+  envase_pulso: 'pulso',
+  envase_media: 'media',
+  envase_djeba: 'djeba',
+  envase_litro: 'litro',
+  envase_galon: 'galon',
+};
+
+const TAPA_ID_TO_INVENTORY_KEY = {
+  tapa_galon: 'gallon',
+  tapa_pulso_litro: 'pulsoLitro',
+  tapa_djeba_media: 'djebaMedia',
+};
+
+let INV_BOTTLE_DEFS = BOTTLES.slice();
+let INV_CAP_DEFS = CAPS.slice();
+
 function defaultCapsSection(){
   const out = {};
   CAPS_KEYS.forEach((k)=>{ out[k] = { stock: 0, min: 0 }; });
   return out;
 }
 
+function normalizeInvText(value){
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
 
+function normalizeInvKey(value){
+  return normalizeInvText(value).replace(/[^a-z0-9]+/g, '');
+}
+
+function invBool(value, fallback){
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value === 1;
+  const s = String(value ?? '').trim().toLowerCase();
+  if (['true','1','si','sí','yes','y','activo','activa'].includes(s)) return true;
+  if (['false','0','no','n','inactivo','inactiva'].includes(s)) return false;
+  return !!fallback;
+}
+
+function readJsonLocalSafe(key, fallback){
+  try{
+    if (window.A33Storage && typeof A33Storage.getJSON === 'function'){
+      const val = A33Storage.getJSON(key, fallback, 'local');
+      return val == null ? fallback : val;
+    }
+  }catch(_){ }
+  try{
+    if (!window.localStorage) return fallback;
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  }catch(_){ return fallback; }
+}
+
+function normalizeCatalogRow(raw, kind, index){
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const id = String(src.id || src.envaseId || src.tapaId || `${kind}_${index}` || '').trim();
+  const name = String(src.name || src.nombre || src.label || src.descripcion || src.description || '').trim();
+  if (!id && !name) return null;
+  return {
+    ...src,
+    id: id || `${kind}_${normalizeInvKey(name) || index}`,
+    name,
+    nombre: name,
+    active: invBool(src.active ?? src.activo ?? src.isActive, true),
+  };
+}
+
+function readCatalogRowsForInventario(key, kind){
+  const raw = readJsonLocalSafe(key, []);
+  const arr = Array.isArray(raw) ? raw : [];
+  const seen = new Set();
+  const out = [];
+  arr.forEach((item, index) => {
+    const row = normalizeCatalogRow(item, kind, index);
+    if (!row || row.active === false) return;
+    const nameKey = normalizeInvKey(row.name || row.nombre);
+    const idKey = String(row.id || '').trim();
+    const unique = nameKey || idKey;
+    if (!unique || seen.has(unique)) return;
+    seen.add(unique);
+    out.push(row);
+  });
+  out.sort((a, b) => String(a.name || a.nombre || '').localeCompare(String(b.name || b.nombre || ''), 'es-NI', { sensitivity:'base' }));
+  return out;
+}
+
+function legacyBottleIdFromName(value){
+  const n = normalizeInvKey(value);
+  if (!n) return '';
+  if (['pulso','botellapulso','pulso250ml','botellapulso250ml'].includes(n)) return 'pulso';
+  if (['media','botellamedia','media375ml','botellamedia375ml'].includes(n)) return 'media';
+  if (['djeba','botelladjeba','djeba750ml','botelladjeba750ml'].includes(n)) return 'djeba';
+  if (['litro','botellalitro','litro1000ml','botellalitro1000ml'].includes(n)) return 'litro';
+  if (['galon','galón','botellagalon','botellagalón','galon3750ml','botellagalon3750ml'].includes(n)) return 'galon';
+  return '';
+}
+
+function legacyCapIdFromName(value){
+  const n = normalizeInvKey(value);
+  if (!n) return '';
+  if (['tapagalon','tapagallon','galon','gallon'].includes(n)) return 'gallon';
+  if (['tapapulsolitro','pulsolitro'].includes(n)) return 'pulsoLitro';
+  if (['tapadjebamedia','djebamedia'].includes(n)) return 'djebaMedia';
+  if (['vasos12oz','vaso12oz'].includes(n)) return 'vasos12oz';
+  return '';
+}
+
+function bottleInventoryKeyFromCatalog(row){
+  const id = String(row && row.id || '').trim();
+  if (id && ENVASE_ID_TO_INVENTORY_KEY[id]) return ENVASE_ID_TO_INVENTORY_KEY[id];
+  const legacy = legacyBottleIdFromName((row && (row.name || row.nombre)) || id);
+  return legacy || id;
+}
+
+function capInventoryKeyFromCatalog(row){
+  const id = String(row && row.id || '').trim();
+  if (id && TAPA_ID_TO_INVENTORY_KEY[id]) return TAPA_ID_TO_INVENTORY_KEY[id];
+  const legacy = legacyCapIdFromName((row && (row.name || row.nombre)) || id);
+  return legacy || id;
+}
+
+function buildBottleDefs(inv){
+  const defs = BOTTLES.map((x) => ({ ...x, legacy:true }));
+  const seenIds = new Set(defs.map((x) => String(x.id)));
+  const seenNames = new Set(defs.map((x) => normalizeInvKey(x.nombre)));
+
+  readCatalogRowsForInventario(ENVASES_CATALOG_KEY, 'envase').forEach((row) => {
+    const id = bottleInventoryKeyFromCatalog(row);
+    const name = String(row.name || row.nombre || id).trim();
+    const nameKey = normalizeInvKey(name);
+    const legacyName = legacyBottleIdFromName(name);
+    if (!id) return;
+    if (seenIds.has(id)) return;
+    if (legacyName && seenIds.has(legacyName)) return;
+    if (nameKey && seenNames.has(nameKey)) return;
+    defs.push({
+      id,
+      nombre: name || id,
+      catalogId: String(row.id || '').trim(),
+      dynamic:true,
+      source:'catalogos-envases'
+    });
+    seenIds.add(id);
+    if (nameKey) seenNames.add(nameKey);
+  });
+
+  Object.keys((inv && inv.bottles) || {}).forEach((id) => {
+    const key = String(id || '').trim();
+    if (!key || seenIds.has(key)) return;
+    defs.push({ id:key, nombre:key, dynamic:true, source:'inventario-existente' });
+    seenIds.add(key);
+  });
+
+  defs.sort((a, b) => {
+    const ax = a.dynamic ? 1 : 0;
+    const bx = b.dynamic ? 1 : 0;
+    if (ax !== bx) return ax - bx;
+    return String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es-NI', { sensitivity:'base' });
+  });
+  return defs;
+}
+
+function buildCapDefs(inv){
+  const defs = CAPS.map((x) => ({ ...x, legacy:true }));
+  const seenIds = new Set(defs.map((x) => String(x.id)));
+  const seenNames = new Set(defs.map((x) => normalizeInvKey(x.nombre)));
+
+  readCatalogRowsForInventario(TAPAS_CATALOG_KEY, 'tapa').forEach((row) => {
+    const id = capInventoryKeyFromCatalog(row);
+    const name = String(row.name || row.nombre || id).trim();
+    const nameKey = normalizeInvKey(name);
+    const legacyName = legacyCapIdFromName(name);
+    if (!id) return;
+    if (seenIds.has(id)) return;
+    if (legacyName && seenIds.has(legacyName)) return;
+    if (nameKey && seenNames.has(nameKey)) return;
+    defs.push({
+      id,
+      nombre: name || id,
+      catalogId: String(row.id || '').trim(),
+      dynamic:true,
+      source:'catalogos-tapas'
+    });
+    seenIds.add(id);
+    if (nameKey) seenNames.add(nameKey);
+  });
+
+  Object.keys((inv && inv.caps) || {}).forEach((id) => {
+    const key = String(id || '').trim();
+    if (!key || seenIds.has(key)) return;
+    defs.push({ id:key, nombre:key, dynamic:true, source:'inventario-existente' });
+    seenIds.add(key);
+  });
+
+  defs.sort((a, b) => {
+    const ax = a.dynamic ? 1 : 0;
+    const bx = b.dynamic ? 1 : 0;
+    if (ax !== bx) return ax - bx;
+    return String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es-NI', { sensitivity:'base' });
+  });
+  return defs;
+}
+
+function ensureDynamicCatalogInventoryInPlace(inv){
+  if (!inv || typeof inv !== 'object') return inv;
+  if (!inv.bottles || typeof inv.bottles !== 'object') inv.bottles = {};
+  if (!inv.caps || typeof inv.caps !== 'object') inv.caps = defaultCapsSection();
+
+  INV_BOTTLE_DEFS = buildBottleDefs(inv);
+  INV_CAP_DEFS = buildCapDefs(inv);
+
+  INV_BOTTLE_DEFS.forEach((b) => {
+    const id = String(b && b.id || '').trim();
+    if (!id) return;
+    if (!inv.bottles[id] || typeof inv.bottles[id] !== 'object') inv.bottles[id] = { stock:0 };
+    const st = toFiniteNumber(inv.bottles[id].stock);
+    inv.bottles[id].stock = Number.isFinite(st) ? Math.trunc(st) : 0;
+  });
+
+  INV_CAP_DEFS.forEach((c) => {
+    const id = String(c && c.id || '').trim();
+    if (!id) return;
+    if (!inv.caps[id] || typeof inv.caps[id] !== 'object') inv.caps[id] = { stock:0, min:0 };
+    const st = toFiniteNumber(inv.caps[id].stock);
+    const mn = toFiniteNumber(inv.caps[id].min);
+    inv.caps[id].stock = Number.isFinite(st) ? Math.trunc(st) : 0;
+    inv.caps[id].min = Number.isFinite(mn) ? Math.max(0, Math.trunc(mn)) : 0;
+  });
+
+  return inv;
+}
 
 function $(id) {
   return document.getElementById(id);
@@ -60,6 +293,7 @@ function defaultInventario() {
     finishedByProductId: {},
     caps: defaultCapsSection(),
     varios: [],
+    movimientos: [],
   };
   LIQUIDS.forEach((l) => {
     inv.liquids[l.id] = { stock: 0, max: 0 };
@@ -146,7 +380,7 @@ function buildFinishedDefs(inv){
 
 function getDefsForSection(section){
   if (section === 'liquids') return LIQUIDS;
-  if (section === 'bottles') return BOTTLES;
+  if (section === 'bottles') return INV_BOTTLE_DEFS && INV_BOTTLE_DEFS.length ? INV_BOTTLE_DEFS : BOTTLES;
   if (section === 'finished') return INV_FINISHED_DEFS && INV_FINISHED_DEFS.length ? INV_FINISHED_DEFS : FINISHED;
   return [];
 }
@@ -395,6 +629,11 @@ function collectEdits(base, local){
     edits.push({ section:'varios', op:'replace', value: deepClone(localV) });
   }
 
+  const newMovs = movimientosNuevosDesdeBase((base && base.movimientos) ? base.movimientos : [], (local && local.movimientos) ? local.movimientos : []);
+  if (newMovs.length){
+    edits.push({ section:'movimientos', op:'append', value: newMovs });
+  }
+
   return edits;
 }
 
@@ -406,9 +645,14 @@ function applyEditsToCurrent(cur, edits){
   if (!out.finished || typeof out.finished !== 'object') out.finished = {};
   if (!out.caps || typeof out.caps !== 'object') out.caps = {};
   if (!Array.isArray(out.varios)) out.varios = [];
+  if (!Array.isArray(out.movimientos)) out.movimientos = [];
 
   edits.forEach((e)=>{
     if (!e || !e.section) return;
+    if (e.section === 'movimientos' && e.op === 'append'){
+      out.movimientos = mergeInventarioMovimientos(out.movimientos, e.value);
+      return;
+    }
     if (e.section === 'varios' && e.op === 'replace'){
       out.varios = deepClone(e.value);
       return;
@@ -523,6 +767,11 @@ function normalizeCapsSectionInPlace(inv){
 
   CAPS_KEYS.forEach((k)=>{
     if (!inv.caps[k] || typeof inv.caps[k] !== 'object') inv.caps[k] = { stock: 0, min: 0 };
+  });
+
+  // Compatibilidad dinámica: conservar y sanear cualquier tapa/corcho creado por Producción desde Catálogos.
+  Object.keys(inv.caps || {}).forEach((k)=>{
+    if (!inv.caps[k] || typeof inv.caps[k] !== 'object') inv.caps[k] = { stock: 0, min: 0 };
 
     // stock: entero (permitir negativos; no bloquear si llega negativo en el futuro)
     const s = toFiniteNumber(inv.caps[k].stock);
@@ -588,6 +837,138 @@ function normalizeVariosSectionInPlace(inv){
   inv.varios = out;
 }
 
+
+function normalizeMovimientoText(value, fallback){
+  const raw = String(value ?? '').trim();
+  return raw || String(fallback || '').trim();
+}
+
+function normalizeInventarioMovimientosInPlace(inv){
+  if (!inv || typeof inv !== 'object') return;
+  const raw = Array.isArray(inv.movimientos) ? inv.movimientos : [];
+  const out = [];
+  const used = new Set();
+
+  raw.forEach((mov, index) => {
+    if (!mov || typeof mov !== 'object') return;
+    const fechaRaw = normalizeMovimientoText(mov.fecha || mov.createdAt || mov.createdAtISO, '');
+    const fecha = fechaRaw || (new Date()).toISOString();
+    let id = normalizeMovimientoText(mov.id, `mov_${Date.parse(fecha) || Date.now()}_${index}`);
+    const baseId = id;
+    let n = 2;
+    while (used.has(id)) id = `${baseId}_${n++}`;
+    used.add(id);
+
+    const tipoItem = normalizeMovimientoText(mov.tipoItem || mov.itemType || mov.kind, 'item');
+    const itemId = normalizeMovimientoText(mov.itemId || mov.idItem || mov.id_item || mov.itemID, '');
+    const nombreSnapshot = normalizeMovimientoText(mov.nombreSnapshot || mov.nombre || mov.name || mov.itemName, itemId || 'Item');
+    const tipoMovimiento = normalizeMovimientoText(mov.tipoMovimiento || mov.movimiento || mov.action || mov.tipo, 'ajuste');
+    const origen = normalizeMovimientoText(mov.origen || mov.source, 'inventario/manual');
+    const nota = normalizeMovimientoText(mov.nota || mov.observacion || mov.observación || mov.note, '');
+    const cantidadRaw = toFiniteNumber(mov.cantidad);
+    const deltaRaw = toFiniteNumber(mov.delta);
+    const stockAnteriorRaw = toFiniteNumber(mov.stockAnterior);
+    const stockNuevoRaw = toFiniteNumber(mov.stockNuevo);
+
+    out.push({
+      ...mov,
+      id,
+      tipoItem,
+      itemId,
+      nombreSnapshot,
+      cantidad: Number.isFinite(cantidadRaw) ? Math.trunc(cantidadRaw) : 0,
+      delta: Number.isFinite(deltaRaw) ? Math.trunc(deltaRaw) : 0,
+      tipoMovimiento,
+      fecha,
+      nota,
+      origen,
+      stockAnterior: Number.isFinite(stockAnteriorRaw) ? Math.trunc(stockAnteriorRaw) : 0,
+      stockNuevo: Number.isFinite(stockNuevoRaw) ? Math.trunc(stockNuevoRaw) : 0,
+    });
+  });
+
+  inv.movimientos = out;
+}
+
+function signatureMovimientos(list){
+  try{
+    if (!Array.isArray(list)) return '[]';
+    return JSON.stringify(list.map((x)=>({
+      id: String((x && x.id) || ''),
+      tipoItem: String((x && (x.tipoItem || x.itemType)) || ''),
+      itemId: String((x && (x.itemId || x.idItem)) || ''),
+      nombreSnapshot: String((x && (x.nombreSnapshot || x.nombre || x.name)) || ''),
+      cantidad: Number.isFinite(+((x && x.cantidad))) ? Math.trunc(+x.cantidad) : 0,
+      delta: Number.isFinite(+((x && x.delta))) ? Math.trunc(+x.delta) : 0,
+      tipoMovimiento: String((x && (x.tipoMovimiento || x.tipo || x.action)) || ''),
+      fecha: String((x && x.fecha) || ''),
+      origen: String((x && x.origen) || ''),
+    })));
+  }catch(_){ return '[]'; }
+}
+
+function mergeInventarioMovimientos(currentList, newList){
+  const current = Array.isArray(currentList) ? currentList.slice() : [];
+  const incoming = Array.isArray(newList) ? newList : [];
+  const seen = new Set(current.map((m)=> String((m && m.id) || '')).filter(Boolean));
+  incoming.forEach((mov)=>{
+    const id = String((mov && mov.id) || '').trim();
+    if (!id || seen.has(id)) return;
+    current.push(mov);
+    seen.add(id);
+  });
+  return current;
+}
+
+function movimientosNuevosDesdeBase(baseList, localList){
+  const base = Array.isArray(baseList) ? baseList : [];
+  const local = Array.isArray(localList) ? localList : [];
+  const baseIds = new Set(base.map((m)=> String((m && m.id) || '')).filter(Boolean));
+  return local.filter((m)=>{
+    const id = String((m && m.id) || '').trim();
+    return id && !baseIds.has(id);
+  }).map((m)=> deepClone(m));
+}
+
+function inventarioDefByKind(kind, id){
+  const key = String(id || '').trim();
+  const defs = kind === 'bottle'
+    ? (INV_BOTTLE_DEFS && INV_BOTTLE_DEFS.length ? INV_BOTTLE_DEFS : BOTTLES)
+    : (kind === 'cap' ? (INV_CAP_DEFS && INV_CAP_DEFS.length ? INV_CAP_DEFS : CAPS) : []);
+  return defs.find((d)=> String((d && d.id) || '') === key) || null;
+}
+
+function inventarioNombreSnapshot(kind, id){
+  const def = inventarioDefByKind(kind, id);
+  return String((def && (def.nombre || def.name)) || id || 'Item').trim();
+}
+
+function registrarMovimientoInventario(inv, { kind, id, tipoMovimiento, cantidad, delta, stockAnterior, stockNuevo, nota } = {}){
+  if (!inv || typeof inv !== 'object') return null;
+  if (!Array.isArray(inv.movimientos)) inv.movimientos = [];
+  const itemId = String(id || '').trim();
+  if (!itemId) return null;
+
+  const tipoItem = kind === 'bottle' ? 'envase' : (kind === 'cap' ? 'tapa' : String(kind || 'item'));
+  const qty = Number.isFinite(+cantidad) ? Math.trunc(+cantidad) : Math.abs(Number.isFinite(+delta) ? Math.trunc(+delta) : 0);
+  const mov = {
+    id: `mov_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    tipoItem,
+    itemId,
+    nombreSnapshot: inventarioNombreSnapshot(kind, itemId),
+    cantidad: Math.max(0, qty),
+    delta: Number.isFinite(+delta) ? Math.trunc(+delta) : 0,
+    tipoMovimiento: String(tipoMovimiento || 'ajuste').trim(),
+    fecha: (new Date()).toISOString(),
+    nota: String(nota || '').trim(),
+    origen: 'inventario/manual',
+    stockAnterior: Number.isFinite(+stockAnterior) ? Math.trunc(+stockAnterior) : 0,
+    stockNuevo: Number.isFinite(+stockNuevo) ? Math.trunc(+stockNuevo) : 0,
+  };
+  inv.movimientos.push(mov);
+  return mov;
+}
+
 function normalizeInventarioInPlace(inv){
   if (!inv || typeof inv !== 'object') return defaultInventario();
 
@@ -633,9 +1014,15 @@ function normalizeInventarioInPlace(inv){
   // Tapas (Auto)
   normalizeCapsSectionInPlace(inv);
 
+  // Envases/Tapas dinámicos desde Catálogos (lectura visual; no produce ni consume).
+  ensureDynamicCatalogInventoryInPlace(inv);
+
   // Inventario Varios (manual)
   if (!Array.isArray(inv.varios)) inv.varios = [];
   normalizeVariosSectionInPlace(inv);
+
+  // Historial técnico de movimientos manuales de envases/tapas.
+  normalizeInventarioMovimientosInPlace(inv);
 
   return inv;
 }
@@ -681,6 +1068,10 @@ function validateBeforeSave(inv){
     inv.caps = defaultCapsSection();
   }
   normalizeCapsSectionInPlace(inv);
+  normalizeInventarioMovimientosInPlace(inv);
+  if (!Array.isArray(inv.movimientos)){
+    return { ok:false, message:'Inventario inválido: movimientos debe ser una lista.' };
+  }
 
   for (const id of Object.keys(inv.caps)){
     const it = inv.caps[id];
@@ -1658,6 +2049,7 @@ function loadInventario() {
     normalizeCapsSectionInPlace(data);
     if (!Array.isArray(data.varios)) data.varios = [];
     normalizeVariosSectionInPlace(data);
+    normalizeInventarioMovimientosInPlace(data);
 
     return data;
   } catch (e) {
@@ -1692,6 +2084,7 @@ function saveInventario(inv) {
         inv.finished = r.data.finished;
         inv.caps = r.data.caps;
         inv.varios = r.data.varios;
+        inv.movimientos = r.data.movimientos;
       }
       return true;
     }
@@ -1772,7 +2165,8 @@ function renderBotellas(inv) {
   const tbody = $("inv-botellas-body");
   if (!tbody) return;
 
-  BOTTLES.forEach((b) => {
+  ensureDynamicCatalogInventoryInPlace(inv);
+  INV_BOTTLE_DEFS.forEach((b) => {
     ensureBottleRow(tbody, b);
     updateBottleRow(inv, b.id);
   });
@@ -1784,7 +2178,8 @@ function renderCaps(inv) {
   const tbody = $("inv-caps-body");
   if (!tbody) return;
 
-  CAPS.forEach((c) => {
+  ensureDynamicCatalogInventoryInPlace(inv);
+  INV_CAP_DEFS.forEach((c) => {
     ensureCapRow(tbody, c);
     updateCapRow(inv, c.id);
   });
@@ -1811,6 +2206,7 @@ function attachListeners(inv) {
       inv.finished = fresh.finished;
       inv.caps = fresh.caps;
       inv.varios = fresh.varios;
+      inv.movimientos = fresh.movimientos;
       renderLiquidos(inv);
       renderBotellas(inv);
       renderCaps(inv);
@@ -1912,7 +2308,20 @@ function attachListeners(inv) {
           updateBottleRow(inv, id);
           return;
         }
+        const before = Math.trunc(parseNumber(inv.bottles[id].stock));
         inv.bottles[id].stock = n;
+        if (n !== before) {
+          registrarMovimientoInventario(inv, {
+            kind: 'bottle',
+            id,
+            tipoMovimiento: 'ajuste_conteo',
+            cantidad: Math.abs(n - before),
+            delta: n - before,
+            stockAnterior: before,
+            stockNuevo: n,
+            nota: 'Ajuste manual por conteo físico'
+          });
+        }
         updateBottleRow(inv, id);
         scheduleSave("bottles", id);
       }
@@ -1942,7 +2351,21 @@ function attachListeners(inv) {
           updateCapRow(inv, id);
           return;
         }
-        inv.caps[id].stock = Math.trunc(n);
+        const nextStock = Math.trunc(n);
+        const before = Math.trunc(parseNumber(inv.caps[id].stock));
+        inv.caps[id].stock = nextStock;
+        if (nextStock !== before) {
+          registrarMovimientoInventario(inv, {
+            kind: 'cap',
+            id,
+            tipoMovimiento: 'ajuste_conteo',
+            cantidad: Math.abs(nextStock - before),
+            delta: nextStock - before,
+            stockAnterior: before,
+            stockNuevo: nextStock,
+            nota: 'Ajuste manual por conteo físico'
+          });
+        }
         updateCapRow(inv, id);
         scheduleSave("caps", id);
       }
@@ -2159,10 +2582,11 @@ function attachListeners(inv) {
 
     if (kind === "bottle") {
       const item = inv.bottles[id] || { stock: 0 };
+      const before = Math.trunc(parseNumber(item.stock));
       if (action === "entrada") {
-        item.stock = parseNumber(item.stock) + cantidad;
+        item.stock = before + cantidad;
       } else {
-        const next = parseNumber(item.stock) - cantidad;
+        const next = before - cantidad;
         if (next < 0) {
           safeAlert(`Operación bloqueada: la salida dejaría el stock de ${id} en negativo.`);
           return;
@@ -2171,6 +2595,16 @@ function attachListeners(inv) {
       }
       item.stock = Math.trunc(item.stock);
       inv.bottles[id] = item;
+      registrarMovimientoInventario(inv, {
+        kind: 'bottle',
+        id,
+        tipoMovimiento: action === 'entrada' ? 'entrada' : 'salida',
+        cantidad,
+        delta: item.stock - before,
+        stockAnterior: before,
+        stockNuevo: item.stock,
+        nota: action === 'entrada' ? 'Entrada manual desde Inventario' : 'Salida/ajuste manual desde Inventario'
+      });
       updateBottleRow(inv, id);
       commitSave("bottles", id);
       return;
@@ -2179,15 +2613,26 @@ function attachListeners(inv) {
     if (kind === "cap") {
       normalizeCapsSectionInPlace(inv);
       const item = (inv.caps && inv.caps[id]) ? inv.caps[id] : { stock: 0, min: 0 };
+      const before = Math.trunc(parseNumber(item.stock));
       if (action === "entrada") {
-        item.stock = parseNumber(item.stock) + cantidad;
+        item.stock = before + cantidad;
       } else {
-        // permitido negativo
-        item.stock = parseNumber(item.stock) - cantidad;
+        // permitido negativo por compatibilidad histórica de tapas.
+        item.stock = before - cantidad;
       }
       item.stock = Math.trunc(item.stock);
       if (!inv.caps || typeof inv.caps !== 'object') inv.caps = defaultCapsSection();
       inv.caps[id] = item;
+      registrarMovimientoInventario(inv, {
+        kind: 'cap',
+        id,
+        tipoMovimiento: action === 'entrada' ? 'entrada' : 'salida',
+        cantidad,
+        delta: item.stock - before,
+        stockAnterior: before,
+        stockNuevo: item.stock,
+        nota: action === 'entrada' ? 'Entrada manual desde Inventario' : 'Salida/ajuste manual desde Inventario'
+      });
       updateCapRow(inv, id);
       commitSave("caps", id);
       return;
@@ -2213,8 +2658,8 @@ function buildAlertLines(inv) {
     }
   });
 
-  // Botellas en alerta (<=10 unidades)
-  BOTTLES.forEach((b) => {
+  // Botellas/envases en alerta (<=10 unidades), incluyendo Catálogos dinámicos.
+  buildBottleDefs(inv).forEach((b) => {
     const info = inv.bottles[b.id] || { stock: 0 };
     const stock = parseNumber(info.stock);
     if (stock <= 10) {
@@ -2268,7 +2713,36 @@ function installSmokeHooks(inv){
     if (typeof window === 'undefined') return;
     const api = {
       get: ()=> deepClone(inv),
+      getBottleDefs: ()=> deepClone(buildBottleDefs(inv)),
+      getCapDefs: ()=> deepClone(buildCapDefs(inv)),
       getCaps: ()=> deepClone((inv && inv.caps) ? inv.caps : null),
+      getMovimientos: ()=> deepClone(Array.isArray(inv && inv.movimientos) ? inv.movimientos : []),
+      addBottleStock: (bottleId, cantidad)=>{
+        try{
+          const id = String(bottleId || '').trim();
+          const qty = toNonNegativeInt(cantidad);
+          if (!id || !Number.isFinite(qty) || qty <= 0) return false;
+          if (!inv.bottles || typeof inv.bottles !== 'object') inv.bottles = {};
+          if (!inv.bottles[id] || typeof inv.bottles[id] !== 'object') inv.bottles[id] = { stock: 0 };
+          const before = Math.trunc(parseNumber(inv.bottles[id].stock));
+          inv.bottles[id].stock = before + qty;
+          registrarMovimientoInventario(inv, { kind:'bottle', id, tipoMovimiento:'entrada', cantidad:qty, delta:qty, stockAnterior:before, stockNuevo:before + qty, nota:'Smoke/manual' });
+          return saveInventario(inv);
+        }catch(_){ return false; }
+      },
+      addCapStock: (capId, cantidad)=>{
+        try{
+          const id = String(capId || '').trim();
+          const qty = toNonNegativeInt(cantidad);
+          if (!id || !Number.isFinite(qty) || qty <= 0) return false;
+          normalizeCapsSectionInPlace(inv);
+          if (!inv.caps[id] || typeof inv.caps[id] !== 'object') inv.caps[id] = { stock: 0, min: 0 };
+          const before = Math.trunc(parseNumber(inv.caps[id].stock));
+          inv.caps[id].stock = before + qty;
+          registrarMovimientoInventario(inv, { kind:'cap', id, tipoMovimiento:'entrada', cantidad:qty, delta:qty, stockAnterior:before, stockNuevo:before + qty, nota:'Smoke/manual' });
+          return saveInventario(inv);
+        }catch(_){ return false; }
+      },
       setCaps: (capId, stock, min)=>{
         try{
           normalizeCapsSectionInPlace(inv);
@@ -2340,6 +2814,7 @@ function installSmokeHooks(inv){
           inv.finished = fresh.finished;
           inv.caps = fresh.caps;
           inv.varios = fresh.varios;
+          inv.movimientos = fresh.movimientos;
           return deepClone(inv);
         }catch(_){ return deepClone(inv); }
       }
@@ -2357,7 +2832,7 @@ function installSmokeHooks(inv){
 function registerServiceWorker() {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker
-      .register("./sw.js?v=4.20.84&r=8")
+      .register("./sw.js?v=4.20.84&r=12")
       .catch((err) => console.error("SW error", err));
   }
 }
