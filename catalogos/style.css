@@ -118,7 +118,7 @@ html[data-theme="light"] .cat-hero-badge{background:rgba(255,255,255,0.38);}
 .cat-shell{padding:18px;}
 .cat-tabs{
   display:grid;
-  grid-template-columns:repeat(5,minmax(0,1fr));
+  grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
   gap:12px;
   margin-bottom:16px;
 }
@@ -258,6 +258,7 @@ html[data-theme="light"] .cat-warn{color:#6b211a;background:rgba(123,24,24,0.10)
 html[data-theme="light"] .cat-product-card{background:rgba(255,255,255,0.46);}
 .cat-product-card.is-inactive{opacity:.72;}
 .cat-product-card.is-canonical{border-color:rgba(221,191,100,0.54);}
+.cat-product-card.is-incomplete{border-color:rgba(221,191,100,0.44);background:linear-gradient(180deg, rgba(123,24,24,0.10), rgba(255,255,255,0.035));}
 .cat-product-title-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:10px;}
 .cat-product-title-row strong{font-size:1.05rem;word-break:break-word;}
 .cat-pill{
@@ -275,8 +276,10 @@ html[data-theme="light"] .cat-product-card{background:rgba(255,255,255,0.46);}
 .cat-pill.ok{color:#c9ffd5;border-color:rgba(86,190,116,0.38);background:rgba(46,125,70,0.22);}
 .cat-pill.muted{color:var(--cat-muted);}
 .cat-pill.gold{color:var(--cat-gold);background:rgba(221,191,100,0.12);}
+.cat-pill.warn{color:#ffd9a0;border-color:rgba(221,191,100,0.42);background:rgba(123,24,24,0.24);}
 html[data-theme="light"] .cat-pill.ok{color:#145728;background:rgba(70,160,88,0.12);}
 .cat-product-meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;}
+.cat-product-warning{display:inline-flex;max-width:100%;margin:0 0 10px;padding:7px 10px;border-radius:999px;border:1px solid rgba(221,191,100,0.32);background:rgba(123,24,24,0.18);color:#ffd9a0;font-size:12px;font-weight:800;line-height:1.35;}
 .cat-product-meta div{
   min-width:0;
   padding:10px;
@@ -285,6 +288,8 @@ html[data-theme="light"] .cat-pill.ok{color:#145728;background:rgba(70,160,88,0.
   background:rgba(0,0,0,0.16);
 }
 html[data-theme="light"] .cat-product-meta div{background:rgba(255,255,255,0.38);}
+html[data-theme="light"] .cat-product-warning,
+html[data-theme="light"] .cat-pill.warn{color:#6b211a;background:rgba(123,24,24,0.10);}
 .cat-product-meta small{display:block;color:var(--cat-muted);margin-bottom:2px;}
 .cat-product-meta b{word-break:break-word;}
 .cat-product-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:10px;}
@@ -305,7 +310,16 @@ html[data-theme="light"] .cat-product-form input,
 html[data-theme="light"] .cat-product-form select,
 html[data-theme="light"] .cat-product-form textarea{background:rgba(255,255,255,0.72);}
 .cat-flag{display:flex !important;grid-template-columns:auto 1fr;align-items:center;gap:8px;padding:10px 0;}
-.cat-flag input{width:auto;}
+.cat-flag input,
+.cat-product-form input[type="checkbox"]{
+  width:auto;
+  min-width:18px;
+  height:18px;
+  padding:0;
+  border-radius:5px;
+  accent-color:var(--cat-gold);
+}
+.cat-product-meta-dynamic{grid-template-columns:repeat(auto-fit,minmax(118px,1fr));}
 .cat-actions-end{margin-top:14px;}
 .cat-modal{
   position:fixed;
@@ -464,4 +478,51 @@ html[data-theme="light"] .cat-supplier-empty{background:rgba(255,255,255,0.34);}
   .cat-supplier-form-modal,
   .cat-supplier-product-form-modal{grid-template-columns:1fr;}
   .cat-supplier-product-card .cat-product-meta{grid-template-columns:1fr;}
+}
+
+
+/* Etapa 2/5 — Envases dinámicos */
+.cat-envase-form{grid-template-columns:repeat(2,minmax(0,1fr));}
+.cat-envase-card .cat-product-meta{grid-template-columns:repeat(4,minmax(0,1fr));}
+.cat-envase-note{
+  display:block;
+  max-width:100%;
+  color:var(--cat-muted);
+  white-space:normal;
+  overflow-wrap:anywhere;
+}
+@media(max-width:980px){
+  .cat-envase-card .cat-product-meta{grid-template-columns:repeat(2,minmax(0,1fr));}
+}
+@media(max-width:560px){
+  .cat-envase-form{grid-template-columns:1fr;}
+  .cat-envase-card .cat-product-meta{grid-template-columns:1fr;}
+}
+
+
+/* Etapa 3/5 — Tapas / Corchos dinámicos */
+.cat-tapa-form{grid-template-columns:repeat(2,minmax(0,1fr));}
+.cat-tapa-card .cat-product-meta{grid-template-columns:repeat(4,minmax(0,1fr));}
+.cat-tapa-note{
+  display:block;
+  max-width:100%;
+  color:var(--cat-muted);
+  white-space:normal;
+  overflow-wrap:anywhere;
+}
+@media(max-width:980px){
+  .cat-tapa-card .cat-product-meta{grid-template-columns:repeat(2,minmax(0,1fr));}
+}
+@media(max-width:560px){
+  .cat-tapa-form{grid-template-columns:1fr;}
+  .cat-tapa-card .cat-product-meta{grid-template-columns:1fr;}
+}
+
+/* Etapa 4/5 — asociación Producto → Envase / Tapa */
+.cat-product-form select[id$="-envase"],
+.cat-product-form select[id$="-tapa"]{
+  min-height:46px;
+}
+.cat-product-meta-dynamic div{
+  overflow-wrap:anywhere;
 }

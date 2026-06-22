@@ -24,6 +24,8 @@ const FINISHED = [
   { id: "galon", nombre: "Galón 3750 ml (lista)" },
 ];
 
+let INV_FINISHED_DEFS = FINISHED.slice();
+
 const CAPS_KEYS = [
   'gallon',
   'pulsoLitro',
@@ -55,6 +57,7 @@ function defaultInventario() {
     liquids: {},
     bottles: {},
     finished: {},
+    finishedByProductId: {},
     caps: defaultCapsSection(),
     varios: [],
   };
@@ -73,6 +76,79 @@ function defaultInventario() {
 function parseNumber(value) {
   const n = parseFloat(String(value).replace(",", "."));
   return Number.isNaN(n) ? 0 : n;
+}
+
+function invKnownFinishedIds(){
+  return new Set(FINISHED.map((x) => String(x.id)));
+}
+
+function normalizeProductIdKey(value){
+  return String(value ?? '').trim();
+}
+
+function finishedDisplayName(id, info){
+  const base = info && typeof info === 'object' ? info : {};
+  const known = FINISHED.find((x) => String(x.id) === String(id));
+  if (known) return known.nombre;
+  const raw = String(base.nombre || base.name || base.productName || base.producto || base.label || '').trim();
+  if (raw) return /list[oa]\)/i.test(raw) ? raw : `${raw} (listo)`;
+  return `${String(id || 'Producto')} (listo)`;
+}
+
+function legacyFinishedIdFromName(value){
+  const n = String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (!n) return '';
+  if (n.includes('pulso')) return 'pulso';
+  if (n.includes('media')) return 'media';
+  if (n.includes('djeba')) return 'djeba';
+  if (n.includes('litro')) return 'litro';
+  if (n.includes('galon') || n.includes('gal')) return 'galon';
+  return '';
+}
+
+function legacyFinishedIdFromInfo(id, info){
+  if (invKnownFinishedIds().has(String(id || ''))) return String(id || '');
+  const base = info && typeof info === 'object' ? info : {};
+  return legacyFinishedIdFromName(base.nombre || base.name || base.productName || base.producto || base.label || '');
+}
+
+function buildFinishedDefs(inv){
+  const defs = FINISHED.map((x) => ({ ...x }));
+  const seen = invKnownFinishedIds();
+  const addDef = (id, info) => {
+    const key = normalizeProductIdKey(id);
+    if (!key || seen.has(key)) return;
+    const legacyId = legacyFinishedIdFromInfo(key, info);
+    if (legacyId && seen.has(legacyId)) return;
+    seen.add(key);
+    defs.push({
+      id: key,
+      productId: (info && (info.productId ?? info.productoId)) ?? key,
+      nombre: finishedDisplayName(key, info),
+      dynamic: true
+    });
+  };
+
+  const finished = inv && inv.finished && typeof inv.finished === 'object' ? inv.finished : {};
+  Object.keys(finished).forEach((id) => addDef(id, finished[id]));
+
+  const byProduct = inv && inv.finishedByProductId && typeof inv.finishedByProductId === 'object' ? inv.finishedByProductId : {};
+  Object.keys(byProduct).forEach((id) => addDef(id, byProduct[id]));
+
+  defs.sort((a, b) => {
+    const ax = a.dynamic ? 1 : 0;
+    const bx = b.dynamic ? 1 : 0;
+    if (ax !== bx) return ax - bx;
+    return String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es-NI', { sensitivity:'base' });
+  });
+  return defs;
+}
+
+function getDefsForSection(section){
+  if (section === 'liquids') return LIQUIDS;
+  if (section === 'bottles') return BOTTLES;
+  if (section === 'finished') return INV_FINISHED_DEFS && INV_FINISHED_DEFS.length ? INV_FINISHED_DEFS : FINISHED;
+  return [];
 }
 
 // ------------------------------
@@ -518,6 +594,7 @@ function normalizeInventarioInPlace(inv){
   if (!inv.liquids || typeof inv.liquids !== 'object') inv.liquids = {};
   if (!inv.bottles || typeof inv.bottles !== 'object') inv.bottles = {};
   if (!inv.finished || typeof inv.finished !== 'object') inv.finished = {};
+  if (!inv.finishedByProductId || typeof inv.finishedByProductId !== 'object') inv.finishedByProductId = {};
 
   // Compat con data vieja: asegurar llaves conocidas y números seguros
   LIQUIDS.forEach((l) => {
@@ -539,6 +616,18 @@ function normalizeInventarioInPlace(inv){
     if (!inv.finished[p.id] || typeof inv.finished[p.id] !== 'object') inv.finished[p.id] = { stock: 0 };
     const st = toFiniteNumber(inv.finished[p.id].stock);
     inv.finished[p.id].stock = Number.isFinite(st) ? st : 0;
+  });
+
+  Object.keys(inv.finished || {}).forEach((id) => {
+    if (!inv.finished[id] || typeof inv.finished[id] !== 'object') inv.finished[id] = { stock: 0 };
+    const st = toFiniteNumber(inv.finished[id].stock);
+    inv.finished[id].stock = Number.isFinite(st) ? st : 0;
+  });
+
+  Object.keys(inv.finishedByProductId || {}).forEach((id) => {
+    if (!inv.finishedByProductId[id] || typeof inv.finishedByProductId[id] !== 'object') inv.finishedByProductId[id] = { stock: 0 };
+    const st = toFiniteNumber(inv.finishedByProductId[id].stock);
+    inv.finishedByProductId[id].stock = Number.isFinite(st) ? st : 0;
   });
 
   // Tapas (Auto)
@@ -877,7 +966,11 @@ function applyView(section) {
   const page = INV_UI.pages[section] || 1;
   const limit = INV_UI.pageSize * page;
 
-  const defs = section === "liquids" ? LIQUIDS : (section === "bottles" ? BOTTLES : FINISHED);
+  const defs = getDefsForSection(section);
+
+  cache.forEach((row) => {
+    if (row && row.tr) row.tr.hidden = true;
+  });
 
   let matched = 0;
   defs.forEach((d) => {
@@ -1263,7 +1356,9 @@ function updateFinishedRow(inv, id) {
   const row = INV_ROW_CACHE.finished.get(id);
   if (!row) return;
 
-  const info = (inv && inv.finished && inv.finished[id]) ? inv.finished[id] : { stock: 0 };
+  const info = (inv && inv.finished && inv.finished[id])
+    ? inv.finished[id]
+    : ((inv && inv.finishedByProductId && inv.finishedByProductId[id]) ? inv.finishedByProductId[id] : { stock: 0 });
   const stock = parseNumber(info.stock);
 
   row.tdStock.textContent = Number.isFinite(stock) ? stock.toFixed(0) : "0";
@@ -2128,8 +2223,8 @@ function buildAlertLines(inv) {
   });
 
   // Producto terminado en alerta (<=10 unidades)
-  FINISHED.forEach((p) => {
-    const info = (inv.finished && inv.finished[p.id]) || { stock: 0 };
+  buildFinishedDefs(inv).forEach((p) => {
+    const info = (inv.finished && inv.finished[p.id]) || (inv.finishedByProductId && inv.finishedByProductId[p.id]) || { stock: 0 };
     const stock = parseNumber(info.stock);
     if (stock <= 10) {
       lines.push(`• ${p.nombre}: ${stock.toFixed(0)} botellas listas`);
@@ -2155,8 +2250,9 @@ function renderProductosTerminados(inv) {
   const tbody = $("inv-productos-body");
   if (!tbody) return;
 
-  FINISHED.forEach((pDef) => {
-		ensureFinishedRow(tbody, pDef);
+  INV_FINISHED_DEFS = buildFinishedDefs(inv);
+  INV_FINISHED_DEFS.forEach((pDef) => {
+			ensureFinishedRow(tbody, pDef);
     updateFinishedRow(inv, pDef.id);
   });
 

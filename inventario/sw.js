@@ -19,7 +19,7 @@ const PRECACHE_URLS = [
   './',
   './index.html?v=4.20.84&r=8',
   './style.css?v=4.20.84&r=8',
-  './script.js?v=4.20.84&r=8',
+  './script.js?v=4.20.84&r=9',
   './manifest.webmanifest?v=4.20.84&r=8',
   './offline.html',
   './images/logo.png',
