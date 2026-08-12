@@ -6,12 +6,37 @@
     storageNamespace: 'a33_agenda_',
     storageKey: 'a33_agenda_records_v1',
     isolated: true,
-    schemaVersion: 6
+    schemaVersion: 9
   });
 
   const TYPE_LABELS = Object.freeze({
     reunion: 'Reunión',
-    tarea: 'Tarea'
+    tarea: 'Tarea',
+    compra: 'Compra'
+  });
+
+  const SECTION_COPY = Object.freeze({
+    reunion: {
+      title: 'Reunión',
+      plural: 'Reuniones',
+      lead: 'Organiza reuniones, clientes, horarios y modalidades.',
+      eyebrow: 'Flujo de Reunión',
+      subjectLabel: 'Asunto',
+      helper: 'Reunión conserva Cliente, Modalidad y Pedido relacionado cuando corresponda.'
+    },
+    tarea: {
+      title: 'Tarea',
+      plural: 'Tareas',
+      lead: 'Registra actividades, pendientes, fechas y prioridades.',
+      eyebrow: 'Flujo de Tarea',
+      subjectLabel: 'Título o descripción',
+      helper: 'Tarea funciona de forma independiente, sin Cliente y sin bloque Pedido.'
+    },
+    compra: {
+      title: 'Compras',
+      plural: 'Compras',
+      lead: 'Planifica los materiales y artículos que necesitas adquirir.'
+    }
   });
 
   const STATUS_LABELS = Object.freeze({
@@ -54,18 +79,13 @@
   const POS_CUSTOMER_CATALOG_KEY = 'a33_pos_customersCatalog';
   const CLIENT_SELECT_NEW_VALUE = '__new__';
 
-  // Sin fallback de precios inventados: si Catálogos no tiene productos, Agenda muestra vacío.
-  const PRODUCT_CATALOG_FALLBACK = Object.freeze([]);
-  const CANON_GALON_LABEL_AGD = 'Galón 3750 ml';
-  const LEGACY_GALON_PRICE_AGD = 800;
-  const DEFAULT_GALON_PRICE_AGD = 900;
-
   const state = {
     records: [],
     currentId: null,
+    activeSection: 'home',
     activeFilter: 'pendiente',
     productCatalog: [],
-    productCatalogSource: 'fallback',
+    productCatalogSource: 'empty',
     clientCatalog: [],
     clientCatalogSource: 'pos'
   };
@@ -122,6 +142,14 @@
   function normalizeType(value){
     const raw = String(value || '').trim().toLowerCase();
     return TYPE_LABELS[raw] ? raw : 'tarea';
+  }
+
+  function getActiveRecordType(){
+    return state.activeSection === 'tarea' ? 'tarea' : 'reunion';
+  }
+
+  function isOperationalSection(value){
+    return value === 'reunion' || value === 'tarea';
   }
 
   function normalizePriority(value){
@@ -181,109 +209,64 @@
       .trim();
   }
 
-  function productSortRank(name){
-    const key = normalizeProductKey(name);
-    if (key.includes('pulso')) return 0;
-    if (key.includes('media')) return 1;
-    if (key.includes('djeba')) return 2;
-    if (key.includes('litro')) return 3;
-    if (key.includes('galon')) return 4;
-    return 999;
-  }
-
-  function mapProductNameToCatalogGroupAGD(name){
-    const key = normalizeProductKey(name);
-    if (!key) return '';
-    if (key.includes('pulso')) return 'pulso';
-    if (key.includes('media')) return 'media';
-    if (key.includes('djeba')) return 'djeba';
-    if (key.includes('litro')) return 'litro';
-    if (key.includes('galon')) return 'galon';
-    return '';
-  }
-
-  function compactProductKeyAGD(value){
-    return normalizeProductKey(value).replace(/\s+/g, '');
-  }
-
-  function scoreProductCatalogItemAGD(item){
-    if (!item) return -9999;
-    const name = String(item.name || item.nombre || '');
-    const group = mapProductNameToCatalogGroupAGD(name);
-    const compact = compactProductKeyAGD(name);
-    let score = 0;
-    if (item.active !== false) score += 1000;
-    if (normalizeNumberInput(item.price) != null && Number(item.price) > 0) score += 100;
-    if (item.manageStock !== false) score += 15;
-    if (group) score += 20;
-    if (group === 'galon'){
-      if (compact === compactProductKeyAGD(CANON_GALON_LABEL_AGD)) score += 80;
-      if (normalizeProductKey(name).includes('3750')) score += 40;
-      if (Number(item.price) === LEGACY_GALON_PRICE_AGD) score -= 60;
-      if (Number(item.price) === DEFAULT_GALON_PRICE_AGD) score += 12;
-    }
+  function agendaProductId(item){
+    const source = item && typeof item === 'object' ? item : {};
     try{
-      const t = Date.parse(item.updatedAt || item.createdAt || '');
-      if (Number.isFinite(t)) score += Math.min(10, t / 1e15);
+      if (window.A33Products && typeof window.A33Products.getProductId === 'function'){
+        return String(window.A33Products.getProductId(source) || '').trim();
+      }
     }catch(_){ }
-    const id = Number(item.id);
-    if (Number.isFinite(id)) score -= Math.min(1, id / 1000000);
-    return score;
+    return String(source.productId ?? source.productoId ?? source.catalogProductId ?? '').trim();
   }
 
   function sanitizeProductCatalogItem(item){
     const source = item && typeof item === 'object' ? item : {};
-    const name = String(source.name || source.nombre || '').trim();
-    const price = normalizeNumberInput(source.price);
-    const active = source.active !== false;
-    const internalType = String(source.internalType || '').trim().toLowerCase();
-    const key = normalizeProductKey(name);
+    const productId = agendaProductId(source);
+    const name = String(source.name || source.nombre || '').replace(/\s+/g, ' ').trim();
+    const price = normalizeNumberInput(source.price ?? source.precio ?? source.unitPrice ?? source.precioVenta);
+    const active = source.active !== false && source.deleted !== true;
+    const internalId = Number(source.id);
 
-    if (!name || !active) return null;
-    if (internalType === 'cup_portion') return null;
-    if (!key || key === 'vaso') return null;
-    if (price == null || price <= 0) return null;
+    if (!productId || !name || !active) return null;
 
     return {
-      id: String(source.id != null ? source.id : key),
+      id: productId,
+      productId,
+      internalId: Number.isFinite(internalId) && internalId > 0 ? internalId : null,
       name,
-      price,
+      price: price == null ? 0 : price,
       active,
       manageStock: source.manageStock !== false,
       createdAt: source.createdAt || '',
-      updatedAt: source.updatedAt || '',
-      __score: scoreProductCatalogItemAGD(source)
+      updatedAt: source.updatedAt || ''
     };
   }
 
   function normalizeProductCatalog(list){
     const items = Array.isArray(list) ? list : [];
-    const grouped = new Map();
+    const byProductId = new Map();
 
     items.forEach(function(raw){
       const item = sanitizeProductCatalogItem(raw);
-      if (!item) return;
-      const group = mapProductNameToCatalogGroupAGD(item.name);
-      const key = group ? ('sku:' + group) : ('name:' + compactProductKeyAGD(item.name));
-      if (!key || key === 'name:') return;
-      const prev = grouped.get(key);
-      if (!prev || item.__score > prev.__score) grouped.set(key, item);
+      if (!item || byProductId.has(item.productId)) return;
+      byProductId.set(item.productId, item);
     });
 
-    return Array.from(grouped.values())
-      .sort(function(a, b){
-        const rankDiff = productSortRank(a.name) - productSortRank(b.name);
-        if (rankDiff !== 0) return rankDiff;
-        return a.name.localeCompare(b.name, 'es');
-      })
-      .map(function(item){
-        return { id:item.id, name:item.name, price:item.price };
-      });
-  }
-
-  function getFallbackProductCatalog(){
-    return PRODUCT_CATALOG_FALLBACK.map(function(item){
-      return { ...item };
+    const normalized = Array.from(byProductId.values());
+    const counts = new Map();
+    normalized.forEach(function(item){
+      const key = normalizeProductKey(item.name);
+      if (key) counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    normalized.forEach(function(item){
+      const key = normalizeProductKey(item.name);
+      item.displayName = (counts.get(key) || 0) > 1
+        ? item.name + ' · ' + item.productId.slice(-6)
+        : item.name;
+    });
+    return normalized.sort(function(a, b){
+      const byName = a.name.localeCompare(b.name, 'es', { sensitivity:'base' });
+      return byName || a.productId.localeCompare(b.productId);
     });
   }
 
@@ -328,6 +311,11 @@
   }
 
   function readProductCatalogFromPOS(){
+    try{
+      if (window.A33Products && typeof window.A33Products.getAll === 'function'){
+        return window.A33Products.getAll().then(normalizeProductCatalog);
+      }
+    }catch(_){ }
     return openPosProductDbReadOnly().then(function(db){
       return new Promise(function(resolve, reject){
         let settled = false;
@@ -960,56 +948,67 @@
     if (!option || !option.value) return null;
 
     return {
-      id: String(option.value || '').trim(),
+      id: String(option.dataset.productId || '').trim(),
       name: String(option.dataset.productName || option.textContent || '').trim(),
-      price: normalizeNumberInput(option.dataset.productPrice)
+      price: normalizeNumberInput(option.dataset.productPrice),
+      internalId: normalizeNumberInput(option.dataset.internalId),
+      historicalOnly: option.dataset.historical === '1'
     };
   }
 
   function renderPedidoProductOptions(options){
     const settings = options || {};
     const selectedId = settings.selectedId != null ? String(settings.selectedId).trim() : String(refs.pedidoProduct.value || '').trim();
-    const selectedName = String(settings.selectedName || '').trim();
+    const selectedName = String(settings.selectedName || '').replace(/\s+/g, ' ').trim();
     const selectedPrice = normalizeNumberInput(settings.selectedPrice);
+    const preserveHistorical = settings.preserveHistorical === true;
 
     refs.pedidoProduct.innerHTML = '';
 
     const placeholder = document.createElement('option');
     placeholder.value = '';
-    placeholder.textContent = state.productCatalog.length ? 'Selecciona un producto' : 'No hay productos disponibles';
+    placeholder.textContent = state.productCatalog.length
+      ? 'Selecciona un producto'
+      : 'No hay productos activos. Créelos en Catálogos → Productos';
     refs.pedidoProduct.appendChild(placeholder);
 
     let matchedValue = '';
-    const selectedNameKey = normalizeProductKey(selectedName);
+    const current = selectedId ? state.productCatalog.find(function(item){ return item.productId === selectedId; }) : null;
+    const snapshotDiffers = !!(current && preserveHistorical && selectedName && (
+      normalizeProductKey(current.name) !== normalizeProductKey(selectedName)
+      || (selectedPrice != null && Math.abs(Number(current.price || 0) - selectedPrice) > 0.000001)
+    ));
 
     state.productCatalog.forEach(function(item){
       const option = document.createElement('option');
-      option.value = String(item.id);
-      option.textContent = item.name + ' · ' + formatMoney(item.price);
+      option.value = String(item.productId);
+      option.textContent = (item.displayName || item.name) + ' · ' + formatMoney(item.price);
+      option.dataset.productId = item.productId;
+      option.dataset.internalId = item.internalId == null ? '' : String(item.internalId);
       option.dataset.productName = item.name;
       option.dataset.productPrice = formatNumberPlain(item.price);
       refs.pedidoProduct.appendChild(option);
 
-      if (!matchedValue && selectedId && option.value === selectedId) {
-        matchedValue = option.value;
-      }
-
-      if (!matchedValue && selectedNameKey && normalizeProductKey(item.name) === selectedNameKey) {
-        matchedValue = option.value;
-      }
+      if (!snapshotDiffers && !matchedValue && selectedId && option.value === selectedId) matchedValue = option.value;
     });
 
-    if (!matchedValue && selectedName) {
+    if (preserveHistorical && selectedName && (!current || snapshotDiffers)) {
       const legacyOption = document.createElement('option');
-      legacyOption.value = selectedId || ('legacy:' + selectedNameKey);
+      legacyOption.value = 'historical:' + (selectedId || normalizeProductKey(selectedName));
       legacyOption.textContent = selectedName + ' · Guardado';
+      legacyOption.dataset.productId = selectedId;
       legacyOption.dataset.productName = selectedName;
+      legacyOption.dataset.historical = '1';
       if (selectedPrice != null) legacyOption.dataset.productPrice = formatNumberPlain(selectedPrice);
       refs.pedidoProduct.appendChild(legacyOption);
       matchedValue = legacyOption.value;
     }
 
     refs.pedidoProduct.value = matchedValue || '';
+    const status = document.getElementById('agendaPedidoProductStatus');
+    if (status) status.textContent = state.productCatalog.length
+      ? state.productCatalog.length + ' producto(s) activo(s) disponible(s).'
+      : 'No hay productos activos. Cree productos desde Catálogos → Productos.';
   }
 
   function syncPedidoPriceFromSelection(){
@@ -1023,8 +1022,9 @@
     const snapshot = pedido && typeof pedido === 'object' ? pedido : getEmptyPedido();
     renderPedidoProductOptions({
       selectedId: snapshot.productId,
-      selectedName: snapshot.product,
-      selectedPrice: snapshot.price
+      selectedName: snapshot.productNameSnapshot || snapshot.product,
+      selectedPrice: snapshot.priceSnapshot != null ? snapshot.priceSnapshot : snapshot.price,
+      preserveHistorical: true
     });
     refs.pedidoPrice.value = snapshot.price != null ? formatNumberPlain(snapshot.price) : '';
   }
@@ -1033,11 +1033,11 @@
     refs.pedidoProduct.innerHTML = '<option value="">Cargando catálogo…</option>';
 
     return readProductCatalogFromPOS().then(function(products){
-      state.productCatalog = products.length ? products : getFallbackProductCatalog();
-      state.productCatalogSource = products.length ? 'catalogos' : 'empty';
+      state.productCatalog = Array.isArray(products) ? products : [];
+      state.productCatalogSource = state.productCatalog.length ? 'catalogos' : 'empty';
       renderPedidoProductOptions();
     }).catch(function(){
-      state.productCatalog = getFallbackProductCatalog();
+      state.productCatalog = [];
       state.productCatalogSource = 'empty';
       renderPedidoProductOptions();
     });
@@ -1048,7 +1048,11 @@
       enabled: false,
       productId: '',
       product: '',
+      productNameSnapshot: '',
       price: null,
+      priceSnapshot: null,
+      productSnapshot: null,
+      historicalOnly: false,
       quantity: null,
       total: null,
       delivery: ''
@@ -1067,14 +1071,81 @@
     const quantity = normalizeNumberInput(merged.quantity);
     const total = price != null && quantity != null ? round2(price * quantity) : null;
 
+    const productNameSnapshot = String(merged.productNameSnapshot || merged.product || '').replace(/\s+/g, ' ').trim();
+    const productId = String(merged.productId || '').trim();
+    const priceSnapshot = normalizeNumberInput(merged.priceSnapshot != null ? merged.priceSnapshot : merged.price);
     return {
       enabled: true,
-      productId: String(merged.productId || '').trim(),
-      product: String(merged.product || '').trim(),
-      price,
+      productId,
+      product: productNameSnapshot,
+      productNameSnapshot,
+      price: priceSnapshot,
+      priceSnapshot,
       quantity,
-      total,
-      delivery: normalizeDate(merged.delivery)
+      total: priceSnapshot != null && quantity != null ? round2(priceSnapshot * quantity) : total,
+      delivery: normalizeDate(merged.delivery),
+      productSnapshot: merged.productSnapshot && typeof merged.productSnapshot === 'object' ? { ...merged.productSnapshot } : null,
+      historicalOnly: merged.historicalOnly === true || (!productId && !!productNameSnapshot)
+    };
+  }
+
+  function normalizePurchase(value, recordSource){
+    const source = value && typeof value === 'object' ? value : {};
+    const record = recordSource && typeof recordSource === 'object' ? recordSource : {};
+    const snapshot = source.snapshot && typeof source.snapshot === 'object' ? source.snapshot : {};
+    const materialId = String(source.materialId || snapshot.materialId || '').trim();
+    const name = String(source.name || source.materialName || snapshot.name || record.subject || '').replace(/\s+/g, ' ').trim();
+    const category = String(source.category || snapshot.category || '').replace(/\s+/g, ' ').trim();
+    const unitRaw = String(source.unit || snapshot.unit || '').trim();
+    const unit = ['Unidad','Cajas','Litros','Galones'].includes(unitRaw) ? unitRaw : '';
+    const priceUsed = normalizeNumberInput(source.priceUsed != null ? source.priceUsed : (source.price != null ? source.price : snapshot.priceUsed));
+    const quantity = normalizeNumberInput(source.quantity);
+    const subtotalRaw = normalizeNumberInput(source.subtotal);
+    const subtotal = priceUsed != null && quantity != null ? round2(priceUsed * quantity) : (subtotalRaw == null ? 0 : subtotalRaw);
+    return {
+      materialId,
+      name,
+      category,
+      unit,
+      priceUsed: priceUsed == null ? 0 : priceUsed,
+      quantity,
+      subtotal,
+      snapshot: {
+        materialId,
+        name,
+        category,
+        unit,
+        priceUsed: priceUsed == null ? 0 : priceUsed,
+        capturedAt: String(snapshot.capturedAt || source.capturedAt || record.createdAt || '').trim()
+      }
+    };
+  }
+
+  function normalizePurchaseGroup(value, purchaseValue, recordSource){
+    const source = value && typeof value === 'object' ? value : {};
+    const record = recordSource && typeof recordSource === 'object' ? recordSource : {};
+    const rawItems = Array.isArray(source.items) ? source.items : [];
+    const items = rawItems.map(function(item){
+      const normalized = normalizePurchase(item, record);
+      return {
+        draftId: String(item && (item.draftId || item.lineId) || '').trim(),
+        ...normalized
+      };
+    }).filter(function(item){
+      return item.materialId && item.name && item.unit && item.quantity != null && item.quantity > 0;
+    });
+    if (!items.length) {
+      const legacy = normalizePurchase(purchaseValue, record);
+      if (legacy.materialId && legacy.name && legacy.unit && legacy.quantity != null && legacy.quantity > 0) {
+        items.push({ draftId:'', ...legacy });
+      }
+    }
+    const totalGeneral = round2(items.reduce(function(sum,item){ return sum + Number(item.subtotal || 0); },0));
+    return {
+      version: Number(source.version) || 1,
+      itemCount: items.length,
+      totalGeneral,
+      items
     };
   }
 
@@ -1099,7 +1170,11 @@
       notes: String(source.notes || '').trim(),
       createdAt,
       updatedAt,
-      pedido: normalizePedido(source.pedido)
+      pedido: normalizePedido(source.pedido),
+      purchase: type === 'compra' ? normalizePurchase(source.purchase || source.compra, source) : normalizePurchase(null, {}),
+      purchaseGroup: type === 'compra'
+        ? normalizePurchaseGroup(source.purchaseGroup, source.purchase || source.compra, source)
+        : { version:1, itemCount:0, totalGeneral:0, items:[] }
     };
   }
 
@@ -1182,7 +1257,9 @@
   }
 
   function getCounts(){
+    const activeType = getActiveRecordType();
     return state.records.reduce(function(acc, record){
+      if (record.type !== activeType) return acc;
       acc.total += 1;
       acc[record.status] += 1;
       return acc;
@@ -1195,7 +1272,10 @@
   }
 
   function getVisibleRecords(){
-    const records = state.records.slice();
+    const activeType = getActiveRecordType();
+    const records = state.records.filter(function(record){
+      return record.type === activeType;
+    });
 
     if (state.activeFilter === 'todos') {
       return records.sort(compareAllRecords);
@@ -1225,8 +1305,9 @@
   }
 
   function getPendingPulseCounts(){
+    const activeType = getActiveRecordType();
     return state.records.reduce(function(acc, record){
-      if (normalizeStatus(record.status) !== 'pendiente') return acc;
+      if (record.type !== activeType || normalizeStatus(record.status) !== 'pendiente') return acc;
       acc.total += 1;
       const timing = getPendingTiming(record);
       if (timing === 'atrasado') acc.atrasado += 1;
@@ -1356,7 +1437,7 @@
   function buildAgendaCalendarDescription(record){
     const lines = [];
     lines.push('Tipo: ' + TYPE_LABELS[record.type]);
-    if (record.client) lines.push('Cliente: ' + record.client);
+    if (record.type === 'reunion' && record.client) lines.push('Cliente: ' + record.client);
     lines.push('Estado: ' + STATUS_LABELS[record.status]);
     if (record.type === 'reunion') {
       lines.push('Modalidad: ' + MODALITY_LABELS[normalizeModality(record.modality)]);
@@ -1365,7 +1446,7 @@
     if (record.time) lines.push('Hora: ' + formatTime(record.time, record.time));
     if (record.notes) lines.push('Notas: ' + record.notes.replace(/\r?\n/g, ' '));
 
-    if (record.pedido && record.pedido.enabled) {
+    if (record.type === 'reunion' && record.pedido && record.pedido.enabled) {
       lines.push('');
       lines.push('Pedido activo: Sí');
       if (record.pedido.product) lines.push('Producto: ' + record.pedido.product);
@@ -1481,6 +1562,18 @@
   }
 
   function setRefs(){
+    refs.homeView = document.getElementById('agendaHomeView');
+    refs.operationalView = document.getElementById('agendaOperationalView');
+    refs.purchasesView = document.getElementById('agendaPurchasesView');
+    refs.entryButtons = Array.from(document.querySelectorAll('[data-agenda-section]'));
+    refs.backButtons = Array.from(document.querySelectorAll('[data-agenda-back]'));
+    refs.sectionKicker = document.getElementById('agendaSectionKicker');
+    refs.sectionTitle = document.getElementById('agenda-title');
+    refs.sectionLead = document.getElementById('agendaSectionLead');
+    refs.formEyebrow = document.getElementById('agendaFormEyebrow');
+    refs.subjectLabel = document.getElementById('agendaSubjectLabel');
+    refs.formHelper = document.getElementById('agendaFormHelper');
+    refs.listTitle = document.getElementById('agendaListTitle');
     refs.form = document.getElementById('agendaForm');
     refs.formTitle = document.getElementById('agendaFormTitle');
     refs.subject = document.getElementById('agendaSubject');
@@ -1489,6 +1582,7 @@
     refs.clientNewWrap = document.getElementById('agendaClientNewWrap');
     refs.clientNew = document.getElementById('agendaClientNew');
     refs.clientNote = document.getElementById('agendaClientNote');
+    refs.clientField = document.getElementById('agendaClientField');
     refs.meetingModalityField = document.getElementById('agendaMeetingModalityField');
     refs.modality = document.getElementById('agendaModality');
     refs.date = document.getElementById('agendaDate');
@@ -1497,6 +1591,7 @@
     refs.priority = document.getElementById('agendaPriority');
     refs.notes = document.getElementById('agendaNotes');
     refs.typeInputs = Array.from(document.querySelectorAll('input[name="type"]'));
+    refs.pedidoToggleWrap = document.getElementById('agendaPedidoToggleWrap');
     refs.pedidoToggle = document.getElementById('agendaPedidoToggle');
     refs.pedidoTogglePill = document.getElementById('agendaPedidoTogglePill');
     refs.pedidoPanel = document.getElementById('agendaPedidoPanel');
@@ -1528,6 +1623,67 @@
     refs.pendingPulseOverdue = document.getElementById('agendaPendingPulseOverdue');
     refs.pendingPulseToday = document.getElementById('agendaPendingPulseToday');
     refs.pendingPulseUpcoming = document.getElementById('agendaPendingPulseUpcoming');
+  }
+
+  function setAgendaView(target){
+    if (refs.homeView) refs.homeView.hidden = target !== 'home';
+    if (refs.operationalView) refs.operationalView.hidden = target !== 'operational';
+    if (refs.purchasesView) refs.purchasesView.hidden = target !== 'compra';
+  }
+
+  function updateSectionCopy(){
+    const type = getActiveRecordType();
+    const copy = SECTION_COPY[type] || SECTION_COPY.reunion;
+    if (refs.sectionKicker) refs.sectionKicker.textContent = 'Agenda operativa';
+    if (refs.sectionTitle) refs.sectionTitle.textContent = copy.title;
+    if (refs.sectionLead) refs.sectionLead.textContent = copy.lead;
+    if (refs.formEyebrow) refs.formEyebrow.textContent = copy.eyebrow;
+    if (refs.subjectLabel) refs.subjectLabel.textContent = copy.subjectLabel;
+    if (refs.formHelper) refs.formHelper.textContent = copy.helper;
+    if (refs.listTitle) refs.listTitle.textContent = copy.plural;
+  }
+
+  function openAgendaHome(options){
+    const settings = options || {};
+    state.activeSection = 'home';
+    state.currentId = null;
+    setAgendaView('home');
+    if (settings.focus !== false && refs.entryButtons && refs.entryButtons[0]) {
+      refs.entryButtons[0].focus();
+    }
+  }
+
+  function openAgendaSection(section, options){
+    const settings = options || {};
+    const target = normalizeType(section);
+
+    if (target === 'compra') {
+      loadRecords();
+      state.activeSection = 'compra';
+      state.currentId = null;
+      setAgendaView('compra');
+      try{
+        if (window.A33AgendaPurchases && typeof window.A33AgendaPurchases.open === 'function') {
+          window.A33AgendaPurchases.open(settings.recordId || '');
+        }
+      }catch(_){ }
+      return;
+    }
+
+    loadRecords();
+    state.activeSection = isOperationalSection(target) ? target : 'reunion';
+    state.activeFilter = settings.keepFilter === true ? state.activeFilter : 'pendiente';
+    setAgendaView('operational');
+    setTypeValue(state.activeSection);
+    updateSectionCopy();
+
+    if (settings.reset !== false) {
+      resetForm({ focus: settings.focus === true, type: state.activeSection });
+      renderList();
+    } else {
+      applyTypeUI();
+      renderList();
+    }
   }
 
   function clearFieldError(input){
@@ -1600,6 +1756,9 @@
     const total = counts.total;
     const visible = getVisibleRecords().length;
     const current = getCurrentRecord();
+    const type = getActiveRecordType();
+    const copy = SECTION_COPY[type] || SECTION_COPY.reunion;
+    const singularLower = copy.title.toLowerCase();
 
     refs.countLabel.textContent = String(total);
 
@@ -1607,7 +1766,8 @@
       refs.listBadge.textContent = '0 elementos';
       refs.modeLabel.textContent = EMPTY_MODE;
       refs.toolbarTitle.textContent = 'Pendientes primero';
-      refs.toolbarText.textContent = 'La Agenda ya está cerrada a nivel operativo. Solo falta que guardes el primer registro.';
+      refs.toolbarText.textContent = 'Aún no hay registros guardados en esta sección.';
+      refs.saveBtn.textContent = 'Guardar ' + copy.title;
       return;
     }
 
@@ -1618,10 +1778,10 @@
     }
 
     if (current) {
-      refs.modeLabel.textContent = 'Editando ' + TYPE_LABELS[current.type].toLowerCase();
-      refs.saveBtn.textContent = 'Actualizar ítem';
+      refs.modeLabel.textContent = 'Editando ' + singularLower;
+      refs.saveBtn.textContent = 'Actualizar ' + copy.title;
     } else {
-      refs.saveBtn.textContent = 'Guardar ítem';
+      refs.saveBtn.textContent = 'Guardar ' + copy.title;
       if (state.activeFilter === 'pendiente') refs.modeLabel.textContent = counts.pendiente ? 'Pendientes primero' : 'Sin pendientes';
       if (state.activeFilter === 'hecho') refs.modeLabel.textContent = 'Vista: Hechos';
       if (state.activeFilter === 'cancelado') refs.modeLabel.textContent = 'Vista: Cancelados';
@@ -1631,33 +1791,37 @@
     if (state.activeFilter === 'pendiente') {
       refs.toolbarTitle.textContent = counts.pendiente ? 'Pendientes al frente' : 'No hay pendientes';
       refs.toolbarText.textContent = counts.pendiente
-        ? 'Mostrando ' + counts.pendiente + ' pendiente' + (counts.pendiente === 1 ? '' : 's') + ' con foco operativo. Hechos y Cancelados siguen a un toque.'
-        : 'Tienes registros guardados, pero ninguno quedó en Pendiente. Puedes revisar Hechos, Cancelados o Todos.';
+        ? 'Mostrando ' + counts.pendiente + ' registro' + (counts.pendiente === 1 ? '' : 's') + ' pendiente' + (counts.pendiente === 1 ? '' : 's') + ', sin mezclar otros tipos de Agenda.'
+        : 'Esta sección tiene registros, pero ninguno quedó en Pendiente.';
       return;
     }
 
     if (state.activeFilter === 'hecho') {
       refs.toolbarTitle.textContent = 'Trabajo cerrado';
       refs.toolbarText.textContent = visible
-        ? 'Aquí ves lo terminado. Pendientes y Cancelados siguen disponibles en los filtros rápidos.'
-        : 'No hay registros marcados como Hecho todavía.';
+        ? 'Aquí ves únicamente registros terminados de esta sección.'
+        : 'No hay registros marcados como Hecho en esta sección.';
       return;
     }
 
     if (state.activeFilter === 'cancelado') {
       refs.toolbarTitle.textContent = 'Cancelados visibles';
       refs.toolbarText.textContent = visible
-        ? 'Nada queda escondido: los cancelados también se pueden revisar y reabrir.'
-        : 'No hay registros cancelados por ahora.';
+        ? 'Los registros cancelados de esta sección siguen disponibles para revisión.'
+        : 'No hay registros cancelados en esta sección.';
       return;
     }
 
     refs.toolbarTitle.textContent = 'Visión completa';
-    refs.toolbarText.textContent = 'Todos los estados juntos, pero con Pendientes primero para no perder el pulso operativo ni mezclar ruido con urgencia.';
+    refs.toolbarText.textContent = 'Todos los estados de esta sección, sin mezclar registros de otras áreas.';
   }
 
   function setLastUpdateLabel(){
-    refs.lastUpdate.textContent = state.records.length ? formatDateTime(state.records[0].updatedAt) : '—';
+    const activeType = getActiveRecordType();
+    const latest = state.records
+      .filter(function(record){ return record.type === activeType; })
+      .sort(function(a, b){ return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(); })[0];
+    refs.lastUpdate.textContent = latest ? formatDateTime(latest.updatedAt) : '—';
   }
 
   function scrollActiveRecordIntoView(){
@@ -1730,27 +1894,38 @@
     const type = getTypeValue();
     const isReunion = type === 'reunion';
 
+    if (refs.clientField) refs.clientField.hidden = !isReunion;
+    refs.clientSelect.disabled = !isReunion;
+    refs.clientSelect.required = isReunion;
+    refs.client.required = isReunion;
+    if (!isReunion) setClientCreationMode(false);
+
     refs.meetingModalityField.hidden = !isReunion;
     refs.modality.disabled = !isReunion;
     refs.modality.required = isReunion;
 
+    if (refs.pedidoToggleWrap) refs.pedidoToggleWrap.hidden = !isReunion;
+    if (!isReunion) setPedidoEnabled(false, { preserveValues: true });
+
     refs.subject.placeholder = isReunion
       ? 'Ej. Seguimiento con cliente / Reunión de propuesta'
-      : 'Ej. Preparar materiales / Confirmar entrega / Llamar al cliente';
+      : 'Ej. Preparar materiales / Confirmar entrega / Revisar pendientes';
 
     refs.notes.placeholder = isReunion
-      ? 'Notas breves de la reunión. Pedido sigue siendo opcional.'
-      : 'Notas simples de la tarea. Sin ruido extra cuando Pedido está apagado.';
+      ? 'Notas breves de la reunión.'
+      : 'Notas simples de la tarea.';
 
+    updateSectionCopy();
     syncFormTitle();
   }
 
   function resetForm(options){
     const settings = options || {};
     const shouldFocus = settings.focus !== false;
+    const formType = isOperationalSection(settings.type) ? settings.type : getActiveRecordType();
     state.currentId = null;
     refs.form.reset();
-    setTypeValue('reunion');
+    setTypeValue(formType);
     refs.modality.value = 'presencial';
     refs.status.value = 'pendiente';
     refs.priority.value = 'media';
@@ -1769,26 +1944,38 @@
     applyTypeUI();
     syncPedidoTotal();
     setModeLabels();
-    if (shouldFocus) refs.subject.focus();
+    if (shouldFocus && !refs.operationalView.hidden) refs.subject.focus();
   }
 
   function fillForm(record, options){
     const settings = options || {};
     state.currentId = record.id;
+    setTypeValue(record.type);
     refs.subject.value = record.subject;
-    applyClientSnapshot(record);
-    refs.modality.value = record.modality || 'presencial';
+
+    if (record.type === 'reunion') {
+      applyClientSnapshot(record);
+    } else {
+      applyClientSnapshot(null);
+    }
+
+    refs.modality.value = record.type === 'reunion' ? (record.modality || 'presencial') : 'presencial';
     refs.date.value = record.date;
     refs.time.value = record.time;
     refs.status.value = record.status;
     refs.priority.value = record.priority;
     refs.notes.value = record.notes;
-    setTypeValue(record.type);
-    setPedidoEnabled(Boolean(record.pedido && record.pedido.enabled), { preserveValues: true });
-    applyPedidoSnapshot(record.pedido);
-    refs.pedidoDelivery.value = record.pedido && record.pedido.delivery ? record.pedido.delivery : '';
-    refs.pedidoQuantity.value = record.pedido && record.pedido.quantity != null ? formatNumberPlain(record.pedido.quantity) : '';
-    syncPedidoTotal();
+
+    if (record.type === 'reunion') {
+      setPedidoEnabled(Boolean(record.pedido && record.pedido.enabled), { preserveValues: true });
+      applyPedidoSnapshot(record.pedido);
+      refs.pedidoDelivery.value = record.pedido && record.pedido.delivery ? record.pedido.delivery : '';
+      refs.pedidoQuantity.value = record.pedido && record.pedido.quantity != null ? formatNumberPlain(record.pedido.quantity) : '';
+      syncPedidoTotal();
+    } else {
+      setPedidoEnabled(false);
+    }
+
     refs.deleteBtn.hidden = false;
     clearFieldError(refs.subject);
     clearFieldError(refs.clientSelect);
@@ -1816,7 +2003,7 @@
   }
 
   function recordToPreview(record){
-    if (record.pedido && record.pedido.enabled) {
+    if (record.type === 'reunion' && record.pedido && record.pedido.enabled) {
       const pedidoText = pedidoSummary(record);
       if (record.notes) {
         return truncateText(pedidoText + ' ' + record.notes, 180);
@@ -1830,7 +2017,7 @@
       return 'Cliente: ' + (record.client || '—') + ' · Modalidad: ' + MODALITY_LABELS[normalizeModality(record.modality)];
     }
 
-    return 'Tarea del cliente ' + (record.client || '—') + ' para ' + buildDatePillText(record) + '.';
+    return 'Tarea programada para ' + buildDatePillText(record) + '.';
   }
 
   function createChip(className, text){
@@ -1905,9 +2092,12 @@
       createChip('agenda-chip agenda-chip--type', TYPE_LABELS[record.type]),
       createChip('agenda-status agenda-status--' + record.status, STATUS_LABELS[record.status]),
       createChip('agenda-chip agenda-chip--priority agenda-chip--priority-' + record.priority, PRIORITY_LABELS[record.priority]),
-      createChip('agenda-date-pill', buildDatePillText(record)),
-      createChip('agenda-chip agenda-chip--client', 'Cliente: ' + (record.client || '—'))
+      createChip('agenda-date-pill', buildDatePillText(record))
     ];
+
+    if (record.type === 'reunion') {
+      metaItems.push(createChip('agenda-chip agenda-chip--client', 'Cliente: ' + (record.client || '—')));
+    }
 
     const pendingTiming = getPendingTiming(record);
     if (pendingTiming === 'atrasado') {
@@ -1922,7 +2112,7 @@
       metaItems.splice(1, 0, createChip('agenda-chip', MODALITY_LABELS[normalizeModality(record.modality)]));
     }
 
-    if (record.pedido && record.pedido.enabled) {
+    if (record.type === 'reunion' && record.pedido && record.pedido.enabled) {
       metaItems.push(createChip('agenda-chip agenda-chip--pedido', 'Pedido: ' + (record.pedido.product || 'Activo')));
       if (record.pedido.total != null) {
         metaItems.push(createChip('agenda-chip agenda-chip--pedido-total', formatMoney(record.pedido.total)));
@@ -2007,32 +2197,33 @@
 
   function updateEmptyState(visibleCount){
     const counts = getCounts();
+    const copy = SECTION_COPY[getActiveRecordType()] || SECTION_COPY.reunion;
 
     if (!counts.total) {
-      refs.emptyTitle.textContent = 'Aún no hay ítems';
-      refs.emptyText.textContent = 'La Agenda ya tiene flujo real. Falta que guardes el primero para verla trabajar.';
+      refs.emptyTitle.textContent = 'Aún no hay ' + copy.plural.toLowerCase();
+      refs.emptyText.textContent = 'Guarda el primer registro para empezar a trabajar esta sección.';
       return;
     }
 
     if (state.activeFilter === 'pendiente') {
       refs.emptyTitle.textContent = 'No hay pendientes';
-      refs.emptyText.textContent = 'Ya existen registros guardados, pero ninguno está en Pendiente. Puedes revisar Hechos, Cancelados o Todos.';
+      refs.emptyText.textContent = 'Hay registros guardados en esta sección, pero ninguno está Pendiente.';
       return;
     }
 
     if (state.activeFilter === 'hecho') {
       refs.emptyTitle.textContent = 'Todavía no hay hechos';
-      refs.emptyText.textContent = 'Aún no has cerrado ningún registro como Hecho. Puedes volver a Pendientes o revisar Todo.';
+      refs.emptyText.textContent = 'Aún no has marcado ningún registro de esta sección como Hecho.';
       return;
     }
 
     if (state.activeFilter === 'cancelado') {
       refs.emptyTitle.textContent = 'Todavía no hay cancelados';
-      refs.emptyText.textContent = 'No hay registros cancelados por ahora. Buena señal, por cierto.';
+      refs.emptyText.textContent = 'No hay registros cancelados en esta sección.';
       return;
     }
 
-    refs.emptyTitle.textContent = visibleCount ? 'Agenda cargada' : 'Nada por mostrar';
+    refs.emptyTitle.textContent = visibleCount ? 'Sección cargada' : 'Nada por mostrar';
     refs.emptyText.textContent = visibleCount ? 'Todo está visible en esta vista.' : 'No se encontraron registros en la vista actual.';
   }
 
@@ -2068,31 +2259,48 @@
 
     const selectedProduct = getSelectedPedidoProductData();
 
+    const productId = selectedProduct ? selectedProduct.id : '';
+    const productNameSnapshot = selectedProduct ? selectedProduct.name : '';
+    const priceSnapshot = price;
     return {
       enabled: true,
-      productId: selectedProduct ? selectedProduct.id : '',
-      product: selectedProduct ? selectedProduct.name : '',
-      price,
+      productId,
+      product: productNameSnapshot,
+      productNameSnapshot,
+      price: priceSnapshot,
+      priceSnapshot,
       quantity,
-      total: price != null && quantity != null ? round2(price * quantity) : null,
-      delivery: normalizeDate(refs.pedidoDelivery.value)
+      total: priceSnapshot != null && quantity != null ? round2(priceSnapshot * quantity) : null,
+      delivery: normalizeDate(refs.pedidoDelivery.value),
+      historicalOnly: !!(selectedProduct && selectedProduct.historicalOnly),
+      productSnapshot: selectedProduct ? {
+        productId,
+        internalId: selectedProduct.internalId == null ? null : selectedProduct.internalId,
+        name: productNameSnapshot,
+        nombre: productNameSnapshot,
+        price: priceSnapshot,
+        precio: priceSnapshot,
+        capturedAt: new Date().toISOString(),
+        historicalOnly: !!selectedProduct.historicalOnly
+      } : null
     };
   }
 
   function collectFormData(){
     const type = getTypeValue();
+    const isReunion = type === 'reunion';
     return {
       subject: refs.subject.value.trim(),
       type,
-      client: sanitizeCustomerDisplay(refs.client.value),
-      clientId: getClientIdHint(),
-      modality: type === 'reunion' ? normalizeModality(refs.modality.value) : '',
+      client: isReunion ? sanitizeCustomerDisplay(refs.client.value) : '',
+      clientId: isReunion ? getClientIdHint() : '',
+      modality: isReunion ? normalizeModality(refs.modality.value) : '',
       date: normalizeDate(refs.date.value),
       time: normalizeTime(refs.time.value),
       status: normalizeStatus(refs.status.value),
       priority: normalizePriority(refs.priority.value),
       notes: refs.notes.value.trim(),
-      pedido: collectPedidoData()
+      pedido: isReunion ? collectPedidoData() : getEmptyPedido()
     };
   }
 
@@ -2112,7 +2320,7 @@
       return invalidateField(refs.subject, 'Escribe el asunto del ítem.');
     }
 
-    if (!data.client) {
+    if (data.type === 'reunion' && !data.client) {
       if (refs.clientSelect && refs.clientSelect.value === CLIENT_SELECT_NEW_VALUE) {
         return invalidateField(refs.clientNew, 'Escribe el nombre del cliente nuevo.');
       }
@@ -2127,12 +2335,16 @@
       return invalidateField(refs.modality, 'Selecciona la modalidad de la reunión.');
     }
 
-    if (!data.pedido || !data.pedido.enabled) {
+    if (data.type !== 'reunion' || !data.pedido || !data.pedido.enabled) {
       return true;
     }
 
     if (!data.pedido.product) {
       return invalidateField(refs.pedidoProduct, 'Indica el producto del pedido.');
+    }
+
+    if (!data.pedido.historicalOnly && !data.pedido.productId) {
+      return invalidateField(refs.pedidoProduct, 'Selecciona un producto activo real desde Catálogos.');
     }
 
     if (data.pedido.price == null || data.pedido.price <= 0) {
@@ -2155,9 +2367,17 @@
     const existing = getCurrentRecord();
 
     if (existing) {
+      const updateData = data.type === 'tarea'
+        ? {
+            ...data,
+            client: existing.client || '',
+            clientId: existing.clientId || '',
+            pedido: existing.pedido || getEmptyPedido()
+          }
+        : data;
       const updated = normalizeRecord({
         ...existing,
-        ...data,
+        ...updateData,
         updatedAt: now
       });
 
@@ -2214,33 +2434,52 @@
   }
 
   function bindEvents(){
+    refs.entryButtons.forEach(function(button){
+      button.addEventListener('click', function(){
+        openAgendaSection(button.getAttribute('data-agenda-section'), { focus: false });
+      });
+    });
+
+    refs.backButtons.forEach(function(button){
+      button.addEventListener('click', function(){
+        openAgendaHome();
+      });
+    });
+
     refs.form.addEventListener('submit', function(event){
       event.preventDefault();
 
-      const clientSelection = finalizeClientSelection();
-      if (!clientSelection.ok) {
-        if (clientSelection.reason === 'missing_new') {
-          invalidateField(refs.clientNew, 'Escribe el nombre del cliente nuevo.');
+      const type = getTypeValue();
+      let clientSelection = { ok: true, id: '', displayName: '' };
+
+      if (type === 'reunion') {
+        clientSelection = finalizeClientSelection();
+        if (!clientSelection.ok) {
+          if (clientSelection.reason === 'missing_new') {
+            invalidateField(refs.clientNew, 'Escribe el nombre del cliente nuevo.');
+            return;
+          }
+          if (clientSelection.reason === 'save_failed') {
+            invalidateField(refs.clientNew, 'No se pudo guardar el cliente nuevo en el catálogo compartido.');
+            return;
+          }
+          invalidateField(refs.clientSelect, 'Selecciona un cliente o crea uno nuevo.');
           return;
         }
-        if (clientSelection.reason === 'save_failed') {
-          invalidateField(refs.clientNew, 'No se pudo guardar el cliente nuevo en el catálogo compartido.');
-          return;
-        }
-        invalidateField(refs.clientSelect, 'Selecciona un cliente o crea uno nuevo.');
-        return;
       }
 
       const data = collectFormData();
-      data.client = clientSelection.displayName;
-      data.clientId = clientSelection.id;
+      if (type === 'reunion') {
+        data.client = clientSelection.displayName;
+        data.clientId = clientSelection.id;
+      }
 
       if (!validateForm(data)) return;
       upsertRecord(data);
     });
 
     refs.newBtn.addEventListener('click', function(){
-      resetForm();
+      resetForm({ type: getActiveRecordType() });
     });
 
     refs.deleteBtn.addEventListener('click', function(){
@@ -2267,6 +2506,7 @@
     });
 
     refs.pedidoToggle.addEventListener('click', function(){
+      if (getTypeValue() !== 'reunion') return;
       setPedidoEnabled(!isPedidoEnabled());
     });
 
@@ -2282,6 +2522,11 @@
         setFilter(button.getAttribute('data-filter'));
       });
     });
+
+    window.addEventListener('a33:agenda-records-changed', function(){
+      loadRecords();
+      if (isOperationalSection(state.activeSection)) renderList();
+    });
   }
 
   function markReady(){
@@ -2291,6 +2536,7 @@
       getState: function(){
         return {
           currentId: state.currentId,
+          activeSection: state.activeSection,
           activeFilter: state.activeFilter,
           clientCatalogSource: state.clientCatalogSource,
           records: state.records.slice()
@@ -2300,16 +2546,45 @@
     };
   }
 
+  function getRequestedRecordId(){
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      return String(params.get('record') || '').trim();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function openRequestedRecord(){
+    const requestedId = getRequestedRecordId();
+    if (!requestedId) return false;
+    const record = state.records.find(function(item){ return item.id === requestedId; });
+    if (!record) return false;
+
+    if (record.type === 'compra') {
+      openAgendaSection('compra', { focus: false, recordId: record.id });
+      return true;
+    }
+
+    openAgendaSection(record.type, { focus: false, reset: true });
+    state.activeFilter = record.status === 'pendiente' ? 'pendiente' : 'todos';
+    fillForm(record, { focus: false });
+    renderList();
+    return true;
+  }
+
   function bootstrap(){
     setRefs();
     loadRecords();
     loadClientCatalog();
     bindEvents();
-    resetForm({ focus: false });
-    renderList();
+
+    const openedRequested = openRequestedRecord();
+    if (!openedRequested) openAgendaHome({ focus: false });
+
     loadProductCatalog().finally(function(){
       const current = getCurrentRecord();
-      if (current && current.pedido && current.pedido.enabled) {
+      if (current && current.type === 'reunion' && current.pedido && current.pedido.enabled) {
         applyPedidoSnapshot(current.pedido);
         syncPedidoTotal();
       }

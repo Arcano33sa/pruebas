@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>A33 POS</title>
-<link rel="manifest" href="manifest.webmanifest?v=4.20.84&r=18">
+<link rel="manifest" href="manifest.webmanifest?v=4.20.98&r=28">
 <link rel="apple-touch-icon" href="logo.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -30,17 +30,17 @@
     }
   })();
 </script>
-<link rel="stylesheet" href="styles.css?v=4.20.84&r=14">
-  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.84&r=13" />
-  <link rel="stylesheet" href="/assets/css/a33-theme.css?v=4.20.84&r=13" />
-  <script src="/assets/js/a33-theme.js?v=4.20.84&r=13"></script>
+<link rel="stylesheet" href="styles.css?v=4.20.98&r=25">
+  <link rel="stylesheet" href="/assets/css/a33-header.css?v=4.20.98&r=13" />
+  <link rel="stylesheet" href="/assets/css/a33-theme.css?v=4.20.98&r=13" />
+  <script src="/assets/js/a33-theme.js?v=4.20.98&r=13"></script>
 </head>
 <body>
   <header class="a33-header" role="banner">
     <a class="a33-btn-menu" href="../index.html" aria-label="Volver al Menú principal">← Menú principal</a>
     <div class="a33-title">POS · Eventos</div>
     <div class="a33-right">
-      <div class="a33-version" id="a33-version-text" data-a33-version="1" data-a33-fallback="v4.20.84">v...</div>
+      <div class="a33-version" id="a33-version-text" data-a33-version="1" data-a33-fallback="v4.20.98">v...</div>
     </div>
   </header>
 <div id="offlineBar" class="offline">Trabajando sin conexión</div>
@@ -192,6 +192,7 @@
     </div>
 
     <div class="customer-v2-actions">
+      <button id="btn-new-customer" class="btn-outline btn-pill btn-pill-mini customer-quick-open" type="button">Nuevo</button>
       <button id="btn-pick-customer" class="btn-outline btn-pill btn-pill-mini" type="button">Seleccionar</button>
       <button id="btn-clear-customer" class="btn-outline btn-pill btn-pill-mini" type="button">Limpiar</button>
       <label class="flag customer-v2-sticky"><input id="sale-customer-sticky" type="checkbox"> Pegajoso</label>
@@ -262,16 +263,10 @@
   <button id="btn-inv-from-lote" class="btn-ok btn-pill" type="button">Agregar desde lote</button>
 </div>
     </div>
-    <div id="lotes-evento-block" class="lotes-block">
-      <div class="lotes-block-head">
-        <div>
-          <h3 style="margin:0">Lotes cargados en este evento <span class="badge" id="lotes-count">0</span></h3>
-          <small class="muted">Se registra cuando usas “Agregar desde lote”.</small>
-        </div>
-        <div class="actions end">
-          <button id="btn-reverse-assign" class="btn-outline btn-pill btn-pill-mini" type="button">Reversar asignación</button>
-          <button id="btn-create-sobrante" class="btn-outline btn-pill btn-pill-mini" type="button">Crear lote sobrante</button>
-        </div>
+    <div id="lotes-operativos-block" class="lotes-operativos-block">
+      <div class="actions end lotes-operativos-actions">
+        <button id="btn-reverse-assign" class="btn-outline btn-pill btn-pill-mini" type="button">Reversar asignación</button>
+        <button id="btn-create-sobrante" class="btn-outline btn-pill btn-pill-mini" type="button">Crear lote sobrante</button>
       </div>
 
       <div id="sobrante-panel" class="sobrante-panel" style="display:none">
@@ -339,22 +334,32 @@
           <button id="btn-reverso-do" class="btn-danger btn-pill btn-pill-mini" type="button">Reversar asignación</button>
         </div>
       </div>
+    </div>
 
-      <div class="table-scroll">
-        <table id="tbl-lotes-evento" class="compact">
-          <thead>
-            <tr>
-              <th>Código/Nombre</th>
-              <th>Fecha/Hora</th>
-              <th>P</th>
-              <th>M</th>
-              <th>D</th>
-              <th>L</th>
-              <th>G</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
+    <div id="lotes-evento-block" class="lotes-block">
+      <div class="lotes-block-head" role="button" tabindex="0" aria-expanded="false" aria-controls="lotes-evento-content">
+        <div>
+          <h3 style="margin:0">Lotes cargados en este evento <span class="badge" id="lotes-count">0</span></h3>
+          <small class="muted">Se registra cuando usas “Agregar desde lote”.</small>
+        </div>
+        <span class="lotes-toggle-indicator" aria-hidden="true">▾</span>
+      </div>
+
+      <div id="lotes-evento-content" class="lotes-evento-content" hidden>
+        <div class="table-scroll">
+          <table id="tbl-lotes-evento" class="compact">
+            <thead>
+              <tr id="lotes-evento-totals-row" class="lotes-totals-row">
+                <th scope="row" colspan="2">TOTALES</th>
+              </tr>
+              <tr id="lotes-evento-head-row">
+                <th>Código</th>
+                <th>Fecha</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -391,6 +396,9 @@
             <div class="reempaque-title">Origen</div>
             <label>Producto origen</label>
             <select id="rp-source-product"></select>
+            <label>Lote origen</label>
+            <select id="rp-source-lot" aria-describedby="rp-source-lot-meta"></select>
+            <small id="rp-source-lot-meta" class="muted">Selecciona evento y producto para resolver el lote.</small>
             <label>Cantidad origen</label>
             <input id="rp-source-qty" class="a33-num" data-a33-default="0" type="number" inputmode="decimal" min="0" step="0.01" placeholder="Ej: 1">
             <label>Costo unitario origen</label>
@@ -406,23 +414,11 @@
             <div class="reempaque-title">Destino</div>
             <label>Producto destino</label>
             <select id="rp-target-product"></select>
-            <div class="reempaque-new-target">
-              <small class="muted">Destino nuevo opcional: se guardará como producto central vendible.</small>
-              <label>Nuevo destino</label>
-              <input id="rp-new-target-name" type="text" placeholder="Ej: Catrina" autocomplete="off">
-              <div class="reempaque-inline-fields">
-                <div>
-                  <label>Capacidad ml</label>
-                  <input id="rp-new-target-capacity" class="a33-num" data-a33-default="0" type="number" inputmode="decimal" min="0" step="0.01" placeholder="Ej: 475">
-                </div>
-                <div>
-                  <label>Precio venta</label>
-                  <input id="rp-new-target-price" class="a33-num" data-a33-default="0" type="number" inputmode="decimal" min="0" step="0.01" placeholder="Opcional">
-                </div>
-              </div>
+            <div class="info" style="margin-top:10px">
+              <small>Reempaque solo usa productos activos existentes. Si falta el destino, créalo primero en Gestión Operativa → Catálogos → Productos.</small>
             </div>
             <label>Cantidad creada</label>
-            <input id="rp-target-qty" class="a33-num" data-a33-default="0" type="number" inputmode="decimal" min="0" step="0.01" placeholder="Ej: 10">
+            <input id="rp-target-qty" class="a33-num" data-a33-default="0" type="number" inputmode="numeric" min="0" step="1" placeholder="Automático" readonly>
           </div>
         </div>
 
@@ -432,6 +428,10 @@
             <div class="reempaque-kv"><span>Volumen/capacidad origen</span><b id="rp-source-capacity">—</b></div>
             <div class="reempaque-kv"><span>Volumen/capacidad destino</span><b id="rp-target-capacity">—</b></div>
             <div class="reempaque-kv"><span>Cantidad sugerida</span><b id="rp-suggested-qty">—</b></div>
+            <div class="reempaque-kv"><span>Unidades por conversión</span><b id="rp-base-units">—</b></div>
+            <div class="reempaque-kv"><span>Extra por merma acumulada</span><b id="rp-extra-units">0</b></div>
+            <div class="reempaque-kv"><span>Total creado</span><b id="rp-total-units">—</b></div>
+            <div class="reempaque-kv"><span>Merma pendiente</span><b id="rp-pending-merma">—</b></div>
           </div>
 
           <div class="reempaque-card soft">
@@ -617,6 +617,65 @@
 
       
 
+    <div id="cashv2-summary-card" class="card inner cashv2-summary-card" style="margin-top:10px; display:none" aria-live="polite">
+      <div class="cashv2-summary-head">
+        <div>
+          <h3 style="margin:0;">Resumen</h3>
+          <small class="muted">Caja física y cobros bancarios del día seleccionado.</small>
+        </div>
+        <small class="muted cashv2-summary-note">Tarjeta, Transferencia y Comisión son informativos; no alteran Caja física.</small>
+      </div>
+
+      <div class="cashv2-summary-grid">
+        <div class="cashv2-summary-panel">
+          <div class="muted cashv2-summary-title">C$ (NIO)</div>
+          <table class="cashv2-summary-table">
+            <tbody>
+              <tr><td>Saldo inicial</td><td id="cashv2-sum-initial-nio" class="sub">0.00</td></tr>
+              <tr><td>Entradas</td><td id="cashv2-sum-in-nio" class="sub">0.00</td></tr>
+              <tr><td>Cobros</td><td id="cashv2-sum-collections-nio" class="sub">0.00</td></tr>
+              <tr><td>Salidas</td><td id="cashv2-sum-out-nio" class="sub">0.00</td></tr>
+              <tr><td>Ventas en efectivo</td><td id="cashv2-sum-sales-nio" class="sub">0.00</td></tr>
+              <tr><td>Ajuste</td><td id="cashv2-sum-adjust-nio" class="sub">0.00</td></tr>
+              <tr><td>Saldo esperado</td><td id="cashv2-sum-expected-nio" class="sub">0.00</td></tr>
+              <tr><td>Saldo final contado</td><td id="cashv2-sum-final-nio" class="sub">0.00</td></tr>
+              <tr><td><b>Diferencia</b></td><td class="sub"><span id="cashv2-sum-diff-nio" class="pill">0.00</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="cashv2-summary-panel">
+          <div class="muted cashv2-summary-title">USD</div>
+          <table class="cashv2-summary-table">
+            <tbody>
+              <tr><td>Saldo inicial</td><td id="cashv2-sum-initial-usd" class="sub">0.00</td></tr>
+              <tr><td>Entradas</td><td id="cashv2-sum-in-usd" class="sub">0.00</td></tr>
+              <tr><td>Cobros</td><td id="cashv2-sum-collections-usd" class="sub">0.00</td></tr>
+              <tr><td>Salidas</td><td id="cashv2-sum-out-usd" class="sub">0.00</td></tr>
+              <tr><td>Ventas en efectivo</td><td id="cashv2-sum-sales-usd" class="sub">0.00</td></tr>
+              <tr><td>Ajuste</td><td id="cashv2-sum-adjust-usd" class="sub">0.00</td></tr>
+              <tr><td>Saldo esperado</td><td id="cashv2-sum-expected-usd" class="sub">0.00</td></tr>
+              <tr><td>Saldo final contado</td><td id="cashv2-sum-final-usd" class="sub">0.00</td></tr>
+              <tr><td><b>Diferencia</b></td><td class="sub"><span id="cashv2-sum-diff-usd" class="pill">0.00</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="cashv2-summary-panel cashv2-summary-banking">
+          <div class="muted cashv2-summary-title">Cobros bancarios · informativo</div>
+          <table class="cashv2-summary-table">
+            <tbody>
+              <tr><td>Transferencias</td><td id="cashv2-sum-transfer-nio" class="sub">C$ 0.00</td></tr>
+              <tr><td>Tarjeta</td><td id="cashv2-sum-card-nio" class="sub">C$ 0.00</td></tr>
+              <tr><td><b>Comisión bancaria total</b></td><td id="cashv2-sum-card-commission-total" class="sub">C$ 0.00</td></tr>
+            </tbody>
+            <tbody id="cashv2-sum-card-commission-lines" class="cashv2-commission-lines"></tbody>
+          </table>
+          <small id="cashv2-sum-card-commission-note" class="muted cashv2-commission-note"></small>
+        </div>
+      </div>
+    </div>
+
     <div id="cashv2-fx-card" class="card inner cashv2-fx" style="margin-top:10px; display:none">
       <div class="row" style="align-items:baseline; justify-content:space-between; gap:10px; flex-wrap:wrap;">
         <div>
@@ -673,7 +732,7 @@
       <div class="row" style="align-items:baseline; justify-content:space-between; gap:10px; flex-wrap:wrap;">
         <div>
           <h3 style="margin:0;">Movimientos</h3>
-          <small class="muted">Ingreso Adicional, Gasto, Fondo o Retiro por moneda.</small>
+          <small class="muted">Entrada, Salida y Cobros vinculados al evento activo.</small>
         </div>
       </div>
 
@@ -687,12 +746,20 @@
           <div style="flex:1; min-width:200px;">
             <div class="muted" style="font-size:12px; margin-bottom:6px;">Tipo</div>
             <select id="cashv2-move-kind-inline">
-              <option value="ADDITIONAL_INCOME">Ingreso Adicional</option>
-              <option value="EXPENSE">Gasto</option>
-              <option value="CASH_IN">Entrada de efectivo / fondo</option>
-              <option value="CASH_OUT">Salida de efectivo / retiro</option>
+              <option value="CASH_IN">Entrada</option>
+              <option value="EXPENSE">Salida</option>
+              <option value="CREDIT_COLLECTION">Cobros</option>
             </select>
           </div>
+        </div>
+
+        <div id="cashv2-credit-collection-wrap" class="cashv2-credit-collection" style="display:none; margin-top:10px;">
+          <div class="muted" style="font-size:12px; margin-bottom:6px;">Venta al crédito pendiente</div>
+          <select id="cashv2-credit-sale-select" aria-label="Venta al crédito pendiente">
+            <option value="">— Selecciona una venta al crédito —</option>
+          </select>
+          <div id="cashv2-credit-sale-empty" class="muted" style="display:none; margin-top:7px;"><small>No hay ventas al crédito pendientes en este evento.</small></div>
+          <div id="cashv2-credit-sale-details" class="cashv2-credit-sale-details" style="display:none; margin-top:8px;" aria-live="polite"></div>
         </div>
 
         <div class="row" style="gap:10px; flex-wrap:wrap; margin-top:8px;">
@@ -705,13 +772,13 @@
           </div>
           <div style="flex:1; min-width:200px;">
             <div class="muted" style="font-size:12px; margin-bottom:6px;">Monto</div>
-            <input id="cashv2-move-amount-inline" type="number" step="1" inputmode="numeric" placeholder="0">
+            <input id="cashv2-move-amount-inline" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0.00">
           </div>
         </div>
 
         <div style="margin-top:8px;">
           <div class="muted" style="font-size:12px; margin-bottom:6px;">Descripción</div>
-          <input id="cashv2-move-desc-inline" type="text" maxlength="120" placeholder="Opcional">
+          <input id="cashv2-move-desc-inline" type="text" maxlength="120" placeholder="Descripción del movimiento">
         </div>
 
         <div class="row" style="align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-top:10px;">
@@ -757,39 +824,6 @@
             <thead><tr><th class="denom">Denom</th><th>Cant</th><th class="sub">Sub</th></tr></thead>
             <tbody></tbody>
             <tfoot><tr><td colspan="2">Total</td><td id="cashv2-final-total-usd" class="sub">0</td></tr></tfoot>
-          </table>
-        </div>
-      </div>
-
-      <div class="row" style="gap:12px; flex-wrap:wrap; margin-top:12px;">
-        <div style="flex:1; min-width:260px;">
-          <div class="muted" style="font-size:12px; margin-bottom:6px;">Resumen C$ (NIO)</div>
-          <table class="cashv2-summary-table">
-            <tbody>
-              <tr><td>Saldo inicial</td><td id="cashv2-sum-initial-nio" class="sub">0.00</td></tr>
-              <tr><td>Entradas</td><td id="cashv2-sum-in-nio" class="sub">0.00</td></tr>
-              <tr><td>Salidas</td><td id="cashv2-sum-out-nio" class="sub">0.00</td></tr>
-              <tr><td>Ventas en efectivo</td><td id="cashv2-sum-sales-nio" class="sub">0.00</td></tr>
-              <tr><td>Ajuste</td><td id="cashv2-sum-adjust-nio" class="sub">0.00</td></tr>
-              <tr><td>Saldo esperado</td><td id="cashv2-sum-expected-nio" class="sub">0.00</td></tr>
-              <tr><td>Saldo final contado</td><td id="cashv2-sum-final-nio" class="sub">0.00</td></tr>
-              <tr><td><b>Diferencia</b></td><td class="sub"><span id="cashv2-sum-diff-nio" class="pill">0.00</span></td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div style="flex:1; min-width:260px;">
-          <div class="muted" style="font-size:12px; margin-bottom:6px;">Resumen USD</div>
-          <table class="cashv2-summary-table">
-            <tbody>
-              <tr><td>Saldo inicial</td><td id="cashv2-sum-initial-usd" class="sub">0.00</td></tr>
-              <tr><td>Entradas</td><td id="cashv2-sum-in-usd" class="sub">0.00</td></tr>
-              <tr><td>Salidas</td><td id="cashv2-sum-out-usd" class="sub">0.00</td></tr>
-              <tr><td>Ventas en efectivo</td><td id="cashv2-sum-sales-usd" class="sub">0.00</td></tr>
-              <tr><td>Ajuste</td><td id="cashv2-sum-adjust-usd" class="sub">0.00</td></tr>
-              <tr><td>Saldo esperado</td><td id="cashv2-sum-expected-usd" class="sub">0.00</td></tr>
-              <tr><td>Saldo final contado</td><td id="cashv2-sum-final-usd" class="sub">0.00</td></tr>
-              <tr><td><b>Diferencia</b></td><td class="sub"><span id="cashv2-sum-diff-usd" class="pill">0.00</span></td></tr>
-            </tbody>
           </table>
         </div>
       </div>
@@ -957,8 +991,16 @@
           <div class="label">Cortesías (Costo real)</div>
           <div class="value">C$ <span id="grand-courtesy-cost">0</span></div>
         </div>
+        <div class="metric">
+          <div class="label">Comisiones Tarjeta</div>
+          <div class="value">C$ <span id="grand-card-commission">0</span></div>
+        </div>
+        <div class="metric">
+          <div class="label">Merma final</div>
+          <div class="value">C$ <span id="grand-final-merma">0</span></div>
+        </div>
         <div class="metric metric-strong">
-          <div class="label">Utilidad después de cortesías</div>
+          <div class="label">Utilidad después de comisión y merma</div>
           <div class="value">C$ <span id="grand-profit-after-courtesy">0</span></div>
         </div>
       </div>
@@ -1242,98 +1284,7 @@
     </div>
   </section>
 
-  <section id="tab-checklist" class="tab card" style="display:none">
-    <div class="row" style="justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
-      <div>
-        <h2 style="margin:0;">Checklist</h2>
-        <div class="muted" style="margin-top:6px;">Tres fases: Pre-evento, Evento y Cierre. Editable por evento; checks + notas por día.</div>
-      </div>
-      <div class="row" style="margin:0; gap:8px; align-items:flex-end;">
-        <div>
-          <label for="checklist-event">Evento</label>
-          <select id="checklist-event"></select>
-        </div>
-        <button id="checklist-go-events" class="btn-pill" type="button" title="Ir a Eventos">Eventos</button>
-      </div>
-    </div>
-
-    <div id="checklist-empty" class="warn" style="display:none"></div>
-
-    <div class="checklist-grid" id="checklist-grid" style="display:none">
-      <div class="card inner">
-        <div class="chk-head">
-          <h3>PRE-EVENTO</h3>
-          <button id="chk-add-pre" type="button" class="btn-mini chk-add" data-section="pre">+ Agregar ítem</button>
-        </div>
-        <div class="chk-list" id="chk-pre"></div>
-      </div>
-
-      <div class="card inner">
-        <div class="chk-head">
-          <h3>EVENTO</h3>
-          <button id="chk-add-evento" type="button" class="btn-mini chk-add" data-section="evento">+ Agregar ítem</button>
-        </div>
-        <div class="chk-list" id="chk-evento"></div>
-      </div>
-
-      <div class="card inner">
-        <div class="chk-head">
-          <h3>CIERRE</h3>
-          <button id="chk-add-cierre" type="button" class="btn-mini chk-add" data-section="cierre">+ Agregar ítem</button>
-        </div>
-        <div class="chk-list" id="chk-cierre"></div>
-      </div>
-    </div>
-
-    <div class="card inner" style="margin-top:12px">
-      <div class="row" style="justify-content:space-between; align-items:flex-end; gap:10px; flex-wrap:wrap;">
-        <div style="flex:1; min-width:240px">
-          <label for="checklist-notes">Notas del día</label>
-          <textarea id="checklist-notes" rows="3" placeholder="Ej: llevar hielo extra, cables, cambio..."></textarea>
-        </div>
-        <div style="min-width:220px">
-          <label>&nbsp;</label>
-          <button id="checklist-reset-day" type="button" class="btn-warn btn-pill">Reiniciar checks del día</button>
-          <div class="info"><small>Solo desmarca. No borra ítems.</small></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card inner" id="checklist-reminders-card" style="margin-top:12px">
-      <div class="rem-head">
-        <div>
-          <h3 style="margin:0">RECORDATORIOS</h3>
-          <div class="muted" style="margin-top:6px">Pendientes: <b><span id="checklist-reminder-count">0</span></b></div>
-        </div>
-        <div class="rem-head-meta muted" style="margin-left:auto">Hoy + Próximos 6 días</div>
-      </div>
-
-      <div class="rem-add" role="group" aria-label="Agregar recordatorio">
-        <input id="checklist-reminder-text" class="rem-text" placeholder="Ej: llevar hielo, cables, cambio…">
-        <input id="checklist-reminder-date" class="rem-date" type="date" title="Fecha (obligatoria)">
-        <input id="checklist-reminder-due" class="rem-due" type="time" title="Hora (opcional)">
-        <select id="checklist-reminder-priority" class="rem-priority" title="Prioridad (opcional)">
-          <option value="">Prioridad</option>
-          <option value="high">Alta</option>
-          <option value="med">Media</option>
-          <option value="low">Baja</option>
-        </select>
-        <button id="checklist-reminder-add" class="btn-ok btn-pill btn-pill-mini" type="button">Agregar</button>
-      </div>
-
-      <div id="checklist-reminder-list" class="rem-list" aria-label="Pendientes"></div>
-
-      <div class="rem-done">
-        <button id="checklist-reminder-done-toggle" class="btn-mini btn-pill btn-pill-mini" type="button" aria-expanded="false">Completados (0) ▾</button>
-        <div id="checklist-reminder-done-wrap" class="rem-done-wrap" style="display:none">
-          <div id="checklist-reminder-done-list" class="rem-list rem-list-done" aria-label="Completados"></div>
-          <div class="actions end" style="margin-top:8px">
-            <button id="checklist-reminder-clear-done" class="btn-warn btn-pill btn-pill-mini" type="button">Limpiar completados</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
+  <!-- Checklist POS retirado de la interfaz. Datos y compatibilidad legacy se conservan internamente. -->
 
 </div>
 
@@ -1436,7 +1387,8 @@
             <div class="consolidated-row"><span>Costo estimado</span><b>C$ <span id="summary-consolidated-arch-grandCost">0</span></b></div>
             <div class="consolidated-row"><span>Utilidad bruta</span><b>C$ <span id="summary-consolidated-arch-grandProfit">0</span></b></div>
             <div class="consolidated-row"><span>Cortesías (Costo real)</span><b>C$ <span id="summary-consolidated-arch-courtesyCost">0</span></b></div>
-            <div class="consolidated-row"><span>Utilidad después de cortesías</span><b>C$ <span id="summary-consolidated-arch-profitAfterCourtesy">0</span></b></div>
+            <div class="consolidated-row"><span>Comisiones Tarjeta</span><b>C$ <span id="summary-consolidated-arch-cardCommissionTotal">0</span></b></div>
+            <div class="consolidated-row"><span>Utilidad después de comisión</span><b>C$ <span id="summary-consolidated-arch-profitAfterCourtesy">0</span></b></div>
             <div class="consolidated-row consolidated-row-mini"><span>Cortesías (unidades)</span><b><span id="summary-consolidated-arch-courtesyQty">0</span></b></div>
             <div class="consolidated-row consolidated-row-mini"><span>Cortesías (movimientos)</span><b><span id="summary-consolidated-arch-courtesyTx">0</span></b></div>
             <div class="consolidated-row consolidated-row-mini"><span>Cortesías (equivalente ventas)</span><b>C$ <span id="summary-consolidated-arch-courtesyEquiv">0</span></b></div>
@@ -1451,7 +1403,8 @@
             <div class="consolidated-row"><span>Costo estimado</span><b>C$ <span id="summary-consolidated-live-grandCost">0</span></b></div>
             <div class="consolidated-row"><span>Utilidad bruta</span><b>C$ <span id="summary-consolidated-live-grandProfit">0</span></b></div>
             <div class="consolidated-row"><span>Cortesías (Costo real)</span><b>C$ <span id="summary-consolidated-live-courtesyCost">0</span></b></div>
-            <div class="consolidated-row"><span>Utilidad después de cortesías</span><b>C$ <span id="summary-consolidated-live-profitAfterCourtesy">0</span></b></div>
+            <div class="consolidated-row"><span>Comisiones Tarjeta</span><b>C$ <span id="summary-consolidated-live-cardCommissionTotal">0</span></b></div>
+            <div class="consolidated-row"><span>Utilidad después de comisión</span><b>C$ <span id="summary-consolidated-live-profitAfterCourtesy">0</span></b></div>
             <div class="consolidated-row consolidated-row-mini"><span>Cortesías (unidades)</span><b><span id="summary-consolidated-live-courtesyQty">0</span></b></div>
             <div class="consolidated-row consolidated-row-mini"><span>Cortesías (movimientos)</span><b><span id="summary-consolidated-live-courtesyTx">0</span></b></div>
             <div class="consolidated-row consolidated-row-mini"><span>Cortesías (equivalente ventas)</span><b>C$ <span id="summary-consolidated-live-courtesyEquiv">0</span></b></div>
@@ -1465,7 +1418,8 @@
             <div class="consolidated-row"><span>Costo estimado</span><b>C$ <span id="summary-consolidated-total-grandCost">0</span></b></div>
             <div class="consolidated-row"><span>Utilidad bruta</span><b>C$ <span id="summary-consolidated-total-grandProfit">0</span></b></div>
             <div class="consolidated-row"><span>Cortesías (Costo real)</span><b>C$ <span id="summary-consolidated-total-courtesyCost">0</span></b></div>
-            <div class="consolidated-row"><span>Utilidad después de cortesías</span><b>C$ <span id="summary-consolidated-total-profitAfterCourtesy">0</span></b></div>
+            <div class="consolidated-row"><span>Comisiones Tarjeta</span><b>C$ <span id="summary-consolidated-total-cardCommissionTotal">0</span></b></div>
+            <div class="consolidated-row"><span>Utilidad después de comisión</span><b>C$ <span id="summary-consolidated-total-profitAfterCourtesy">0</span></b></div>
             <div class="consolidated-row consolidated-row-mini"><span>Cortesías (unidades)</span><b><span id="summary-consolidated-total-courtesyQty">0</span></b></div>
             <div class="consolidated-row consolidated-row-mini"><span>Cortesías (movimientos)</span><b><span id="summary-consolidated-total-courtesyTx">0</span></b></div>
             <div class="consolidated-row consolidated-row-mini"><span>Cortesías (equivalente ventas)</span><b>C$ <span id="summary-consolidated-total-courtesyEquiv">0</span></b></div>
@@ -1495,10 +1449,9 @@
       <div>
         <label>Tipo</label>
         <select id="cashv2-move-kind">
-          <option value="ADDITIONAL_INCOME">Ingreso Adicional</option>
-          <option value="EXPENSE">Gasto</option>
-          <option value="CASH_IN">Entrada de efectivo / fondo</option>
-          <option value="CASH_OUT">Salida de efectivo / retiro</option>
+          <option value="CASH_IN">Entrada</option>
+          <option value="EXPENSE">Salida</option>
+          <option value="CREDIT_COLLECTION">Cobros</option>
         </select>
       </div>
       <div id="cashv2-move-adjust-wrap" style="display:none">
@@ -1520,7 +1473,7 @@
       </div>
       <div>
         <label>Monto</label>
-        <input id="cashv2-move-amount" type="number" step="1" inputmode="numeric" placeholder="0">
+        <input id="cashv2-move-amount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0.00">
       </div>
     </div>
 
@@ -1617,6 +1570,33 @@
   </div>
 </div>
 
+<!-- Modal Cliente Rápido · POS · Etapa 1/3 -->
+<div id="customer-quick-modal" class="modal" aria-hidden="true" inert role="dialog" aria-modal="true" aria-labelledby="customer-quick-title">
+  <div class="panel panel-compact customer-quick-panel" tabindex="-1">
+    <h3 id="customer-quick-title">Nuevo cliente</h3>
+
+    <form id="customer-quick-form" novalidate>
+      <div class="customer-quick-fields">
+        <div>
+          <label for="customer-quick-name">Nombre</label>
+          <input id="customer-quick-name" name="customerQuickName" type="text" autocomplete="name" maxlength="120" required>
+        </div>
+        <div>
+          <label for="customer-quick-cell">Celular</label>
+          <input id="customer-quick-cell" name="customerQuickCell" type="tel" inputmode="tel" autocomplete="tel" maxlength="40">
+        </div>
+      </div>
+
+      <div id="customer-quick-msg" class="customer-quick-msg" role="alert" aria-live="polite"></div>
+
+      <div class="customer-quick-actions">
+        <button id="customer-quick-create" class="customer-quick-create btn-pill" type="submit">Crear</button>
+        <button id="customer-quick-cancel" class="customer-quick-cancel btn-pill" type="button">Cancelar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- Modal Seleccionar Cliente (Clientes v2) -->
 <div id="customer-picker-modal" class="modal">
   <div class="panel panel-compact">
@@ -1647,7 +1627,7 @@
 	
 	    
 		<div class="row inv-lote-toolbar" style="grid-template-columns:1fr auto; gap:10px; margin-top:10px; align-items:center">
-		  <input id="inv-lote-selector-search" placeholder="Buscar por código o notas…" autocomplete="off" inputmode="search">
+		  <input id="inv-lote-selector-search" placeholder="Buscar por código…" autocomplete="off" inputmode="search">
 		  <button id="inv-lote-selector-clear" class="btn-outline btn-pill btn-pill-mini" type="button">Limpiar</button>
 		</div>
 		<div id="inv-lote-selector-msg" class="muted" style="margin-top:6px"></div>
@@ -1658,7 +1638,7 @@
 	          <tr>
 	            <th>Lote</th>
 	            <th>Fecha</th>
-	            <th>Nota</th>
+	            <th>Contenido</th>
 	            <th>Estado</th>
 	            <th>Acción</th>
 	          </tr>
@@ -1694,25 +1674,25 @@
 <button data-tab="resumen">Resumen</button>
   <button data-tab="extras">Extras</button>
   <button data-tab="calculadora">Calculadora</button>
-  <button data-tab="checklist">Checklist</button>
 </nav>
 
-<script src="./vendor/xlsx.full.min.js?v=4.20.84&r=13"></script>
-  <script src="/assets/js/a33-release.js?v=4.20.84&r=48"></script>
+<script src="./vendor/xlsx.full.min.js?v=4.20.98&r=13"></script>
+  <script src="/assets/js/a33-release.js?v=4.20.98&r=57"></script>
 
-<script src="/assets/js/a33-storage.js?v=4.20.84&r=13"></script>
-  <script src="/assets/js/a33-currency.js?v=4.20.84&r=14"></script>
-  <script src="/assets/js/a33-presentations.js?v=4.20.84&r=13"></script>
-<script src="/assets/js/a33-build.js?v=4.20.84&r=14"></script>
+<script src="/assets/js/a33-storage.js?v=4.20.98&r=20"></script>
+  <script src="/assets/js/a33-currency.js?v=4.20.98&r=14"></script>
+  <script src="/assets/js/a33-presentations.js?v=4.20.98&r=15"></script>
+<script src="/assets/js/a33-build.js?v=4.20.98&r=14"></script>
+<script src="/assets/js/a33-lot-code.js?v=4.20.98&r=6"></script>
 <script>
   (function(){
     try{
       const relObj = (window.A33_RELEASE || {});
-      const v = (relObj && relObj.suiteVersion) ? String(relObj.suiteVersion) : '4.20.84';
-      const rev = (relObj && relObj.rev !== undefined && relObj.rev !== null) ? String(relObj.rev) : '2'; // POS cache bump local — Tablero operativo Etapa 2
+      const v = (relObj && relObj.suiteVersion) ? String(relObj.suiteVersion) : '4.20.98';
+      const rev = (relObj && relObj.rev !== undefined && relObj.rev !== null) ? String(relObj.rev) : '1'; // revisión global coordinada
       try{ window.A33_VERSION = v; }catch(_){ }
       try{ window.A33_ASSET_REV = rev; }catch(_){ }
-      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r'+rev).toString(); }catch(_){ }
+      try{ window.A33_POS_CACHE_NAME = ('a33-v'+v+'-pos-r'+rev+'-m56').toString(); }catch(_){ }
       try{ window.A33_BUILD_TAG = (v + '-r' + rev).toString(); }catch(_){ }
       const verEl = document.getElementById('a33-version-text');
       const shown = 'v' + v + ' r' + rev;
@@ -1721,7 +1701,7 @@
       if (bEl) bEl.textContent = 'POS Build: ' + v;
       const cEl = document.getElementById('pos-sw-cache-id');
       if (cEl){
-	        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r'+rev)).toString();
+	        const cn = (window.A33_POS_CACHE_NAME || ('a33-v'+v+'-pos-r'+rev+'-m56')).toString();
         cEl.textContent = 'SW Cache: ' + cn;
         cEl.title = cn;
       }
@@ -1729,11 +1709,11 @@
   })();
 </script>
 
-<script src="app.js?v=4.20.84&r=24"></script>
-<script src="/assets/js/a33-input-ux.js?v=4.20.84&r=13"></script>
+<script src="app.js?v=4.20.98&r=52"></script>
+<script src="/assets/js/a33-input-ux.js?v=4.20.98&r=13"></script>
 <script>
   (function(){
-    const BUILD = (window.A33_VERSION || '4.20.84').toString();
+    const BUILD = (window.A33_VERSION || '4.20.98').toString();
     const REV = (window.A33_ASSET_REV || '8').toString();
     const SW_URL = './sw.js?v=' + encodeURIComponent(BUILD) + '&r=' + encodeURIComponent(REV);
     if (!('serviceWorker' in navigator)) return;

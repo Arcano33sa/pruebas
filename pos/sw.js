@@ -3,36 +3,45 @@
 */
 
 // A33_RELEASE (fuente única)
-try { importScripts('/assets/js/a33-release.js?v=4.20.84&r=48'); } catch (e) {}
+try { importScripts('/assets/js/a33-release.js?v=4.20.98&r=57'); } catch (e) {}
 
 const SW_VERSION = (self.A33_RELEASE && (self.A33_RELEASE.suiteVersion || self.A33_RELEASE.SuiteVersion))
   ? String(self.A33_RELEASE.suiteVersion || self.A33_RELEASE.SuiteVersion)
-  : '4.20.84';
+  : '4.20.98';
 const SW_REV = (self.A33_RELEASE && (self.A33_RELEASE.rev !== undefined && self.A33_RELEASE.rev !== null))
   ? String(self.A33_RELEASE.rev)
-  : '6'; // POS cache bump local — Cierre Parte 4 Final
+  : '1'; // POS cache bump local — Cierre Parte 4 Final
 
 const MODULE = 'pos';
-const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}-r${SW_REV}`;
+const MODULE_CACHE_REV = '56';
+const CACHE_NAME = `a33-v${SW_VERSION}-${MODULE}-r${SW_REV}-m${MODULE_CACHE_REV}`;
+
+function isLegacySuiteCache(name){
+  const value = String(name || '').toLowerCase();
+  if (!(value.startsWith('a33-') || value.startsWith('arcano33-'))) return false;
+  return value.includes('centro_mando') || value.includes('centro-mando') || value.includes('calculadora_a33');
+}
+
 
 const PRECACHE_URLS = [
   './',
-  './index.html?v=4.20.84&r=19',
-  './styles.css?v=4.20.84&r=15',
-  './app.js?v=4.20.84&r=24',
-  './manifest.webmanifest?v=4.20.84&r=18',
+  './index.html?v=4.20.98&r=35',
+  './styles.css?v=4.20.98&r=25',
+  './app.js?v=4.20.98&r=52',
+  './manifest.webmanifest?v=4.20.98&r=28',
   './offline.html',
   './logo.png',
-  './vendor/xlsx.full.min.js?v=4.20.84&r=13',
-  '/assets/js/a33-release.js?v=4.20.84&r=48',
+  './vendor/xlsx.full.min.js?v=4.20.98&r=13',
+  '/assets/js/a33-release.js?v=4.20.98&r=57',
 
-  '/assets/js/a33-input-ux.js?v=4.20.84&r=13',
-  '/assets/js/a33-storage.js?v=4.20.84&r=13',
-  '/assets/js/a33-currency.js?v=4.20.84&r=14',
-  '/assets/js/a33-presentations.js?v=4.20.84&r=13',
-  '/assets/css/a33-header.css?v=4.20.84&r=13',
-  '/assets/css/a33-theme.css?v=4.20.84&r=13',
-  '/assets/js/a33-theme.js?v=4.20.84&r=13'
+  '/assets/js/a33-input-ux.js?v=4.20.98&r=13',
+  '/assets/js/a33-storage.js?v=4.20.98&r=20',
+  '/assets/js/a33-currency.js?v=4.20.98&r=14',
+  '/assets/js/a33-presentations.js?v=4.20.98&r=15',
+  '/assets/js/a33-lot-code.js?v=4.20.98&r=6',
+  '/assets/css/a33-header.css?v=4.20.98&r=13',
+  '/assets/css/a33-theme.css?v=4.20.98&r=13',
+  '/assets/js/a33-theme.js?v=4.20.98&r=13'
 ];
 
 function sameOrigin(url){
@@ -77,11 +86,11 @@ self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     // Borrar SOLO caches a33- del MISMO módulo (evita “guerra de caches”).
     const keys = await caches.keys();
-    const victims = keys.filter(k =>
-      String(k || '').startsWith('a33-') &&
-      String(k || '').includes(`-${MODULE}`) &&
-      k !== CACHE_NAME
-    );
+    const victims = keys.filter((k) => {
+      const value = String(k || '');
+      const sameModule = value.startsWith('a33-') && value.includes(`-${MODULE}`) && value !== CACHE_NAME;
+      return sameModule || isLegacySuiteCache(value);
+    });
     await Promise.all(victims.map(k => caches.delete(k).catch(() => false)));
     try{ await self.clients.claim(); }catch(_){ }
   })());
@@ -99,7 +108,7 @@ async function handleNavigate(request){
     const cache = await caches.open(CACHE_NAME);
     return (
       (await cache.match(request)) ||
-      (await cache.match('./index.html?v=4.20.84&r=19')) ||
+      (await cache.match('./index.html?v=4.20.98&r=35')) ||
       (await cache.match('./index.html', { ignoreSearch: true })) ||
       (await cache.match('./offline.html')) ||
       (await cache.match('./')) ||

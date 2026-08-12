@@ -1,21 +1,23 @@
 /*
-  Suite A33 — A33CloudSync (Etapa 6/6)
+  Suite A33 — A33CloudSync (Etapa 7/8)
   Motor híbrido local-first + sincronización manual inicial.
-  Alcance real: Configuración segura + Catálogos maestros.
-  No sincroniza POS, ventas, eventos, Caja Chica, Finanzas, cierres, saldos ni históricos.
+  Alcance real: Configuración segura + Catálogos maestros + Lotes de producción.
+  No sincroniza ventas, eventos, Caja Chica, Finanzas, cierres ni saldos.
 */
 (function(g){
   'use strict';
 
   const QUEUE_KEY = 'suite_a33_sync_queue_v1';
   const STATE_KEY = 'suite_a33_sync_state_v1';
-  const ENGINE_VERSION = 2;
-  const SCHEMA_VERSION = 1;
+  const ENGINE_VERSION = 3;
+  const SCHEMA_VERSION = 2;
   const CATALOG_DB_NAME = 'a33-pos';
-  const CATALOG_DB_VERSION = 34;
+  const CATALOG_DB_VERSION = 37;
   const TECHNICAL_COLLECTION = '_meta/syncEngineTests';
-  const READY_MESSAGE = 'Sincronización manual lista para Configuración y Catálogos. La Suite sigue local-first.';
-  const SYNC_SCOPE_MESSAGE = 'Alcance: Configuración + Catálogos. POS, ventas, Finanzas y Caja Chica permanecen locales.';
+  const LOTES_KEY = 'arcano33_lotes';
+  const LOTES_PATH = 'lotes';
+  const READY_MESSAGE = 'Sincronización manual lista para Configuración, Catálogos y Lotes. La Suite sigue local-first.';
+  const SYNC_SCOPE_MESSAGE = 'Alcance: Configuración + Catálogos + Lotes. Ventas, Finanzas y Caja Chica permanecen locales.';
 
   const CONFIG_KEYS = {
     identity: 'suite_a33_identity_v1',
@@ -30,6 +32,7 @@
   const META_KEYS = new Set(['id', 'createdAt', 'updatedAt', 'deviceId', 'rev', 'deleted', 'schemaVersion', '_syncKind']);
   const CATALOG_SPECS = [
     { id: 'productos', store: 'products', path: 'catalogos/productos', label: 'Productos', duplicateKey: duplicateProductKey },
+    { id: 'materiaPrima', store: 'rawMaterials', path: 'catalogos/materia_prima', label: 'Materia Prima', duplicateKey: duplicateRawMaterialKey },
     { id: 'extras', store: 'extras', path: 'catalogos/extras', label: 'Extras', duplicateKey: duplicateExtraKey },
     { id: 'bancos', store: 'banks', path: 'catalogos/bancos', label: 'Bancos', duplicateKey: duplicateBankKey }
   ];
@@ -445,6 +448,8 @@
       configDownloaded: 0,
       catalogUploaded: 0,
       catalogDownloaded: 0,
+      lotsUploaded: 0,
+      lotsDownloaded: 0,
       warnings: [],
       details: []
     };
@@ -698,39 +703,83 @@
     }
   }
 
+  function applyCloudCatalogSchema(database, transaction){
+    const ensureIndex = function(store, name, keyPath, options){
+      try{ if (!store.indexNames.contains(name)) store.createIndex(name, keyPath, options || { unique:false }); }catch(_){ }
+    };
+    let store = null;
+    if (!database.objectStoreNames.contains('products')) store = database.createObjectStore('products', { keyPath:'id', autoIncrement:true });
+    else { try{ store = transaction.objectStore('products'); }catch(_){ store = null; } }
+    if (store) ensureIndex(store, 'by_name', 'name', { unique:false });
+
+    if (!database.objectStoreNames.contains('rawMaterials')) store = database.createObjectStore('rawMaterials', { keyPath:'id', autoIncrement:true });
+    else { try{ store = transaction.objectStore('rawMaterials'); }catch(_){ store = null; } }
+    if (store){
+      ensureIndex(store, 'by_name_normalized', 'nameNormalized', { unique:false });
+      ensureIndex(store, 'by_active', 'active', { unique:false });
+      ensureIndex(store, 'by_updated_at', 'updatedAt', { unique:false });
+    }
+
+    if (!database.objectStoreNames.contains('extras')) store = database.createObjectStore('extras', { keyPath:'id', autoIncrement:true });
+    else { try{ store = transaction.objectStore('extras'); }catch(_){ store = null; } }
+    if (store){
+      ensureIndex(store, 'by_name', 'name', { unique:false });
+      ensureIndex(store, 'by_active', 'active', { unique:false });
+    }
+
+    if (!database.objectStoreNames.contains('banks')) store = database.createObjectStore('banks', { keyPath:'id', autoIncrement:true });
+    else { try{ store = transaction.objectStore('banks'); }catch(_){ store = null; } }
+    if (store){
+      ensureIndex(store, 'by_name', 'name', { unique:false });
+      ensureIndex(store, 'by_active', 'isActive', { unique:false });
+      ensureIndex(store, 'by_type', 'type', { unique:false });
+    }
+  }
+
+  function cloudCatalogSchemaNeedsUpgrade(database){
+    const required = ['products','rawMaterials','extras','banks'];
+    if (required.some(function(name){ return !database.objectStoreNames.contains(name); })) return true;
+    try{
+      const tx = database.transaction('rawMaterials', 'readonly');
+      const indexes = tx.objectStore('rawMaterials').indexNames;
+      return !indexes.contains('by_name_normalized') || !indexes.contains('by_active') || !indexes.contains('by_updated_at');
+    }catch(_){ return true; }
+  }
+
+  function adoptCloudCatalogDb(database, resolve){
+    catalogDb = database;
+    try{ catalogDb.onversionchange = function(){ try{ catalogDb.close(); }catch(_){ } catalogDb = null; }; }catch(_){ }
+    resolve(catalogDb);
+  }
+
   function openCatalogDb(){
     if (catalogDb) return Promise.resolve(catalogDb);
     return new Promise(function(resolve, reject){
       try{
         if (!g.indexedDB) throw new Error('indexeddb_unavailable');
-        const req = g.indexedDB.open(CATALOG_DB_NAME, CATALOG_DB_VERSION);
-        req.onupgradeneeded = function(event){
-          const d = event.target.result;
-          try{
-            if (!d.objectStoreNames.contains('products')){
-              const p = d.createObjectStore('products', { keyPath: 'id', autoIncrement: true });
-              try{ p.createIndex('by_name', 'name', { unique: true }); }catch(_){ }
-            }
-            if (!d.objectStoreNames.contains('extras')){
-              const e = d.createObjectStore('extras', { keyPath: 'id', autoIncrement: true });
-              try{ e.createIndex('by_name', 'name', { unique: false }); }catch(_){ }
-              try{ e.createIndex('by_active', 'active', { unique: false }); }catch(_){ }
-            }
-            if (!d.objectStoreNames.contains('banks')){
-              const b = d.createObjectStore('banks', { keyPath: 'id', autoIncrement: true });
-              try{ b.createIndex('by_name', 'name', { unique: false }); }catch(_){ }
-              try{ b.createIndex('by_active', 'isActive', { unique: false }); }catch(_){ }
-              try{ b.createIndex('by_type', 'type', { unique: false }); }catch(_){ }
-            }
-          }catch(_){ }
+        const fail = function(error){ reject(error || new Error('indexeddb_open_failed')); };
+        const first = g.indexedDB.open(CATALOG_DB_NAME);
+        first.onupgradeneeded = function(event){ applyCloudCatalogSchema(event.target.result, event.target.transaction); };
+        first.onsuccess = function(){
+          const current = first.result;
+          if (!cloudCatalogSchemaNeedsUpgrade(current)){
+            adoptCloudCatalogDb(current, resolve);
+            return;
+          }
+          const nextVersion = Number(current.version || 1) + 1;
+          try{ current.close(); }catch(_){ }
+          if (nextVersion > CATALOG_DB_VERSION){
+            fail(new Error('catalog_schema_requires_suite_update'));
+            return;
+          }
+          const upgrade = g.indexedDB.open(CATALOG_DB_NAME, nextVersion);
+          upgrade.onupgradeneeded = function(event){ applyCloudCatalogSchema(event.target.result, event.target.transaction); };
+          upgrade.onsuccess = function(){ adoptCloudCatalogDb(upgrade.result, resolve); };
+          upgrade.onerror = function(){ fail(upgrade.error); };
+          upgrade.onblocked = function(){ fail(new Error('indexeddb_blocked')); };
         };
-        req.onsuccess = function(){
-          catalogDb = req.result;
-          try{ catalogDb.onversionchange = function(){ try{ catalogDb.close(); }catch(_){ } catalogDb = null; }; }catch(_){ }
-          resolve(catalogDb);
-        };
-        req.onerror = function(){ reject(req.error || new Error('indexeddb_open_failed')); };
-        req.onblocked = function(){ reject(new Error('indexeddb_blocked')); };
+        first.onerror = function(){ fail(first.error); };
+        first.onblocked = function(){ fail(new Error('indexeddb_blocked')); };
       }catch(error){
         reject(error);
       }
@@ -755,7 +804,7 @@
     return new Promise(function(resolve, reject){
       const tx = db.transaction(storeName, 'readwrite');
       const req = tx.objectStore(storeName).put(value);
-      req.onsuccess = function(){ resolve(true); };
+      req.onsuccess = function(){ resolve(req.result); };
       req.onerror = function(){ reject(req.error || tx.error); };
       tx.onerror = function(){ reject(tx.error || req.error); };
     });
@@ -769,21 +818,29 @@
 
   function normKey(value){ return normName(value).replace(/\s+/g, ''); }
 
-  function productGroup(name){
-    const n = normName(name);
-    if (n.includes('pulso')) return 'pulso';
-    if (n.includes('media')) return 'media';
-    if (n.includes('djeba')) return 'djeba';
-    if (n.includes('litro')) return 'litro';
-    if (n.includes('galon') || n.includes('galón') || n.includes('gal')) return 'galon';
-    if (n.includes('vaso')) return 'vaso';
-    return '';
+  function syncProductId(record){
+    const row = record && typeof record === 'object' ? record : {};
+    const direct = clean(row.productId || row.productoId || row.catalogProductId, 160);
+    if (direct) return direct;
+    const legacyId = clean(row.id, 120);
+    return legacyId ? ('prd_legacy_' + legacyId.toLowerCase().replace(/[^a-z0-9_-]+/g, '_')) : '';
+  }
+
+  function ensureSyncProductIdentity(record){
+    const row = record && typeof record === 'object' ? clone(record) || {} : {};
+    if (!clean(row.productId, 160)) row.productId = syncProductId(row);
+    if (Object.prototype.hasOwnProperty.call(row, 'productoId')) delete row.productoId;
+    return row;
   }
 
   function duplicateProductKey(record){
-    const name = record && (record.name || record.nombre || record.productName || record.descripcion);
-    const group = productGroup(name);
-    return group ? 'sku:' + group : 'name:' + normKey(name);
+    const productId = syncProductId(record);
+    return productId ? ('productId:' + productId) : '';
+  }
+
+  function duplicateRawMaterialKey(record){
+    const name = record && (record.name || record.nombre || record.materialName);
+    return 'raw-material:' + normKey(name);
   }
 
   function duplicateExtraKey(record){
@@ -813,16 +870,6 @@
     if (activeValue(record, spec)) score += 1000;
     if (record && record.id != null) score += 50;
     if (record && clean(record.updatedAt, 80)) score += Math.min(10, parseTime(record.updatedAt) / 1e15);
-    if (spec && spec.id === 'productos'){
-      const group = productGroup(record && (record.name || record.nombre));
-      const price = Number(record && record.price);
-      if (Number.isFinite(price) && price > 0) score += 80;
-      if (group === 'galon'){
-        const name = normName(record && (record.name || record.nombre));
-        if (name.includes('3750')) score += 40;
-        if (price === 900) score += 12;
-      }
-    }
     return score;
   }
 
@@ -843,31 +890,87 @@
     }).filter(function(row){ return row && typeof row === 'object'; });
   }
 
-  function catalogRecordKey(record){
+  function catalogIdentity(record, spec){
+    if (spec && spec.id === 'productos') return syncProductId(record);
+    if (spec && spec.id === 'materiaPrima'){
+      const materialId = clean(record && (record.materialId || record.rawMaterialId), 160);
+      if (materialId) return materialId;
+    }
     const id = record && record.id;
-    if (id == null || id === '') return '';
-    if (typeof id === 'number' || /^\d+$/.test(String(id))) return 'id_' + String(id);
-    return firebaseKey(id, 'record');
+    return id == null ? '' : String(id);
+  }
+
+  function catalogRecordKey(record, spec){
+    const identity = catalogIdentity(record, spec);
+    if (!identity) return '';
+    if (!(spec && spec.id === 'productos') && (/^\d+$/.test(identity))) return 'id_' + identity;
+    return firebaseKey(identity, 'record');
+  }
+
+  function withCatalogSyncMeta(record, settings, spec){
+    const row = record && typeof record === 'object' ? record : {};
+    const hadLegacyId = row.id != null && row.id !== '';
+    const out = withSyncMeta(row, catalogIdentity(row, spec), settings, 'catalogos/' + (spec && spec.id || 'catalogo'));
+    if (spec && spec.id === 'productos' && !hadLegacyId) delete out.id;
+    return out;
   }
 
   function catalogMap(records, settings, spec){
     const out = {};
     (Array.isArray(records) ? records : []).forEach(function(record){
       if (!record || typeof record !== 'object') return;
-      const key = catalogRecordKey(record);
-      if (!key) return;
-      out[key] = withSyncMeta(record, record.id, settings, 'catalogos/' + (spec && spec.id || 'catalogo'));
+      const normalized = spec && spec.id === 'productos' ? ensureSyncProductIdentity(record) : record;
+      const identity = catalogIdentity(normalized, spec);
+      const key = catalogRecordKey(normalized, spec);
+      if (!key || !identity) return;
+      out[key] = withCatalogSyncMeta(normalized, settings, spec);
     });
     return out;
   }
 
-  function localMapById(records){
+  function localMapById(records, spec){
     const map = new Map();
     (records || []).forEach(function(record){
-      if (!record || record.id == null || record.id === '') return;
-      map.set(String(record.id), record);
+      if (!record) return;
+      const identity = catalogIdentity(record, spec);
+      if (!identity) return;
+      map.set(String(identity), record);
     });
     return map;
+  }
+
+  function prepareRemoteCatalogRecord(remote, spec, localRecords){
+    if (spec && spec.id === 'materiaPrima'){
+      const row = clone(remote) || {};
+      const materialId = clean(row.materialId || row.rawMaterialId, 160);
+      if (materialId) row.materialId = materialId;
+      const local = materialId ? (localRecords || []).find(function(item){ return clean(item && item.materialId, 160) === materialId; }) : null;
+      if (local && local.id != null){
+        row.id = local.id;
+        return row;
+      }
+      const legacyId = row.id;
+      const idCollision = legacyId != null && (localRecords || []).some(function(item){
+        return item && String(item.id) === String(legacyId) && clean(item.materialId, 160) !== materialId;
+      });
+      if (idCollision) delete row.id;
+      return row;
+    }
+    if (!(spec && spec.id === 'productos')) return remote;
+    const row = ensureSyncProductIdentity(remote);
+    const productId = syncProductId(row);
+    const local = (localRecords || []).find(function(item){ return syncProductId(item) === productId; });
+    if (local && local.id != null){
+      row.id = local.id;
+      return row;
+    }
+    if (!clean(row.origin, 60)) row.origin = 'sincronizacion';
+    const legacyId = row.id;
+    const idCollision = legacyId != null && (localRecords || []).some(function(item){
+      return item && String(item.id) === String(legacyId) && syncProductId(item) !== productId;
+    });
+    if (idCollision) delete row.id;
+    return row;
   }
 
   function buildDuplicateMap(records, spec){
@@ -882,12 +985,111 @@
     return map;
   }
 
+
+  function readProductTombstones(){
+    try{
+      if (g.A33ProductIntegrity && typeof g.A33ProductIntegrity.readTombstones === 'function'){
+        return g.A33ProductIntegrity.readTombstones();
+      }
+      if (g.A33Products && typeof g.A33Products.readDeletedMarkers === 'function'){
+        return g.A33Products.readDeletedMarkers();
+      }
+    }catch(_){ }
+    return [];
+  }
+
+  function isProductTombstoned(productId){
+    const target = clean(productId, 160);
+    if (!target) return false;
+    try{
+      if (g.A33ProductIntegrity && typeof g.A33ProductIntegrity.isTombstoned === 'function'){
+        return g.A33ProductIntegrity.isTombstoned(target);
+      }
+      if (g.A33Products && typeof g.A33Products.isDeletedProductId === 'function'){
+        return g.A33Products.isDeletedProductId(target);
+      }
+    }catch(_){ }
+    return readProductTombstones().some(function(row){ return clean(row && row.productId, 160) === target; });
+  }
+
+  function productsClearlyDistinct(a, b){
+    try{
+      return !!(g.A33ProductIntegrity && typeof g.A33ProductIntegrity.clearlyDistinct === 'function' && g.A33ProductIntegrity.clearlyDistinct(a, b));
+    }catch(_){ return false; }
+  }
+
+  async function syncProductTombstones(db, settings, summary){
+    const path = getWorkspacePath(settings) + '/catalogos/productos_tombstones';
+    const ref = db.ref(path);
+    const local = readProductTombstones();
+    const snapshot = await ref.once('value');
+    const remote = normalizeRemoteCollection(snapshot && typeof snapshot.val === 'function' ? snapshot.val() : null);
+    let merged = [];
+    try{
+      if (g.A33ProductIntegrity && typeof g.A33ProductIntegrity.mergeTombstones === 'function'){
+        merged = g.A33ProductIntegrity.mergeTombstones(local, remote);
+        g.A33ProductIntegrity.writeTombstones(merged);
+        if (typeof g.A33ProductIntegrity.applyTombstonesToCatalog === 'function'){
+          const applied = await g.A33ProductIntegrity.applyTombstonesToCatalog({ source:'sincronizacion_nube' });
+          if (applied && applied.removed) summary.details.push('Productos: ' + applied.removed + ' registro(s) local(es) retirado(s) por tombstone.');
+        }
+      } else {
+        const map = new Map();
+        local.concat(remote).forEach(function(row){
+          const id = clean(row && row.productId, 160);
+          if (id) map.set(id, row);
+        });
+        merged = Array.from(map.values());
+      }
+    }catch(_){ merged = local.slice(); }
+    const payload = {};
+    merged.forEach(function(row){
+      const productId = clean(row && row.productId, 160);
+      if (!productId) return;
+      payload[firebaseKey(productId, 'product')] = Object.assign({}, clone(row) || {}, {
+        productId,
+        syncedAt: nowIso(),
+        deviceId: getDeviceId(settings),
+        schemaVersion: SCHEMA_VERSION
+      });
+    });
+    await ref.set(payload);
+    if (merged.length){
+      const localIds = new Set(local.map(function(row){ return clean(row && row.productId, 160); }));
+      const remoteIds = new Set(remote.map(function(row){ return clean(row && row.productId, 160); }));
+      const uploaded = merged.filter(function(row){ return !remoteIds.has(clean(row && row.productId, 160)); }).length;
+      const downloaded = merged.filter(function(row){ return !localIds.has(clean(row && row.productId, 160)); }).length;
+      summary.uploaded += uploaded;
+      summary.downloaded += downloaded;
+      summary.details.push('Productos borrados: tombstones sincronizados (' + merged.length + ').');
+    }
+    return merged;
+  }
+
   async function syncCatalogCollection(db, settings, spec, summary){
     const ref = db.ref(getWorkspacePath(settings) + '/' + spec.path);
+    if (spec && spec.id === 'productos' && g.A33Products && typeof g.A33Products.ensureIdentities === 'function'){
+      await g.A33Products.ensureIdentities();
+    }
     let localRecords = await getAllStore(spec.store);
+    if (spec && spec.id === 'productos'){
+      localRecords = localRecords.map(ensureSyncProductIdentity).filter(function(row){ return !isProductTombstoned(syncProductId(row)); });
+    }
     localRecords = Array.isArray(localRecords) ? localRecords : [];
     const snapshot = await ref.once('value');
-    const remoteRecords = normalizeRemoteCollection(snapshot && typeof snapshot.val === 'function' ? snapshot.val() : null).filter(function(row){ return row && row.deleted !== true; });
+    let remoteRecords = normalizeRemoteCollection(snapshot && typeof snapshot.val === 'function' ? snapshot.val() : null).filter(function(row){ return row && row.deleted !== true; });
+    if (spec && spec.id === 'productos'){
+      remoteRecords = remoteRecords.map(ensureSyncProductIdentity);
+      const blockedRemote = remoteRecords.filter(function(row){ return isProductTombstoned(syncProductId(row)); });
+      for (const stale of blockedRemote){
+        const staleKey = catalogRecordKey(stale, spec);
+        if (staleKey){
+          try{ await ref.child(staleKey).remove(); }catch(_){ }
+        }
+      }
+      if (blockedRemote.length) summary.details.push('Productos: ' + blockedRemote.length + ' remoto(s) bloqueado(s) por tombstone.');
+      remoteRecords = remoteRecords.filter(function(row){ return !isProductTombstoned(syncProductId(row)); });
+    }
 
     if (localRecords.length && !remoteRecords.length){
       await ref.set(catalogMap(localRecords, settings, spec));
@@ -899,7 +1101,11 @@
 
     if (!localRecords.length && remoteRecords.length){
       for (const remote of remoteRecords){
-        await putStore(spec.store, withSyncMeta(remote, remote.id, settings, 'catalogos/' + spec.id));
+        const prepared = prepareRemoteCatalogRecord(remote, spec, localRecords);
+        const identity = catalogIdentity(prepared, spec);
+        const insertedKey = await putStore(spec.store, withCatalogSyncMeta(prepared, settings, spec));
+        if (prepared.id == null && insertedKey != null) prepared.id = insertedKey;
+        localRecords.push(prepared);
         summary.downloaded += 1;
         summary.catalogDownloaded += 1;
       }
@@ -912,8 +1118,8 @@
       return;
     }
 
-    const localById = localMapById(localRecords);
-    const remoteById = localMapById(remoteRecords);
+    const localById = localMapById(localRecords, spec);
+    const remoteById = localMapById(remoteRecords, spec);
     const duplicateMap = buildDuplicateMap(localRecords, spec);
     const allIds = new Set();
     localById.forEach(function(_, id){ allIds.add(id); });
@@ -922,11 +1128,11 @@
     for (const id of Array.from(allIds)){
       const local = localById.get(id);
       const remote = remoteById.get(id);
-      const key = local ? catalogRecordKey(local) : catalogRecordKey(remote);
+      const key = local ? catalogRecordKey(local, spec) : catalogRecordKey(remote, spec);
       const child = ref.child(key || firebaseKey(id, 'record'));
 
       if (local && !remote){
-        await child.set(withSyncMeta(local, local.id, settings, 'catalogos/' + spec.id));
+        await child.set(withCatalogSyncMeta(local, settings, spec));
         summary.uploaded += 1;
         summary.catalogUploaded += 1;
         continue;
@@ -935,19 +1141,27 @@
       if (!local && remote){
         const dupKey = spec.duplicateKey(remote);
         const dup = duplicateMap.get(dupKey);
-        if (dup && String(dup.id) !== String(remote.id)){
-          addWarning(summary, spec.label + ': duplicado por nombre/canon detectado (' + clean(remote.name || remote.nombre || remote.id, 80) + '). No se insertó duplicado local.');
+        if (dup && catalogIdentity(dup, spec) !== catalogIdentity(remote, spec)){
+          addWarning(summary, spec.label + ': identidad duplicada detectada (' + clean(catalogIdentity(remote, spec), 80) + '). No se insertó duplicado local.');
           continue;
         }
-        await putStore(spec.store, withSyncMeta(remote, remote.id, settings, 'catalogos/' + spec.id));
+        const prepared = prepareRemoteCatalogRecord(remote, spec, localRecords);
+        const insertedKey = await putStore(spec.store, withCatalogSyncMeta(prepared, settings, spec));
+        if (prepared.id == null && insertedKey != null) prepared.id = insertedKey;
+        localRecords.push(prepared);
         summary.downloaded += 1;
         summary.catalogDownloaded += 1;
         continue;
       }
 
       if (!local || !remote) continue;
-      const localClean = withSyncMeta(local, local.id, settings, 'catalogos/' + spec.id);
-      const remoteClean = withSyncMeta(remote, remote.id, settings, 'catalogos/' + spec.id);
+      const localClean = withCatalogSyncMeta(local, settings, spec);
+      const remoteClean = withCatalogSyncMeta(remote, settings, spec);
+
+      if (spec && spec.id === 'productos' && productsClearlyDistinct(localClean, remoteClean)){
+        addWarning(summary, spec.label + ': conflicto seguro de productId ' + clean(id, 80) + '. Los productos son claramente distintos; no se sobrescribió ningún lado.');
+        continue;
+      }
 
       if (stableJson(stripMeta(localClean)) === stableJson(stripMeta(remoteClean))){
         summary.skipped += 1;
@@ -962,17 +1176,187 @@
       } else if (cmp === -1){
         const dupKey = spec.duplicateKey(remoteClean);
         const dup = duplicateMap.get(dupKey);
-        if (dup && String(dup.id) !== String(remoteClean.id)){
-          addWarning(summary, spec.label + ': remoto más reciente duplica nombre/canon. Se conservó local sin borrar.');
+        if (dup && catalogIdentity(dup, spec) !== catalogIdentity(remoteClean, spec)){
+          addWarning(summary, spec.label + ': remoto más reciente duplica identidad. Se conservó local sin borrar.');
           continue;
         }
-        await putStore(spec.store, remoteClean);
+        const prepared = prepareRemoteCatalogRecord(remoteClean, spec, localRecords);
+        await putStore(spec.store, prepared);
         summary.downloaded += 1;
         summary.catalogDownloaded += 1;
       } else {
         addWarning(summary, spec.label + ': conflicto no decidido para id ' + clean(id, 80) + '. Se conservaron ambos lados.');
       }
     }
+  }
+
+  function lotCodeLiteral(record){
+    const row = record && typeof record === 'object' ? record : {};
+    const value = row.codigo != null ? row.codigo
+      : (row.codigoLote != null ? row.codigoLote
+        : (row.loteCodigo != null ? row.loteCodigo
+          : (row.batchCode != null ? row.batchCode : (row.lotCode != null ? row.lotCode : row.code))));
+    return String(value == null ? '' : value).trim();
+  }
+
+  function lotCodeIdentity(value){
+    const raw = String(value == null ? '' : value).trim();
+    if (!raw) return '';
+    try{
+      if (g.A33LotCode && typeof g.A33LotCode.identityKey === 'function') return g.A33LotCode.identityKey(raw);
+      if (g.A33LotCode && typeof g.A33LotCode.recognize === 'function'){
+        const parsed = g.A33LotCode.recognize(raw);
+        if (parsed && parsed.ok) return String(parsed.code || raw).replace(/\s+/g, '').toLowerCase();
+      }
+    }catch(_){ }
+    return raw.replace(/\s+/g, '').toLowerCase();
+  }
+
+  function lotInternalIdentity(record){
+    const row = record && typeof record === 'object' ? record : {};
+    const candidates = [row.loteId, row.id, row.operationId, row.productionOperationId, row.batchId];
+    for (const value of candidates){
+      const cleanValue = clean(value, 180);
+      if (cleanValue) return cleanValue;
+    }
+    return '';
+  }
+
+  function lotIdentity(record){
+    const internal = lotInternalIdentity(record);
+    if (internal) return 'id:' + internal;
+    const codeKey = lotCodeIdentity(lotCodeLiteral(record));
+    return codeKey ? 'code:' + codeKey : '';
+  }
+
+  function lotRecordKey(record){
+    const identity = lotIdentity(record);
+    return identity ? firebaseKey('lot_' + identity, 'lot') : '';
+  }
+
+  function withLotSyncMeta(record, settings){
+    const now = nowIso();
+    const src = record && typeof record === 'object' ? clone(record) || {} : {};
+    const deviceId = getDeviceId(settings);
+    const updatedAt = clean(src.updatedAt, 80) || clean(src.fechaActualizacion, 80) || clean(src.savedAt, 80) || now;
+    src.createdAt = clean(src.createdAt, 80) || clean(src.fechaCreacion, 80) || updatedAt;
+    src.updatedAt = updatedAt;
+    src.deviceId = clean(src.deviceId, 120) || deviceId;
+    src.rev = clean(src.rev, 180) || makeRev(Object.assign({ id: lotIdentity(src) || 'lot' }, src), deviceId);
+    src.deleted = src.deleted === true;
+    src.schemaVersion = Math.max(1, parseInt(src.schemaVersion || SCHEMA_VERSION, 10) || SCHEMA_VERSION);
+    src._syncKind = 'lotes';
+    return src;
+  }
+
+  function normalizeRemoteLots(value){
+    if (!value || typeof value !== 'object') return [];
+    if (Array.isArray(value)) return value.filter(Boolean).map(function(row){ return clone(row) || {}; });
+    return Object.keys(value).map(function(key){
+      const row = value[key] && typeof value[key] === 'object' ? clone(value[key]) || {} : {};
+      row._firebaseKey = key;
+      return row;
+    }).filter(function(row){ return row && typeof row === 'object' && row.deleted !== true; });
+  }
+
+  function lotComparable(record){
+    const cleanRecord = stripMeta(record || {});
+    try{ delete cleanRecord._firebaseKey; }catch(_){ }
+    return cleanRecord;
+  }
+
+  function buildLotMap(records, summary, side){
+    const map = new Map();
+    (Array.isArray(records) ? records : []).forEach(function(record){
+      if (!record || typeof record !== 'object' || record.deleted === true) return;
+      const identity = lotIdentity(record);
+      if (!identity) return;
+      if (map.has(identity)){
+        addWarning(summary, 'Lotes: duplicado ' + (side || '') + ' detectado para ' + clean(lotCodeLiteral(record) || identity, 100) + '. Se conservó un solo registro por identidad.');
+        return;
+      }
+      map.set(identity, record);
+    });
+    return map;
+  }
+
+  async function syncLots(db, settings, summary){
+    const ref = db.ref(getWorkspacePath(settings) + '/' + LOTES_PATH);
+    let localRecords = readJson(LOTES_KEY, []);
+    localRecords = Array.isArray(localRecords) ? localRecords.filter(function(row){ return row && typeof row === 'object' && row.deleted !== true; }) : [];
+    const snapshot = await ref.once('value');
+    const remoteRecords = normalizeRemoteLots(snapshot && typeof snapshot.val === 'function' ? snapshot.val() : null);
+    const localMap = buildLotMap(localRecords, summary, 'local');
+    const remoteMap = buildLotMap(remoteRecords, summary, 'remoto');
+    let localChanged = localMap.size !== localRecords.length;
+    if (localChanged) localRecords = Array.from(localMap.values());
+
+    if (localMap.size && !remoteMap.size){
+      const payload = {};
+      localMap.forEach(function(record){
+        const key = lotRecordKey(record);
+        if (key) payload[key] = withLotSyncMeta(record, settings);
+      });
+      await ref.set(payload);
+      if (localChanged) writeJson(LOTES_KEY, localRecords);
+      summary.uploaded += localMap.size;
+      summary.lotsUploaded += localMap.size;
+      summary.details.push('Lotes: subida inicial local (' + localMap.size + ').');
+      return;
+    }
+
+    const allIds = new Set(Array.from(localMap.keys()).concat(Array.from(remoteMap.keys())));
+    for (const identity of allIds){
+      const local = localMap.get(identity);
+      const remote = remoteMap.get(identity);
+      const remoteKey = remote && remote._firebaseKey ? remote._firebaseKey : '';
+      const child = ref.child(remoteKey || lotRecordKey(local || remote));
+
+      if (local && !remote){
+        await child.set(withLotSyncMeta(local, settings));
+        summary.uploaded += 1;
+        summary.lotsUploaded += 1;
+        continue;
+      }
+      if (!local && remote){
+        const cleanRemote = clone(remote) || {};
+        delete cleanRemote._firebaseKey;
+        localRecords.push(cleanRemote);
+        localMap.set(identity, cleanRemote);
+        localChanged = true;
+        summary.downloaded += 1;
+        summary.lotsDownloaded += 1;
+        continue;
+      }
+      if (!local || !remote) continue;
+      if (stableJson(lotComparable(local)) === stableJson(lotComparable(remote))){
+        summary.skipped += 1;
+        continue;
+      }
+      const cmp = compareUpdatedAt(local, remote);
+      if (cmp === -1){
+        const cleanRemote = clone(remote) || {};
+        delete cleanRemote._firebaseKey;
+        const index = localRecords.indexOf(local);
+        if (index >= 0) localRecords[index] = cleanRemote;
+        localMap.set(identity, cleanRemote);
+        localChanged = true;
+        summary.downloaded += 1;
+        summary.lotsDownloaded += 1;
+      } else if (cmp === 1){
+        await child.set(withLotSyncMeta(local, settings));
+        summary.uploaded += 1;
+        summary.lotsUploaded += 1;
+      } else {
+        // Sin fechas comparables se protege el registro local y no se crea otro documento.
+        await child.set(withLotSyncMeta(local, settings));
+        summary.uploaded += 1;
+        summary.lotsUploaded += 1;
+        addWarning(summary, 'Lotes: conflicto sin fecha para ' + clean(lotCodeLiteral(local) || identity, 100) + '. Se conservó el registro local sin duplicar.');
+      }
+    }
+
+    if (localChanged && !writeJson(LOTES_KEY, localRecords)) addError(summary, 'No se pudieron guardar los Lotes descargados en el almacenamiento local.');
   }
 
   function buildNonSensitiveFirebaseMeta(settings){
@@ -1001,8 +1385,8 @@
       engineVersion: ENGINE_VERSION,
       schemaVersion: SCHEMA_VERSION,
       localFirst: true,
-      scope: ['configuracion', 'catalogos'],
-      excluded: ['pos', 'ventas', 'eventos', 'caja_chica', 'cierres', 'finanzas', 'asientos', 'recibos', 'inventario_evento', 'reempaques_historicos', 'pedidos_historicos', 'saldos'],
+      scope: ['configuracion', 'catalogos', 'lotes'],
+      excluded: ['ventas', 'eventos', 'caja_chica', 'cierres', 'finanzas', 'asientos', 'recibos', 'inventario_evento', 'reempaques_historicos', 'pedidos_historicos', 'saldos'],
       summary: clone(summary),
       firebase: buildNonSensitiveFirebaseMeta(settings),
       appVersion: clean((g.A33_RELEASE && g.A33_RELEASE.label) || g.A33_BUILD_TAG || 'Suite A33', 80)
@@ -1027,7 +1411,7 @@
 
   function mapError(error){
     const raw = clean((error && (error.code || error.message)) || error || 'sync_error', 420).toLowerCase();
-    if (raw.includes('permission')) return 'Firebase respondió, pero las reglas no permiten sincronizar Configuración/Catálogos.';
+    if (raw.includes('permission')) return 'Firebase respondió, pero las reglas no permiten sincronizar Configuración/Catálogos/Lotes.';
     if (raw.includes('indexeddb_blocked')) return 'IndexedDB está bloqueado por otra pestaña. Cerrá otras pestañas de Suite A33 e intentá de nuevo.';
     if (raw.includes('indexeddb') || raw.includes('database')) return 'No se pudo leer/escribir la base local de Catálogos.';
     if (raw.includes('network') || raw.includes('failed to fetch') || raw.includes('offline') || raw.includes('load')) return 'Sin conexión o Firebase no respondió. Se conservan datos locales y pendientes.';
@@ -1043,7 +1427,7 @@
     if (!validation.ok){
       return { ok: false, status: validation.status, message: validation.message, summary, at: startedAt };
     }
-    saveState({ status: 'syncing', label: 'Sincronizando', message: 'Sincronizando Configuración y Catálogos…', lastError: '', lastSummary: summary });
+    saveState({ status: 'syncing', label: 'Sincronizando', message: 'Sincronizando Configuración, Catálogos y Lotes…', lastError: '', lastSummary: summary });
     try{
       const settings = validation.settings;
       const db = await g.A33Firebase.getRealtimeDatabase(settings);
@@ -1054,10 +1438,12 @@
       await syncConfigDoc(db, settings, 'moneda', 'configuracion/moneda', summary);
       await syncConfigDoc(db, settings, 'pwa', 'configuracion/pwa', summary);
 
+      await syncProductTombstones(db, settings, summary);
       for (const spec of CATALOG_SPECS){
         await syncCatalogCollection(db, settings, spec, summary);
       }
 
+      await syncLots(db, settings, summary);
       await writeSyncMeta(db, settings, summary);
 
       const currentSettings = readSettings();
@@ -1117,6 +1503,8 @@
     queueKey: QUEUE_KEY,
     stateKey: STATE_KEY,
     technicalCollection: TECHNICAL_COLLECTION,
+    lotesKey: LOTES_KEY,
+    lotesPath: LOTES_PATH,
     readyMessage: READY_MESSAGE,
     scopeMessage: SYNC_SCOPE_MESSAGE,
     readSettings,
@@ -1136,6 +1524,9 @@
     getStatus,
     refreshStatus,
     syncNow,
-    retryPending
+    retryPending,
+    lotCodeLiteral,
+    lotIdentity,
+    syncLots
   });
 })(typeof globalThis !== 'undefined' ? globalThis : window);

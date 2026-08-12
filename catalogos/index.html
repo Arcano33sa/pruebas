@@ -4,12 +4,12 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Suite A33 · Catálogos</title>
-  <meta name="description" content="Catálogos operativos de Suite A33: productos, envases, tapas, extras, bancos, clientes y datos maestros." />
+  <meta name="description" content="Catálogos operativos de Suite A33: productos, costos, materia prima, envases, tapas, extras, bancos, clientes y datos maestros." />
   <meta name="theme-color" content="#7b1818" />
-  <script src="/assets/js/a33-theme.js?v=4.20.84&r=11"></script>
+  <script src="/assets/js/a33-theme.js?v=4.20.98&r=11"></script>
   <link rel="icon" type="image/png" sizes="192x192" href="../icon-a33-192.png" />
   <link rel="apple-touch-icon" href="../icon-a33-192.png" />
-  <link rel="manifest" href="manifest.webmanifest?v=4.20.84&r=8" />
+  <link rel="manifest" href="manifest.webmanifest?v=4.20.98&r=13" />
   <script>
     (function(){
       try{
@@ -28,68 +28,70 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="../assets/css/a33-header.css?v=4.20.84&r=11" />
-  <link rel="stylesheet" href="../assets/css/a33-theme.css?v=4.20.84&r=11" />
-  <link rel="stylesheet" href="style.css?v=4.20.84&r=15" />
+  <link rel="stylesheet" href="../assets/css/a33-header.css?v=4.20.98&r=11" />
+  <link rel="stylesheet" href="../assets/css/a33-theme.css?v=4.20.98&r=11" />
+  <link rel="stylesheet" href="style.css?v=4.20.98&r=24" />
 </head>
 <body>
   <header class="a33-header" role="banner">
     <a class="a33-btn-menu" href="../index.html" aria-label="Ir al Menú principal">⌂ Menú principal</a>
     <div class="a33-title">Catálogos</div>
-    <div class="a33-version" data-a33-version="1" data-a33-fallback="v4.20.84">v...</div>
+    <div class="a33-version" data-a33-version="1" data-a33-fallback="v4.20.98">v...</div>
   </header>
 
   <main class="cat-main" role="main">
-    <section class="cat-hero cat-card" aria-labelledby="cat-title">
-      <div class="cat-hero-content">
-        <p class="cat-eyebrow">Gestión Operativa</p>
-        <h1 id="cat-title">Catálogos</h1>
-        <p class="cat-lead">Administración maestra de Productos, Envases, Tapas, Extras, Bancos y Clientes para consumo seguro de la Suite.</p>
-      </div>
-      <div class="cat-hero-badge" aria-label="Estado de implementación">
-        <span>Datos maestros</span>
-        <strong>Productos · Envases · Tapas · Extras · Bancos · Clientes</strong>
-      </div>
-    </section>
-
     <section class="cat-card cat-shell" aria-label="Apartados de Catálogos">
-      <div class="cat-tabs" role="tablist" aria-label="Secciones de Catálogos">
-        <button class="cat-tab is-active" id="tab-productos" type="button" role="tab" aria-selected="true" aria-controls="panel-productos" data-target="productos">
+      <div class="cat-tabs" aria-label="Tarjetas de Catálogos">
+        <button class="cat-tab" id="tab-productos" type="button" aria-expanded="false" aria-controls="panel-productos" data-target="productos">
           <span class="cat-tab-icon">🍷</span>
           <span>
             <strong>Productos</strong>
             <small>Presentaciones y precios base</small>
           </span>
         </button>
-        <button class="cat-tab" id="tab-envases" type="button" role="tab" aria-selected="false" aria-controls="panel-envases" data-target="envases">
+        <button class="cat-tab" id="tab-costos" type="button" aria-expanded="false" aria-controls="panel-costos" data-target="costos">
+          <span class="cat-tab-icon">🧾</span>
+          <span>
+            <strong>Costos</strong>
+            <small>Precios y contenido base</small>
+          </span>
+        </button>
+        <button class="cat-tab" id="tab-materia-prima" type="button" aria-expanded="false" aria-controls="panel-materia-prima" data-target="materia-prima">
+          <span class="cat-tab-icon">🧺</span>
+          <span>
+            <strong>Materia Prima</strong>
+            <small>Artículos, unidades y precios</small>
+          </span>
+        </button>
+        <button class="cat-tab" id="tab-envases" type="button" aria-expanded="false" aria-controls="panel-envases" data-target="envases">
           <span class="cat-tab-icon">🍾</span>
           <span>
             <strong>Envases</strong>
             <small>Botellas dinámicas</small>
           </span>
         </button>
-        <button class="cat-tab" id="tab-tapas" type="button" role="tab" aria-selected="false" aria-controls="panel-tapas" data-target="tapas">
+        <button class="cat-tab" id="tab-tapas" type="button" aria-expanded="false" aria-controls="panel-tapas" data-target="tapas">
           <span class="cat-tab-icon">🟤</span>
           <span>
             <strong>Tapas</strong>
             <small>Tapas y corchos</small>
           </span>
         </button>
-        <button class="cat-tab" id="tab-extras" type="button" role="tab" aria-selected="false" aria-controls="panel-extras" data-target="extras">
+        <button class="cat-tab" id="tab-extras" type="button" aria-expanded="false" aria-controls="panel-extras" data-target="extras">
           <span class="cat-tab-icon">➕</span>
           <span>
             <strong>Extras</strong>
             <small>Complementos operativos</small>
           </span>
         </button>
-        <button class="cat-tab" id="tab-bancos" type="button" role="tab" aria-selected="false" aria-controls="panel-bancos" data-target="bancos">
+        <button class="cat-tab" id="tab-bancos" type="button" aria-expanded="false" aria-controls="panel-bancos" data-target="bancos">
           <span class="cat-tab-icon">🏦</span>
           <span>
             <strong>Bancos</strong>
             <small>Cuentas y entidades</small>
           </span>
         </button>
-        <button class="cat-tab" id="tab-clientes" type="button" role="tab" aria-selected="false" aria-controls="panel-clientes" data-target="clientes">
+        <button class="cat-tab" id="tab-clientes" type="button" aria-expanded="false" aria-controls="panel-clientes" data-target="clientes">
           <span class="cat-tab-icon">👥</span>
           <span>
             <strong>Clientes</strong>
@@ -98,8 +100,12 @@
         </button>
       </div>
 
-      <div class="cat-panels">
-        <section class="cat-panel is-active" id="panel-productos" role="tabpanel" aria-labelledby="tab-productos" data-panel="productos">
+      <div class="cat-panels" hidden aria-hidden="true">
+        <nav class="cat-section-nav" aria-label="Navegación interna de Catálogos">
+          <button class="cat-nav-chip cat-nav-chip--back" data-cat-back type="button">← Catálogos</button>
+          <a class="cat-nav-chip cat-nav-chip--home" href="../index.html" aria-label="Ir al Menú principal">⌂ Menú principal</a>
+        </nav>
+        <section class="cat-panel" id="panel-productos" role="region" aria-labelledby="tab-productos" data-panel="productos" aria-hidden="true" tabindex="-1" hidden>
           <article class="cat-panel-card cat-products-intro">
             <div>
               <p class="cat-eyebrow">Productos maestros</p>
@@ -121,7 +127,6 @@
               </div>
               <div class="cat-toolbar-actions">
                 <button id="cat-refresh-products" class="cat-btn cat-btn-secondary" type="button">Actualizar</button>
-                <button id="cat-restore-seed" class="cat-btn cat-btn-warn" type="button">Restaurar base A33</button>
               </div>
             </div>
 
@@ -160,6 +165,12 @@
                   <option value="">Sin tapa</option>
                 </select>
               </label>
+              <label class="cat-physical-cup-field">Vaso físico asociado
+                <select id="cat-new-vaso-fisico">
+                  <option value="">Sin asociación</option>
+                </select>
+                <small>Opcional · usa el ID estable de Inventario Varios.</small>
+              </label>
               <label class="cat-flag"><input id="cat-new-receta" type="checkbox"> Receta</label>
               <label class="cat-flag"><input id="cat-new-pos" type="checkbox" checked> POS</label>
               <label class="cat-flag"><input id="cat-new-active" type="checkbox" checked> Activo</label>
@@ -171,7 +182,186 @@
           </article>
         </section>
 
-        <section class="cat-panel" id="panel-envases" role="tabpanel" aria-labelledby="tab-envases" data-panel="envases" hidden>
+
+        <section class="cat-panel" id="panel-costos" role="region" aria-labelledby="tab-costos" data-panel="costos" aria-hidden="true" tabindex="-1" hidden>
+          <article class="cat-panel-card cat-products-intro">
+            <div>
+              <p class="cat-eyebrow">Costos maestros</p>
+              <h2>Costos</h2>
+              <p>Control de precios, contenido y costos de producción por producto.</p>
+            </div>
+            <ul class="cat-list">
+              <li>Precio corresponde al costo total de la presentación comprada.</li>
+              <li>ML corresponde al contenido total de esa presentación.</li>
+              <li>Los líquidos se calculan automáticamente desde las recetas reales de Producción.</li>
+            </ul>
+          </article>
+
+          <article class="cat-product-tools cat-costs-card">
+            <div class="cat-toolbar">
+              <div>
+                <p class="cat-eyebrow">Configuración base</p>
+                <h2>Referencias de costos</h2>
+              </div>
+              <div class="cat-toolbar-actions">
+                <button id="cat-save-costs" class="cat-btn cat-btn-ok" type="button">Guardar</button>
+              </div>
+            </div>
+
+            <div id="cat-costs-status" class="cat-status" role="status" aria-live="polite">Cargando costos…</div>
+            <div id="cat-costs-recipe-status" class="cat-status cat-costs-recipe-status" role="status" aria-live="polite">Leyendo recetas reales…</div>
+
+            <div class="cat-costs-summary" aria-label="Resumen de costos">
+              <div><span id="cat-costs-summary-visible">0</span><small>Productos visibles</small></div>
+              <div><span id="cat-costs-summary-complete">0</span><small>Costo completo</small></div>
+              <div><span id="cat-costs-summary-pending">0</span><small>Información pendiente</small></div>
+              <div><span id="cat-costs-summary-no-recipe">0</span><small>Sin receta legible</small></div>
+            </div>
+
+            <div class="cat-costs-table-wrap">
+              <table class="cat-costs-table" aria-label="Costos completos por producto">
+                <colgroup id="cat-costs-colgroup">
+                  <col class="cat-cost-col-reference">
+                  <col class="cat-cost-col-number">
+                  <col class="cat-cost-col-number">
+                </colgroup>
+                <thead>
+                  <tr id="cat-costs-head-row">
+                    <th scope="col">Referencia</th>
+                    <th scope="col">Precio</th>
+                    <th scope="col">ML</th>
+                  </tr>
+                </thead>
+                <tbody id="cat-costs-body">
+                  <tr data-cost-row="vino">
+                    <th scope="row">Vino</th>
+                    <td><input id="cat-cost-vino-price" class="cat-cost-input a33-num" data-a33-num="1" data-a33-default="" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Vacío" aria-label="Precio de Vino"></td>
+                    <td><input id="cat-cost-vino-ml" class="cat-cost-input a33-num" data-a33-num="1" data-a33-default="" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Vacío" aria-label="ML de Vino"></td>
+                  </tr>
+                  <tr data-cost-row="vodka">
+                    <th scope="row">Vodka</th>
+                    <td><input id="cat-cost-vodka-price" class="cat-cost-input a33-num" data-a33-num="1" data-a33-default="" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Vacío" aria-label="Precio de Vodka"></td>
+                    <td><input id="cat-cost-vodka-ml" class="cat-cost-input a33-num" data-a33-num="1" data-a33-default="" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Vacío" aria-label="ML de Vodka"></td>
+                  </tr>
+                  <tr data-cost-row="jugo">
+                    <th scope="row">Jugo</th>
+                    <td><input id="cat-cost-jugo-price" class="cat-cost-input a33-num" data-a33-num="1" data-a33-default="" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Vacío" aria-label="Precio de Jugo"></td>
+                    <td><input id="cat-cost-jugo-ml" class="cat-cost-input a33-num" data-a33-num="1" data-a33-default="" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Vacío" aria-label="ML de Jugo"></td>
+                  </tr>
+                  <tr data-cost-row="sirope">
+                    <th scope="row">Sirope</th>
+                    <td><input id="cat-cost-sirope-price" class="cat-cost-input a33-num" data-a33-num="1" data-a33-default="" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Vacío" aria-label="Precio de Sirope"></td>
+                    <td><input id="cat-cost-sirope-ml" class="cat-cost-input a33-num" data-a33-num="1" data-a33-default="" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Vacío" aria-label="ML de Sirope"></td>
+                  </tr>
+                  <tr data-cost-row="agua_pura">
+                    <th scope="row">Agua pura</th>
+                    <td><input id="cat-cost-agua-pura-price" class="cat-cost-input a33-num" data-a33-num="1" data-a33-default="" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Vacío" aria-label="Precio de Agua pura"></td>
+                    <td><input id="cat-cost-agua-pura-ml" class="cat-cost-input a33-num" data-a33-num="1" data-a33-default="" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Vacío" aria-label="ML de Agua pura"></td>
+                  </tr>
+                  <tr class="cat-cost-locked" data-cost-row="botella">
+                    <th scope="row">Botella</th>
+                    <td><span aria-label="No aplica Precio general">—</span></td>
+                    <td><span aria-label="No aplica ML">—</span></td>
+                  </tr>
+                  <tr class="cat-cost-locked" data-cost-row="calcomania">
+                    <th scope="row">Calcomanía</th>
+                    <td><span aria-label="No aplica Precio general">—</span></td>
+                    <td><span aria-label="No aplica ML">—</span></td>
+                  </tr>
+                  <tr class="cat-cost-total" data-cost-row="total">
+                    <th scope="row">Total</th>
+                    <td><span aria-label="No aplica">—</span></td>
+                    <td><span aria-label="No aplica">—</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p id="cat-costs-empty" class="cat-costs-empty" role="status" aria-live="polite" hidden>No hay productos activos con Receta disponibles para calcular.</p>
+          </article>
+        </section>
+
+
+        <section class="cat-panel" id="panel-materia-prima" role="region" aria-labelledby="tab-materia-prima" data-panel="materia-prima" aria-hidden="true" tabindex="-1" hidden>
+          <article class="cat-panel-card cat-products-intro">
+            <div>
+              <p class="cat-eyebrow">Fuente oficial para Compras</p>
+              <h2>Materia Prima</h2>
+              <p>Administra manualmente los artículos, unidades y precios de referencia que utilizará Agenda → Compras. El catálogo inicia vacío y no crea registros desde otros módulos.</p>
+            </div>
+            <ul class="cat-list">
+              <li>Solo los artículos activos estarán disponibles para nuevas Compras.</li>
+              <li>Los cambios aplican hacia adelante; las compras guardarán su propia fotografía.</li>
+              <li>No modifica Inventario, Producción, Finanzas, POS ni costos de recetas.</li>
+            </ul>
+          </article>
+
+          <article class="cat-product-tools cat-raw-material-tools">
+            <div class="cat-toolbar">
+              <div>
+                <p class="cat-eyebrow">Catálogo actual</p>
+                <h2>Artículos de Materia Prima</h2>
+              </div>
+              <div class="cat-toolbar-actions">
+                <button id="cat-refresh-raw-materials" class="cat-btn cat-btn-secondary" type="button">Actualizar</button>
+              </div>
+            </div>
+            <div id="cat-raw-materials-status" class="cat-status" role="status" aria-live="polite">Cargando Materia Prima…</div>
+            <div class="cat-raw-material-table-scroll" tabindex="0" aria-label="Listado de Materia Prima">
+              <table class="cat-raw-material-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Nombre</th>
+                    <th scope="col">Categoría</th>
+                    <th scope="col">Unidad</th>
+                    <th scope="col">Precio</th>
+                    <th scope="col">Estado</th>
+                    <th scope="col">Última actualización</th>
+                    <th scope="col" class="cat-raw-material-actions-head">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="cat-raw-materials-body"></tbody>
+              </table>
+            </div>
+            <p id="cat-raw-materials-empty" class="cat-costs-empty" role="status" aria-live="polite" hidden>Materia Prima está vacía. Agrega el primer artículo manualmente.</p>
+          </article>
+
+          <article class="cat-product-form-card">
+            <div>
+              <p class="cat-eyebrow">Nuevo artículo</p>
+              <h2>Agregar Materia Prima</h2>
+            </div>
+            <div class="cat-product-form cat-raw-material-form">
+              <label>Nombre
+                <input id="cat-raw-material-name" autocomplete="off" maxlength="120" placeholder="Ej: Jugo de naranja">
+              </label>
+              <label>Categoría
+                <input id="cat-raw-material-category" autocomplete="off" maxlength="80" placeholder="Ej: Materia prima">
+              </label>
+              <label>Unidad de compra
+                <select id="cat-raw-material-unit">
+                  <option value="">Seleccionar</option>
+                  <option value="Unidad">Unidad</option>
+                  <option value="Cajas">Cajas</option>
+                  <option value="Litros">Litros</option>
+                  <option value="Galones">Galones</option>
+                </select>
+              </label>
+              <label>Precio de referencia (C$)
+                <input id="cat-raw-material-price" class="a33-num" data-a33-num="1" data-a33-default="" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0.00">
+              </label>
+              <label class="cat-flag"><input id="cat-raw-material-active" type="checkbox" checked> Activo</label>
+              <label class="cat-field-full">Observación
+                <textarea id="cat-raw-material-note" rows="3" maxlength="300" placeholder="Opcional"></textarea>
+              </label>
+            </div>
+            <small id="cat-raw-material-msg" class="cat-muted cat-edit-msg"></small>
+            <div class="cat-actions-end">
+              <button id="cat-save-raw-material" class="cat-btn cat-btn-ok" type="button">+ Agregar artículo</button>
+            </div>
+          </article>
+        </section>
+
+        <section class="cat-panel" id="panel-envases" role="region" aria-labelledby="tab-envases" data-panel="envases" aria-hidden="true" tabindex="-1" hidden>
           <article class="cat-panel-card cat-products-intro">
             <div>
               <p class="cat-eyebrow">Envases maestros</p>
@@ -225,7 +415,7 @@
           </article>
         </section>
 
-        <section class="cat-panel" id="panel-tapas" role="tabpanel" aria-labelledby="tab-tapas" data-panel="tapas" hidden>
+        <section class="cat-panel" id="panel-tapas" role="region" aria-labelledby="tab-tapas" data-panel="tapas" aria-hidden="true" tabindex="-1" hidden>
           <article class="cat-panel-card cat-products-intro">
             <div>
               <p class="cat-eyebrow">Tapas maestras</p>
@@ -276,7 +466,7 @@
           </article>
         </section>
 
-        <section class="cat-panel" id="panel-extras" role="tabpanel" aria-labelledby="tab-extras" data-panel="extras" hidden>
+        <section class="cat-panel" id="panel-extras" role="region" aria-labelledby="tab-extras" data-panel="extras" aria-hidden="true" tabindex="-1" hidden>
           <article class="cat-panel-card cat-products-intro">
             <div>
               <p class="cat-eyebrow">Extras maestros</p>
@@ -331,7 +521,7 @@
           </article>
         </section>
 
-        <section class="cat-panel" id="panel-bancos" role="tabpanel" aria-labelledby="tab-bancos" data-panel="bancos" hidden>
+        <section class="cat-panel" id="panel-bancos" role="region" aria-labelledby="tab-bancos" data-panel="bancos" aria-hidden="true" tabindex="-1" hidden>
           <article class="cat-panel-card cat-products-intro">
             <div>
               <p class="cat-eyebrow">Bancos maestros</p>
@@ -397,7 +587,7 @@
           </article>
         </section>
 
-        <section class="cat-panel" id="panel-clientes" role="tabpanel" aria-labelledby="tab-clientes" data-panel="clientes" hidden>
+        <section class="cat-panel" id="panel-clientes" role="region" aria-labelledby="tab-clientes" data-panel="clientes" aria-hidden="true" tabindex="-1" hidden>
           <article class="cat-panel-card cat-products-intro">
             <div>
               <p class="cat-eyebrow">Clientes maestros</p>
@@ -427,7 +617,7 @@
               </label>
             </div>
             <div id="cat-customers-status" class="cat-status" role="status" aria-live="polite">Cargando clientes…</div>
-            <div id="cat-customers-list" class="cat-products-list"></div>
+            <div id="cat-customers-list" class="cat-customers-list"></div>
           </article>
 
           <article class="cat-product-form-card">
@@ -465,6 +655,46 @@
   </main>
 
 
+
+  <div id="cat-raw-material-modal" class="cat-modal" aria-hidden="true">
+    <div class="cat-modal-panel" role="dialog" aria-modal="true" aria-labelledby="cat-raw-material-modal-title">
+      <button id="cat-raw-material-close" class="cat-modal-close" type="button">Cerrar</button>
+      <p class="cat-eyebrow">Materia Prima</p>
+      <h2 id="cat-raw-material-modal-title">Editar artículo</h2>
+      <p id="cat-raw-material-current" class="cat-muted">Artículo actual: —</p>
+      <div class="cat-warn">Los cambios aplican hacia adelante. Las compras guardadas conservarán el nombre, categoría, unidad y precio utilizados.</div>
+      <div class="cat-product-form cat-product-form-modal cat-raw-material-form">
+        <label>Nombre
+          <input id="cat-edit-raw-material-name" autocomplete="off" maxlength="120" placeholder="Nombre">
+        </label>
+        <label>Categoría
+          <input id="cat-edit-raw-material-category" autocomplete="off" maxlength="80" placeholder="Categoría">
+        </label>
+        <label>Unidad de compra
+          <select id="cat-edit-raw-material-unit">
+            <option value="">Seleccionar</option>
+            <option value="Unidad">Unidad</option>
+            <option value="Cajas">Cajas</option>
+            <option value="Litros">Litros</option>
+            <option value="Galones">Galones</option>
+          </select>
+        </label>
+        <label>Precio de referencia (C$)
+          <input id="cat-edit-raw-material-price" class="a33-num" data-a33-num="1" data-a33-default="" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0.00">
+        </label>
+        <label class="cat-flag"><input id="cat-edit-raw-material-active" type="checkbox"> Activo</label>
+        <label class="cat-field-full">Observación
+          <textarea id="cat-edit-raw-material-note" rows="3" maxlength="300" placeholder="Opcional"></textarea>
+        </label>
+      </div>
+      <small id="cat-edit-raw-material-msg" class="cat-muted cat-edit-msg"></small>
+      <div class="cat-modal-actions">
+        <button id="cat-edit-raw-material-save" class="cat-btn cat-btn-ok" type="button">Guardar cambios</button>
+        <button id="cat-edit-raw-material-cancel" class="cat-btn cat-btn-secondary" type="button">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
   <div id="cat-product-modal" class="cat-modal" aria-hidden="true">
     <div class="cat-modal-panel" role="dialog" aria-modal="true" aria-labelledby="cat-product-modal-title">
       <button id="cat-product-close" class="cat-modal-close" type="button">Cerrar</button>
@@ -498,6 +728,12 @@
           <select id="cat-edit-tapa">
             <option value="">Sin tapa</option>
           </select>
+        </label>
+        <label class="cat-physical-cup-field">Vaso físico asociado
+          <select id="cat-edit-vaso-fisico">
+            <option value="">Sin asociación</option>
+          </select>
+          <small>Opcional · no descuenta inventario en esta etapa.</small>
         </label>
         <label class="cat-flag"><input id="cat-edit-receta" type="checkbox"> Receta</label>
         <label class="cat-flag"><input id="cat-edit-pos" type="checkbox"> POS</label>
@@ -674,11 +910,34 @@
   </div>
 
 
+  <div id="cat-customer-view-modal" class="cat-modal" aria-hidden="true">
+    <div class="cat-modal-panel cat-customer-view-modal-panel" role="dialog" aria-modal="true" aria-labelledby="cat-customer-view-title">
+      <button id="cat-customer-view-close" class="cat-modal-close" type="button">Cerrar</button>
+      <p class="cat-eyebrow">Cliente maestro</p>
+      <h2 id="cat-customer-view-title">Detalle del cliente</h2>
+      <div id="cat-view-customer-merged" class="cat-warn" hidden></div>
+      <dl class="cat-customer-view-grid">
+        <div><dt>Nombre</dt><dd id="cat-view-customer-name">—</dd></div>
+        <div><dt>Estado</dt><dd id="cat-view-customer-status">—</dd></div>
+        <div><dt>Celular</dt><dd id="cat-view-customer-cell">—</dd></div>
+        <div><dt>Última compra</dt><dd id="cat-view-customer-last-purchase">Sin compras</dd></div>
+        <div><dt>Correo</dt><dd id="cat-view-customer-email">—</dd></div>
+        <div><dt>Dirección</dt><dd id="cat-view-customer-address">—</dd></div>
+        <div class="cat-customer-view-wide"><dt>Notas</dt><dd id="cat-view-customer-notes">—</dd></div>
+      </dl>
+      <div class="cat-modal-actions">
+        <button id="cat-customer-view-ok" class="cat-btn cat-btn-secondary" type="button">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
   <div id="cat-toast" class="cat-toast" role="status" aria-live="polite" aria-atomic="true">Hecho</div>
 
-  <script src="/assets/js/a33-release.js?v=4.20.84&r=47"></script>
-  <script src="/assets/js/a33-storage.js?v=4.20.84&r=13"></script>
-  <script src="script.js?v=4.20.84&r=19"></script>
-  <script src="/assets/js/a33-input-ux.js?v=4.20.84&r=11"></script>
+  <script src="/assets/js/a33-release.js?v=4.20.98&r=57"></script>
+  <script src="/assets/js/a33-storage.js?v=4.20.98&r=20"></script>
+  <script src="/assets/js/a33-product-integrity.js?v=4.20.98&r=1"></script>
+  <script src="/assets/js/a33-materials.js?v=4.20.98&r=2"></script>
+  <script src="script.js?v=4.20.98&r=36"></script>
+  <script src="/assets/js/a33-input-ux.js?v=4.20.98&r=11"></script>
 </body>
 </html>

@@ -6,11 +6,17 @@
 (function(global){
   'use strict';
 
-  const VERSION = '4.20.84';
-  const REV = '1'; // subir cuando haya que forzar limpiar caches sin cambiar VERSION
+  const VERSION = '4.20.98';
+  const REV = '2'; // subir cuando haya que forzar limpiar caches sin cambiar VERSION
+
+  const MODULE_REVISIONS = Object.freeze({
+    calculadora:'10', catalogos:'34', inventario:'18', lotes:'21', pedidos:'19', pos:'34'
+  });
 
   function cacheName(module){
-    return 'a33-v' + VERSION + '-' + String(module || 'app') + '-r' + REV;
+    const name = String(module || 'app');
+    const moduleRev = MODULE_REVISIONS[name];
+    return 'a33-v' + VERSION + '-' + name + '-r' + REV + (moduleRev ? ('-m' + moduleRev) : '');
   }
 
   try{ global.A33_VERSION = VERSION; }catch(_){ }
@@ -19,10 +25,11 @@
   try{ global.A33_CACHE_NAME = cacheName; }catch(_){ }
 
   // Conveniencia: nombres por modulo (solo lectura)
+  try{ global.A33_CALCULADORA_CACHE_NAME = cacheName('calculadora'); }catch(_){ }
+  try{ global.A33_CATALOGOS_CACHE_NAME = cacheName('catalogos'); }catch(_){ }
   try{ global.A33_POS_CACHE_NAME = cacheName('pos'); }catch(_){ }
   try{ global.A33_LOTES_CACHE_NAME = cacheName('lotes'); }catch(_){ }
   try{ global.A33_INVENTARIO_CACHE_NAME = cacheName('inventario'); }catch(_){ }
   try{ global.A33_PEDIDOS_CACHE_NAME = cacheName('pedidos'); }catch(_){ }
-  try{ global.A33_CENTRO_MANDO_CACHE_NAME = cacheName('centro_mando'); }catch(_){ }
 
 })(typeof window !== 'undefined' ? window : self);

@@ -1,13 +1,13 @@
 // --- IndexedDB helpers POS
 const DB_NAME = 'a33-pos';
-const DB_VER = 34; // Catálogos Etapa 3: Extras maestros + Bancos centralizados
+const DB_VER = 37; // Materia Prima + cierre de esquema compartido a33-pos
 let db;
 
 // --- Build / version (fuente unica de verdad)
-const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.84';
+const POS_BUILD = (typeof window !== 'undefined' && window.A33_VERSION) ? String(window.A33_VERSION) : '4.20.98';
 
 
-const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r6');
+const POS_SW_CACHE = (typeof window !== 'undefined' && window.A33_POS_CACHE_NAME) ? String(window.A33_POS_CACHE_NAME) : ('a33-v' + POS_BUILD + '-pos-r1-m50');
 
 // --- Util: round2 (2 decimales) — Hotfix Ventas Etapa 1/3
 // Nota: evita NaN y errores de flotante (EPSILON). Retorna Number.
@@ -668,6 +668,10 @@ function cashV2HistNormalizeMove(m){
     if (s) out.note = s;
   }catch(_){ }
   try{ if (o.id != null && String(o.id).trim() !== '') out.id = String(o.id); }catch(_){ }
+  const passthrough = ['movementType','tipoMovimiento','operationalClass','clasificacionOperativa','eventId','dayKey','creditSaleId','creditSaleUid','creditPaymentId','creditCustomer','creditReference','creditSaleDate','creditOriginalAmount','creditPaidBefore','creditPaidAfter','creditBalanceBefore','creditBalanceAfter','creditStatusAfter','clientRequestId','collectedAt','recordedAt'];
+  for (const key of passthrough){
+    try{ if (o[key] != null && String(o[key]).trim() !== '') out[key] = o[key]; }catch(_){ }
+  }
   return out;
 }
 
@@ -2267,9 +2271,9 @@ function cashV2NormAmountInt(v, opts){
   const allowNeg = !!(opts && opts.allowNegative);
   let n = Number(v);
   if (!Number.isFinite(n)) return 0;
-  n = Math.trunc(n);
+  n = round2(n);
   if (!allowNeg && n < 0) n = Math.abs(n);
-  // En ajuste se permite negativo. 0 se considera inválido para agregar movimiento.
+  // Compatibilidad histórica: conserva enteros y admite centavos para cobros parciales.
   return n;
 }
 
@@ -2339,13 +2343,537 @@ function cashV2MovementKindToUi(kind){
   return { text: (k || 'Mov'), sign: 0 };
 }
 
+
+const CASHV2_MOVEMENT_TYPE_CREDIT_COLLECTION = 'CREDIT_COLLECTION';
+const CREDIT_UPDATE_KEY_POS = 'a33_pos_credit_update_pulse';
+const CREDIT_UPDATE_CHANNEL_POS = 'a33-pos-credit-updates';
+
+function notifyCreditStateChangedPOS(detail){
+  const payload = {
+    type:'a33:credit-updated',
+    ts:Date.now(),
+    eventId:detail && detail.eventId != null ? detail.eventId : null,
+    saleId:detail && detail.saleId != null ? detail.saleId : null,
+    reason:String(detail && detail.reason || 'updated')
+  };
+  try{ window.dispatchEvent(new CustomEvent('a33:credit-updated', { detail:payload })); }catch(_){ }
+  try{ localStorage.setItem(CREDIT_UPDATE_KEY_POS, JSON.stringify(payload)); }catch(_){ }
+  try{
+    if (typeof BroadcastChannel === 'function'){
+      const channel = new BroadcastChannel(CREDIT_UPDATE_CHANNEL_POS);
+      channel.postMessage(payload);
+      channel.close();
+    }
+  }catch(_){ }
+}
+let __cashV2CreditSalesUiToken = 0;
+let __cashV2CreditSalesCache = new Map();
+const __cashV2CreditCollectionLocks = new Set();
+const __cashV2MovementSubmitLocks = new Set();
+
+function cashV2IsReversedMovement(movement){
+  const m = movement && typeof movement === 'object' ? movement : {};
+  const status = String(m.status || m.estado || m.movementStatus || '').trim().toUpperCase();
+  return !!(m.reversedAt || m.revertedAt || m.voidedAt || m.isReversed || m.reversed || m.voided ||
+    status === 'REVERSED' || status === 'REVERTED' || status === 'VOID' || status === 'ANULADO' || status === 'ANULADA');
+}
+
+function cashV2IsSaleCollectiblePOS(sale){
+  const s = sale && typeof sale === 'object' ? sale : {};
+  if (!s || s.id == null) return false;
+  if (s.courtesy || s.isReturn || s.deletedAt || s.voidedAt || s.annulledAt || s.cancelledAt || s.canceledAt || s.revertedAt || s.reversedAt) return false;
+  if (s.isDeleted || s.deleted || s.isVoid || s.voided || s.isCancelled || s.cancelled || s.canceled || s.isReverted || s.reverted || s.reversed) return false;
+  const raw = String(s.status || s.estado || s.saleStatus || s.state || '').trim().toUpperCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const blocked = new Set(['ANULADA','ANULADO','VOID','VOIDED','CANCELADA','CANCELADO','CANCELLED','CANCELED','REVERTIDA','REVERTIDO','REVERSED','REVERTED','ELIMINADA','ELIMINADO','DELETED']);
+  return !blocked.has(raw);
+}
+
+function cashV2IsCreditCollectionMovement(movement){
+  const m = movement && typeof movement === 'object' ? movement : {};
+  const t = String(m.movementType || m.tipoMovimiento || m.cashMovementType || '').trim().toUpperCase();
+  return t === CASHV2_MOVEMENT_TYPE_CREDIT_COLLECTION || m.creditSaleId != null || m.ventaCreditoId != null;
+}
+
+function cashV2CreditPaymentIdentity(record){
+  const r = record && typeof record === 'object' ? record : {};
+  const paymentId = String(r.creditPaymentId || r.paymentId || r.idPagoCredito || '').trim();
+  if (paymentId) return 'payment:' + paymentId;
+  const movementId = String(r.movementId || r.cashMovementId || r.id || '').trim();
+  if (movementId) return 'movement:' + movementId;
+  const saleId = String(r.creditSaleId ?? r.ventaCreditoId ?? r.saleId ?? '').trim();
+  const ts = Number(r.ts || r.collectionTs || r.createdAt || 0) || 0;
+  const amount = round2(Number(r.amount || r.monto || 0));
+  return `fallback:${saleId}:${ts}:${amount}`;
+}
+
+function cashV2NewRequestId(prefix){
+  return String(prefix || 'REQ') + '-' + Date.now().toString(36) + '-' + Math.random().toString(16).slice(2, 10);
+}
+
+function cashV2CreditSaleOriginalAmount(sale){
+  const s = sale && typeof sale === 'object' ? sale : {};
+  const explicit = Number(s.creditOriginalAmount ?? s.montoCreditoOriginal);
+  if (Number.isFinite(explicit) && explicit > 0) return round2(Math.abs(explicit));
+  const total = Number(s.total || 0);
+  return Number.isFinite(total) ? round2(Math.abs(total)) : 0;
+}
+
+function cashV2CreditSaleStoredPaidAmount(sale){
+  const s = sale && typeof sale === 'object' ? sale : {};
+  const candidates = [s.creditPaidAmount, s.montoCreditoPagado, s.paidAmount, s.amountPaid];
+  let paid = 0;
+  for (const value of candidates){
+    const n = Number(value);
+    if (Number.isFinite(n) && n > paid) paid = n;
+  }
+  const seen = new Set();
+  const payments = Array.isArray(s.creditPayments) ? s.creditPayments : [];
+  const paymentsTotal = payments.reduce((sum, item)=>{
+    if (!item || cashV2IsReversedMovement(item)) return sum;
+    const identity = cashV2CreditPaymentIdentity(item);
+    if (seen.has(identity)) return sum;
+    seen.add(identity);
+    const n = Number(item.amount);
+    return sum + (Number.isFinite(n) && n > 0 ? n : 0);
+  }, 0);
+  return round2(Math.max(paid, paymentsTotal));
+}
+
+function cashV2CreditPaidFromMovements(records, saleId){
+  const wanted = String(saleId == null ? '' : saleId).trim();
+  if (!wanted) return 0;
+  let paid = 0;
+  const seen = new Set();
+  for (const rec of (Array.isArray(records) ? records : [])){
+    for (const m of (rec && Array.isArray(rec.movements) ? rec.movements : [])){
+      if (!cashV2IsCreditCollectionMovement(m) || cashV2IsReversedMovement(m)) continue;
+      const linked = String(m.creditSaleId ?? m.ventaCreditoId ?? '').trim();
+      if (linked !== wanted) continue;
+      const identity = cashV2CreditPaymentIdentity(m);
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      const amount = Number(m.amount || 0);
+      if (Number.isFinite(amount) && amount > 0) paid += amount;
+    }
+  }
+  return round2(paid);
+}
+
+function cashV2CreditSaleSnapshot(sale, cashRecords){
+  const s = sale && typeof sale === 'object' ? sale : {};
+  const original = cashV2CreditSaleOriginalAmount(s);
+  const paid = round2(Math.max(
+    cashV2CreditSaleStoredPaidAmount(s),
+    cashV2CreditPaidFromMovements(cashRecords, s.id)
+  ));
+  const balance = round2(Math.max(0, original - paid));
+  const customer = String(s.customerName || s.customer || 'Cliente sin nombre').trim() || 'Cliente sin nombre';
+  const product = String(s.productNameSnapshot || s.productName || (s.productSnapshot && s.productSnapshot.name) || 'Venta').trim() || 'Venta';
+  const reference = s.seqId != null && s.seqId !== '' ? `Venta #${s.seqId}` : (s.id != null ? `Venta #${s.id}` : 'Venta al crédito');
+  const date = String(s.date || '').slice(0, 10) || '—';
+  const status = balance <= 0.009 ? 'PAGADA' : (paid > 0 ? 'ABONADA' : 'PENDIENTE');
+  return { sale:s, id:s.id, original, paid, balance, customer, product, reference, date, status, collectible:cashV2IsSaleCollectiblePOS(s) };
+}
+
+function cashV2FormatCreditSaleOption(snapshot){
+  const s = snapshot || {};
+  return `${s.customer || 'Cliente'} · ${s.date || '—'} · ${s.product || 'Venta'} · Saldo C$ ${cashV2FmtMoney(s.balance || 0)}`;
+}
+
+function cashV2SetCreditSaleDetails(snapshot){
+  const box = document.getElementById('cashv2-credit-sale-details');
+  if (!box) return;
+  if (!snapshot){
+    box.style.display = 'none';
+    box.innerHTML = '';
+    return;
+  }
+  box.style.display = 'grid';
+  box.innerHTML = `
+    <div><span>Cliente</span><b>${escapeHtml(snapshot.customer)}</b></div>
+    <div><span>Fecha</span><b>${escapeHtml(snapshot.date)}</b></div>
+    <div><span>Referencia</span><b>${escapeHtml(snapshot.reference)} · ${escapeHtml(snapshot.product)}</b></div>
+    <div><span>Total original</span><b>C$ ${escapeHtml(cashV2FmtMoney(snapshot.original))}</b></div>
+    <div><span>Total cobrado</span><b>C$ ${escapeHtml(cashV2FmtMoney(snapshot.paid))}</b></div>
+    <div><span>Saldo pendiente</span><b>C$ ${escapeHtml(cashV2FmtMoney(snapshot.balance))}</b></div>
+    <div><span>Estado</span><b>${escapeHtml(snapshot.status === 'PAGADA' ? 'Pagada' : (snapshot.status === 'ABONADA' ? 'Abonada' : 'Pendiente'))}</b></div>`;
+}
+
+function cashV2ClearCreditSalesUI(){
+  __cashV2CreditSalesUiToken += 1;
+  __cashV2CreditSalesCache = new Map();
+  const select = document.getElementById('cashv2-credit-sale-select');
+  const empty = document.getElementById('cashv2-credit-sale-empty');
+  if (select) select.innerHTML = '<option value="">— Selecciona una venta al crédito —</option>';
+  if (empty) empty.style.display = 'none';
+  cashV2SetCreditSaleDetails(null);
+}
+
+async function cashV2RefreshCreditSalesUI(eventId, opts){
+  const token = ++__cashV2CreditSalesUiToken;
+  const select = document.getElementById('cashv2-credit-sale-select');
+  const empty = document.getElementById('cashv2-credit-sale-empty');
+  if (!select) return [];
+  const previous = opts && opts.keepSelection ? String(select.value || '') : '';
+  const eid = String(eventId || '').trim();
+  if (!eid){ cashV2ClearCreditSalesUI(); return []; }
+
+  let sales = [];
+  let cashRecords = [];
+  try{
+    [sales, cashRecords] = await Promise.all([getAll('sales'), getAll(CASH_V2_STORE)]);
+  }catch(_){ sales = []; cashRecords = []; }
+  if (token !== __cashV2CreditSalesUiToken) return [];
+
+  const pending = (Array.isArray(sales) ? sales : [])
+    .filter(s => s && String(s.eventId) === eid)
+    .filter(s => normalizePaymentMethodPOS(s.payment || '') === 'credito')
+    .filter(s => cashV2IsSaleCollectiblePOS(s) && Number(s.total || 0) > 0)
+    .map(s => cashV2CreditSaleSnapshot(s, cashRecords))
+    .filter(s => s.id != null && s.balance > 0.009)
+    .sort((a,b)=>{
+      const dateCmp = String(a.date).localeCompare(String(b.date));
+      if (dateCmp) return dateCmp;
+      return Number(a.sale.createdAt || a.id || 0) - Number(b.sale.createdAt || b.id || 0);
+    });
+
+  __cashV2CreditSalesCache = new Map(pending.map(item => [String(item.id), item]));
+  select.innerHTML = '<option value="">— Selecciona una venta al crédito —</option>' + pending.map(item =>
+    `<option value="${escapeHtml(String(item.id))}">${escapeHtml(cashV2FormatCreditSaleOption(item))}</option>`
+  ).join('');
+  if (previous && __cashV2CreditSalesCache.has(previous)) select.value = previous;
+  if (empty) empty.style.display = pending.length ? 'none' : 'block';
+  const selected = __cashV2CreditSalesCache.get(String(select.value || '')) || null;
+  cashV2SetCreditSaleDetails(selected);
+  return pending;
+}
+
+function cashV2ApplyMovementTypeFormState(){
+  const card = document.getElementById('cashv2-movements-card');
+  const kind = String(document.getElementById('cashv2-move-kind-inline')?.value || 'CASH_IN').trim().toUpperCase();
+  const wrap = document.getElementById('cashv2-credit-collection-wrap');
+  const currency = document.getElementById('cashv2-move-currency-inline');
+  const saleSelect = document.getElementById('cashv2-credit-sale-select');
+  const isCollection = kind === CASHV2_MOVEMENT_TYPE_CREDIT_COLLECTION;
+  if (wrap) wrap.style.display = isCollection ? 'block' : 'none';
+  if (currency){
+    if (isCollection) currency.value = 'NIO';
+    currency.disabled = isCollection || card?.dataset.readonly === '1';
+  }
+  if (!isCollection){
+    if (saleSelect) saleSelect.value = '';
+    cashV2SetCreditSaleDetails(null);
+  }else{
+    const eid = String(card?.dataset.eventId || '').trim();
+    if (card?.dataset.creditEventEnabled === '1') cashV2RefreshCreditSalesUI(eid, { keepSelection:true }).catch(()=>{});
+    else cashV2ClearCreditSalesUI();
+  }
+}
+
+function cashV2ApplySelectedCreditSale(){
+  const saleSelect = document.getElementById('cashv2-credit-sale-select');
+  const amount = document.getElementById('cashv2-move-amount-inline');
+  const desc = document.getElementById('cashv2-move-desc-inline');
+  const snapshot = __cashV2CreditSalesCache.get(String(saleSelect?.value || '')) || null;
+  cashV2SetCreditSaleDetails(snapshot);
+  if (!snapshot) return;
+  if (amount) amount.value = Number(snapshot.balance || 0).toFixed(2);
+  if (desc) desc.value = `Cobro de venta a crédito — ${snapshot.customer}`.slice(0, 120);
+}
+
+async function cashV2RegisterCreditCollectionAtomic({ eventId, dayKey, saleId, amount, desc, requestId }){
+  const eid = cashV2AssertEventId(eventId);
+  const dk = cashV2AssertDayKeyCanon(safeYMD(dayKey));
+  const actualDayKey = cashV2DayKeyFromTsLocal(Date.now());
+  if (dk !== actualDayKey) throw new Error('El cobro debe registrarse en la caja del día real. Cierra el día anterior y abre la caja de hoy.');
+  const amt = round2(Number(amount));
+  if (!(amt > 0)) throw new Error('El monto del cobro debe ser mayor que cero.');
+  const sidRaw = String(saleId == null ? '' : saleId).trim();
+  if (!sidRaw) throw new Error('Selecciona una venta al crédito pendiente.');
+  const sid = /^\d+$/.test(sidRaw) ? Number(sidRaw) : sidRaw;
+  const reqId = String(requestId || cashV2NewRequestId('COL')).trim();
+  const lockKey = `${eid}|${sidRaw}`;
+  if (__cashV2CreditCollectionLocks.has(lockKey)) throw new Error('Este cobro ya se está guardando.');
+  __cashV2CreditCollectionLocks.add(lockKey);
+  try{
+    if (!db) await openDB();
+    return await new Promise((resolve, reject)=>{
+      let validationError = null;
+      let result = null;
+      const transaction = db.transaction([CASH_V2_STORE, 'sales'], 'readwrite');
+      const cashStore = transaction.objectStore(CASH_V2_STORE);
+      const salesStore = transaction.objectStore('sales');
+      const key = cashV2Key(eid, dk);
+      let cashDay = null;
+      let sale = null;
+      let cashRecords = null;
+      let ready = 0;
+
+      const fail = (message)=>{
+        validationError = new Error(message);
+        try{ transaction.abort(); }catch(_){ }
+      };
+      const maybeCommit = ()=>{
+        ready += 1;
+        if (ready < 3 || validationError) return;
+        try{
+          if (!cashDay || cashV2NormStatus(cashDay.status) === 'CLOSED') return fail('El día de Efectivo está cerrado.');
+          if (!sale) return fail('La venta seleccionada ya no existe.');
+          if (String(sale.eventId) !== eid) return fail('La venta pertenece a otro evento.');
+          if (normalizePaymentMethodPOS(sale.payment || '') !== 'credito') return fail('La venta ya no está registrada al crédito.');
+          if (!cashV2IsSaleCollectiblePOS(sale)) return fail('La venta está anulada, revertida o no admite cobros.');
+
+          const allMovements = (cashRecords || []).flatMap(rec => rec && Array.isArray(rec.movements) ? rec.movements : []);
+          const duplicateRequest = allMovements.some(m => !cashV2IsReversedMovement(m) && String(m.clientRequestId || '').trim() === reqId);
+          if (duplicateRequest) return fail('Este cobro ya fue registrado.');
+
+          const snapshot = cashV2CreditSaleSnapshot(sale, cashRecords || []);
+          if (!(snapshot.balance > 0.009)) return fail('La venta ya está pagada.');
+          if (amt - snapshot.balance > 0.009) return fail(`El cobro supera el saldo pendiente de C$ ${cashV2FmtMoney(snapshot.balance)}.`);
+
+          const nowTs = Date.now();
+          const nowIso = new Date(nowTs).toISOString();
+          const paymentId = 'CP-' + nowTs.toString(36) + '-' + Math.random().toString(16).slice(2, 9);
+          const movementId = cashV2NewMovementId();
+          const paidAfter = round2(snapshot.paid + amt);
+          const balanceAfter = round2(Math.max(0, snapshot.original - paidAfter));
+          const statusAfter = balanceAfter <= 0.009 ? 'PAGADA' : 'ABONADA';
+          const description = String(desc || '').trim().slice(0, 120);
+          const paymentRecord = {
+            id: paymentId,
+            creditPaymentId: paymentId,
+            movementId,
+            clientRequestId: reqId,
+            saleId: sale.id,
+            saleUid: sale.uid || '',
+            amount: amt,
+            currency: 'NIO',
+            ts: nowTs,
+            collectedAt: nowIso,
+            date: dk,
+            dayKey: dk,
+            eventId: eid,
+            customer: snapshot.customer,
+            reference: snapshot.reference,
+            originalAmount: snapshot.original,
+            balanceBefore: snapshot.balance,
+            balanceAfter,
+            source: 'POS_EFECTIVO',
+            description
+          };
+
+          const updatedSale = {
+            ...sale,
+            creditOriginalAmount: snapshot.original,
+            creditPaidAmount: paidAfter,
+            creditBalance: balanceAfter,
+            creditStatus: statusAfter,
+            estadoCredito: statusAfter,
+            creditUpdatedAt: nowTs,
+            updatedAt: nowTs,
+            creditPayments: [...(Array.isArray(sale.creditPayments) ? sale.creditPayments : []), paymentRecord]
+          };
+
+          const movement = {
+            id: movementId,
+            clientRequestId: reqId,
+            ts: nowTs,
+            collectedAt: nowIso,
+            eventId: eid,
+            dayKey: dk,
+            kind: 'IN',
+            operationalClass: CASHV2_OPERATIONAL_CLASSES.CASH_IN,
+            clasificacionOperativa: CASHV2_OPERATIONAL_CLASSES.CASH_IN,
+            operationalClassLabel: 'Cobro',
+            operationalStage: 'pos_efectivo_etapa_2_3',
+            movementType: CASHV2_MOVEMENT_TYPE_CREDIT_COLLECTION,
+            tipoMovimiento: CASHV2_MOVEMENT_TYPE_CREDIT_COLLECTION,
+            currency: 'NIO',
+            amount: amt,
+            desc: description,
+            creditSaleId: sale.id,
+            creditSaleUid: sale.uid || '',
+            creditPaymentId: paymentId,
+            creditCustomer: snapshot.customer,
+            creditReference: snapshot.reference,
+            creditSaleDate: snapshot.date,
+            creditOriginalAmount: snapshot.original,
+            creditPaidBefore: snapshot.paid,
+            creditPaidAfter: paidAfter,
+            creditBalanceBefore: snapshot.balance,
+            creditBalanceAfter: balanceAfter,
+            creditStatusAfter: statusAfter,
+            affectsCash: true,
+            affectsIncome: false,
+            affectsUtility: false,
+            affectsInventory: false
+          };
+          const auditEntry = {
+            id: 'AUD-' + movementId,
+            ts: nowTs,
+            action: 'CREDIT_COLLECTION_RECORDED',
+            movementId,
+            creditPaymentId: paymentId,
+            creditSaleId: sale.id,
+            amount: amt,
+            balanceBefore: snapshot.balance,
+            balanceAfter,
+            reason: description || `Cobro ${snapshot.reference}`
+          };
+          const updatedCashDay = {
+            ...cashDay,
+            movements: [...(Array.isArray(cashDay.movements) ? cashDay.movements : []), movement],
+            audit: [...(Array.isArray(cashDay.audit) ? cashDay.audit : []), auditEntry],
+            meta: {
+              ...(cashDay.meta && typeof cashDay.meta === 'object' ? cashDay.meta : {}),
+              updatedAt: nowIso,
+              lastMovementId: movementId
+            }
+          };
+          salesStore.put(updatedSale);
+          cashStore.put(updatedCashDay);
+          result = { sale: updatedSale, cashDay: updatedCashDay, movement };
+        }catch(error){
+          validationError = error instanceof Error ? error : new Error(String(error));
+          try{ transaction.abort(); }catch(_){ }
+        }
+      };
+
+      const cashReq = cashStore.get(key);
+      cashReq.onsuccess = ()=>{ cashDay = cashReq.result || null; maybeCommit(); };
+      cashReq.onerror = ()=>fail('No se pudo leer Efectivo.');
+      const saleReq = salesStore.get(sid);
+      saleReq.onsuccess = ()=>{ sale = saleReq.result || null; maybeCommit(); };
+      saleReq.onerror = ()=>fail('No se pudo leer la venta.');
+      const allCashReq = cashStore.getAll();
+      allCashReq.onsuccess = ()=>{ cashRecords = allCashReq.result || []; maybeCommit(); };
+      allCashReq.onerror = ()=>fail('No se pudo verificar el historial de cobros.');
+
+      transaction.oncomplete = ()=>{
+        try{ if (result && result.sale) notifyCreditStateChangedPOS({ eventId:result.sale.eventId, saleId:result.sale.id, reason:'collection' }); }catch(_){ }
+        resolve(result);
+      };
+      transaction.onabort = ()=> reject(validationError || transaction.error || new Error('No se pudo guardar el cobro.'));
+      transaction.onerror = ()=>{};
+    });
+  }finally{
+    __cashV2CreditCollectionLocks.delete(lockKey);
+  }
+}
+
+async function cashV2RegisterManualMovementAtomic({ eventId, dayKey, operationalClass, currency, amount, desc, requestId }){
+  const eid = cashV2AssertEventId(eventId);
+  const dk = cashV2AssertDayKeyCanon(safeYMD(dayKey));
+  const actualDayKey = cashV2DayKeyFromTsLocal(Date.now());
+  if (dk !== actualDayKey) throw new Error('El movimiento debe registrarse en la caja del día real. Cierra el día anterior y abre la caja de hoy.');
+  const opClass = cashV2NormalizeOperationalClass(operationalClass, CASHV2_OPERATIONAL_CLASSES.CASH_IN);
+  if (!(opClass === CASHV2_OPERATIONAL_CLASSES.CASH_IN || opClass === CASHV2_OPERATIONAL_CLASSES.EXPENSE)) throw new Error('Tipo de movimiento inválido.');
+  const ccy = String(currency || '').trim().toUpperCase();
+  if (!(ccy === 'NIO' || ccy === 'USD')) throw new Error('Moneda inválida.');
+  const amt = round2(Math.abs(Number(amount)));
+  if (!(amt > 0)) throw new Error('El monto debe ser mayor que cero.');
+  const description = String(desc || '').trim().slice(0, 120);
+  if (!description) throw new Error('La descripción es obligatoria.');
+  const reqId = String(requestId || cashV2NewRequestId('MOV')).trim();
+  if (!db) await openDB();
+  let phys = null;
+  try{ phys = await cashV2ComputeCashSalesPhysicalPOS(eid, dk); }catch(_){ phys = null; }
+
+  return new Promise((resolve, reject)=>{
+    let validationError = null;
+    let result = null;
+    const transaction = db.transaction([CASH_V2_STORE], 'readwrite');
+    const cashStore = transaction.objectStore(CASH_V2_STORE);
+    const key = cashV2Key(eid, dk);
+    const fail = (message)=>{
+      validationError = new Error(message);
+      try{ transaction.abort(); }catch(_){ }
+    };
+    const req = cashStore.get(key);
+    req.onsuccess = ()=>{
+      try{
+        const cashDay = req.result || null;
+        if (!cashDay || cashV2NormStatus(cashDay.status) === 'CLOSED') return fail('El día de Efectivo está cerrado.');
+        const movements = Array.isArray(cashDay.movements) ? cashDay.movements : [];
+        if (movements.some(m => !cashV2IsReversedMovement(m) && String(m.clientRequestId || '').trim() === reqId)) return fail('Este movimiento ya fue registrado.');
+        const nowTs = Date.now();
+        const nowIso = new Date(nowTs).toISOString();
+        const movementId = cashV2NewMovementId();
+        const isExpense = opClass === CASHV2_OPERATIONAL_CLASSES.EXPENSE;
+        const movement = {
+          id: movementId,
+          clientRequestId: reqId,
+          ts: nowTs,
+          recordedAt: nowIso,
+          eventId: eid,
+          dayKey: dk,
+          kind: isExpense ? 'OUT' : 'IN',
+          operationalClass: opClass,
+          clasificacionOperativa: opClass,
+          operationalClassLabel: isExpense ? 'Salida' : 'Entrada',
+          operationalStage: 'pos_efectivo_etapa_2_3',
+          movementType: isExpense ? 'CASH_EXPENSE_OUT' : 'CASH_MANUAL_IN',
+          tipoMovimiento: isExpense ? 'CASH_EXPENSE_OUT' : 'CASH_MANUAL_IN',
+          currency: ccy,
+          amount: amt,
+          desc: description,
+          affectsCash: true,
+          affectsIncome: false,
+          affectsUtility: isExpense,
+          affectsInventory: false
+        };
+        const auditEntry = {
+          id: 'AUD-' + movementId,
+          ts: nowTs,
+          action: isExpense ? 'CASH_EXPENSE_RECORDED' : 'CASH_ENTRY_RECORDED',
+          movementId,
+          amount: amt,
+          currency: ccy,
+          reason: description
+        };
+        const updatedCashDay = {
+          ...cashDay,
+          cashSalesC: phys ? cashV2Round2Money(phys.NIO) : cashDay.cashSalesC,
+          cashSalesUSD: phys ? cashV2Round2Money(phys.USD) : cashDay.cashSalesUSD,
+          cashSalesGrossC: phys ? cashV2Round2Money(phys.grossNIO) : cashDay.cashSalesGrossC,
+          cashSalesChangeC: phys ? cashV2Round2Money(phys.changeNIO) : cashDay.cashSalesChangeC,
+          cashSalesPhysicalUpdatedAt: phys ? nowTs : cashDay.cashSalesPhysicalUpdatedAt,
+          movements: [...movements, movement],
+          audit: [...(Array.isArray(cashDay.audit) ? cashDay.audit : []), auditEntry],
+          meta: {
+            ...(cashDay.meta && typeof cashDay.meta === 'object' ? cashDay.meta : {}),
+            updatedAt: nowIso,
+            lastMovementId: movementId
+          }
+        };
+        cashStore.put(updatedCashDay);
+        result = { cashDay: updatedCashDay, movement };
+      }catch(error){
+        validationError = error instanceof Error ? error : new Error(String(error));
+        try{ transaction.abort(); }catch(_){ }
+      }
+    };
+    req.onerror = ()=>fail('No se pudo leer Efectivo.');
+    transaction.oncomplete = ()=>resolve(result);
+    transaction.onabort = ()=>reject(validationError || transaction.error || new Error('No se pudo guardar el movimiento.'));
+    transaction.onerror = ()=>{};
+  });
+}
+
 function cashV2NetForCurrency(movements, currency){
   const ccy = String(currency || '').trim().toUpperCase();
   let net = 0;
+  const seenCollections = new Set();
   const arr = Array.isArray(movements) ? movements : [];
   for (const m of arr){
-    if (!m || typeof m !== 'object') continue;
+    if (!m || typeof m !== 'object' || cashV2IsReversedMovement(m)) continue;
     if (String(m.currency || '').trim().toUpperCase() != ccy) continue;
+    if (cashV2IsCreditCollectionMovement(m)){
+      const identity = cashV2CreditPaymentIdentity(m);
+      if (seenCollections.has(identity)) continue;
+      seenCollections.add(identity);
+    }
     const k = String(m.kind || '').trim().toUpperCase();
     const allowNeg = (k === 'ADJUST');
     let amt = cashV2NormAmountInt(m.amount, { allowNegative: allowNeg });
@@ -2451,12 +2979,20 @@ function cashV2RenderMovementsUI(cashDay){
     if (!Number.isFinite(amt)) amt = 0;
     const ui = cashV2MovementKindToUi(k);
     const opClass = cashV2NormalizeOperationalClass(m.operationalClass || m.clasificacionOperativa || '', cashV2OperationalClassFromKind(k));
-    const opLabel = cashV2OperationalClassLabel(opClass);
+    const movementType = String(m.movementType || m.tipoMovimiento || '').trim().toUpperCase();
+    const opLabel = cashV2IsCreditCollectionMovement(m)
+      ? 'Cobro'
+      : (movementType === 'CASH_MANUAL_IN'
+          ? 'Entrada'
+          : (movementType === 'CASH_EXPENSE_OUT' ? 'Salida' : cashV2OperationalClassLabel(opClass)));
     let sign = ui.sign > 0 ? '+' : (ui.sign < 0 ? '−' : '');
     if (k === 'ADJUST') sign = (amt < 0 ? '−' : '+');
-    const amountText = `${sign} ${ccyLabel} ${cashV2FmtInt(Math.abs(amt))}`.trim();
+    const amountText = `${sign} ${ccyLabel} ${cashV2FmtMoney(Math.abs(amt))}`.trim();
 
     const desc = (m.desc != null ? String(m.desc) : (m.note != null ? String(m.note) : '')).trim();
+    const creditTrace = cashV2IsCreditCollectionMovement(m)
+      ? `<div class="cashv2-move-trace"><b>${escapeHtml(String(m.creditCustomer || 'Cliente'))}</b> · ${escapeHtml(String(m.creditReference || ('Venta #' + String(m.creditSaleId || '—'))))}<br><small>Saldo: C$ ${escapeHtml(cashV2FmtMoney(m.creditBalanceBefore || 0))} → C$ ${escapeHtml(cashV2FmtMoney(m.creditBalanceAfter || 0))}</small></div>`
+      : '';
     const descHtml = desc ? `<div class="cashv2-move-note" style="white-space:normal; overflow:visible; text-overflow:unset;">${escapeHtml(desc)}</div>` : '';
 
     return `<div class="cashv2-move-row">
@@ -2466,6 +3002,7 @@ function cashV2RenderMovementsUI(cashDay){
           <span class="cashv2-mtag">${escapeHtml(opLabel || ui.text)}</span>
           <span class="cashv2-mtag">${escapeHtml(ccyLabel)}</span>
         </div>
+        ${creditTrace}
         ${descHtml}
       </div>
       <div class="cashv2-move-amt">${escapeHtml(amountText)}</div>
@@ -2483,6 +3020,7 @@ function cashV2InitMovementsUIOnce(){
   const selCcy = document.getElementById('cashv2-move-currency-inline');
   const inpAmt = document.getElementById('cashv2-move-amount-inline');
   const inpDesc = document.getElementById('cashv2-move-desc-inline');
+  const saleSelect = document.getElementById('cashv2-credit-sale-select');
   const btnAdd = document.getElementById('cashv2-btn-add-movement');
   const elErr = document.getElementById('cashv2-move-inline-error');
   const elErrSmall = elErr ? elErr.querySelector('small') : null;
@@ -2506,14 +3044,17 @@ function cashV2InitMovementsUIOnce(){
 
   function resetForm(){
     showErr('');
-    try{ if (selKind) selKind.value = 'ADDITIONAL_INCOME'; }catch(_){ }
+    try{ if (selKind) selKind.value = 'CASH_IN'; }catch(_){ }
     try{ if (selCcy) selCcy.value = 'NIO'; }catch(_){ }
     try{ if (inpAmt) inpAmt.value = ''; }catch(_){ }
     try{ if (inpDesc) inpDesc.value = ''; }catch(_){ }
+    try{ if (saleSelect) saleSelect.value = ''; }catch(_){ }
+    cashV2SetCreditSaleDetails(null);
     try{
       const { dk } = currentCtx();
       if (inpDate && dk) inpDate.value = dk;
     }catch(_){ }
+    cashV2ApplyMovementTypeFormState();
   }
 
   async function addMovement(){
@@ -2521,89 +3062,90 @@ function cashV2InitMovementsUIOnce(){
     if (!eid || !dk){ showErr('Falta evento o día.'); return; }
     if (btnAdd && btnAdd.disabled){ return; }
 
-    const selectedRaw = selKind ? String(selKind.value || '').trim().toUpperCase() : 'ADDITIONAL_INCOME';
-    const operationalClass = cashV2NormalizeOperationalClass(selectedRaw, CASHV2_OPERATIONAL_CLASSES.ADDITIONAL_INCOME);
+    const selectedRaw = selKind ? String(selKind.value || '').trim().toUpperCase() : 'CASH_IN';
+    const isCollection = selectedRaw === CASHV2_MOVEMENT_TYPE_CREDIT_COLLECTION;
+    const operationalClass = isCollection
+      ? CASHV2_OPERATIONAL_CLASSES.CASH_IN
+      : cashV2NormalizeOperationalClass(selectedRaw, CASHV2_OPERATIONAL_CLASSES.CASH_IN);
     const kind = cashV2OperationalClassToKind(operationalClass);
-    const ccy = selCcy ? String(selCcy.value || '').trim().toUpperCase() : 'NIO';
+    const ccy = isCollection ? 'NIO' : (selCcy ? String(selCcy.value || '').trim().toUpperCase() : 'NIO');
     const desc = inpDesc ? String(inpDesc.value || '').trim() : '';
-    const allowNeg = (kind === 'ADJUST');
-    let amt = cashV2NormAmountInt(inpAmt ? inpAmt.value : 0, { allowNegative: allowNeg });
+    let amt = cashV2NormAmountInt(inpAmt ? inpAmt.value : 0, { allowNegative:false });
     if (!Number.isFinite(amt)) amt = 0;
-    if (!allowNeg) amt = Math.abs(amt);
+    amt = Math.abs(amt);
 
-    if (!(kind === 'IN' || kind === 'OUT' || kind === 'ADJUST')){
-      showErr('Clasificación inválida.');
+    if (!(kind === 'IN' || kind === 'OUT')){ showErr('Tipo de movimiento inválido.'); return; }
+    if (!(ccy === 'NIO' || ccy === 'USD')){ showErr('Moneda inválida.'); return; }
+    if (!(amt > 0)){ showErr('El monto debe ser mayor que cero.'); return; }
+    if (!desc){ showErr('La descripción es obligatoria.'); return; }
+    if (isCollection && !String(saleSelect?.value || '').trim()){
+      showErr('Selecciona una venta al crédito pendiente.');
       return;
     }
-    if (!(ccy === 'NIO' || ccy === 'USD')){
-      showErr('Moneda inválida.');
-      return;
-    }
-    if (!allowNeg){
-      if (!amt || amt <= 0){
-        showErr('Monto inválido.');
-        return;
-      }
-    }else{
-      if (amt == 0){
-        showErr('Monto inválido.');
-        return;
-      }
-    }
 
+    const submitLockKey = `${eid}|${dk}`;
+    if (__cashV2MovementSubmitLocks.has(submitLockKey)){ showErr('La operación ya se está guardando.'); return; }
+    __cashV2MovementSubmitLocks.add(submitLockKey);
+    const clientRequestId = cashV2NewRequestId(isCollection ? 'COL' : 'MOV');
+    if (btnAdd) btnAdd.disabled = true;
     try{
-      const rec = await cashV2Ensure(eid, dk);
-
-      const movement = {
-        id: cashV2NewMovementId(),
-        ts: Date.now(),
-        kind,
-        operationalClass,
-        clasificacionOperativa: operationalClass,
-        operationalClassLabel: cashV2OperationalClassLabel(operationalClass),
-        operationalStage: 'finanzas_tablero_operativo_etapa_2_5',
-        currency: ccy,
-        amount: amt,
-        desc: desc ? desc.slice(0, 120) : ''
-      };
-
-      const next = { ...rec };
-      const movs = Array.isArray(next.movements) ? next.movements.slice() : [];
-      movs.push(movement);
-      next.movements = movs;
-
-      await cashV2RefreshPhysicalSalesOnRecordPOS(next, eid, dk);
-      const saved = await cashV2Save(next);
-      if (typeof window !== 'undefined' && window.A33_DEBUG_CASHV2) console.info(`[A33][CASHv2] movement add: ${kind} ${ccy} ${amt}`);
-
-      try{ cashV2SetLastRec(saved); }catch(_){ }
-      try{ cashV2RenderMovementsUI(saved); }catch(_){ }
-      try{ cashV2UpdateCloseSummary(saved); }catch(_){ }
-      try{ cashV2UpdateCloseEligibility(saved); }catch(_){ }
+      if (isCollection){
+        const savedCollection = await cashV2RegisterCreditCollectionAtomic({
+          eventId:eid,
+          dayKey:dk,
+          saleId:saleSelect.value,
+          amount:amt,
+          desc,
+          requestId: clientRequestId
+        });
+        const saved = savedCollection && savedCollection.cashDay;
+        try{ cashV2SetLastRec(saved); }catch(_){ }
+        try{ cashV2RenderMovementsUI(saved); }catch(_){ }
+        try{ cashV2UpdateCloseSummary(saved); }catch(_){ }
+        try{ cashV2UpdateCloseEligibility(saved); }catch(_){ }
+        await cashV2RefreshCreditSalesUI(eid);
+        try{ await renderDay(); await renderSummary(); }catch(_){ }
+        try{ toast(savedCollection.sale.creditStatus === 'PAGADA' ? 'Cobro final registrado' : 'Abono registrado'); }catch(_){ }
+      }else{
+        const savedMovement = await cashV2RegisterManualMovementAtomic({
+          eventId:eid,
+          dayKey:dk,
+          operationalClass,
+          currency:ccy,
+          amount:amt,
+          desc,
+          requestId:clientRequestId
+        });
+        const saved = savedMovement && savedMovement.cashDay;
+        try{ cashV2SetLastRec(saved); }catch(_){ }
+        try{ cashV2RenderMovementsUI(saved); }catch(_){ }
+        try{ cashV2UpdateCloseSummary(saved); }catch(_){ }
+        try{ cashV2UpdateCloseEligibility(saved); }catch(_){ }
+        try{ toast(selectedRaw === 'EXPENSE' ? 'Salida registrada' : 'Entrada registrada'); }catch(_){ }
+      }
 
       resetForm();
-      try{ if (inpAmt) inpAmt.focus(); }catch(_){ }
+      try{ if (btnAdd) btnAdd.focus({ preventScroll:true }); }catch(_){ try{ if (btnAdd) btnAdd.focus(); }catch(__){ } }
     }catch(err){
       console.error('[A33][CASHv2] movement add error', err);
       const msg = (err && (err.message || err.name)) ? (err.message || err.name) : String(err);
       showErr(msg);
+    }finally{
+      __cashV2MovementSubmitLocks.delete(submitLockKey);
+      if (btnAdd) btnAdd.disabled = false;
+      try{ cashV2ApplyMovementTypeFormState(); }catch(_){ }
     }
   }
 
-  if (btnAdd){
-    btnAdd.addEventListener('click', (e)=>{ try{ if (e) e.preventDefault(); }catch(_){ } addMovement(); });
-  }
-  if (inpAmt){
-    inpAmt.addEventListener('keydown', (e)=>{ if (e && e.key === 'Enter'){ try{ e.preventDefault(); }catch(_){ } addMovement(); } });
-  }
-  if (inpDesc){
-    inpDesc.addEventListener('keydown', (e)=>{ if (e && e.key === 'Enter'){ try{ e.preventDefault(); }catch(_){ } addMovement(); } });
-  }
+  if (selKind) selKind.addEventListener('change', ()=>{ showErr(''); cashV2ApplyMovementTypeFormState(); });
+  if (saleSelect) saleSelect.addEventListener('change', ()=>{ showErr(''); cashV2ApplySelectedCreditSale(); });
+  if (btnAdd) btnAdd.addEventListener('click', (e)=>{ try{ if (e) e.preventDefault(); }catch(_){ } addMovement(); });
+  if (inpAmt) inpAmt.addEventListener('keydown', (e)=>{ if (e && e.key === 'Enter'){ try{ e.preventDefault(); }catch(_){ } addMovement(); } });
+  if (inpDesc) inpDesc.addEventListener('keydown', (e)=>{ if (e && e.key === 'Enter'){ try{ e.preventDefault(); }catch(_){ } addMovement(); } });
 
   resetForm();
   card.dataset.readyMove = '1';
 }
-
 
 
 // --- POS: Efectivo v2 — Cierre (Final + Esperado + Diferencia) — Etapa 5
@@ -2762,27 +3304,36 @@ function cashV2SumMovementsByCurrency(movements, currency){
   let inc = 0;
   let out = 0;
   let adj = 0;
+  let collections = 0;
+  const seenCollections = new Set();
 
   for (const m of arr){
-    if (!m || typeof m !== 'object') continue;
+    if (!m || typeof m !== 'object' || cashV2IsReversedMovement(m)) continue;
     if (String(m.currency || '').trim().toUpperCase() != ccy) continue;
+    if (cashV2IsCreditCollectionMovement(m)){
+      const identity = cashV2CreditPaymentIdentity(m);
+      if (seenCollections.has(identity)) continue;
+      seenCollections.add(identity);
+    }
     const k = String(m.kind || '').trim().toUpperCase();
     const allowNeg = (k === 'ADJUST');
     let amt = cashV2NormAmountInt(m.amount, { allowNegative: allowNeg });
     if (!Number.isFinite(amt)) amt = 0;
 
-    if (k === 'IN' || k === 'ADJUST_IN') inc += Math.abs(amt);
-    else if (k === 'OUT' || k === 'ADJUST_OUT') out += Math.abs(amt);
+    if (k === 'IN' || k === 'ADJUST_IN'){
+      inc += Math.abs(amt);
+      if (cashV2IsCreditCollectionMovement(m)) collections += Math.abs(amt);
+    }else if (k === 'OUT' || k === 'ADJUST_OUT') out += Math.abs(amt);
     else if (k === 'ADJUST') adj += amt;
   }
 
-  return { in: inc, out, adjust: adj };
+  return { in: inc, entries: round2(Math.max(0, inc - collections)), collections: round2(collections), out, adjust: adj };
 }
 
 function cashV2ComputeCloseNumbers(rec, opts){
   const o = {
-    NIO: { initial:0, net:0, in:0, out:0, sales:0, adjust:0, expected:0, final:0, diff:0 },
-    USD: { initial:0, net:0, in:0, out:0, sales:0, adjust:0, expected:0, final:0, diff:0 }
+    NIO: { initial:0, net:0, in:0, collections:0, out:0, sales:0, adjust:0, expected:0, final:0, diff:0 },
+    USD: { initial:0, net:0, in:0, collections:0, out:0, sales:0, adjust:0, expected:0, final:0, diff:0 }
   };
 
   const preferDom = !(opts && opts.preferDom === false);
@@ -2821,11 +3372,12 @@ function cashV2ComputeCloseNumbers(rec, opts){
   const netNio = cashV2Round2Money((sN.in - sN.out) + sN.adjust);
   const netUsd = cashV2Round2Money((sU.in - sU.out) + sU.adjust);
 
-  const eN = cashV2Round2Money(iN + sN.in - sN.out + salesC + sN.adjust);
-  const eU = cashV2Round2Money(iU + sU.in - sU.out + salesUSD + sU.adjust);
+  const eN = cashV2Round2Money(iN + sN.entries + sN.collections - sN.out + salesC + sN.adjust);
+  const eU = cashV2Round2Money(iU + sU.entries + sU.collections - sU.out + salesUSD + sU.adjust);
 
   o.NIO.initial = cashV2Round2Money(iN);
-  o.NIO.in = cashV2Round2Money(sN.in);
+  o.NIO.in = cashV2Round2Money(sN.entries);
+  o.NIO.collections = cashV2Round2Money(sN.collections);
   o.NIO.out = cashV2Round2Money(sN.out);
   o.NIO.sales = salesC;
   o.NIO.adjust = cashV2Round2Money(sN.adjust);
@@ -2835,7 +3387,8 @@ function cashV2ComputeCloseNumbers(rec, opts){
   o.NIO.diff = cashV2Round2Money(fN - eN);
 
   o.USD.initial = cashV2Round2Money(iU);
-  o.USD.in = cashV2Round2Money(sU.in);
+  o.USD.in = cashV2Round2Money(sU.entries);
+  o.USD.collections = cashV2Round2Money(sU.collections);
   o.USD.out = cashV2Round2Money(sU.out);
   o.USD.sales = salesUSD;
   o.USD.adjust = cashV2Round2Money(sU.adjust);
@@ -2854,10 +3407,89 @@ function cashV2SetDiffPill(el, diff){
   el.classList.toggle('danger', n !== 0);
 }
 
+// --- POS: Efectivo — Resumen superior económico (Etapa 3/5)
+// Tarjeta/Transferencia/Comisión son SOLO informativos. No participan en cashV2ComputeCloseNumbers.
+function cashV2SetSummaryCardVisiblePOS(visible){
+  try{
+    const card = document.getElementById('cashv2-summary-card');
+    if (card) card.style.display = visible ? 'block' : 'none';
+  }catch(_){ }
+}
+
+function cashV2ClearBankingSummaryPOS(){
+  try{ const el = document.getElementById('cashv2-sum-transfer-nio'); if (el) el.textContent = 'C$ 0.00'; }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-card-nio'); if (el) el.textContent = 'C$ 0.00'; }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-card-commission-total'); if (el) el.textContent = 'C$ 0.00'; }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-card-commission-lines'); if (el) el.innerHTML = ''; }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-card-commission-note'); if (el) el.textContent = ''; }catch(_){ }
+}
+
+async function cashV2ComputeBankingSummaryPOS(eventId, dayKey){
+  const eid = String(eventId || '').trim();
+  const dk = safeYMD(dayKey);
+  let transfer = 0;
+  let card = 0;
+  let filtered = [];
+  if (!eid || !dk) return { transfer:0, card:0, commissionTotal:0, commissions:[], undeterminedCount:0 };
+
+  let sales = [];
+  try{ sales = await cashV2GetSalesByEventPOS(eid); }catch(_){ sales = []; }
+  filtered = (Array.isArray(sales) ? sales : []).filter(s => s && safeYMD(s.date || '') === dk);
+
+  for (const sale of filtered){
+    try{ if (typeof isCourtesySalePOS === 'function' && isCourtesySalePOS(sale)) continue; }catch(_){ }
+    const pay = normalizePaymentMethodPOS(sale.payment || sale.paymentMethod || '');
+    let amount = Number(sale.total || 0);
+    if (!Number.isFinite(amount)) amount = 0;
+    if (pay === 'transferencia') transfer = cashV2Round2Money(transfer + amount);
+    else if (pay === 'tarjeta') card = cashV2Round2Money(card + amount);
+  }
+
+  // Fuente única de comisión: snapshots congelados en cada venta Tarjeta.
+  const cardCommissions = collectSaleCardCommissionsPOS(filtered);
+  return {
+    transfer: cashV2Round2Money(transfer),
+    card: cashV2Round2Money(card),
+    commissionTotal: cashV2Round2Money(cardCommissions.total),
+    commissions: Array.isArray(cardCommissions.byLabel) ? cardCommissions.byLabel : [],
+    undeterminedCount: Number(cardCommissions.undeterminedCount || 0)
+  };
+}
+
+function cashV2ApplyBankingSummaryPOS(summary){
+  const s = summary && typeof summary === 'object' ? summary : {};
+  try{ const el = document.getElementById('cashv2-sum-transfer-nio'); if (el) el.textContent = 'C$ ' + cashV2FmtMoney(s.transfer || 0); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-card-nio'); if (el) el.textContent = 'C$ ' + cashV2FmtMoney(s.card || 0); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-card-commission-total'); if (el) el.textContent = 'C$ ' + cashV2FmtMoney(s.commissionTotal || 0); }catch(_){ }
+
+  try{
+    const host = document.getElementById('cashv2-sum-card-commission-lines');
+    if (host){
+      const rows = (Array.isArray(s.commissions) ? s.commissions : []).map(item=>{
+        const label = String(item && item.label || '').trim();
+        const total = cashV2Round2Money(item && item.total || 0);
+        if (!label) return '';
+        return `<tr class="cashv2-commission-row"><td>${escapeHtml(label)}</td><td class="sub">C$ ${cashV2FmtMoney(total)}</td></tr>`;
+      }).filter(Boolean);
+      host.innerHTML = rows.join('');
+    }
+  }catch(_){ }
+
+  try{
+    const note = document.getElementById('cashv2-sum-card-commission-note');
+    if (note){
+      const pending = Number(s.undeterminedCount || 0);
+      note.textContent = pending > 0
+        ? `${pending} venta${pending === 1 ? '' : 's'} Tarjeta histórica${pending === 1 ? '' : 's'} con comisión no determinada.`
+        : '';
+    }
+  }catch(_){ }
+}
+
 function cashV2ClearCloseSummary(){
   const ids = [
-    'cashv2-sum-initial-nio','cashv2-sum-in-nio','cashv2-sum-out-nio','cashv2-sum-sales-nio','cashv2-sum-adjust-nio','cashv2-sum-expected-nio','cashv2-sum-final-nio',
-    'cashv2-sum-initial-usd','cashv2-sum-in-usd','cashv2-sum-out-usd','cashv2-sum-sales-usd','cashv2-sum-adjust-usd','cashv2-sum-expected-usd','cashv2-sum-final-usd'
+    'cashv2-sum-initial-nio','cashv2-sum-in-nio','cashv2-sum-collections-nio','cashv2-sum-out-nio','cashv2-sum-sales-nio','cashv2-sum-adjust-nio','cashv2-sum-expected-nio','cashv2-sum-final-nio',
+    'cashv2-sum-initial-usd','cashv2-sum-in-usd','cashv2-sum-collections-usd','cashv2-sum-out-usd','cashv2-sum-sales-usd','cashv2-sum-adjust-usd','cashv2-sum-expected-usd','cashv2-sum-final-usd'
   ];
   ids.forEach(id=>{ try{ const el = document.getElementById(id); if (el) el.textContent = '0.00'; }catch(_){ } });
   try{ cashV2SetDiffPill(document.getElementById('cashv2-sum-diff-nio'), 0); }catch(_){ }
@@ -2871,6 +3503,7 @@ function cashV2UpdateCloseSummary(rec){
   const nums = cashV2ComputeCloseNumbers(r, { preferDom: true });
   try{ const el = document.getElementById('cashv2-sum-initial-nio'); if (el) el.textContent = cashV2FmtMoney(nums.NIO.initial); }catch(_){ }
   try{ const el = document.getElementById('cashv2-sum-in-nio'); if (el) el.textContent = cashV2FmtMoney(nums.NIO.in); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-collections-nio'); if (el) el.textContent = cashV2FmtMoney(nums.NIO.collections); }catch(_){ }
   try{ const el = document.getElementById('cashv2-sum-out-nio'); if (el) el.textContent = cashV2FmtMoney(nums.NIO.out); }catch(_){ }
   try{ const el = document.getElementById('cashv2-sum-sales-nio'); if (el) el.textContent = cashV2FmtMoney(nums.NIO.sales); }catch(_){ }
   try{ const el = document.getElementById('cashv2-sum-adjust-nio'); if (el) el.textContent = cashV2FmtMoney(nums.NIO.adjust); }catch(_){ }
@@ -2880,6 +3513,7 @@ function cashV2UpdateCloseSummary(rec){
 
   try{ const el = document.getElementById('cashv2-sum-initial-usd'); if (el) el.textContent = cashV2FmtMoney(nums.USD.initial); }catch(_){ }
   try{ const el = document.getElementById('cashv2-sum-in-usd'); if (el) el.textContent = cashV2FmtMoney(nums.USD.in); }catch(_){ }
+  try{ const el = document.getElementById('cashv2-sum-collections-usd'); if (el) el.textContent = cashV2FmtMoney(nums.USD.collections); }catch(_){ }
   try{ const el = document.getElementById('cashv2-sum-out-usd'); if (el) el.textContent = cashV2FmtMoney(nums.USD.out); }catch(_){ }
   try{ const el = document.getElementById('cashv2-sum-sales-usd'); if (el) el.textContent = cashV2FmtMoney(nums.USD.sales); }catch(_){ }
   try{ const el = document.getElementById('cashv2-sum-adjust-usd'); if (el) el.textContent = cashV2FmtMoney(nums.USD.adjust); }catch(_){ }
@@ -2934,10 +3568,12 @@ function cashV2SetMovementsEnabled(enabled){
   if (btnAdd) btnAdd.disabled = !en;
 
   // Etapa 2/7: bloque visible (inline)
-  ['cashv2-move-kind-inline','cashv2-move-currency-inline','cashv2-move-amount-inline','cashv2-move-desc-inline'].forEach(id=>{
+  ['cashv2-move-kind-inline','cashv2-move-currency-inline','cashv2-move-amount-inline','cashv2-move-desc-inline','cashv2-credit-sale-select'].forEach(id=>{
     const el = document.getElementById(id);
     if (el) el.disabled = !en;
   });
+
+  try{ if (en) cashV2ApplyMovementTypeFormState(); }catch(_){ }
 
   // Compat: modal (si existe en DOM)
   const btnSave = document.getElementById('cashv2-move-save');
@@ -3508,10 +4144,17 @@ function cashV2HistCurrencySym(ccy){
 function cashV2HistSumMoves(moves, wantKind){
   const k = String(wantKind || '').toUpperCase();
   let sum = 0;
+  const seenCollections = new Set();
   for (const m of (Array.isArray(moves) ? moves : [])){
     try{
+      if (cashV2IsReversedMovement(m)) continue;
       const mk = String(m && m.kind || '').toUpperCase();
       if (mk !== k) continue;
+      if (cashV2IsCreditCollectionMovement(m)){
+        const identity = cashV2CreditPaymentIdentity(m);
+        if (seenCollections.has(identity)) continue;
+        seenCollections.add(identity);
+      }
       let a = Number(m && m.amount);
       if (!Number.isFinite(a)) a = 0;
       if (k === 'IN' || k === 'OUT') a = Math.abs(a);
@@ -3554,7 +4197,17 @@ function cashV2HistBuildSummaryTable(ccy, block){
   const initial = cashV2Round2Money(b.initial && b.initial.total);
   const finalT = cashV2Round2Money(b.finalCount && b.finalCount.total);
   const moves = Array.isArray(b.movements) ? b.movements : [];
-  const entradas = cashV2HistSumMoves(moves, 'IN');
+  const totalEntradas = cashV2HistSumMoves(moves, 'IN');
+  const seenCobros = new Set();
+  const cobros = cashV2Round2Money(moves.reduce((sum, movement)=>{
+    if (!cashV2IsCreditCollectionMovement(movement) || cashV2IsReversedMovement(movement)) return sum;
+    const identity = cashV2CreditPaymentIdentity(movement);
+    if (seenCobros.has(identity)) return sum;
+    seenCobros.add(identity);
+    const amount = Number(movement && movement.amount);
+    return sum + (Number.isFinite(amount) ? Math.abs(amount) : 0);
+  }, 0));
+  const entradas = cashV2Round2Money(Math.max(0, totalEntradas - cobros));
   const salidas = cashV2HistSumMoves(moves, 'OUT');
   const ajuste = cashV2HistSumMoves(moves, 'ADJUST');
   const ventas = (ccy === 'NIO') ? cashV2Round2Money(b.cashSalesC$ || 0) : cashV2Round2Money(b.cashSalesUSD || 0);
@@ -3568,6 +4221,7 @@ function cashV2HistBuildSummaryTable(ccy, block){
       <tbody>
         <tr><td>Inicial</td><td class="sub">${escapeHtml(sym)} ${escapeHtml(cashV2FmtMoney(initial))}</td></tr>
         <tr><td>Entradas</td><td class="sub">${escapeHtml(sym)} ${escapeHtml(cashV2FmtMoney(entradas))}</td></tr>
+        <tr><td>Cobros</td><td class="sub">${escapeHtml(sym)} ${escapeHtml(cashV2FmtMoney(cobros))}</td></tr>
         <tr><td>Salidas</td><td class="sub">${escapeHtml(sym)} ${escapeHtml(cashV2FmtMoney(salidas))}</td></tr>
         <tr><td>Ventas efectivo</td><td class="sub">${(ventas == null) ? '—' : (escapeHtml(sym) + ' ' + escapeHtml(cashV2FmtMoney(ventas)))}</td></tr>
         <tr><td>Ajuste</td><td class="sub">${escapeHtml(sym)} ${escapeHtml(cashV2FmtMoney(ajuste))}</td></tr>
@@ -3627,8 +4281,17 @@ function cashV2HistRenderMovements(nioMoves, usdMoves){
 
     const sym = cashV2HistCurrencySym(ccy);
     const opClass = cashV2NormalizeOperationalClass(m.operationalClass || m.clasificacionOperativa || '', cashV2OperationalClassFromKind(kind));
-    const topTag = `<span class="cashv2-mtag"><b>${escapeHtml(cashV2OperationalClassLabel(opClass) || cashV2HistKindLabel(kind))}</b><span>${escapeHtml(sym)}</span></span>`;
+    const movementType = String(m.movementType || m.tipoMovimiento || '').trim().toUpperCase();
+    const histOpLabel = cashV2IsCreditCollectionMovement(m)
+      ? 'Cobro'
+      : (movementType === 'CASH_MANUAL_IN'
+          ? 'Entrada'
+          : (movementType === 'CASH_EXPENSE_OUT' ? 'Salida' : (cashV2OperationalClassLabel(opClass) || cashV2HistKindLabel(kind))));
+    const topTag = `<span class="cashv2-mtag"><b>${escapeHtml(histOpLabel)}</b><span>${escapeHtml(sym)}</span></span>`;
     const note = (m && m.note != null) ? String(m.note).trim() : ((m && m.desc != null) ? String(m.desc).trim() : '');
+    const trace = cashV2IsCreditCollectionMovement(m)
+      ? `<div class="cashv2-move-trace"><b>${escapeHtml(String(m.creditCustomer || 'Cliente'))}</b> · ${escapeHtml(String(m.creditReference || ('Venta #' + String(m.creditSaleId || '—'))))}<br><small>Saldo: C$ ${escapeHtml(cashV2FmtMoney(m.creditBalanceBefore || 0))} → C$ ${escapeHtml(cashV2FmtMoney(m.creditBalanceAfter || 0))}</small></div>`
+      : '';
 
     rows.push(`
       <div class="cashv2-move-row">
@@ -3637,6 +4300,7 @@ function cashV2HistRenderMovements(nioMoves, usdMoves){
             ${topTag}
             <small class="muted">${escapeHtml(ts ? fmtDateTimePOS(ts) : '—')}</small>
           </div>
+          ${trace}
           <div class="cashv2-move-note">${escapeHtml(note || '—')}</div>
         </div>
         <div class="cashv2-move-amt">${escapeHtml(sign)} ${escapeHtml(sym)} ${escapeHtml(cashV2FmtMoney(shown))}</div>
@@ -4278,6 +4942,7 @@ async function renderEfectivoTab(){
   const elMultiNote = document.getElementById('cashv2-multiday-note');
   const elMultiActions = document.getElementById('cashv2-multiday-actions');
   const btnOpenFromY = document.getElementById('cashv2-btn-open-from-yesterday');
+  const summaryCard = document.getElementById('cashv2-summary-card');
 
   // Etapa 3: UI Inicio (denominaciones)
   cashV2InitInitialUIOnce();
@@ -4310,6 +4975,7 @@ async function renderEfectivoTab(){
   try{ if (elMultiNote){ elMultiNote.style.display = 'none'; const sm = elMultiNote.querySelector('small'); if (sm) sm.textContent = ''; } }catch(_){ }
   try{ if (elMultiActions){ elMultiActions.style.display = 'none'; } }catch(_){ }
   try{ if (btnOpenFromY){ btnOpenFromY.style.display = 'none'; btnOpenFromY.dataset.eventId = ''; btnOpenFromY.dataset.todayKey = ''; } }catch(_){ }
+  try{ if (summaryCard) summaryCard.style.display = 'none'; }catch(_){ }
 
   const todayKey = safeYMD(getTodayDayKey());
   let dayKey = todayKey;
@@ -4400,6 +5066,7 @@ async function renderEfectivoTab(){
       if (mcard){ mcard.style.display = 'none'; mcard.dataset.eventId=''; mcard.dataset.dayKey=dayKey; }
     }catch(_){ }
     try{ cashV2RenderMovementsUI({movements:[]}); }catch(_){ }
+    try{ cashV2ClearCreditSalesUI(); }catch(_){ }
     // Etapa 5: sin evento => oculta Cierre
     try{
       const fcard = document.getElementById('cashv2-final-card');
@@ -4409,6 +5076,8 @@ async function renderEfectivoTab(){
     try{ cashV2ApplyFinalToDom(null); }catch(_){ }
     try{ cashV2SetLastRec(null); }catch(_){ }
     try{ cashV2ClearCloseSummary(); }catch(_){ }
+    try{ cashV2ClearBankingSummaryPOS(); }catch(_){ }
+    try{ cashV2SetSummaryCardVisiblePOS(false); }catch(_){ }
     try{ cashV2UpdateCloseEligibility(null); }catch(_){ }
     try{ cashV2ApplyCashSalesToDom(null); }catch(_){ }
     return;
@@ -4463,6 +5132,15 @@ async function renderEfectivoTab(){
     cashSalesUSD = cashV2Round2Money(phys && phys.USD);
   }catch(_){ cashSalesC = 0; cashSalesUSD = 0; }
   try{ cashV2ApplyCashSalesToDom(cashSalesC, cashSalesUSD); }catch(_){ }
+
+  // Resumen superior: los cobros bancarios son lectura económica y no alteran la Caja física.
+  try{
+    const bankSummary = await cashV2ComputeBankingSummaryPOS(eventId, dayKey);
+    cashV2ApplyBankingSummaryPOS(bankSummary);
+    cashV2SetSummaryCardVisiblePOS(true);
+  }catch(_){
+    try{ cashV2ClearBankingSummaryPOS(); cashV2SetSummaryCardVisiblePOS(true); }catch(__){ }
+  }
 
   try{
     let locked = false;
@@ -4593,6 +5271,7 @@ async function renderEfectivoTab(){
         if (mcard){ mcard.style.display = 'none'; mcard.dataset.eventId=''; mcard.dataset.dayKey=dayKey; }
       }catch(_){ }
       try{ cashV2RenderMovementsUI({movements:[]}); }catch(_){ }
+      try{ cashV2ClearCreditSalesUI(); }catch(_){ }
       try{ cashV2SetMovementsEnabled(false); }catch(_){ }
 
       try{
@@ -4602,6 +5281,7 @@ async function renderEfectivoTab(){
       try{ cashV2SetFinalEnabled(false); }catch(_){ }
       try{ cashV2ApplyFinalToDom(null); }catch(_){ }
       try{ cashV2ClearCloseSummary(); }catch(_){ }
+      try{ cashV2SetSummaryCardVisiblePOS(true); }catch(_){ }
       try{ cashV2SetCloseUiState({ canClose:false, reason:'Aún no has abierto el día de hoy' }); }catch(_){ }
       try{ cashV2SetLastRec(null); }catch(_){ }
 
@@ -4636,9 +5316,11 @@ async function renderEfectivoTab(){
     // Etapa 4: mostrar Movimientos
     try{
       const mcard = document.getElementById('cashv2-movements-card');
-      if (mcard){ mcard.style.display = 'block'; mcard.dataset.eventId = String(eventId); mcard.dataset.dayKey = dayKey; }
+      if (mcard){ mcard.style.display = 'block'; mcard.dataset.eventId = String(eventId); mcard.dataset.dayKey = dayKey; mcard.dataset.creditEventEnabled = isActiveEvent ? '1' : '0'; }
     }catch(_){ }
     try{ cashV2RenderMovementsUI(rec || { movements: [] }); }catch(_){ }
+    try{ if (isActiveEvent) await cashV2RefreshCreditSalesUI(eventId, { keepSelection:true }); else cashV2ClearCreditSalesUI(); }catch(_){ }
+    try{ cashV2ApplyMovementTypeFormState(); }catch(_){ }
     // Etapa 5: mostrar Cierre
     try{
       const fcard = document.getElementById('cashv2-final-card');
@@ -4646,6 +5328,7 @@ async function renderEfectivoTab(){
     }catch(_){ }
     try{ cashV2SetFinalEnabled(true); }catch(_){ }
     try{ cashV2ApplyFinalToDom((rec && rec.final) ? rec.final : null); }catch(_){ }
+    try{ cashV2SetSummaryCardVisiblePOS(true); }catch(_){ }
     try{ cashV2UpdateCloseSummary(rec); }catch(_){ }
     try{ cashV2UpdateCloseEligibility(rec); }catch(_){ }
     try{
@@ -4688,6 +5371,7 @@ async function renderEfectivoTab(){
     try{ cashV2SetInitialEnabled(false); }catch(_){ }
     try{ cashV2SetFinalEnabled(false); }catch(_){ }
     try{ cashV2SetLastRec(null); }catch(_){ }
+    try{ cashV2ClearCloseSummary(); cashV2ClearBankingSummaryPOS(); cashV2SetSummaryCardVisiblePOS(false); }catch(_){ }
     console.error('Efectivo v2: no se pudo load/ensure', err);
     try{
       if (statusTag){
@@ -4733,7 +5417,8 @@ function saleFingerprintPOS(sale){
     const fp = {
       eventId: Number(sale.eventId || 0) || 0,
       date: safeYMD(sale.date || ''),
-      productId: (sale.productId == null ? null : Number(sale.productId)),
+      productId: (sale.productId == null ? null : String(sale.productId)),
+      productInternalId: (sale.productInternalId == null ? null : Number(sale.productInternalId)),
       extraId: (sale.extraId == null ? null : Number(sale.extraId)),
       productName: getSaleProductNameSnapshotPOS(sale),
       qty: Number(sale.qty || 0),
@@ -4968,7 +5653,15 @@ function openDB(opts) {
       }catch(_){ }
       if (!d.objectStoreNames.contains('products')) {
         const os = d.createObjectStore('products', { keyPath: 'id', autoIncrement: true });
-        os.createIndex('by_name', 'name', { unique: true });
+        os.createIndex('by_name', 'name', { unique: false });
+      }
+      else {
+        // productId es la identidad. El nombre puede repetirse entre productos distintos.
+        try{
+          const productsStore = e.target.transaction.objectStore('products');
+          if (productsStore.indexNames.contains('by_name')) productsStore.deleteIndex('by_name');
+          productsStore.createIndex('by_name', 'name', { unique:false });
+        }catch(_){ }
       }
       if (!d.objectStoreNames.contains('events')) {
         const os2 = d.createObjectStore('events', { keyPath: 'id', autoIncrement: true });
@@ -5015,6 +5708,17 @@ function openDB(opts) {
       } else {
         try { e.target.transaction.objectStore('banks').createIndex('by_name', 'name'); } catch {}
         try { e.target.transaction.objectStore('banks').createIndex('by_active', 'isActive'); } catch {}
+      }
+
+      if (!d.objectStoreNames.contains('rawMaterials')) {
+        const rm = d.createObjectStore('rawMaterials', { keyPath:'id', autoIncrement:true });
+        try { rm.createIndex('by_name_normalized', 'nameNormalized', { unique:false }); } catch {}
+        try { rm.createIndex('by_active', 'active', { unique:false }); } catch {}
+        try { rm.createIndex('by_updated_at', 'updatedAt', { unique:false }); } catch {}
+      } else {
+        try { e.target.transaction.objectStore('rawMaterials').createIndex('by_name_normalized', 'nameNormalized', { unique:false }); } catch {}
+        try { e.target.transaction.objectStore('rawMaterials').createIndex('by_active', 'active', { unique:false }); } catch {}
+        try { e.target.transaction.objectStore('rawMaterials').createIndex('by_updated_at', 'updatedAt', { unique:false }); } catch {}
       }
 
       if (!d.objectStoreNames.contains('extras')) {
@@ -5369,10 +6073,18 @@ function posFinResolveIncomeAccountPOS(accounts){
   });
 }
 
-function posFinProductKeyPOS(name){
+function posFinProductKeyPOS(productRef){
+  // Vaso moderno/legacy: clasificación por contrato/snapshot estable antes del fallback textual.
+  // Las demás presentaciones conservan el mapeo histórico por nombre para no alterar cuentas existentes.
+  if (productRef && typeof productRef === 'object'){
+    try{ if (isVasoCategorySalePOS(productRef)) return 'vaso'; }catch(_){ }
+  }
+  const isSaleRecord = !!(productRef && typeof productRef === 'object');
+  const name = isSaleRecord ? getSaleProductNameSnapshotPOS(productRef) : productRef;
   const n = posFinNormText(name);
   if (!n) return '';
-  if (n.includes('vaso')) return 'vaso';
+  // Para una venta real, "Vaso" nunca se decide solo por texto; requiere contrato/snapshot estable o marca legacy.
+  if (!isSaleRecord && n.includes('vaso')) return 'vaso';
   if (n.includes('pulso')) return 'pulso';
   if (n.includes('media')) return 'media';
   if (n.includes('djeba')) return 'djeba';
@@ -5381,8 +6093,8 @@ function posFinProductKeyPOS(name){
   return '';
 }
 
-function posFinResolveProductAccountPOS(accounts, productName, side){
-  const key = posFinProductKeyPOS(productName);
+function posFinResolveProductAccountPOS(accounts, productRef, side){
+  const key = posFinProductKeyPOS(productRef);
   const maps = {
     vaso: { cost: ['5131','5216','5101','5100'], inv: ['1441','1425','1501','1500'], wordsCost: [['vasos'], ['costo','ventas']], wordsInv: [['vasos'], ['inventario','producto']] },
     pulso: { cost: ['5215','5101','5100'], inv: ['1425','1501','1500'], wordsCost: [['costo','pulso'], ['costo','ventas']], wordsInv: [['pulso'], ['inventario','producto']] },
@@ -5430,7 +6142,7 @@ function posFinBuildSaleAutoLinesPOS(sale, accounts, amounts){
   if (isCourtesy) {
     if (amountCost > 0) {
       const courtesyCode = posFinResolveCourtesyExpenseAccountPOS(accounts);
-      const inventoryCode = posFinResolveProductAccountPOS(accounts, getSaleProductNameSnapshotPOS(sale), 'inventory');
+      const inventoryCode = posFinResolveProductAccountPOS(accounts, sale, 'inventory');
       if (!isReturn) {
         lines.push(posFinLinePOS(courtesyCode, amountCost, 0));
         lines.push(posFinLinePOS(inventoryCode, 0, amountCost));
@@ -5443,8 +6155,8 @@ function posFinBuildSaleAutoLinesPOS(sale, accounts, amounts){
   }
   const collectionCode = amount > 0 ? posFinResolveCollectionAccountPOS(sale, accounts) : null;
   const incomeCode = amount > 0 ? posFinResolveIncomeAccountPOS(accounts) : null;
-  const costCode = amountCost > 0 ? posFinResolveProductAccountPOS(accounts, getSaleProductNameSnapshotPOS(sale), 'cost') : null;
-  const inventoryCode = amountCost > 0 ? posFinResolveProductAccountPOS(accounts, getSaleProductNameSnapshotPOS(sale), 'inventory') : null;
+  const costCode = amountCost > 0 ? posFinResolveProductAccountPOS(accounts, sale, 'cost') : null;
+  const inventoryCode = amountCost > 0 ? posFinResolveProductAccountPOS(accounts, sale, 'inventory') : null;
   if (!isReturn) {
     if (amount > 0) {
       lines.push(posFinLinePOS(collectionCode, amount, 0));
@@ -5749,6 +6461,13 @@ function clearStore(name){
 const REEMPAQUE_STORE_POS = 'reempaques';
 const REEMPAQUE_VISIBLE_NAME_POS = 'Reempaque';
 const REEMPAQUE_STATUS_VALID_POS = 'VALIDO';
+const REEMPAQUE_MERMA_TYPE_POS = 'REEMPAQUE_MERMA_TECNICA';
+const REEMPAQUE_MERMA_PREFIX_POS = 'rpq_merma_';
+const REEMPAQUE_MERMA_FINAL_TYPE_POS = 'REEMPAQUE_MERMA_FINAL_EVENTO';
+const REEMPAQUE_MERMA_FINAL_PREFIX_POS = 'rpq_merma_final_';
+const REEMPAQUE_SANEAMIENTO_TYPE_POS = 'REEMPAQUE_SANEAMIENTO_LEGACY';
+const REEMPAQUE_SANEAMIENTO_PREFIX_POS = 'rpq_saneamiento_legacy_';
+const REEMPAQUE_REVERSE_SOURCE_POS = 'reempaque_reverso';
 
 function reempaqueNowISOPOS(){
   try{ return new Date().toISOString(); }catch(_){ return String(Date.now()); }
@@ -5780,6 +6499,532 @@ function reempaqueRound4POS(value){
   const n = Number(value);
   if (!Number.isFinite(n)) return 0;
   return Math.round((n + Number.EPSILON) * 10000) / 10000;
+}
+
+
+function reempaqueFloorUnitsPOS(value){
+  const n = reempaqueNumPOS(value, 0);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.max(0, Math.floor(n + 1e-9));
+}
+
+function reempaqueHashTextPOS(value){
+  const text = String(value || '');
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++){
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+}
+
+function reempaqueIsMermaTechnicalRecordPOS(record){
+  const r = record || {};
+  return r.tipo === REEMPAQUE_MERMA_TYPE_POS || r.isTechnicalRemainder === true || r.technicalMerma === true;
+}
+
+function reempaqueIsFinalEventMermaRecordPOS(record){
+  const r = record || {};
+  return r.tipo === REEMPAQUE_MERMA_FINAL_TYPE_POS || r.isFinalEventMerma === true;
+}
+
+function reempaqueIsLegacySanitationRecordPOS(record){
+  const r = record || {};
+  return r.tipo === REEMPAQUE_SANEAMIENTO_TYPE_POS || r.isLegacyFractionSanitation === true;
+}
+
+function reempaqueEventIdFromRecordPOS(record){
+  const r = record || {};
+  const n = Number(r.eventId ?? r.eventoId ?? r.posEventId);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+async function reempaqueLoadFinalMermaForEventPOS(eventId, options={}){
+  if (!db) await openDB();
+  const eid = Number(eventId);
+  if (!Number.isFinite(eid) || !(eid > 0)) return [];
+  const includeProvisional = options.includeProvisional === true;
+  const rows = await getAll(REEMPAQUE_STORE_POS).catch(()=>[]);
+  return (rows || []).filter((r)=>{
+    if (!reempaqueIsFinalEventMermaRecordPOS(r)) return false;
+    if (reempaqueEventIdFromRecordPOS(r) !== eid) return false;
+    if (!includeProvisional && r.provisionalClose === true) return false;
+    if (r.anulado === true || r.cancelled === true || String(r.estado || '').toUpperCase() === 'ANULADO') return false;
+    return true;
+  });
+}
+
+async function reempaqueGetFinalMermaTotalsPOS(eventId, options={}){
+  const records = await reempaqueLoadFinalMermaForEventPOS(eventId, options);
+  let ml = 0;
+  let cost = 0;
+  for (const r of records){
+    ml += Math.max(0, reempaqueNumPOS(r.mermaFinalMl ?? r.finalMermaMl ?? r.remainderMlBefore, 0));
+    cost += Math.max(0, reempaqueNumPOS(r.costoMermaFinal ?? r.finalMermaCost ?? r.remainderLiquidCostBefore, 0));
+  }
+  return { records, ml:reempaqueRound4POS(ml), cost:round2(cost) };
+}
+
+async function reempaqueGetFinalMermaForSummaryPOS(eventId, periodKey){
+  if (!db) await openDB();
+  const selected = Number(eventId);
+  const hasEvent = Number.isFinite(selected) && selected > 0;
+  const pk = String(periodKey || '').trim();
+  const rows = await getAll(REEMPAQUE_STORE_POS).catch(()=>[]);
+  let ml = 0;
+  let cost = 0;
+  const records = [];
+  for (const r of (rows || [])){
+    if (!reempaqueIsFinalEventMermaRecordPOS(r) || r.provisionalClose === true) continue;
+    if (r.anulado === true || r.cancelled === true || String(r.estado || '').toUpperCase() === 'ANULADO') continue;
+    if (hasEvent && reempaqueEventIdFromRecordPOS(r) !== selected) continue;
+    const date = String(r.date || r.fecha || r.economicDate || '').slice(0,10);
+    if (pk && (!date || !date.startsWith(pk))) continue;
+    ml += Math.max(0, reempaqueNumPOS(r.mermaFinalMl ?? r.finalMermaMl, 0));
+    cost += Math.max(0, reempaqueNumPOS(r.costoMermaFinal ?? r.finalMermaCost, 0));
+    records.push(r);
+  }
+  return { records, ml:reempaqueRound4POS(ml), cost:round2(cost) };
+}
+
+function reempaqueLotIdentityForMermaPOS(trace){
+  const t = reempaqueNormalizeLotTracePOS(trace || {});
+  const load = String(t.loteCargaId || '').trim();
+  const group = String(t.loteGroupKey || '').trim();
+  const lotId = String(t.loteId ?? '').trim();
+  const code = String(t.loteCodigo || '').trim();
+  if (load) return `LOAD:${load}`;
+  if (group) return `GROUP:${group}`;
+  if (lotId) return `LOT:${lotId}`;
+  if (code) return `CODE:${code}`;
+  return 'NOLOT';
+}
+
+function reempaqueMermaKeyPOS(eventId, trace, targetProductId){
+  return `${String(eventId ?? '')}|${reempaqueLotIdentityForMermaPOS(trace)}|${String(targetProductId ?? '')}`;
+}
+
+function reempaqueMermaIdPOS(key){
+  return REEMPAQUE_MERMA_PREFIX_POS + String(key || '');
+}
+
+function reempaqueEmptyMermaBalancePOS(eventId, trace, targetProduct, targetCapacityMl){
+  const t = reempaqueNormalizeLotTracePOS(trace || {});
+  const targetId = targetProduct && typeof targetProduct === 'object'
+    ? (targetProduct.id ?? targetProduct.productId ?? targetProduct.productoId ?? null)
+    : targetProduct;
+  const targetName = targetProduct && typeof targetProduct === 'object'
+    ? String(targetProduct.name || targetProduct.nombre || targetProduct.productName || '').trim()
+    : '';
+  const key = reempaqueMermaKeyPOS(eventId, t, targetId);
+  return {
+    id: reempaqueMermaIdPOS(key),
+    tipo: REEMPAQUE_MERMA_TYPE_POS,
+    technicalMerma: true,
+    isTechnicalRemainder: true,
+    mermaKey: key,
+    eventId,
+    eventoId: eventId,
+    loteId: t.loteId ?? null,
+    loteCodigo: t.loteCodigo || '',
+    loteCargaId: t.loteCargaId || null,
+    loteGroupKey: t.loteGroupKey || '',
+    targetProductId: targetId ?? null,
+    targetProductName: targetName,
+    targetProductNameSnapshot: targetName,
+    targetCapacityMl: reempaquePositivePOS(targetCapacityMl),
+    targetCapacityMlSnapshot: reempaquePositivePOS(targetCapacityMl),
+    remainderMl: 0,
+    remainderLiquidCost: 0,
+    estado: 'AGOTADA',
+    exists: false,
+    createdAt: null,
+    updatedAt: null
+  };
+}
+
+async function reempaqueLoadMermaBalancePOS(eventId, trace, targetProduct, targetCapacityMl){
+  if (!db) await openDB();
+  const empty = reempaqueEmptyMermaBalancePOS(eventId, trace, targetProduct, targetCapacityMl);
+  let row = null;
+  try{ row = await getOne(REEMPAQUE_STORE_POS, empty.id); }catch(_){ row = null; }
+  if (!row || !reempaqueIsMermaTechnicalRecordPOS(row) || String(row.mermaKey || '') !== empty.mermaKey) return empty;
+  return {
+    ...empty,
+    ...row,
+    exists: true,
+    remainderMl: reempaqueRound4POS(Math.max(0, reempaqueNumPOS(row.remainderMl, 0))),
+    remainderLiquidCost: reempaqueMoneyPOS(row.remainderLiquidCost),
+    targetProductName: String(row.targetProductName || row.targetProductNameSnapshot || empty.targetProductName || '').trim(),
+    targetProductNameSnapshot: String(row.targetProductNameSnapshot || row.targetProductName || empty.targetProductName || '').trim(),
+    targetCapacityMl: reempaquePositivePOS(row.targetCapacityMl || row.targetCapacityMlSnapshot || empty.targetCapacityMl),
+    targetCapacityMlSnapshot: reempaquePositivePOS(row.targetCapacityMlSnapshot || row.targetCapacityMl || empty.targetCapacityMl)
+  };
+}
+
+function reempaqueMermaSnapshotPOS(balance){
+  const b = balance || {};
+  return {
+    exists: !!b.exists,
+    id: String(b.id || ''),
+    mermaKey: String(b.mermaKey || ''),
+    remainderMl: reempaqueRound4POS(Math.max(0, reempaqueNumPOS(b.remainderMl, 0))),
+    remainderLiquidCost: reempaqueMoneyPOS(b.remainderLiquidCost),
+    estado: String(b.estado || (reempaquePositivePOS(b.remainderMl) > 0 ? 'PENDIENTE' : 'AGOTADA')),
+    updatedAt: b.updatedAt || null
+  };
+}
+
+function reempaqueBuildMermaPlanPOS({ before, sourceVolumeMl, sourceLiquidCost, targetCapacityMl }){
+  const prev = before || {};
+  const cap = reempaquePositivePOS(targetCapacityMl);
+  const sourceMl = reempaqueRound4POS(Math.max(0, reempaqueNumPOS(sourceVolumeMl, 0)));
+  const sourceCost = reempaqueMoneyPOS(sourceLiquidCost);
+  if (!(cap > 0) || !(sourceMl > 0)){
+    return {
+      baseUnits:0, extraUnits:0, totalUnits:0, baseVolumeMl:0,
+      newRemainderMl:0, newRemainderLiquidCost:0,
+      consumedRemainderMl:0, consumedRemainderLiquidCost:0,
+      pendingRemainderMl:reempaqueRound4POS(Math.max(0, reempaqueNumPOS(prev.remainderMl,0))),
+      pendingRemainderLiquidCost:reempaqueMoneyPOS(prev.remainderLiquidCost),
+      assignedLiquidCost:0, sourceVolumeMl:sourceMl, sourceLiquidCost:sourceCost, targetCapacityMl:cap
+    };
+  }
+  const prevMl = reempaqueRound4POS(Math.max(0, reempaqueNumPOS(prev.remainderMl, 0)));
+  const prevCost = reempaqueMoneyPOS(prev.remainderLiquidCost);
+  const baseUnits = reempaqueFloorUnitsPOS(sourceMl / cap);
+  const baseVolumeMl = reempaqueRound4POS(baseUnits * cap);
+  const newRemainderMl = reempaqueRound4POS(Math.max(0, sourceMl - baseVolumeMl));
+  const newRemainderLiquidCost = (sourceCost > 0 && sourceMl > 0 && newRemainderMl > 0)
+    ? round2(sourceCost * (newRemainderMl / sourceMl))
+    : 0;
+  const baseLiquidCost = round2(Math.max(0, sourceCost - newRemainderLiquidCost));
+  const combinedMl = reempaqueRound4POS(prevMl + newRemainderMl);
+  const extraUnits = reempaqueFloorUnitsPOS(combinedMl / cap);
+  const consumedRemainderMl = reempaqueRound4POS(extraUnits * cap);
+  const consumePrevMl = reempaqueRound4POS(Math.min(prevMl, consumedRemainderMl));
+  const consumeNewMl = reempaqueRound4POS(Math.max(0, consumedRemainderMl - consumePrevMl));
+  const consumedPrevCost = consumePrevMl > 0 && prevMl > 0
+    ? (Math.abs(consumePrevMl - prevMl) < 0.0001 ? prevCost : round2(prevCost * (consumePrevMl / prevMl)))
+    : 0;
+  const consumedNewCost = consumeNewMl > 0 && newRemainderMl > 0
+    ? (Math.abs(consumeNewMl - newRemainderMl) < 0.0001 ? newRemainderLiquidCost : round2(newRemainderLiquidCost * (consumeNewMl / newRemainderMl)))
+    : 0;
+  const consumedRemainderLiquidCost = round2(consumedPrevCost + consumedNewCost);
+  const assignedLiquidCost = round2(baseLiquidCost + consumedRemainderLiquidCost);
+  const pendingRemainderMl = reempaqueRound4POS(Math.max(0, combinedMl - consumedRemainderMl));
+  const pendingRemainderLiquidCost = round2(Math.max(0, prevCost + sourceCost - assignedLiquidCost));
+  return {
+    baseUnits, extraUnits, totalUnits:baseUnits + extraUnits,
+    baseVolumeMl, newRemainderMl, newRemainderLiquidCost,
+    consumedRemainderMl, consumedRemainderLiquidCost,
+    pendingRemainderMl, pendingRemainderLiquidCost,
+    assignedLiquidCost, baseLiquidCost,
+    sourceVolumeMl:sourceMl, sourceLiquidCost:sourceCost, targetCapacityMl:cap,
+    previousRemainderMl:prevMl, previousRemainderLiquidCost:prevCost
+  };
+}
+
+function reempaqueBuildMermaBalanceAfterPOS(before, plan, meta){
+  const now = reempaqueNowISOPOS();
+  const base = before || {};
+  const m = meta || {};
+  const pendingMl = reempaqueRound4POS(Math.max(0, reempaqueNumPOS(plan && plan.pendingRemainderMl, 0)));
+  return {
+    ...base,
+    id: String(base.id || reempaqueMermaIdPOS(m.mermaKey || '')),
+    tipo: REEMPAQUE_MERMA_TYPE_POS,
+    technicalMerma: true,
+    isTechnicalRemainder: true,
+    mermaKey: String(m.mermaKey || base.mermaKey || ''),
+    eventId: m.eventId ?? base.eventId ?? null,
+    eventoId: m.eventId ?? base.eventoId ?? base.eventId ?? null,
+    loteId: m.loteId ?? base.loteId ?? null,
+    loteCodigo: String(m.loteCodigo ?? base.loteCodigo ?? ''),
+    loteCargaId: m.loteCargaId ?? base.loteCargaId ?? null,
+    loteGroupKey: String(m.loteGroupKey ?? base.loteGroupKey ?? ''),
+    targetProductId: m.targetProductId ?? base.targetProductId ?? null,
+    targetProductName: String(m.targetProductName || base.targetProductName || '').trim(),
+    targetProductNameSnapshot: String(m.targetProductName || base.targetProductNameSnapshot || base.targetProductName || '').trim(),
+    targetCapacityMl: reempaquePositivePOS(m.targetCapacityMl || base.targetCapacityMl),
+    targetCapacityMlSnapshot: reempaquePositivePOS(m.targetCapacityMl || base.targetCapacityMlSnapshot || base.targetCapacityMl),
+    remainderMl: pendingMl,
+    remainderLiquidCost: reempaqueMoneyPOS(plan && plan.pendingRemainderLiquidCost),
+    estado: pendingMl > 0.0001 ? 'PENDIENTE' : 'AGOTADA',
+    exists: true,
+    createdAt: base.createdAt || now,
+    updatedAt: now
+  };
+}
+
+
+async function reempaqueEconomicDateForEventPOS(eventId, eventRecord){
+  const eid = Number(eventId);
+  try{
+    const sales = (await getAll('sales')).filter(s => s && Number(s.eventId) === eid);
+    const dates = sales.map(s => safeYMD(s.date || s.createdAt || s.time)).filter(Boolean).sort();
+    if (dates.length) return dates[dates.length - 1];
+  }catch(_){ }
+  const ev = eventRecord || null;
+  const fromEvent = safeYMD(ev && (ev.date || ev.fecha || ev.createdAt || ev.closedAt));
+  return fromEvent || safeYMD(new Date()) || new Date().toISOString().slice(0,10);
+}
+
+function reempaqueFinalMermaIdPOS(balance){
+  const b = balance || {};
+  const signature = [
+    String(b.mermaKey || b.id || ''),
+    String(b.updatedAt || ''),
+    reempaqueRound4POS(b.remainderMl),
+    reempaqueMoneyPOS(b.remainderLiquidCost)
+  ].join('|');
+  return REEMPAQUE_MERMA_FINAL_PREFIX_POS + reempaqueHashTextPOS(signature);
+}
+
+async function reempaqueFinalizeMermaForEventPOS(eventId, options={}){
+  if (!db) await openDB();
+  const eid = Number(eventId);
+  if (!Number.isFinite(eid) || !(eid > 0)) return { eventId:eid, ids:[], ml:0, cost:0, provisional:false };
+
+  const all = await getAll(REEMPAQUE_STORE_POS).catch(()=>[]);
+  const balances = (all || []).filter(r =>
+    reempaqueIsMermaTechnicalRecordPOS(r) &&
+    reempaqueEventIdFromRecordPOS(r) === eid &&
+    reempaqueNumPOS(r.remainderMl, 0) > 0.0001
+  );
+  if (!balances.length) return { eventId:eid, ids:[], ml:0, cost:0, provisional:options.provisional === true };
+
+  const events = await getAll('events').catch(()=>[]);
+  const ev = (events || []).find(e => Number(e && e.id) === eid) || null;
+  const economicDate = await reempaqueEconomicDateForEventPOS(eid, ev);
+  const now = reempaqueNowISOPOS();
+  const provisional = options.provisional === true;
+  const eventClosedAt = options.eventClosedAt || (ev && ev.closedAt) || null;
+  const finalRows = balances.map((b)=>{
+    const ml = reempaqueRound4POS(Math.max(0, reempaqueNumPOS(b.remainderMl,0)));
+    const cost = reempaqueMoneyPOS(b.remainderLiquidCost);
+    const finalId = reempaqueFinalMermaIdPOS(b);
+    const warning = String(b.costWarning || b.advertenciaCosto || '').trim();
+    const costReliable = b.costReliable !== false && !warning;
+    return {
+      id: finalId,
+      tipo: REEMPAQUE_MERMA_FINAL_TYPE_POS,
+      isFinalEventMerma: true,
+      eventId:eid,
+      eventoId:eid,
+      eventName:String((ev && ev.name) || b.eventName || b.eventNameSnapshot || '').trim(),
+      eventNameSnapshot:String((ev && ev.name) || b.eventName || b.eventNameSnapshot || '').trim(),
+      date:economicDate,
+      fecha:economicDate,
+      economicDate,
+      periodKey:String(economicDate || '').slice(0,7),
+      mermaKey:String(b.mermaKey || ''),
+      technicalBalanceId:String(b.id || ''),
+      loteId:b.loteId ?? null,
+      loteCodigo:String(b.loteCodigo || ''),
+      loteCargaId:b.loteCargaId ?? null,
+      loteGroupKey:String(b.loteGroupKey || ''),
+      targetProductId:b.targetProductId ?? null,
+      targetProductName:String(b.targetProductName || b.targetProductNameSnapshot || '').trim(),
+      targetProductNameSnapshot:String(b.targetProductNameSnapshot || b.targetProductName || '').trim(),
+      targetCapacityMl:reempaquePositivePOS(b.targetCapacityMl || b.targetCapacityMlSnapshot),
+      mermaFinalMl:ml,
+      finalMermaMl:ml,
+      costoMermaFinal:cost,
+      finalMermaCost:cost,
+      economicCost:cost,
+      costoLiquidoFinal:cost,
+      costoAdicionalUnitario:0,
+      costoAdicionalTotal:0,
+      affectsSales:false,
+      afectaVentas:false,
+      affectsCash:false,
+      afectaCaja:false,
+      afectaEfectivo:false,
+      affectsAccountingIncome:false,
+      noVenta:true,
+      noCaja:true,
+      noCortesia:true,
+      provisionalClose:provisional,
+      eventClosedAt:eventClosedAt,
+      estado:provisional ? 'PENDIENTE_CIERRE' : 'FINALIZADA',
+      motivo:String(options.reason || 'CIERRE_EVENTO'),
+      costReliable,
+      costWarning:warning,
+      advertenciaCosto:warning,
+      technicalBalanceBefore:{ ...b },
+      createdAt:now,
+      updatedAt:now
+    };
+  });
+
+  await new Promise((resolve,reject)=>{
+    try{
+      const tr = db.transaction([REEMPAQUE_STORE_POS], 'readwrite');
+      const st = tr.objectStore(REEMPAQUE_STORE_POS);
+      for (let i=0;i<balances.length;i++){
+        const b = balances[i];
+        const fr = finalRows[i];
+        const after = {
+          ...b,
+          remainderMl:0,
+          remainderLiquidCost:0,
+          estado:'AGOTADA',
+          finalizedAt:now,
+          finalMermaRecordId:fr.id,
+          provisionalClose:provisional,
+          updatedAt:now
+        };
+        try{ st.put(after); st.put(fr); }catch(err){ try{ tr.abort(); }catch(_){ } }
+      }
+      tr.oncomplete=()=>resolve(true);
+      tr.onerror=()=>reject(tr.error || new Error('No se pudo cerrar la merma recuperable.'));
+      tr.onabort=()=>reject(tr.error || new Error('Transacción abortada cerrando merma recuperable.'));
+    }catch(err){ reject(err); }
+  });
+
+  return {
+    eventId:eid,
+    ids:finalRows.map(r=>r.id),
+    ml:reempaqueRound4POS(finalRows.reduce((a,r)=>a + reempaquePositivePOS(r.mermaFinalMl),0)),
+    cost:round2(finalRows.reduce((a,r)=>a + reempaqueMoneyPOS(r.costoMermaFinal),0)),
+    provisional,
+    economicDate
+  };
+}
+
+async function reempaqueRollbackFinalMermaForEventPOS(finalization){
+  if (!db) await openDB();
+  const info = finalization || {};
+  const ids = Array.isArray(info.ids) ? info.ids.filter(Boolean) : [];
+  if (!ids.length) return true;
+  await new Promise((resolve,reject)=>{
+    try{
+      const tr = db.transaction([REEMPAQUE_STORE_POS], 'readwrite');
+      const st = tr.objectStore(REEMPAQUE_STORE_POS);
+      let pending = ids.length;
+      const done = ()=>{ pending--; };
+      for (const id of ids){
+        const req = st.get(id);
+        req.onsuccess=()=>{
+          const row=req.result;
+          if (row && reempaqueIsFinalEventMermaRecordPOS(row) && row.provisionalClose === true){
+            const before=row.technicalBalanceBefore;
+            if (before && before.id) st.put({ ...before, provisionalClose:false });
+            st.delete(id);
+          }
+          done();
+        };
+        req.onerror=()=>{ try{ tr.abort(); }catch(_){ } };
+      }
+      tr.oncomplete=()=>resolve(true);
+      tr.onerror=()=>reject(tr.error || new Error('No se pudo revertir la merma provisional.'));
+      tr.onabort=()=>reject(tr.error || new Error('Transacción abortada revirtiendo merma provisional.'));
+    }catch(err){ reject(err); }
+  });
+  return true;
+}
+
+async function reempaqueConfirmFinalMermaForEventPOS(finalization, eventClosedAt){
+  if (!db) await openDB();
+  const info = finalization || {};
+  const ids = Array.isArray(info.ids) ? info.ids.filter(Boolean) : [];
+  if (!ids.length) return true;
+  const now=reempaqueNowISOPOS();
+  await new Promise((resolve,reject)=>{
+    try{
+      const tr=db.transaction([REEMPAQUE_STORE_POS],'readwrite');
+      const st=tr.objectStore(REEMPAQUE_STORE_POS);
+      for (const id of ids){
+        const req=st.get(id);
+        req.onsuccess=()=>{
+          const row=req.result;
+          if (!row || !reempaqueIsFinalEventMermaRecordPOS(row)) return;
+          st.put({ ...row, provisionalClose:false, eventClosedAt:eventClosedAt || row.eventClosedAt || now, estado:'FINALIZADA', updatedAt:now });
+          const bid=String(row.technicalBalanceId || '');
+          if (bid){
+            const breq=st.get(bid);
+            breq.onsuccess=()=>{
+              const b=breq.result;
+              if (b && reempaqueIsMermaTechnicalRecordPOS(b)){
+                st.put({ ...b, remainderMl:0, remainderLiquidCost:0, estado:'AGOTADA', provisionalClose:false, finalizedAt:eventClosedAt || now, updatedAt:now });
+              }
+            };
+          }
+        };
+        req.onerror=()=>{ try{ tr.abort(); }catch(_){ } };
+      }
+      tr.oncomplete=()=>resolve(true);
+      tr.onerror=()=>reject(tr.error || new Error('No se pudo confirmar la merma final.'));
+      tr.onabort=()=>reject(tr.error || new Error('Transacción abortada confirmando merma final.'));
+    }catch(err){ reject(err); }
+  });
+  return true;
+}
+
+async function reempaqueReconcileProvisionalFinalMermaPOS(){
+  if (!db) await openDB();
+  const rows=await getAll(REEMPAQUE_STORE_POS).catch(()=>[]);
+  const provisional=(rows || []).filter(r=>reempaqueIsFinalEventMermaRecordPOS(r) && r.provisionalClose === true);
+  if (!provisional.length) return { confirmed:0, rolledBack:0 };
+  const events=await getAll('events').catch(()=>[]);
+  const eventMap=new Map((events || []).filter(Boolean).map(e=>[Number(e.id),e]));
+  const groups=new Map();
+  for (const r of provisional){
+    const eid=reempaqueEventIdFromRecordPOS(r);
+    if (!eid) continue;
+    if (!groups.has(eid)) groups.set(eid,[]);
+    groups.get(eid).push(r.id);
+  }
+  let confirmed=0, rolledBack=0;
+  for (const [eid,ids] of groups.entries()){
+    const ev=eventMap.get(eid);
+    const info={eventId:eid,ids};
+    if (ev && ev.closedAt){
+      await reempaqueConfirmFinalMermaForEventPOS(info, ev.closedAt);
+      confirmed += ids.length;
+    }else{
+      await reempaqueRollbackFinalMermaForEventPOS(info);
+      rolledBack += ids.length;
+    }
+  }
+  return { confirmed, rolledBack };
+}
+
+function reempaquePluralProductNamePOS(name, qty){
+  const raw = String(name || 'Producto').trim() || 'Producto';
+  if (Number(qty) === 1) return raw;
+  if (/s$/i.test(raw)) return raw;
+  if (/[aeiouáéíóú]$/i.test(raw)) return raw + 's';
+  return raw + 'es';
+}
+
+function reempaqueSuccessSummaryPOS(record){
+  const r = record || {};
+  const name = String(r.targetProductName || r.productoDestinoNombre || r.productoDestino || 'Producto').trim() || 'Producto';
+  const base = reempaqueFloorUnitsPOS(r.cantidadConversionBase ?? r.cantidadBaseConversion ?? r.cantidadFinalRegistrada ?? 0);
+  const extra = reempaqueFloorUnitsPOS(r.cantidadExtraMerma ?? 0);
+  const total = reempaqueFloorUnitsPOS(r.cantidadFinalRegistrada ?? r.cantidadCreadaDestino ?? 0);
+  const pending = reempaqueRound4POS(Math.max(0, reempaqueNumPOS(r.mermaPendienteMl ?? r.mlSobranteMerma ?? 0, 0)));
+  const parts = [`${base} ${reempaquePluralProductNamePOS(name, base)} por conversión`];
+  if (extra > 0) parts.push(`+${extra} ${reempaquePluralProductNamePOS(name, extra)} extra por merma acumulada`);
+  parts.push(`Total creado: ${total}`);
+  parts.push(`Merma pendiente: ${reempaqueFmtMlPOS(pending)}`);
+  return parts.join(' · ');
+}
+
+function reempaqueMultipleSuccessSummaryPOS(record){
+  const r = record || {};
+  const ops = Array.isArray(r.mermaOperaciones) ? r.mermaOperaciones : [];
+  const extras = ops.filter(op=>reempaqueFloorUnitsPOS(op && op.cantidadExtraMerma) > 0).map(op=>{
+    const qty = reempaqueFloorUnitsPOS(op.cantidadExtraMerma);
+    const name = String(op.targetProductName || 'Producto').trim() || 'Producto';
+    return `+${qty} ${reempaquePluralProductNamePOS(name, qty)} extra por merma acumulada`;
+  });
+  const pending = reempaqueRound4POS(Math.max(0, reempaqueNumPOS(r.mlSobranteMerma, 0)));
+  const parts = extras.length ? extras : ['Reempaque múltiple registrado'];
+  parts.push(`Merma pendiente: ${reempaqueFmtMlPOS(pending)}`);
+  return parts.join(' · ');
 }
 
 function reempaqueProductNameFromRefPOS(ref){
@@ -5822,7 +7067,7 @@ function reempaqueParseCapacityMlFromTextPOS(text){
   if (nrm.includes('media')) return 375;
   if (nrm.includes('djeba')) return 750;
   if (nrm.includes('litro')) return 1000;
-  if (nrm.includes('galon') || nrm.includes('galón')) return 3750;
+  if (nrm.includes('galon') || nrm.includes('galón')) return 3720;
   return 0;
 }
 
@@ -5970,6 +7215,8 @@ function reempaqueBuildMultipleDestinationsPOS(rawDestinos, products, costoPorMl
       productoNuevoDestino: !!(raw.destinoNuevo || raw.productoNuevoDestino || tipoDestino === 'NUEVO' || tipoDestino === 'NUEVO_EXISTENTE'),
       productoNuevoCreado: !!(raw.productoNuevoCreado || tipoDestino === 'NUEVO'),
       precioVentaDestino,
+      cantidadSolicitadaRaw: reempaquePositivePOS(raw.cantidadSolicitadaRaw ?? raw.cantidadCreada ?? raw.cantidadCreadaDestino ?? raw.cantidadDestino),
+      fraccionMermaMl: reempaquePositivePOS(raw.fraccionMermaMl),
       cantidadCreada,
       cantidadCreadaDestino: cantidadCreada,
       cantidadDestino: cantidadCreada,
@@ -6045,6 +7292,7 @@ async function reempaquePrepareMultiplePayloadPOS(input={}){
     sourceProductName: src.name,
     productoOrigenId: src.id,
     productoOrigenNombre: src.name,
+    ...reempaqueRecordLotFieldsPOS(input.loteOrigen || input.sourceLot || input),
     cantidadOrigen,
     capacidadOrigenMl: capacidadOrigenMl > 0 ? capacidadOrigenMl : null,
     capacidadVolumenOrigen: capacidadOrigenMl > 0 ? capacidadOrigenMl : null,
@@ -6147,25 +7395,17 @@ function reempaqueValidateMultipleRecordPOS(record){
 
 function reempaqueNormalizeProductRefPOS(ref, products){
   const list = Array.isArray(products) ? products : [];
-  let found = null;
-  const refId = reempaqueProductIdFromRefPOS(ref);
+  const identity = resolveCatalogProductIdentityPOS(ref, list, { allowLegacy:true });
   const refName = reempaqueProductNameFromRefPOS(ref);
-
-  if (refId !== null){
-    found = list.find(p => p && String(p.id) === String(refId)) || null;
-  }
-  if (!found && refName){
-    const refKey = (typeof normName === 'function') ? normName(refName) : refName.toLowerCase().trim();
-    found = list.find(p => p && (((typeof normName === 'function') ? normName(p.name || p.nombre || '') : String(p.name || p.nombre || '').toLowerCase().trim()) === refKey)) || null;
-  }
-
-  const base = found || ((ref && typeof ref === 'object') ? ref : {});
+  const base = identity.ok ? identity.product : ((ref && typeof ref === 'object') ? ref : {});
   const name = String((base && (base.name || base.nombre || base.productName || base.label)) || refName || '').trim();
-  const id = (base && (base.id ?? base.productId ?? base.productoId)) ?? refId;
+  const id = identity.ok ? identity.internalId : reempaqueProductIdFromRefPOS(ref);
   const capacityMl = reempaqueCapacityMlFromProductPOS(base && (base.name || base.nombre || base.productName) ? base : { name });
 
   return {
     id: (id === null || typeof id === 'undefined' || id === '') ? null : id,
+    productId: identity.ok ? identity.stableId : '',
+    internalId: identity.ok ? identity.internalId : null,
     name,
     capacityMl: capacityMl > 0 ? capacityMl : null,
     raw: base || null
@@ -6271,6 +7511,7 @@ async function reempaqueCreateBaseRecordPOS(input={}){
     sourceProductName: src.name,
     productoOrigenId: src.id,
     productoOrigenNombre: src.name,
+    ...reempaqueRecordLotFieldsPOS(input.loteOrigen || input.sourceLot || input),
     cantidadOrigen,
     capacidadOrigenMl: src.capacityMl,
     capacidadVolumenOrigen: src.capacityMl,
@@ -6410,7 +7651,10 @@ async function reempaqueLoadForEventPOS(eventId){
   }
 
   const uniq = new Map();
-  for (const r of out){ if (r && r.id) uniq.set(String(r.id), r); }
+  for (const r of out){
+    if (!r || !r.id || reempaqueIsMermaTechnicalRecordPOS(r) || reempaqueIsFinalEventMermaRecordPOS(r) || reempaqueIsLegacySanitationRecordPOS(r)) continue;
+    uniq.set(String(r.id), r);
+  }
   return Array.from(uniq.values()).sort((a,b)=> String(b.createdAt || b.fechaHora || '').localeCompare(String(a.createdAt || a.fechaHora || '')));
 }
 
@@ -6434,6 +7678,8 @@ try{
     applyMovement: reempaqueApplyMovementPOS,
     registerMovement: reempaqueApplyMovementPOS,
     applyMultipleMovement: reempaqueApplyMultipleMovementPOS,
+    reverseMovement: reempaqueReversePOS,
+    loadMermaBalance: reempaqueLoadMermaBalancePOS,
     prepareMultiplePayload: reempaquePrepareMultiplePayloadPOS,
     validateMultipleRecord: reempaqueValidateMultipleRecordPOS,
     hasMultipleDestinations: reempaqueHasMultipleDestinationsInputPOS,
@@ -6492,6 +7738,15 @@ function del(name, key){
         }catch(err){ rej(err); }
       });
 
+      const idbGetAll = (storeName) => new Promise((res, rej) => {
+        try{
+          const st = tx(storeName);
+          const r = st.getAll();
+          r.onsuccess = ()=>res(r.result || []);
+          r.onerror = ()=>rej(r.error);
+        }catch(err){ rej(err); }
+      });
+
       const idbDelete = (storeName, k) => new Promise((res, rej) => {
         try{
           const t = db.transaction([storeName], 'readwrite');
@@ -6505,6 +7760,7 @@ function del(name, key){
 
       (async ()=>{
         const warnings = [];
+        let physicalCupRestoreTicket = null;
 
         // 1) Traer la venta (fuera de cualquier tx de borrado)
         const sale = await idbGet('sales', key);
@@ -6520,10 +7776,47 @@ function del(name, key){
           return resolve({ok:true, warnings: ['La venta no se encontró (posible ya estaba eliminada).']});
         }
 
-        // 2) Borrar la venta primero (objetivo principal). Si falla, no hacemos side-effects.
-        await idbDelete('sales', key);
+        // 2) Integridad crédito/caja: una venta con cobros no puede borrarse dejando caja huérfana.
+        try{
+          if (normalizePaymentMethodPOS(sale.payment || '') === 'credito'){
+            const cashRows = await idbGetAll(CASH_V2_STORE);
+            const creditSnapshot = cashV2CreditSaleSnapshot(sale, cashRows);
+            if (creditSnapshot.paid > 0.009){
+              throw new Error('Esta venta tiene cobros vinculados. No puede eliminarse sin una reversión contable completa.');
+            }
+          }
+        }catch(err){
+          if (err && /cobros vinculados/i.test(String(err.message || err))) throw err;
+          console.warn('No se pudo verificar cobros antes de eliminar venta', err);
+          throw new Error('No se pudo verificar la integridad de cobros. La venta no fue eliminada.');
+        }
 
-        // 2.1) Verificación rápida (mejor error que "parece que borró")
+        // 3) Preparar reverso durable del Vaso físico antes del borrado.
+        // Si la app se cierra después de borrar, la cola permite completar el reverso al reiniciar.
+        try{
+          const queued = enqueuePhysicalCupRestoreForSalePOS(sale, 'sale-delete');
+          if (queued && queued.ok === false){
+            throw new Error(queued.message || 'No se pudo preparar el reverso seguro del Vaso físico.');
+          }
+          physicalCupRestoreTicket = queued && queued.ticket ? queued.ticket : null;
+        }catch(error){
+          throw new Error((error && error.message) || 'No se pudo preparar el reverso seguro del Vaso físico.');
+        }
+
+        // 4) Borrar la venta primero (objetivo principal). Si falla, cancelar la cola preparada.
+        try{
+          await idbDelete('sales', key);
+        }catch(error){
+          if (physicalCupRestoreTicket) removePhysicalCupRestoreTicketPOS(physicalCupRestoreTicket);
+          throw error;
+        }
+        try{
+          if (normalizePaymentMethodPOS(sale.payment || sale.paymentMethod || '') === 'credito'){
+            notifyCreditStateChangedPOS({ eventId:sale.eventId, saleId:sale.id != null ? sale.id : key, reason:'sale-deleted' });
+          }
+        }catch(_){ }
+
+        // 4.1) Verificación rápida (mejor error que "parece que borró")
         try{
           const still = await idbGet('sales', key);
           if (still){
@@ -6534,12 +7827,25 @@ function del(name, key){
           console.warn('No se pudo verificar el borrado de la venta', verErr);
         }
 
-        // 3) Side-effects (no bloquean el borrado): revertir inventario central + borrar asientos en Finanzas
+        // 5) Side-effects (no bloquean el borrado): revertir inventario central + borrar asientos en Finanzas
         try{
           applyFinishedFromSalePOS(sale, -1);
         }catch(e){
           console.error('Error revertiendo inventario central al eliminar venta', e);
           warnings.push('No se pudo revertir inventario central (la venta sí se eliminó).');
+        }
+
+        // Restaurar Vaso físico asociado (Etapa 3/4), exactamente una vez.
+        try{
+          if (physicalCupRestoreTicket){
+            const physicalRestore = await processPhysicalCupRestoreTicketPOS(physicalCupRestoreTicket, { assumeDeleted:true });
+            if (!physicalRestore || physicalRestore.ok === false || !['restored','already_restored'].includes(String(physicalRestore.reason || ''))){
+              warnings.push('No se pudo completar el reverso del Vaso físico; quedó pendiente para reintento automático.');
+            }
+          }
+        }catch(e){
+          console.error('Error restaurando Vaso físico al eliminar venta', e);
+          warnings.push('No se pudo completar el reverso del Vaso físico; quedó pendiente para reintento automático.');
         }
 
         // Revertir consumo de vasos (FIFO) si esta venta/cortesía fue por vaso
@@ -6674,7 +7980,11 @@ function sanitizeCustomerDisplayPOS(name){
 function sortCustomerObjectsAZ_POS(list){
   return (Array.isArray(list) ? list : [])
     .slice()
-    .sort((a,b)=> normalizeCustomerKeyPOS(a && a.name).localeCompare(normalizeCustomerKeyPOS(b && b.name)));
+    .sort((a,b)=> normalizeCustomerKeyPOS(a && a.name).localeCompare(
+      normalizeCustomerKeyPOS(b && b.name),
+      'es-NI',
+      { sensitivity:'base', numeric:true }
+    ));
 }
 
 function loadCustomerDisabledSetPOS(){
@@ -7270,6 +8580,7 @@ async function resetOperationalStateOnEventSwitchPOS(){
   }catch(_){ }
 
   // 5) Cerrar modales/paneles que podrían quedar “colgados”
+  try{ closeCustomerQuickPOS({ returnFocus:false }); }catch(_){ }
   try{ closeModalPOS('customer-picker-modal'); }catch(_){ }
   try{ closeModalPOS('customer-edit-modal'); }catch(_){ }
   try{ closeModalPOS('customer-merge-modal'); }catch(_){ }
@@ -7632,6 +8943,338 @@ function isCustomerDisabledKeyPOS(normKey){
   return set.has(normKey);
 }
 
+let customerQuickBusyPOS = false;
+let customerQuickLastFocusPOS = null;
+let customerQuickLifecyclePOS = 0;
+let customerQuickSubmitSeqPOS = 0;
+let customerQuickSubmitLockedPOS = false;
+
+function isCustomerQuickOpenPOS(){
+  const modal = document.getElementById('customer-quick-modal');
+  return !!(
+    modal &&
+    modal.style.display === 'flex' &&
+    modal.getAttribute('aria-hidden') === 'false' &&
+    !modal.hasAttribute('inert')
+  );
+}
+
+function setCustomerQuickMessagePOS(message, kind){
+  const el = document.getElementById('customer-quick-msg');
+  if (!el) return;
+  el.textContent = String(message || '');
+  el.classList.toggle('is-ok', kind === 'ok');
+}
+
+function setCustomerQuickBusyPOS(isBusy){
+  customerQuickBusyPOS = !!isBusy;
+  const createBtn = document.getElementById('customer-quick-create');
+  const cancelBtn = document.getElementById('customer-quick-cancel');
+  const modal = document.getElementById('customer-quick-modal');
+  const form = document.getElementById('customer-quick-form');
+  if (createBtn){
+    createBtn.disabled = customerQuickBusyPOS;
+    createBtn.setAttribute('aria-disabled', customerQuickBusyPOS ? 'true' : 'false');
+    createBtn.textContent = customerQuickBusyPOS ? 'Creando…' : 'Crear';
+  }
+  if (cancelBtn){
+    cancelBtn.disabled = customerQuickBusyPOS;
+    cancelBtn.setAttribute('aria-disabled', customerQuickBusyPOS ? 'true' : 'false');
+  }
+  if (modal) modal.setAttribute('aria-busy', customerQuickBusyPOS ? 'true' : 'false');
+  if (form) form.setAttribute('aria-busy', customerQuickBusyPOS ? 'true' : 'false');
+}
+
+function resetCustomerQuickFormPOS(){
+  const form = document.getElementById('customer-quick-form');
+  const name = document.getElementById('customer-quick-name');
+  const cell = document.getElementById('customer-quick-cell');
+  try{ if (form) form.reset(); }catch(_){ }
+  if (name){ name.value = ''; name.classList.remove('a33-invalid'); }
+  if (cell) cell.value = '';
+  setCustomerQuickMessagePOS('', '');
+  setCustomerQuickBusyPOS(false);
+}
+
+function getCustomerQuickFocusablePOS(){
+  const modal = document.getElementById('customer-quick-modal');
+  if (!modal || typeof modal.querySelectorAll !== 'function') return [];
+  return Array.from(modal.querySelectorAll('input, button, [tabindex]:not([tabindex="-1"])'))
+    .filter(el => el && !el.disabled && el.offsetParent !== null);
+}
+
+function closeCustomerQuickPOS({ returnFocus = true, force = false } = {}){
+  if (customerQuickBusyPOS && !force) return false;
+  const modal = document.getElementById('customer-quick-modal');
+  if (!modal) return false;
+  if (!isCustomerQuickOpenPOS() && modal.getAttribute('aria-hidden') === 'true'){
+    try{ document.body.classList.remove('customer-quick-modal-open'); }catch(_){ }
+    return false;
+  }
+
+  customerQuickLifecyclePOS += 1;
+  modal.style.display = 'none';
+  modal.setAttribute('aria-hidden', 'true');
+  modal.setAttribute('inert', '');
+  try{ document.body.classList.remove('customer-quick-modal-open'); }catch(_){ }
+  resetCustomerQuickFormPOS();
+
+  if (returnFocus){
+    const target = (customerQuickLastFocusPOS && customerQuickLastFocusPOS.isConnected)
+      ? customerQuickLastFocusPOS
+      : (document.getElementById('btn-new-customer') || document.getElementById('sale-customer'));
+    setTimeout(()=>{ try{ target && target.focus({ preventScroll:true }); }catch(_){ try{ target && target.focus(); }catch(__){ } } }, 20);
+  }
+  customerQuickLastFocusPOS = null;
+  return true;
+}
+
+function openCustomerQuickPOS(){
+  const modal = document.getElementById('customer-quick-modal');
+  if (!modal || isCustomerQuickOpenPOS()) return false;
+  if (customerQuickSubmitLockedPOS) return false;
+  try{ if (isCustomerPickerOpenPOS()) closeCustomerPickerPOS(); }catch(_){ }
+  customerQuickLifecyclePOS += 1;
+  customerQuickLastFocusPOS = document.activeElement || document.getElementById('btn-new-customer');
+  resetCustomerQuickFormPOS();
+  modal.removeAttribute('inert');
+  modal.style.display = 'flex';
+  modal.setAttribute('aria-hidden', 'false');
+  try{ document.body.classList.add('customer-quick-modal-open'); }catch(_){ }
+  const lifecycle = customerQuickLifecyclePOS;
+  setTimeout(()=>{
+    if (lifecycle !== customerQuickLifecyclePOS || !isCustomerQuickOpenPOS()) return;
+    try{ document.getElementById('customer-quick-name')?.focus({ preventScroll:true }); }
+    catch(_){ try{ document.getElementById('customer-quick-name')?.focus(); }catch(__){ } }
+  }, 40);
+  return true;
+}
+
+function acquireCustomerQuickSubmitLockPOS(){
+  try{
+    if (customerQuickSubmitLockedPOS || window.__A33_POS_CUSTOMER_QUICK_SUBMITTING__ === true) return false;
+    customerQuickSubmitLockedPOS = true;
+    window.__A33_POS_CUSTOMER_QUICK_SUBMITTING__ = true;
+    return true;
+  }catch(_){
+    if (customerQuickSubmitLockedPOS) return false;
+    customerQuickSubmitLockedPOS = true;
+    return true;
+  }
+}
+
+function releaseCustomerQuickSubmitLockPOS(){
+  customerQuickSubmitLockedPOS = false;
+  try{ window.__A33_POS_CUSTOMER_QUICK_SUBMITTING__ = false; }catch(_){ }
+}
+
+function findEquivalentCustomerPOS(name){
+  const clean = sanitizeCustomerDisplayPOS(name);
+  if (!clean) return null;
+  const list = loadCustomerCatalogPOS();
+  const resolver = buildCustomerResolverPOS(list);
+  const finalId = resolver.matchNameToFinalId(clean);
+  if (!finalId) return null;
+  return resolver.byId.get(String(finalId)) || null;
+}
+
+function createQuickCustomerPOS(name, cellular){
+  const cleanName = sanitizeCustomerDisplayPOS(name);
+  const cleanCell = sanitizeCustomerDisplayPOS(cellular);
+  const normalizedName = normalizeCustomerKeyPOS(cleanName);
+  if (!cleanName || !normalizedName) return { ok:false, reason:'empty' };
+
+  // Releer inmediatamente antes de guardar: evita duplicados evidentes y carreras simples.
+  const list = loadCustomerCatalogPOS();
+  const resolver = buildCustomerResolverPOS(list);
+  const existingId = resolver.matchNameToFinalId(cleanName);
+  if (existingId){
+    const existing = resolver.byId.get(String(existingId));
+    return { ok:false, reason:'exists', customer:existing || null, id:String(existingId) };
+  }
+
+  const existingIds = new Set(list.map(c => c && c.id).filter(Boolean).map(String));
+  const id = generateCustomerIdPOS(existingIds);
+  const now = Date.now();
+  const customer = {
+    id,
+    name:cleanName,
+    nombre:cleanName,
+    celular:cleanCell,
+    telefono:cleanCell,
+    whatsapp:'',
+    correo:'',
+    direccion:'',
+    notas:'',
+    isActive:true,
+    active:true,
+    createdAt:now,
+    updatedAt:null,
+    normalizedName,
+    aliases:[],
+    nameHistory:[],
+    mergedIntoId:null,
+    mergedAt:null,
+    mergeReason:'',
+    mergeHistory:[],
+    schemaVersion:1,
+    updatedFrom:'pos_cliente_rapido'
+  };
+
+  list.push(customer);
+  const sorted = sortCustomerObjectsAZ_POS(list);
+  if (!saveCustomerCatalogPOS(sorted)) return { ok:false, reason:'save' };
+  syncDisabledLegacyFromCatalogPOS(sorted);
+
+  // Confirmar persistencia real antes de cerrar el modal.
+  const persisted = loadCustomerCatalogPOS().find(c => c && String(c.id) === String(id));
+  if (!persisted) return { ok:false, reason:'verify' };
+  return { ok:true, id:String(id), customer:persisted };
+}
+
+function handleCustomerQuickSubmitPOS(event){
+  try{ event && event.preventDefault(); }catch(_){ }
+  if (customerQuickBusyPOS) return false;
+  if (!isCustomerQuickOpenPOS()) return false;
+  if (!acquireCustomerQuickSubmitLockPOS()) return false;
+
+  const lifecycleAtStart = customerQuickLifecyclePOS;
+  const submitSeq = ++customerQuickSubmitSeqPOS;
+  const nameEl = document.getElementById('customer-quick-name');
+  const cellEl = document.getElementById('customer-quick-cell');
+  const name = sanitizeCustomerDisplayPOS(nameEl ? nameEl.value : '');
+  const cellular = sanitizeCustomerDisplayPOS(cellEl ? cellEl.value : '');
+
+  if (!name){
+    releaseCustomerQuickSubmitLockPOS();
+    if (nameEl) nameEl.classList.add('a33-invalid');
+    setCustomerQuickMessagePOS('Escribe el nombre del cliente.', 'error');
+    try{ nameEl && nameEl.focus({ preventScroll:true }); }catch(_){ try{ nameEl && nameEl.focus(); }catch(__){ } }
+    return false;
+  }
+  if (nameEl) nameEl.classList.remove('a33-invalid');
+
+  setCustomerQuickBusyPOS(true);
+  setCustomerQuickMessagePOS('', '');
+
+  try{
+    const result = createQuickCustomerPOS(name, cellular);
+    if (lifecycleAtStart !== customerQuickLifecyclePOS || submitSeq !== customerQuickSubmitSeqPOS || !isCustomerQuickOpenPOS()) return false;
+
+    if (result && result.ok && result.customer){
+      refreshCustomerUI_POS();
+      setCustomerSelectionUI_POS(result.customer);
+      persistCustomerLastPOS(result.customer.name || name);
+      closeCustomerQuickPOS({ returnFocus:true, force:true });
+      showToast('Cliente creado y seleccionado.', 'ok', 2600);
+      return true;
+    }
+
+    if (result && result.reason === 'exists'){
+      const existing = result.customer;
+      if (existing && existing.isActive !== false && !existing.mergedIntoId){
+        setCustomerSelectionUI_POS(existing);
+        persistCustomerLastPOS(existing.name || name);
+        closeCustomerQuickPOS({ returnFocus:true, force:true });
+        showToast('El cliente ya existía. Se seleccionó el registro existente.', 'ok', 3400);
+        return true;
+      }
+      setCustomerQuickMessagePOS('Ese cliente ya existe, pero está inactivo. Reactívalo desde Catálogos.', 'error');
+    } else if (result && result.reason === 'save'){
+      setCustomerQuickMessagePOS('No se pudo guardar el cliente. Intenta nuevamente.', 'error');
+    } else if (result && result.reason === 'verify'){
+      setCustomerQuickMessagePOS('No se pudo confirmar el guardado del cliente.', 'error');
+    } else {
+      setCustomerQuickMessagePOS('No se pudo crear el cliente.', 'error');
+    }
+  }catch(err){
+    console.error('Cliente rápido POS: error al crear', err);
+    if (lifecycleAtStart === customerQuickLifecyclePOS && isCustomerQuickOpenPOS()){
+      setCustomerQuickMessagePOS('No se pudo crear el cliente.', 'error');
+    }
+  }finally{
+    releaseCustomerQuickSubmitLockPOS();
+    if (lifecycleAtStart === customerQuickLifecyclePOS && isCustomerQuickOpenPOS()) setCustomerQuickBusyPOS(false);
+  }
+  return false;
+}
+
+function setupCustomerQuickModalPOS(){
+  const modal = document.getElementById('customer-quick-modal');
+  if (!modal || (modal.dataset && modal.dataset.bound === '1')) return;
+  if (modal.dataset) modal.dataset.bound = '1';
+
+  const form = document.getElementById('customer-quick-form');
+  const cancelBtn = document.getElementById('customer-quick-cancel');
+  const nameEl = document.getElementById('customer-quick-name');
+
+  if (modal.getAttribute('aria-hidden') !== 'false'){
+    modal.style.display = 'none';
+    modal.setAttribute('aria-hidden', 'true');
+    modal.setAttribute('inert', '');
+  }
+
+  if (form) form.addEventListener('submit', handleCustomerQuickSubmitPOS);
+  if (cancelBtn) cancelBtn.addEventListener('click', (event)=>{
+    try{ event && event.preventDefault(); }catch(_){ }
+    if (!customerQuickBusyPOS && isCustomerQuickOpenPOS()) closeCustomerQuickPOS({ returnFocus:true });
+  });
+  if (nameEl){
+    nameEl.addEventListener('input', ()=>{
+      if (sanitizeCustomerDisplayPOS(nameEl.value || '')){
+        nameEl.classList.remove('a33-invalid');
+        setCustomerQuickMessagePOS('', '');
+      }
+    });
+  }
+
+  modal.addEventListener('click', (event)=>{
+    if (event && event.target === modal && !customerQuickBusyPOS && isCustomerQuickOpenPOS()){
+      closeCustomerQuickPOS({ returnFocus:true });
+    }
+  });
+
+  modal.addEventListener('keydown', (event)=>{
+    if (!isCustomerQuickOpenPOS()) return;
+    if (event.key === 'Escape'){
+      if (!customerQuickBusyPOS){
+        event.preventDefault();
+        closeCustomerQuickPOS({ returnFocus:true });
+      }
+      return;
+    }
+    if (event.key === 'Enter' && event.repeat){
+      event.preventDefault();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = getCustomerQuickFocusablePOS();
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first){ event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last){ event.preventDefault(); first.focus(); }
+  });
+
+  try{
+    if (!window.__A33_POS_CUSTOMER_QUICK_LIFECYCLE_BOUND__){
+      window.__A33_POS_CUSTOMER_QUICK_LIFECYCLE_BOUND__ = true;
+      window.addEventListener('pagehide', ()=>{
+        if (isCustomerQuickOpenPOS()) closeCustomerQuickPOS({ returnFocus:false, force:true });
+      });
+      window.addEventListener('pageshow', ()=>{
+        const currentModal = document.getElementById('customer-quick-modal');
+        if (!currentModal) return;
+        if (currentModal.getAttribute('aria-hidden') !== 'false'){
+          currentModal.style.display = 'none';
+          currentModal.setAttribute('inert', '');
+          try{ document.body.classList.remove('customer-quick-modal-open'); }catch(_){ }
+        }
+      });
+    }
+  }catch(_){ }
+}
+
 function isCustomerPickerOpenPOS(){
   const modal = document.getElementById('customer-picker-modal');
   return !!(modal && modal.style.display === 'flex');
@@ -7957,6 +9600,7 @@ function setupCustomerPickerModalPOS(){
   // Escape
   document.addEventListener('keydown', (e)=>{
     if (e.key !== 'Escape') return;
+    if (isCustomerQuickOpenPOS() && !customerQuickBusyPOS) closeCustomerQuickPOS({ returnFocus:true });
     if (isCustomerPickerOpenPOS()) closeCustomerPickerPOS();
     if (isCustomerEditOpenPOS()) closeCustomerEditModalPOS();
     if (isCustomerMergeOpenPOS()) closeCustomerMergeModalPOS();
@@ -8175,12 +9819,14 @@ function initCustomerUXPOS(){
   const sticky = document.getElementById('sale-customer-sticky');
   const clearBtn = document.getElementById('btn-clear-customer');
   const pickBtn = document.getElementById('btn-pick-customer');
+  const newBtn = document.getElementById('btn-new-customer');
 
   if (!inp || !sticky) return;
 
-  // Etapa 2/3: POS solo selecciona clientes activos; no administra ni crea clientes.
+  // POS selecciona clientes activos y permite alta rápida sin abandonar la venta.
   try{ inp.setAttribute('readonly', 'readonly'); inp.setAttribute('aria-readonly', 'true'); }catch(_){ }
   setupCustomerPickerModalPOS();
+  setupCustomerQuickModalPOS();
   refreshCustomerUI_POS();
 
   // Estado pegajoso + último cliente: restaurar solo si todavía existe y está activo.
@@ -8239,17 +9885,35 @@ function initCustomerUXPOS(){
     });
   }
 
-  if (pickBtn){
+  if (pickBtn && (!pickBtn.dataset || pickBtn.dataset.bound !== '1')){
+    if (pickBtn.dataset) pickBtn.dataset.bound = '1';
     pickBtn.addEventListener('click', ()=> openCustomerPickerPOS());
+  }
+
+  if (newBtn && (!newBtn.dataset || newBtn.dataset.bound !== '1')){
+    if (newBtn.dataset) newBtn.dataset.bound = '1';
+    newBtn.addEventListener('click', (event)=>{
+      try{ event && event.preventDefault(); }catch(_){ }
+      openCustomerQuickPOS();
+    });
   }
 
   // Catálogos vive fuera de POS: si otra pantalla cambia clientes, POS se auto-blinda.
   try{
-    window.addEventListener('storage', (ev)=>{
-      if (!ev || ev.key === CUSTOMER_CATALOG_KEY || ev.key === CUSTOMER_DISABLED_KEY){
+    if (!window.__A33_POS_CUSTOMERS_LIVE_BOUND__){
+      window.__A33_POS_CUSTOMERS_LIVE_BOUND__ = true;
+      window.addEventListener('storage', (ev)=>{
+        if (!ev || ev.key === CUSTOMER_CATALOG_KEY || ev.key === CUSTOMER_DISABLED_KEY){
+          refreshCustomerUI_POS();
+        }
+      });
+      window.addEventListener('focus', ()=>{
         refreshCustomerUI_POS();
-      }
-    });
+      });
+      document.addEventListener('visibilitychange', ()=>{
+        if (!document.hidden) refreshCustomerUI_POS();
+      });
+    }
   }catch(_){ }
 }
 
@@ -8516,7 +10180,7 @@ async function ensureGroupsAvailableAtStartupPOS(){
 }
 function normName(s){ return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim(); }
 
-const CANON_GALON_LABEL = 'Galón 3750 ml';
+const CANON_GALON_LABEL = 'Galón 3720 ml';
 function normKeyPOS(s){ return normName(s).replace(/\s+/g,''); }
 // Back-compat: algunos bloques usan norm(...)
 function norm(s){ return normKeyPOS(s); }
@@ -8570,15 +10234,7 @@ function invCentralDefaultPOS(){
   return {
     liquids: {},
     bottles: {},
-    finished: {
-      pulso: { stock: 0 },
-      media: { stock: 0 },
-      djeba: { stock: 0 },
-      litro: { stock: 0 },
-      galon: { stock: 0 },
-    },
-    // Productos nuevos: stock terminado por Product ID.
-    // Compatibilidad: los cinco legacy siguen viviendo en finished.{pulso,media,djeba,litro,galon}.
+    finished: {},
     finishedByProductId: {},
   };
 }
@@ -8588,12 +10244,8 @@ function invCentralNormalizePOS(data){
   if (!out.bottles || typeof out.bottles !== 'object') out.bottles = {};
   if (!out.finished || typeof out.finished !== 'object') out.finished = {};
   if (!out.finishedByProductId || typeof out.finishedByProductId !== 'object') out.finishedByProductId = {};
-
-  ['pulso','media','djeba','litro','galon'].forEach((id)=>{
-    if (!out.finished[id] || typeof out.finished[id] !== 'object') out.finished[id] = { stock: 0 };
-    const info = out.finished[id];
-    info.stock = invParseNumberPOS(info.stock || 0);
-  });
+  if (!Array.isArray(out.varios)) out.varios = [];
+  if (!Array.isArray(out.movimientos)) out.movimientos = [];
 
   Object.keys(out.finished || {}).forEach((id)=>{
     if (!out.finished[id] || typeof out.finished[id] !== 'object') out.finished[id] = { stock: 0 };
@@ -8656,9 +10308,9 @@ function mapProductNameToFinishedId(name){
 }
 function saleProductIdForInventoryPOS(sale){
   if (!sale || typeof sale !== 'object') return null;
-  const raw = sale.productId ?? sale.productoId ?? (sale.productSnapshot && (sale.productSnapshot.productId ?? sale.productSnapshot.id));
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : null;
+  const raw = sale.productId ?? sale.productoId ?? (sale.productSnapshot && sale.productSnapshot.productId);
+  const value = String(raw == null ? '' : raw).trim();
+  return value || null;
 }
 function saleProductNameForInventoryPOS(sale){
   if (!sale || typeof sale !== 'object') return '';
@@ -8693,16 +10345,8 @@ function applyFinishedFromSalePOS(sale, direction){
     const delta = -dir * qty; // dir=+1: registrar venta/devolución; dir=-1: revertir
     const inv = invCentralLoadPOS();
 
-    // Legacy: las presentaciones históricas siguen usando finished.{pulso,media,djeba,litro,galon}.
-    if (finishedId){
-      if (!inv.finished || typeof inv.finished !== 'object') inv.finished = {};
-      if (!inv.finished[finishedId] || typeof inv.finished[finishedId] !== 'object') inv.finished[finishedId] = { stock: 0 };
-      inv.finished[finishedId].stock = invParseNumberPOS(inv.finished[finishedId].stock) + delta;
-      invCentralSavePOS(inv);
-      return;
-    }
-
-    // Productos nuevos: nunca se fuerzan a un legacy. Se descuentan por Product ID.
+    // Productos con identidad estable: siempre se descuentan por productId.
+    // Dos productos con el mismo nombre nunca comparten inventario terminado.
     if (productId){
       const key = String(productId);
       if (!inv.finishedByProductId || typeof inv.finishedByProductId !== 'object') inv.finishedByProductId = {};
@@ -8716,11 +10360,732 @@ function applyFinishedFromSalePOS(sale, direction){
       row.productName = productName || row.productName || row.name;
       row.updatedAt = new Date().toISOString();
       invCentralSavePOS(inv);
+      return;
+    }
+
+    // Compatibilidad exclusiva para ventas históricas sin productId estable.
+    if (finishedId){
+      if (!inv.finished || typeof inv.finished !== 'object') inv.finished = {};
+      if (!inv.finished[finishedId] || typeof inv.finished[finishedId] !== 'object') inv.finished[finishedId] = { stock: 0 };
+      inv.finished[finishedId].stock = invParseNumberPOS(inv.finished[finishedId].stock) + delta;
+      invCentralSavePOS(inv);
     }
   }catch(e){
     console.error('Error ajustando inventario central desde venta', e);
   }
 }
+
+
+// ------------------------------------------------------------
+// SUITE A33 — POS — VASOS — ETAPAS 2-3/4
+// Descuento y reverso idempotentes del Vaso físico asociado por ID estable.
+// - Solo ventas/cortesías confirmadas (no devoluciones ni Extras).
+// - Fuente oficial: Inventario Central -> Inventario Varios.
+// - Reempaque no llama esta lógica.
+// - El reverso exige trazabilidad moderna; nunca infiere por nombre.
+// ------------------------------------------------------------
+const POS_PHYSICAL_CUP_EFFECT_PREFIX = 'pos-vaso-fisico';
+const POS_PHYSICAL_CUP_RESTORE_QUEUE_KEY = 'a33_pos_physical_cup_restore_queue_v1';
+let __A33_PHYSICAL_CUP_RECONCILE_RUNNING_POS = false;
+let __A33_PHYSICAL_CUP_HOOKS_BOUND_POS = false;
+
+function productPhysicalCupInventoryIdPOS(product){
+  if (!product || typeof product !== 'object') return '';
+  return String(product.vasoFisicoId ?? product.physicalCupInventoryId ?? product.cupInventoryItemId ?? '').trim();
+}
+
+function salePhysicalCupInventoryIdPOS(sale){
+  if (!sale || typeof sale !== 'object') return '';
+  const snap = sale.productSnapshot && typeof sale.productSnapshot === 'object' ? sale.productSnapshot : {};
+  return String(
+    sale.physicalCupInventoryIdSnapshot ??
+    sale.vasoFisicoId ??
+    snap.vasoFisicoId ??
+    snap.physicalCupInventoryId ??
+    ''
+  ).trim();
+}
+
+function physicalCupQtyFromSalePOS(sale){
+  if (!sale || typeof sale !== 'object' || sale.isExtra || sale.isReturn) return 0;
+  const raw = Math.abs(Number(sale.qty || 0));
+  if (!(raw > 0) || !Number.isFinite(raw)) return 0;
+  const rounded = Math.round(raw);
+  return Math.abs(raw - rounded) < 1e-9 ? rounded : 0;
+}
+
+function physicalCupSaleKeyPOS(sale){
+  if (!sale || typeof sale !== 'object') return '';
+  const uid = String(sale.uid ?? '').trim();
+  if (uid) return 'uid:' + uid;
+  const id = String(sale.id ?? '').trim();
+  if (id) return 'id:' + id;
+  const createdAt = String(sale.createdAt ?? '').trim();
+  const eventId = String(sale.eventId ?? '').trim();
+  if (createdAt) return 'ts:' + createdAt + ':ev:' + eventId;
+  return '';
+}
+
+function physicalCupSourceIdPOS(sale, itemId){
+  const sid = physicalCupSaleKeyPOS(sale);
+  const iid = String(itemId || '').trim();
+  return sid && iid ? `${POS_PHYSICAL_CUP_EFFECT_PREFIX}|${iid}|${sid}` : '';
+}
+
+function physicalCupMovementIdPOS(sourceId){
+  const raw = String(sourceId || '').trim();
+  if (!raw) return '';
+  let hash = 2166136261;
+  for (let i = 0; i < raw.length; i++){
+    hash ^= raw.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `mov_pos_vaso_${(hash >>> 0).toString(36)}`;
+}
+
+function physicalCupEffectTraceFromSalePOS(sale){
+  if (!sale || typeof sale !== 'object') return null;
+  const effects = sale.invEffects && typeof sale.invEffects === 'object' ? sale.invEffects : null;
+  const trace = effects && effects.physicalCup && typeof effects.physicalCup === 'object'
+    ? effects.physicalCup
+    : null;
+  if (!trace) return null;
+  const itemId = String(trace.itemId || '').trim();
+  const movementId = String(trace.movementId || '').trim();
+  const sourceId = String(trace.sourceId || '').trim();
+  const qtyApplied = Math.abs(Number(trace.qtyApplied || trace.qty || 0));
+  if (!itemId || !movementId || !sourceId || !(qtyApplied > 0) || !Number.isFinite(qtyApplied)) return null;
+  return {
+    itemId,
+    movementId,
+    sourceId,
+    qtyApplied,
+    state: String(trace.state || 'APPLIED').trim().toUpperCase() || 'APPLIED',
+    restoredAt: trace.restoredAt || null,
+    restoreMovementId: String(trace.restoreMovementId || '').trim()
+  };
+}
+
+function saleIsInactiveForPhysicalCupPOS(sale){
+  if (!sale || typeof sale !== 'object') return true;
+  return !!(
+    sale.deletedAt || sale.voidedAt || sale.annulledAt || sale.cancelledAt || sale.canceledAt ||
+    sale.revertedAt || sale.reversedAt || sale.isDeleted || sale.deleted || sale.isVoid || sale.voided ||
+    sale.isCancelled || sale.cancelled || sale.canceled || sale.isReverted || sale.reverted || sale.reversed
+  );
+}
+
+function physicalCupRestoreMovementIdPOS(trace){
+  const movementId = String(trace && trace.movementId || '').trim();
+  return movementId ? `${movementId}_restore` : '';
+}
+
+function physicalCupRestoreSourceIdPOS(trace){
+  const sourceId = String(trace && trace.sourceId || '').trim();
+  return sourceId ? `${sourceId}|restore` : '';
+}
+
+function physicalCupRestoreMovementByIdentityPOS(inv, trace){
+  const restoreMovementId = physicalCupRestoreMovementIdPOS(trace);
+  const restoreSourceId = physicalCupRestoreSourceIdPOS(trace);
+  const rows = Array.isArray(inv && inv.movimientos) ? inv.movimientos : [];
+  return rows.find((mov) => {
+    if (!mov || typeof mov !== 'object') return false;
+    if (restoreMovementId && String(mov.id || '') === restoreMovementId) return true;
+    return !!(
+      restoreSourceId && String(mov.sourceId || '') === restoreSourceId &&
+      String(mov.restoresMovementId || '') === String(trace && trace.movementId || '')
+    );
+  }) || null;
+}
+
+function buildPhysicalCupRestoreMovementPOS({ sale, item, trace, qty, before, after }){
+  return {
+    id: physicalCupRestoreMovementIdPOS(trace),
+    tipoItem: 'varios',
+    itemId: trace.itemId,
+    nombreSnapshot: String((item && item.producto) || trace.itemId || 'Vaso físico').trim(),
+    cantidad: qty,
+    delta: qty,
+    tipoMovimiento: sale && sale.courtesy ? 'entrada_reverso_cortesia_pos' : 'entrada_reverso_venta_pos',
+    fecha: new Date().toISOString(),
+    nota: '',
+    origen: 'pos/reverso-venta-cortesia',
+    stockAnterior: before,
+    stockNuevo: after,
+    sourceId: physicalCupRestoreSourceIdPOS(trace),
+    state: 'RESTORED',
+    restoresMovementId: trace.movementId,
+    restoresSourceId: trace.sourceId
+  };
+}
+
+function ensurePhysicalCupInventoryShapePOS(inv){
+  const out = inv && typeof inv === 'object' ? inv : {};
+  if (!Array.isArray(out.varios)) out.varios = [];
+  if (!Array.isArray(out.movimientos)) out.movimientos = [];
+  return out;
+}
+
+function physicalCupMovementByIdentityPOS(inv, movementId, sourceId){
+  const rows = Array.isArray(inv && inv.movimientos) ? inv.movimientos : [];
+  return rows.find((mov) => {
+    if (!mov || typeof mov !== 'object') return false;
+    if (movementId && String(mov.id || '') === movementId){
+      return !sourceId || !mov.sourceId || String(mov.sourceId || '') === sourceId;
+    }
+    return sourceId && String(mov.sourceId || '') === sourceId && String(mov.state || mov.estado || '') === 'APPLIED';
+  }) || null;
+}
+
+function buildPhysicalCupMovementPOS({ sale, item, itemId, qty, before, after, sourceId, movementId }){
+  return {
+    id: movementId,
+    tipoItem: 'varios',
+    itemId,
+    nombreSnapshot: String((item && item.producto) || itemId || 'Vaso físico').trim(),
+    cantidad: qty,
+    delta: -qty,
+    tipoMovimiento: sale && sale.courtesy ? 'salida_cortesia_pos' : 'salida_venta_pos',
+    fecha: new Date().toISOString(),
+    nota: '',
+    origen: 'pos/venta-cortesia',
+    stockAnterior: before,
+    stockNuevo: after,
+    sourceId,
+    state: 'APPLIED'
+  };
+}
+
+function applyPhysicalCupEffectToInventoryPOS(invObj, sale){
+  const inv = ensurePhysicalCupInventoryShapePOS(invObj || {});
+  const itemId = salePhysicalCupInventoryIdPOS(sale);
+  const qty = physicalCupQtyFromSalePOS(sale);
+  if (!itemId) return { inv, ok:true, skipped:true, reason:'no_association', itemId:'', qty:0 };
+  if (!(qty > 0)) return { inv, ok:true, skipped:true, reason:'not_consumable_sale', itemId, qty:0 };
+
+  const sourceId = physicalCupSourceIdPOS(sale, itemId);
+  const movementId = physicalCupMovementIdPOS(sourceId);
+  if (!sourceId || !movementId){
+    return { inv, ok:false, skipped:true, reason:'missing_sale_identity', itemId, qty, message:'No se pudo identificar de forma estable el consumo del Vaso físico.' };
+  }
+
+  const existing = physicalCupMovementByIdentityPOS(inv, movementId, sourceId);
+  if (existing){
+    return {
+      inv, ok:true, skipped:true, reason:'already_applied', itemId,
+      qty: Math.abs(Number(existing.cantidad || qty)) || qty,
+      sourceId, movementId,
+      before:Number(existing.stockAnterior), after:Number(existing.stockNuevo)
+    };
+  }
+
+  const item = inv.varios.find((row) => row && typeof row === 'object' && String(row.id || '').trim() === itemId) || null;
+  if (!item){
+    return { inv, ok:true, skipped:true, reason:'item_missing', itemId, qty, sourceId, movementId };
+  }
+
+  const beforeRaw = Number(item.stock);
+  const before = Number.isFinite(beforeRaw) ? Math.trunc(beforeRaw) : 0;
+  const after = before - qty; // Inventario Varios permite negativos: conservar política actual.
+  item.stock = after;
+  const movement = buildPhysicalCupMovementPOS({ sale, item, itemId, qty, before, after, sourceId, movementId });
+  inv.movimientos.push(movement);
+  return { inv, ok:true, skipped:false, reason:'applied', itemId, qty, sourceId, movementId, before, after, movement };
+}
+
+function verifyPhysicalCupEffectPOS(invObj, expected){
+  const inv = ensurePhysicalCupInventoryShapePOS(invObj || {});
+  const movement = physicalCupMovementByIdentityPOS(inv, expected.movementId, expected.sourceId);
+  if (!movement) return false;
+  const item = inv.varios.find((row) => row && String(row.id || '').trim() === expected.itemId);
+  return !!item && Number.isFinite(Number(item.stock));
+}
+
+function applyPhysicalCupRestoreToInventoryPOS(invObj, sale){
+  const inv = ensurePhysicalCupInventoryShapePOS(invObj || {});
+  const trace = physicalCupEffectTraceFromSalePOS(sale);
+  if (!trace){
+    return { inv, ok:true, skipped:true, reason:'no_modern_trace' };
+  }
+
+  const alreadyRestored = physicalCupRestoreMovementByIdentityPOS(inv, trace);
+  if (alreadyRestored){
+    return {
+      inv, ok:true, skipped:true, reason:'already_restored', trace,
+      itemId:trace.itemId,
+      qty:Math.abs(Number(alreadyRestored.cantidad || trace.qtyApplied)) || trace.qtyApplied,
+      movementId:trace.movementId,
+      restoreMovementId:String(alreadyRestored.id || physicalCupRestoreMovementIdPOS(trace)),
+      restoreSourceId:String(alreadyRestored.sourceId || physicalCupRestoreSourceIdPOS(trace))
+    };
+  }
+
+  const appliedMovement = physicalCupMovementByIdentityPOS(inv, trace.movementId, trace.sourceId);
+  if (!appliedMovement){
+    return {
+      inv, ok:true, skipped:true, reason:'applied_movement_missing', trace,
+      itemId:trace.itemId, qty:trace.qtyApplied
+    };
+  }
+
+  const movementItemId = String(appliedMovement.itemId || '').trim();
+  if (!movementItemId || movementItemId !== trace.itemId){
+    return {
+      inv, ok:false, skipped:true, reason:'trace_mismatch', trace,
+      itemId:trace.itemId, qty:trace.qtyApplied,
+      message:'La trazabilidad del Vaso físico no coincide con el movimiento aplicado.'
+    };
+  }
+
+  const appliedDelta = Number(appliedMovement.delta);
+  if (!Number.isFinite(appliedDelta) || !(appliedDelta < 0)){
+    return {
+      inv, ok:false, skipped:true, reason:'invalid_applied_movement', trace,
+      itemId:trace.itemId, qty:trace.qtyApplied,
+      message:'El movimiento original no representa una salida válida de Vaso físico.'
+    };
+  }
+  const qtyFromMovement = Math.abs(appliedDelta);
+  const qty = (qtyFromMovement > 0 && Number.isFinite(qtyFromMovement)) ? qtyFromMovement : trace.qtyApplied;
+  if (!(qty > 0) || !Number.isFinite(qty)){
+    return { inv, ok:false, skipped:true, reason:'invalid_applied_qty', trace, itemId:trace.itemId, qty:0 };
+  }
+
+  const item = inv.varios.find((row) => row && typeof row === 'object' && String(row.id || '').trim() === trace.itemId) || null;
+  if (!item){
+    return {
+      inv, ok:true, skipped:true, reason:'item_missing', trace,
+      itemId:trace.itemId, qty
+    };
+  }
+
+  const beforeRaw = Number(item.stock);
+  const before = Number.isFinite(beforeRaw) ? Math.trunc(beforeRaw) : 0;
+  const after = before + qty;
+  item.stock = after;
+  const restoreMovement = buildPhysicalCupRestoreMovementPOS({ sale, item, trace, qty, before, after });
+  inv.movimientos.push(restoreMovement);
+  return {
+    inv, ok:true, skipped:false, reason:'restored', trace,
+    itemId:trace.itemId, qty,
+    movementId:trace.movementId,
+    restoreMovementId:restoreMovement.id,
+    restoreSourceId:restoreMovement.sourceId,
+    before, after, restoreMovement
+  };
+}
+
+function verifyPhysicalCupRestorePOS(invObj, expected){
+  const inv = ensurePhysicalCupInventoryShapePOS(invObj || {});
+  const trace = expected && expected.trace ? expected.trace : physicalCupEffectTraceFromSalePOS(expected && expected.sale);
+  if (!trace) return false;
+  const movement = physicalCupRestoreMovementByIdentityPOS(inv, trace);
+  if (!movement) return false;
+  const item = inv.varios.find((row) => row && String(row.id || '').trim() === trace.itemId);
+  return !!item && Number.isFinite(Number(item.stock));
+}
+
+function readPhysicalCupInventorySharedPOS(){
+  if (window.A33Storage && typeof A33Storage.sharedRead === 'function'){
+    const r = A33Storage.sharedRead(STORAGE_KEY_INVENTARIO, invCentralDefaultPOS(), 'local');
+    return {
+      data: ensurePhysicalCupInventoryShapePOS((r && r.data) ? r.data : invCentralDefaultPOS()),
+      meta: (r && r.meta && typeof r.meta === 'object') ? r.meta : {}
+    };
+  }
+  return { data: ensurePhysicalCupInventoryShapePOS(invCentralLoadPOS()), meta:{} };
+}
+
+function adjustPhysicalCupInventoryFromSalePOS(sale){
+  const itemId = salePhysicalCupInventoryIdPOS(sale);
+  const qty = physicalCupQtyFromSalePOS(sale);
+  if (!itemId) return { ok:true, skipped:true, reason:'no_association', itemId:'', qty:0 };
+  if (!(qty > 0)) return { ok:true, skipped:true, reason:'not_consumable_sale', itemId, qty:0 };
+
+  try{
+    if (window.A33Storage && typeof A33Storage.sharedRead === 'function' && typeof A33Storage.sharedSet === 'function'){
+      for (let attempt = 0; attempt < 3; attempt++){
+        const current = readPhysicalCupInventorySharedPOS();
+        const baseRev = (current.meta && typeof current.meta.rev === 'number') ? current.meta.rev : null;
+        const applied = applyPhysicalCupEffectToInventoryPOS(current.data, sale);
+        if (!applied.ok || applied.skipped) return applied;
+
+        const saved = A33Storage.sharedSet(STORAGE_KEY_INVENTARIO, applied.inv, {
+          source:'pos/vaso-fisico', baseRev, conflictPolicy:'block'
+        });
+        if (saved && saved.ok){
+          const verify = readPhysicalCupInventorySharedPOS();
+          if (verifyPhysicalCupEffectPOS(verify.data, applied)) return applied;
+          return { ...applied, ok:false, message:'No se pudo verificar el descuento del Vaso físico.' };
+        }
+        if (saved && saved.conflict) continue;
+        return { ...applied, ok:false, message:(saved && saved.message) ? saved.message : 'No se pudo guardar el descuento del Vaso físico.' };
+      }
+      return { ok:false, skipped:false, itemId, qty, message:'Conflicto al actualizar Inventario Varios. Recarga e intenta de nuevo.' };
+    }
+  }catch(error){
+    console.warn('Error actualizando Vaso físico con almacenamiento compartido', error);
+  }
+
+  try{
+    const applied = applyPhysicalCupEffectToInventoryPOS(invCentralLoadPOS(), sale);
+    if (!applied.ok || applied.skipped) return applied;
+    A33Storage.setItem(STORAGE_KEY_INVENTARIO, JSON.stringify(applied.inv));
+    const verify = invCentralLoadPOS();
+    if (!verifyPhysicalCupEffectPOS(verify, applied)){
+      return { ...applied, ok:false, message:'No se pudo verificar el descuento del Vaso físico (fallback).' };
+    }
+    return { ...applied, fallback:true };
+  }catch(error){
+    console.warn('Error actualizando Vaso físico (fallback)', error);
+    return { ok:false, skipped:false, itemId, qty, message:'No se pudo actualizar el Vaso físico en Inventario Varios.' };
+  }
+}
+
+function restorePhysicalCupInventoryFromSalePOS(sale){
+  const trace = physicalCupEffectTraceFromSalePOS(sale);
+  if (!trace) return { ok:true, skipped:true, reason:'no_modern_trace' };
+
+  try{
+    if (window.A33Storage && typeof A33Storage.sharedRead === 'function' && typeof A33Storage.sharedSet === 'function'){
+      for (let attempt = 0; attempt < 3; attempt++){
+        const current = readPhysicalCupInventorySharedPOS();
+        const baseRev = (current.meta && typeof current.meta.rev === 'number') ? current.meta.rev : null;
+        const restored = applyPhysicalCupRestoreToInventoryPOS(current.data, sale);
+        if (!restored.ok || restored.skipped) return restored;
+
+        const saved = A33Storage.sharedSet(STORAGE_KEY_INVENTARIO, restored.inv, {
+          source:'pos/vaso-fisico-reverso', baseRev, conflictPolicy:'block'
+        });
+        if (saved && saved.ok){
+          const verify = readPhysicalCupInventorySharedPOS();
+          if (verifyPhysicalCupRestorePOS(verify.data, restored)) return restored;
+          return { ...restored, ok:false, message:'No se pudo verificar la restauración del Vaso físico.' };
+        }
+        if (saved && saved.conflict) continue;
+        return { ...restored, ok:false, message:(saved && saved.message) ? saved.message : 'No se pudo guardar la restauración del Vaso físico.' };
+      }
+      return { ok:false, skipped:false, trace, itemId:trace.itemId, qty:trace.qtyApplied, message:'Conflicto al restaurar Inventario Varios. Recarga e intenta de nuevo.' };
+    }
+  }catch(error){
+    console.warn('Error restaurando Vaso físico con almacenamiento compartido', error);
+  }
+
+  try{
+    const restored = applyPhysicalCupRestoreToInventoryPOS(invCentralLoadPOS(), sale);
+    if (!restored.ok || restored.skipped) return restored;
+    A33Storage.setItem(STORAGE_KEY_INVENTARIO, JSON.stringify(restored.inv));
+    const verify = invCentralLoadPOS();
+    if (!verifyPhysicalCupRestorePOS(verify, restored)){
+      return { ...restored, ok:false, message:'No se pudo verificar la restauración del Vaso físico (fallback).' };
+    }
+    return { ...restored, fallback:true };
+  }catch(error){
+    console.warn('Error restaurando Vaso físico (fallback)', error);
+    return { ok:false, skipped:false, trace, itemId:trace.itemId, qty:trace.qtyApplied, message:'No se pudo restaurar el Vaso físico en Inventario Varios.' };
+  }
+}
+
+async function persistPhysicalCupTraceOnSalePOS(sale, result){
+  if (!sale || !result || !result.ok || !result.itemId || !result.movementId) return sale;
+  try{
+    let current = null;
+    if (sale.id != null) current = await getOne('sales', sale.id);
+    if (!current && sale.uid) current = await getSaleByUidPOS(sale.uid);
+    current = current || sale;
+
+    const previous = current.invEffects && current.invEffects.physicalCup;
+    const wasRestored = previous && String(previous.state || '').toUpperCase() === 'RESTORED'
+      && String(previous.itemId || '') === String(result.itemId)
+      && String(previous.movementId || '') === String(result.movementId);
+    if (wasRestored){
+      Object.assign(sale, current);
+      return current;
+    }
+    const same = previous && previous.state === 'APPLIED'
+      && String(previous.itemId || '') === String(result.itemId)
+      && String(previous.movementId || '') === String(result.movementId)
+      && Number(previous.qtyApplied || 0) === Number(result.qty || 0);
+    if (same){
+      Object.assign(sale, current);
+      return current;
+    }
+
+    const updated = {
+      ...current,
+      invEffects: {
+        ...(current.invEffects && typeof current.invEffects === 'object' ? current.invEffects : {}),
+        physicalCup: {
+          itemId: result.itemId,
+          qtyApplied: result.qty,
+          state: 'APPLIED',
+          sourceId: result.sourceId,
+          movementId: result.movementId
+        }
+      }
+    };
+    await put('sales', updated);
+    Object.assign(sale, updated);
+    return updated;
+  }catch(error){
+    console.warn('Vaso físico descontado, pero no se pudo guardar la marca en la venta', error);
+    return sale;
+  }
+}
+
+async function persistPhysicalCupRestoreTraceOnSalePOS(sale, result){
+  if (!sale || !result || !result.ok || !result.trace) return sale;
+  try{
+    let current = null;
+    if (sale.id != null) current = await getOne('sales', sale.id);
+    if (!current && sale.uid) current = await getSaleByUidPOS(sale.uid);
+    if (!current) return sale; // Nunca recrear una venta ya borrada.
+
+    const previous = current.invEffects && current.invEffects.physicalCup;
+    const restoreMovementId = String(result.restoreMovementId || physicalCupRestoreMovementIdPOS(result.trace));
+    const updated = {
+      ...current,
+      invEffects: {
+        ...(current.invEffects && typeof current.invEffects === 'object' ? current.invEffects : {}),
+        physicalCup: {
+          ...(previous && typeof previous === 'object' ? previous : {}),
+          itemId: result.trace.itemId,
+          qtyApplied: result.trace.qtyApplied,
+          state: 'RESTORED',
+          sourceId: result.trace.sourceId,
+          movementId: result.trace.movementId,
+          qtyRestored: result.qty || result.trace.qtyApplied,
+          restoreMovementId,
+          restoredAt: (result.restoreMovement && result.restoreMovement.fecha) || new Date().toISOString()
+        }
+      }
+    };
+    await put('sales', updated);
+    Object.assign(sale, updated);
+    return updated;
+  }catch(error){
+    console.warn('Vaso físico restaurado, pero no se pudo guardar la marca en la venta', error);
+    return sale;
+  }
+}
+
+function readPhysicalCupRestoreQueuePOS(){
+  try{
+    const raw = (window.A33Storage && typeof A33Storage.getItem === 'function')
+      ? A33Storage.getItem(POS_PHYSICAL_CUP_RESTORE_QUEUE_KEY)
+      : localStorage.getItem(POS_PHYSICAL_CUP_RESTORE_QUEUE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((row)=> row && typeof row === 'object') : [];
+  }catch(error){
+    console.warn('No se pudo leer la cola de reversos de Vasos físicos', error);
+    return [];
+  }
+}
+
+function writePhysicalCupRestoreQueuePOS(rows){
+  const clean = Array.isArray(rows) ? rows.filter((row)=> row && typeof row === 'object') : [];
+  const raw = JSON.stringify(clean);
+  let ok = false;
+  try{
+    if (window.A33Storage && typeof A33Storage.setItem === 'function'){
+      ok = A33Storage.setItem(POS_PHYSICAL_CUP_RESTORE_QUEUE_KEY, raw) !== false;
+    }else{
+      localStorage.setItem(POS_PHYSICAL_CUP_RESTORE_QUEUE_KEY, raw);
+      ok = true;
+    }
+  }catch(error){
+    console.warn('No se pudo guardar la cola de reversos de Vasos físicos', error);
+    ok = false;
+  }
+  return ok;
+}
+
+function physicalCupRestoreTicketFromSalePOS(sale, reason){
+  const trace = physicalCupEffectTraceFromSalePOS(sale);
+  if (!trace || trace.state === 'RESTORED') return null;
+  const restoreMovementId = physicalCupRestoreMovementIdPOS(trace);
+  if (!restoreMovementId) return null;
+  return {
+    id: restoreMovementId,
+    reason: String(reason || 'sale-delete'),
+    createdAt: new Date().toISOString(),
+    saleRef: {
+      id: sale && sale.id != null ? sale.id : null,
+      uid: String(sale && sale.uid || '').trim(),
+      eventId: sale && sale.eventId != null ? sale.eventId : null,
+      courtesy: !!(sale && sale.courtesy)
+    },
+    trace: {
+      itemId: trace.itemId,
+      qtyApplied: trace.qtyApplied,
+      state: trace.state,
+      sourceId: trace.sourceId,
+      movementId: trace.movementId
+    }
+  };
+}
+
+function saleFromPhysicalCupRestoreTicketPOS(ticket){
+  const ref = ticket && ticket.saleRef && typeof ticket.saleRef === 'object' ? ticket.saleRef : {};
+  const trace = ticket && ticket.trace && typeof ticket.trace === 'object' ? ticket.trace : {};
+  return {
+    id: ref.id,
+    uid: ref.uid,
+    eventId: ref.eventId,
+    courtesy: !!ref.courtesy,
+    invEffects: { physicalCup: { ...trace } }
+  };
+}
+
+function enqueuePhysicalCupRestoreForSalePOS(sale, reason){
+  const ticket = physicalCupRestoreTicketFromSalePOS(sale, reason);
+  if (!ticket) return { ok:true, skipped:true, reason:'no_modern_trace', ticket:null };
+  const rows = readPhysicalCupRestoreQueuePOS();
+  const existing = rows.find((row)=> String(row && row.id || '') === ticket.id);
+  if (existing) return { ok:true, skipped:true, reason:'already_queued', ticket:existing };
+  rows.push(ticket);
+  if (!writePhysicalCupRestoreQueuePOS(rows)){
+    return { ok:false, skipped:false, reason:'queue_write_failed', ticket, message:'No se pudo preparar el reverso seguro del Vaso físico.' };
+  }
+  return { ok:true, skipped:false, reason:'queued', ticket };
+}
+
+function removePhysicalCupRestoreTicketPOS(ticketOrId){
+  const id = String((ticketOrId && ticketOrId.id) || ticketOrId || '').trim();
+  if (!id) return true;
+  const rows = readPhysicalCupRestoreQueuePOS();
+  const next = rows.filter((row)=> String(row && row.id || '') !== id);
+  if (next.length === rows.length) return true;
+  return writePhysicalCupRestoreQueuePOS(next);
+}
+
+async function resolvePhysicalCupTicketSalePOS(ticket){
+  try{
+    const ref = ticket && ticket.saleRef && typeof ticket.saleRef === 'object' ? ticket.saleRef : {};
+    let sale = null;
+    if (ref.id != null) sale = await getOne('sales', ref.id);
+    if (!sale && ref.uid) sale = await getSaleByUidPOS(ref.uid);
+    return sale || null;
+  }catch(_){
+    return null;
+  }
+}
+
+async function processPhysicalCupRestoreTicketPOS(ticket, opts){
+  if (!ticket || typeof ticket !== 'object') return { ok:true, skipped:true, reason:'invalid_ticket' };
+  const assumeDeleted = !!(opts && opts.assumeDeleted);
+  const currentSale = assumeDeleted ? null : await resolvePhysicalCupTicketSalePOS(ticket);
+  if (currentSale && !saleIsInactiveForPhysicalCupPOS(currentSale)){
+    removePhysicalCupRestoreTicketPOS(ticket);
+    return { ok:true, skipped:true, reason:'sale_still_active' };
+  }
+
+  const sale = currentSale || saleFromPhysicalCupRestoreTicketPOS(ticket);
+  const result = restorePhysicalCupInventoryFromSalePOS(sale);
+  if (result && result.ok && (result.reason === 'restored' || result.reason === 'already_restored')){
+    if (currentSale) await persistPhysicalCupRestoreTraceOnSalePOS(currentSale, result);
+    removePhysicalCupRestoreTicketPOS(ticket);
+    return result;
+  }
+  return result || { ok:false, skipped:false, reason:'unknown_restore_failure' };
+}
+
+async function processPendingPhysicalCupRestoresPOS(){
+  const rows = readPhysicalCupRestoreQueuePOS();
+  let restored = 0;
+  let already = 0;
+  let pending = 0;
+  let failed = 0;
+  for (const ticket of rows){
+    const result = await processPhysicalCupRestoreTicketPOS(ticket);
+    if (!result || result.ok === false) failed++;
+    else if (result.reason === 'restored') restored++;
+    else if (result.reason === 'already_restored' || result.reason === 'sale_still_active') already++;
+    else pending++;
+  }
+  return { ok:failed === 0, restored, already, pending, failed };
+}
+
+async function ensurePhysicalCupRestoreForInactiveSalePOS(sale){
+  const trace = physicalCupEffectTraceFromSalePOS(sale);
+  if (!trace || trace.state === 'RESTORED') return { ok:true, skipped:true, reason:'no_restore_needed' };
+  const result = restorePhysicalCupInventoryFromSalePOS(sale);
+  if (result && result.ok && (result.reason === 'restored' || result.reason === 'already_restored')){
+    await persistPhysicalCupRestoreTraceOnSalePOS(sale, result);
+  }
+  return result;
+}
+
+async function ensurePhysicalCupConsumptionForSalePOS(sale){
+  const result = adjustPhysicalCupInventoryFromSalePOS(sale);
+  if (result && result.ok && result.itemId && result.movementId){
+    await persistPhysicalCupTraceOnSalePOS(sale, result);
+  }
+  return result;
+}
+
+async function reconcilePendingPhysicalCupConsumptionsPOS(){
+  if (__A33_PHYSICAL_CUP_RECONCILE_RUNNING_POS) return { ok:true, skipped:true, reason:'already_running' };
+  __A33_PHYSICAL_CUP_RECONCILE_RUNNING_POS = true;
+  try{
+    if (!db) await openDB();
+    const sales = await getAll('sales');
+    let applied = 0;
+    let already = 0;
+    let missing = 0;
+    let restored = 0;
+    let failed = 0;
+    for (const sale of (Array.isArray(sales) ? sales : [])){
+      const trace = physicalCupEffectTraceFromSalePOS(sale);
+      if (trace && saleIsInactiveForPhysicalCupPOS(sale)){
+        const restoredResult = await ensurePhysicalCupRestoreForInactiveSalePOS(sale);
+        if (!restoredResult || restoredResult.ok === false) failed++;
+        else if (restoredResult.reason === 'restored') restored++;
+        else already++;
+        continue;
+      }
+      if (trace && trace.state === 'RESTORED') continue;
+      if (!salePhysicalCupInventoryIdPOS(sale) || !(physicalCupQtyFromSalePOS(sale) > 0)) continue;
+      const result = await ensurePhysicalCupConsumptionForSalePOS(sale);
+      if (!result || result.ok === false) failed++;
+      else if (result.reason === 'applied') applied++;
+      else if (result.reason === 'item_missing') missing++;
+      else already++;
+    }
+    return { ok:failed === 0, applied, restored, already, missing, failed };
+  }catch(error){
+    console.warn('No se pudo reconciliar consumo pendiente de Vasos físicos', error);
+    return { ok:false, error };
+  }finally{
+    __A33_PHYSICAL_CUP_RECONCILE_RUNNING_POS = false;
+  }
+}
+
+function bindPhysicalCupReconciliationHooksPOS(){
+  if (__A33_PHYSICAL_CUP_HOOKS_BOUND_POS) return;
+  __A33_PHYSICAL_CUP_HOOKS_BOUND_POS = true;
+  const run = ()=>{
+    processPendingPhysicalCupRestoresPOS()
+      .catch(()=>{})
+      .finally(()=>{ reconcilePendingPhysicalCupConsumptionsPOS().catch(()=>{}); });
+  };
+  try{ window.addEventListener('online', run); }catch(_){ }
+  try{ window.addEventListener('focus', run); }catch(_){ }
+  try{ window.addEventListener('storage', run); }catch(_){ }
+  try{ window.addEventListener('a33:cloud-sync-status', run); }catch(_){ }
+  try{ window.addEventListener('a33:firebase-status', run); }catch(_){ }
+}
+
+try{
+  window.A33_POS_PHYSICAL_CUPS = Object.freeze({
+    getItemIdFromSale: salePhysicalCupInventoryIdPOS,
+    ensureForSale: ensurePhysicalCupConsumptionForSalePOS,
+    restoreForSale: restorePhysicalCupInventoryFromSalePOS,
+    processPendingRestores: processPendingPhysicalCupRestoresPOS,
+    reconcile: reconcilePendingPhysicalCupConsumptionsPOS
+  });
+}catch(_){ }
 
 
 // ------------------------------------------------------------
@@ -8868,46 +11233,71 @@ async function renderCentralFinishedPOS(){
   if (!tbody) return;
   tbody.innerHTML = '';
   const inv = invCentralLoadPOS();
-  const defs = [
-    { id:'pulso', label:'Pulso 250 ml', legacy:true },
-    { id:'media', label:'Media 375 ml', legacy:true },
-    { id:'djeba', label:'Djeba 750 ml', legacy:true },
-    { id:'litro', label:'Litro 1000 ml', legacy:true },
-    { id:'galon', label:'Galón 3750 ml', legacy:true },
-  ];
+  const defs = [];
+  const seen = new Set();
 
   try{
     const products = await getAll('products');
-    const byId = new Map((Array.isArray(products) ? products : []).map(p => [String(p.id), p]));
-    Object.keys(inv.finishedByProductId || {}).forEach((id)=>{
-      const info = inv.finishedByProductId[id] || {};
-      const p = byId.get(String(id)) || null;
-      const label = String(
-        (p && (p.name || p.nombre)) ||
-        info.productName ||
-        info.name ||
-        ('Producto ' + id)
-      ).trim();
-      defs.push({ id:String(id), label, legacy:false });
+    (Array.isArray(products) ? products : []).forEach((product) => {
+      const productId = catalogProductStableIdPOS(product);
+      if (!productId || seen.has(productId)) return;
+      seen.add(productId);
+      const label = String(product.name || product.nombre || ('Producto ' + productId)).trim();
+      defs.push({ id:productId, label, legacy:false });
     });
-  }catch(_){
-    Object.keys(inv.finishedByProductId || {}).forEach((id)=>{
-      const info = inv.finishedByProductId[id] || {};
-      defs.push({ id:String(id), label:String(info.productName || info.name || ('Producto ' + id)), legacy:false });
+  }catch(_){ }
+
+  // Históricos borrados/inactivos: se conservan por identidad, pero nunca se convierten en Productos.
+  Object.keys(inv.finishedByProductId || {}).forEach((productId) => {
+    if (seen.has(productId)) return;
+    const info = inv.finishedByProductId[productId] || {};
+    const stock = invParseNumberPOS(info.stock);
+    if (!stock && !info.productName && !info.name) return;
+    seen.add(productId);
+    defs.push({
+      id:String(productId),
+      label:String(info.productName || info.name || ('Producto histórico ' + productId)).trim(),
+      legacy:false,
+      historical:true
     });
+  });
+
+  // Compatibilidad histórica sin productId: solo filas realmente existentes, nunca cinco defaults vacíos.
+  const legacyLabels = {
+    pulso:'Pulso 250 ml', media:'Media 375 ml', djeba:'Djeba 750 ml',
+    litro:'Litro 1000 ml', galon:'Galón 3720 ml'
+  };
+  Object.keys(inv.finished || {}).forEach((legacyId) => {
+    const info = inv.finished[legacyId] || {};
+    const stock = invParseNumberPOS(info.stock);
+    if (!stock && !info.productName && !info.name) return;
+    defs.push({
+      id:String(legacyId),
+      label:String(info.productName || info.name || legacyLabels[legacyId] || ('Histórico ' + legacyId)).trim(),
+      legacy:true,
+      historical:true
+    });
+  });
+
+  defs.sort((a,b) => String(a.label || '').localeCompare(String(b.label || ''), 'es-NI', { sensitivity:'base' }));
+  if (!defs.length){
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="2"><small class="muted">No hay Productos registrados en Catálogos.</small></td>';
+    tbody.appendChild(tr);
+    return;
   }
 
-  defs.forEach(d=>{
-    const info = d.legacy
-      ? ((inv.finished && inv.finished[d.id]) || { stock: 0 })
-      : ((inv.finishedByProductId && inv.finishedByProductId[d.id]) || { stock: 0 });
+  defs.forEach((def) => {
+    const info = def.legacy
+      ? ((inv.finished && inv.finished[def.id]) || { stock:0 })
+      : ((inv.finishedByProductId && inv.finishedByProductId[def.id]) || { stock:0 });
     const stock = invParseNumberPOS(info.stock);
+    const suffix = def.historical ? ' <small class="muted">(histórico)</small>' : '';
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${escapeHtml(d.label)}</td><td>${stock}</td>`;
+    tr.innerHTML = `<td>${escapeHtml(def.label)}${suffix}</td><td>${stock}</td>`;
     tbody.appendChild(tr);
   });
 }
-
 
 function leerCostosPresentacion() {
   try {
@@ -8962,15 +11352,8 @@ function getCostoUnitarioProducto(productName) {
 // Defaults (SKUs Arcano 33)
 const DEFAULT_GALON_PRICE_POS = 900;
 const LEGACY_DEFAULT_GALON_PRICE_POS = 800;
-const SEED = [
-  // "Vaso" ahora es producto vendible normal; su stock formal viene de Reempaque.
-  {name:'Vaso', price:100, manageStock:true, active:true, capacityMl:null, receta:false, letra:'', pos:true, envaseId:'', tapaId:''},
-  {name:'Pulso 250ml', price:120, manageStock:true, active:true, receta:true, letra:'P', pos:true, envaseId:'envase_pulso', tapaId:'tapa_pulso_litro'},
-  {name:'Media 375ml', price:150, manageStock:true, active:true, receta:true, letra:'M', pos:true, envaseId:'envase_media', tapaId:'tapa_djeba_media'},
-  {name:'Djeba 750ml', price:300, manageStock:true, active:true, receta:true, letra:'D', pos:true, envaseId:'envase_djeba', tapaId:'tapa_djeba_media'},
-  {name:'Litro 1000ml', price:330, manageStock:true, active:true, receta:true, letra:'L', pos:true, envaseId:'envase_litro', tapaId:'tapa_pulso_litro'},
-  {name:'Galón 3750 ml', price:DEFAULT_GALON_PRICE_POS, manageStock:true, active:true, receta:true, letra:'G', pos:true, envaseId:'envase_galon', tapaId:'tapa_galon'},
-];
+const SEED = Object.freeze([]); // Productos: sin semillas fuera de Catálogos → Productos.
+
 const CATALOG_DELETED_KEYS_POS = {
   products:'a33_catalog_deleted_products_v1',
   banks:'a33_catalog_deleted_banks_v1'
@@ -9013,7 +11396,7 @@ function rememberCatalogDeletedPOS(kind, row){
   const keys = readCatalogDeletedKeysPOS(kind);
   const main = catalogDeletedKeyPOS(kind, row);
   if (main) keys.add(main);
-  if (kind === 'products' && mapProductNameToFinishedIdPOS(row && row.name) === 'galon') keys.add(normKeyPOS('Galón 3750 ml'));
+  if (kind === 'products' && mapProductNameToFinishedIdPOS(row && row.name) === 'galon') keys.add(normKeyPOS('Galón 3720 ml'));
   writeCatalogDeletedKeysPOS(kind, keys);
 }
 
@@ -9074,8 +11457,8 @@ function productRecipeEnabledForProductionPOS(product){
   for (const key of keys){
     if (hasOwnPOS(p, key)) return boolCatalogFlagPOS(p[key], false);
   }
-  // Compatibilidad: productos legacy sin campo Receta conservan candado por presentación.
-  return !!presKeyFromProductNamePOS(p.name || p.nombre || p.productName || '');
+  // Fuente única: sin marca Receta explícita, el producto no hereda comportamiento por nombre.
+  return false;
 }
 
 function legacyGallonVendibleNamePOS(name){
@@ -9084,29 +11467,9 @@ function legacyGallonVendibleNamePOS(name){
 }
 
 function legacyVendibleDefaultPOS(product){
-  const name = String((product && (product.name || product.nombre)) || '').trim();
-  if (!name) return false;
-  const n = normName(name);
-  const nk = normKeyPOS(name);
-  const known = new Set([
-    normKeyPOS('Vaso'),
-    normKeyPOS('Pulso 250ml'), normKeyPOS('Pulso 250 ml'),
-    normKeyPOS('Media 375ml'), normKeyPOS('Media 375 ml'),
-    normKeyPOS('Djeba 750ml'), normKeyPOS('Djeba 750 ml'),
-    normKeyPOS('Litro 1000ml'), normKeyPOS('Litro 1000 ml'),
-    normKeyPOS('Galón 3750 ml'), normKeyPOS('Galón 3750ml'),
-    normKeyPOS('Galón 3800 ml'), normKeyPOS('Galón 3800ml')
-  ]);
-  if (known.has(nk)) return true;
-  if (n === 'vaso') return true;
-  if (n.includes('pulso') && n.includes('250')) return true;
-  if (n.includes('media') && n.includes('375')) return true;
-  if (n.includes('djeba') && n.includes('750')) return true;
-  if (n.includes('litro') && n.includes('1000')) return true;
-  if (legacyGallonVendibleNamePOS(name)) return true;
+  // Compatibilidad de firma únicamente: Catálogos debe marcar POS de forma explícita.
   return false;
 }
-
 function hasExplicitPosFlagPOS(product){
   const p = product && typeof product === 'object' ? product : {};
   return ['pos','POS','posEnabled','showInPOS','visiblePOS','vendible','sellable','saleEnabled']
@@ -9119,24 +11482,255 @@ function productPosEnabledForSalePOS(product){
   for (const key of keys){
     if (hasOwnPOS(p, key)) return boolCatalogFlagPOS(p[key], false);
   }
-  // Default seguro para productos antiguos: solo presentaciones A33 conocidas y Vaso.
-  return legacyVendibleDefaultPOS(p);
+  // Fuente única: sin marca POS explícita el producto no se publica en el selector.
+  return false;
+}
+
+function catalogProductStableIdPOS(product){
+  if (!product || typeof product !== 'object') return '';
+  try{
+    if (window.A33Products && typeof window.A33Products.getProductId === 'function'){
+      return String(window.A33Products.getProductId(product) || '').trim();
+    }
+  }catch(_){ }
+  const explicit = String(product.productId ?? product.productoId ?? product.catalogProductId ?? '').trim();
+  if (explicit) return explicit;
+  const rawId = String(product.id ?? '').trim();
+  return rawId && !(Number.isFinite(Number(rawId)) && Number(rawId) > 0) ? rawId : '';
+}
+
+function catalogProductInternalIdPOS(product){
+  if (!product || typeof product !== 'object') return null;
+  const candidates = [
+    product.internalId,
+    product.productInternalId,
+    product.catalogInternalId,
+    product.legacyProductId,
+    product.idInternoProducto,
+    product.id
+  ];
+  for (const value of candidates){
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+}
+
+// Resolución centralizada de identidad de Producto.
+// Catálogos → Productos sigue siendo la única fuente oficial. Esta capa únicamente
+// traduce referencias estables/legacy para consumidores que todavía usan el id interno.
+function productIdentityNormPOS(value){
+  return String(value == null ? '' : value).trim();
+}
+
+function productIdentityNameKeyPOS(value){
+  return productIdentityNormPOS(value)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/\s+/g, ' ');
+}
+
+function buildProductIdentityIndexPOS(products){
+  const list = Array.isArray(products) ? products.filter(Boolean) : [];
+  const byStableId = new Map();
+  const byInternalId = new Map();
+  const byLetter = new Map();
+  const byName = new Map();
+
+  const addUnique = (map, key, product) => {
+    if (!key) return;
+    if (!map.has(key)) map.set(key, product);
+    else if (map.get(key) !== product) map.set(key, null); // fallback ambiguo: no resolver
+  };
+
+  for (const product of list){
+    const stableId = catalogProductStableIdPOS(product);
+    const internalId = catalogProductInternalIdPOS(product);
+    const letter = productIdentityNormPOS(product.letra ?? product.Letra ?? product.letter).toUpperCase();
+    const nameKey = productIdentityNameKeyPOS(product.name ?? product.nombre ?? product.productName);
+    if (stableId) byStableId.set(stableId, product);
+    if (internalId) byInternalId.set(String(internalId), product);
+    addUnique(byLetter, letter, product);
+    addUnique(byName, nameKey, product);
+  }
+
+  return { __a33ProductIdentityIndex:true, list, byStableId, byInternalId, byLetter, byName };
+}
+
+function collectProductIdentityCandidatesPOS(ref){
+  const stableIds = [];
+  const internalIds = [];
+  const letters = [];
+  const names = [];
+  const seen = new Set();
+  const push = (arr, value) => {
+    const raw = productIdentityNormPOS(value);
+    if (raw && !arr.includes(raw)) arr.push(raw);
+  };
+  const pushInternal = (value) => {
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0){
+      const raw = String(n);
+      if (!internalIds.includes(raw)) internalIds.push(raw);
+    }
+  };
+
+  const visit = (value, depth=0) => {
+    if (value == null || depth > 2) return;
+    if (typeof value !== 'object'){
+      push(stableIds, value);
+      pushInternal(value);
+      return;
+    }
+    if (seen.has(value)) return;
+    seen.add(value);
+
+    const stableFields = [
+      value.productId, value.productoId, value.catalogProductId, value.idProducto,
+      value.stableProductId, value.productStableId, value.id
+    ];
+    stableFields.forEach((candidate) => {
+      push(stableIds, candidate);
+      pushInternal(candidate); // productId legacy puede ser el id autoincremental
+    });
+
+    [
+      value.productInternalId, value.catalogInternalId, value.internalId,
+      value.legacyProductId, value.idInternoProducto, value.id
+    ].forEach(pushInternal);
+
+    push(letters, value.letra ?? value.Letra ?? value.letter ?? value.productLetter);
+    push(names, value.productNameSnapshot ?? value.nombreSnapshot ?? value.productName ?? value.name ?? value.nombre);
+
+    [
+      value.productSnapshot, value.product, value.catalogProduct,
+      value.targetProduct, value.sourceProduct,
+      value.productoDestinoRef, value.productoOrigenRef
+    ].forEach((nested) => visit(nested, depth + 1));
+  };
+
+  visit(ref);
+  return { stableIds, internalIds, letters, names };
+}
+
+function resolveCatalogProductIdentityPOS(ref, productsOrIndex, options={}){
+  const index = productsOrIndex && productsOrIndex.__a33ProductIdentityIndex
+    ? productsOrIndex
+    : buildProductIdentityIndexPOS(productsOrIndex);
+  const candidates = collectProductIdentityCandidatesPOS(ref);
+
+  let product = null;
+  let matchedBy = '';
+  for (const stableId of candidates.stableIds){
+    product = index.byStableId.get(stableId) || null;
+    if (product){ matchedBy = 'productId'; break; }
+  }
+  if (!product){
+    for (const internalId of candidates.internalIds){
+      product = index.byInternalId.get(internalId) || null;
+      if (product){ matchedBy = 'internalId'; break; }
+    }
+  }
+
+  const allowLegacy = options.allowLegacy !== false;
+  if (!product && allowLegacy){
+    for (const letterRaw of candidates.letters){
+      const letter = productIdentityNormPOS(letterRaw).toUpperCase();
+      const found = index.byLetter.get(letter);
+      if (found){ product = found; matchedBy = 'letter_legacy'; break; }
+    }
+  }
+  if (!product && allowLegacy){
+    for (const nameRaw of candidates.names){
+      const nameKey = productIdentityNameKeyPOS(nameRaw);
+      const found = index.byName.get(nameKey);
+      if (found){ product = found; matchedBy = 'name_legacy'; break; }
+    }
+  }
+
+  if (!product){
+    return {
+      ok:false, product:null, stableId:'', internalId:null, name:'', letter:'',
+      matchedBy:'unresolved', index
+    };
+  }
+
+  return {
+    ok:true,
+    product,
+    stableId:catalogProductStableIdPOS(product),
+    internalId:catalogProductInternalIdPOS(product),
+    name:catalogProductSnapshotNamePOS(product),
+    letter:productIdentityNormPOS(product.letra ?? product.Letra ?? product.letter).toUpperCase(),
+    matchedBy,
+    index
+  };
+}
+
+function productIdentityMatchesRefPOS(identity, ref){
+  if (!identity || !identity.ok || ref == null) return false;
+  if (typeof ref !== 'object'){
+    const raw = productIdentityNormPOS(ref);
+    if (identity.stableId && raw === String(identity.stableId)) return true;
+    const n = Number(ref);
+    return !!(identity.internalId && Number.isFinite(n) && n === Number(identity.internalId));
+  }
+
+  const stableRefs = [
+    ref.productId, ref.productoId, ref.catalogProductId, ref.idProducto,
+    ref.stableProductId, ref.productStableId,
+    ref.productSnapshot && ref.productSnapshot.productId
+  ].map(productIdentityNormPOS).filter(Boolean);
+  if (identity.stableId && stableRefs.includes(String(identity.stableId))) return true;
+
+  const internalRefs = [
+    ref.productInternalId, ref.catalogInternalId, ref.internalId, ref.idInternoProducto,
+    ref.productSnapshot && ref.productSnapshot.internalId
+  ];
+  // En inventory/reempaque legacy, productId puede contener el id interno numérico.
+  const legacyProductId = Number(ref.productId ?? ref.productoId);
+  if (Number.isFinite(legacyProductId) && legacyProductId > 0) internalRefs.push(legacyProductId);
+  return !!(identity.internalId && internalRefs.some((value) => Number(value) === Number(identity.internalId)));
+}
+
+function findCatalogProductByStableIdPOS(products, productId){
+  const target = String(productId == null ? '' : productId).trim();
+  if (!target) return null;
+  return (Array.isArray(products) ? products : []).find((product) => catalogProductStableIdPOS(product) === target) || null;
+}
+
+function saleStableProductIdPOS(sale){
+  if (!sale || typeof sale !== 'object') return '';
+  const raw = sale.productId ?? sale.productoId ?? (sale.productSnapshot && sale.productSnapshot.productId);
+  return String(raw == null ? '' : raw).trim();
+}
+
+function saleInternalProductIdPOS(sale){
+  if (!sale || typeof sale !== 'object') return null;
+  const raw = sale.productInternalId ?? sale.catalogInternalId ?? (sale.productSnapshot && sale.productSnapshot.internalId);
+  const direct = Number(raw);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  // Compatibilidad histórica: antes productId contenía el id autoincremental numérico.
+  const legacy = Number(sale.productId);
+  return Number.isFinite(legacy) && legacy > 0 ? legacy : null;
+}
+
+function saleMatchesCatalogProductPOS(sale, product){
+  if (!sale || !product) return false;
+  const stable = catalogProductStableIdPOS(product);
+  const saleStable = saleStableProductIdPOS(sale);
+  if (stable && saleStable && stable === saleStable) return true;
+  const internalId = catalogProductInternalIdPOS(product);
+  const saleInternalId = saleInternalProductIdPOS(sale);
+  return !!(internalId && saleInternalId && internalId === saleInternalId);
 }
 
 function productSellableInPOS(product){
-  return !!(product && productActiveForSalePOS(product) && productPosEnabledForSalePOS(product));
+  return !!(product && catalogProductStableIdPOS(product) && productActiveForSalePOS(product) && productPosEnabledForSalePOS(product));
 }
 
 
-// POS Etapa 2/6: snapshots históricos por venta.
-// La venta se guarda con ID estable + copia congelada del nombre/precio/datos básicos.
-// Así, si Catálogos cambia mañana, el historial no se disfraza de otra cosa. Elegante y sin magia negra.
-function catalogProductStableIdPOS(product){
-  if (!product || typeof product !== 'object') return null;
-  const raw = product.id ?? product.productId ?? product.productoId ?? null;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
+// POS: snapshots históricos por venta.
+// La venta usa productId estable y conserva el id interno solo para compatibilidad del inventario por evento.
 
 function catalogProductSnapshotNamePOS(product){
   if (!product || typeof product !== 'object') return '';
@@ -9156,10 +11750,15 @@ function buildSaleProductSnapshotPOS(product, selectedUnitPrice){
   const unitPrice = catalogProductSnapshotPricePOS(product, selectedUnitPrice);
   const unitCost = getProductStoredUnitCostPOS(product);
   const capacityMl = Number(product && (product.capacityMl ?? product.ml ?? product.contenidoMl));
+  const productInternalId = catalogProductInternalIdPOS(product);
+  const vasoFisicoId = productPhysicalCupInventoryIdPOS(product);
+  // La asociación estable define la clase POS Vaso; nunca se infiere solo por el nombre.
+  const productClass = vasoFisicoId ? 'vaso' : '';
   const productSnapshot = {
     kind: 'product',
     id: productId,
     productId,
+    internalId: productInternalId,
     name: productName,
     productName,
     price: unitPrice,
@@ -9175,16 +11774,23 @@ function buildSaleProductSnapshotPOS(product, selectedUnitPrice){
     letra: String((product && (product.letra ?? product.letter ?? '')) || '').trim(),
     envaseId: String((product && (product.envaseId ?? product.bottleId ?? '')) || '').trim(),
     tapaId: String((product && (product.tapaId ?? product.capId ?? '')) || '').trim(),
+    vasoFisicoId,
+    productClass,
+    presentationClass: productClass,
     capacityMl: Number.isFinite(capacityMl) && capacityMl > 0 ? capacityMl : null,
     presKey: productName ? (presKeyFromProductNamePOS(productName) || '') : '',
     capturedAt: new Date().toISOString()
   };
   return {
     productId,
+    productInternalId,
     productName,
     productNameSnapshot: productName,
     unitPrice,
     unitPriceSnapshot: unitPrice,
+    vasoFisicoId,
+    physicalCupInventoryIdSnapshot: vasoFisicoId,
+    productClassSnapshot: productClass,
     productSnapshot
   };
 }
@@ -9223,55 +11829,10 @@ function applyProductSaleCatalogDefaultsPOS(product, seed){
 }
 
 async function seedMissingDefaults(force=false, options={}){
-  const restoreDeleted = !!(options && options.restoreDeleted);
-  const list = await getAll('products');
-  const keys = new Set(list.map(p=>normKeyPOS(p.name)));
-
-  // Alias legacy: si existe Galón 3800 (o variantes), lo tratamos como galón canónico para no duplicar.
-  if (keys.has(normKeyPOS('Galón 3800ml')) || keys.has(normKeyPOS('Galón 3800 ml'))){
-    keys.add(normKeyPOS(CANON_GALON_LABEL));
-  }
-
-  for (const s of SEED){
-    const k = normKeyPOS(s.name);
-    const seedDeleted = wasCatalogSeedDeletedPOS('products', s);
-    let existing = list.find(p=>normKeyPOS(p.name)===k);
-    if (!existing && k === normKeyPOS(CANON_GALON_LABEL)){
-      // Si solo existe el Galón legacy (3800 ml u otra variante), usarlo como existente y no crear duplicado.
-      existing = list.find(p => p && legacyGallonVendibleNamePOS(p.name || ''));
-    }
-
-    if (!existing && seedDeleted && !restoreDeleted) continue;
-
-    if (force || !existing){
-      if (existing){
-        let changed = false;
-        if (existing.active !== true){ existing.active = true; changed = true; }
-        if (k === normKeyPOS(CANON_GALON_LABEL) && existing.name !== s.name && !list.some(p => p && p.id !== existing.id && normKeyPOS(p.name) === k)){ existing.name = s.name; changed = true; }
-        // Catálogo global editable: un precio válido del usuario NUNCA se pisa por defaults.
-        // Excepción controlada: migrar Galón desde el viejo default C$800 al nuevo default C$900.
-        if (k === normKeyPOS(CANON_GALON_LABEL) && Number(existing.price) === LEGACY_DEFAULT_GALON_PRICE_POS){ existing.price = s.price; changed = true; }
-        else if (!isValidCatalogPricePOS(existing.price)){ existing.price = s.price; changed = true; }
-        if (typeof existing.manageStock === 'undefined'){ existing.manageStock = s.manageStock; changed = true; }
-        if (applyProductSaleCatalogDefaultsPOS(existing, s)){ changed = true; }
-        if (s.internalType && existing.internalType !== s.internalType){ existing.internalType = s.internalType; changed = true; }
-        if (changed) await put('products', existing);
-      } else {
-        await put('products', {...s});
-      }
-    } else {
-      // Existe: solo completar faltantes (sin pisar precios manuales válidos).
-      let changed = false;
-      if (typeof existing.active === 'undefined'){ existing.active = true; changed = true; }
-      if (k === normKeyPOS(CANON_GALON_LABEL) && existing.name !== s.name && !list.some(p => p && p.id !== existing.id && normKeyPOS(p.name) === k)){ existing.name = s.name; changed = true; }
-      if (typeof existing.manageStock === 'undefined'){ existing.manageStock = s.manageStock; changed = true; }
-      if (applyProductSaleCatalogDefaultsPOS(existing, s)){ changed = true; }
-      // Excepción controlada: migrar Galón desde el viejo default C$800 al nuevo default C$900.
-      if (k === normKeyPOS(CANON_GALON_LABEL) && Number(existing.price) === LEGACY_DEFAULT_GALON_PRICE_POS){ existing.price = s.price; changed = true; }
-      else if (!isValidCatalogPricePOS(existing.price)) { existing.price = s.price; changed = true; }
-      if (changed) await put('products', existing);
-    }
-  }
+  // Etapa 2/8 — Catálogos → Productos es la única puerta de creación.
+  // Se conserva la firma por compatibilidad con HTML/código antiguo, pero POS no inserta,
+  // completa, reactiva ni restaura productos bajo ninguna condición.
+  return { ok:true, skipped:true, reason:'catalogos_productos_fuente_unica', force:!!force, options:options || {} };
 }
 
 // UI helpers
@@ -9686,13 +12247,13 @@ function validateSaleMinimalPOS(sale){
   }
 
 
-  const pid = Number(sale.productId);
+  const pid = String(sale.productId == null ? '' : sale.productId).trim();
   const isExtra = !!sale.isExtra;
   if (isExtra){
     const ex = Number(sale.extraId);
     if (!(Number.isFinite(ex) && ex > 0)) return { ok:false, msg:'Venta inválida: extra inválido.' };
   } else {
-    if (!(Number.isFinite(pid) && pid > 0)) return { ok:false, msg:'Venta inválida: producto inválido.' };
+    if (!pid) return { ok:false, msg:'Venta inválida: producto inválido.' };
   }
 
   const pay = normalizePaymentMethodPOS(sale.payment || '');
@@ -9809,90 +12370,249 @@ function lotTotalsForKeyPOS(fifo, presKey){
   return { loaded, remaining };
 }
 
-function lotesPOSContractRowsPOS(lote){
+function lotesPOSContractSourcesPOS(lote){
   if (!lote || typeof lote !== 'object') return [];
-  const candidates = [];
-  if (Array.isArray(lote.disponibilidadPOS)) candidates.push(lote.disponibilidadPOS);
-  if (lote.salidaPOS && Array.isArray(lote.salidaPOS.productos)) candidates.push(lote.salidaPOS.productos);
-  if (Array.isArray(lote.productosProducidos)) candidates.push(lote.productosProducidos);
-  if (Array.isArray(lote.productosDinamicos)) candidates.push(lote.productosDinamicos);
-  if (Array.isArray(lote.productos)) candidates.push(lote.productos);
-  if (Array.isArray(lote.itemsProducidos)) candidates.push(lote.itemsProducidos);
-  for (const arr of candidates){
-    const clean = (arr || []).filter(x => x && typeof x === 'object');
-    if (clean.length) return clean;
+  const candidates = [
+    ['disponibilidadPOS', lote.disponibilidadPOS],
+    ['salidaPOS.productos', lote.salidaPOS && lote.salidaPOS.productos],
+    ['productosProducidos', lote.productosProducidos],
+    ['productosDinamicos', lote.productosDinamicos],
+    ['productos', lote.productos],
+    ['itemsProducidos', lote.itemsProducidos]
+  ];
+  const out = [];
+  const seenArrays = new Set();
+  for (const [source, arr] of candidates){
+    if (!Array.isArray(arr) || seenArrays.has(arr)) continue;
+    seenArrays.add(arr);
+    const rows = arr.filter(x => x && typeof x === 'object');
+    if (rows.length) out.push({ source, rows });
   }
-  return [];
+  return out;
+}
+
+// Compatibilidad para consumidores existentes: conserva la primera fuente legible.
+function lotesPOSContractRowsPOS(lote){
+  const sources = lotesPOSContractSourcesPOS(lote);
+  return sources.length ? sources[0].rows : [];
+}
+
+function parseLoteContractQtyPOS(value){
+  if (value == null) return null;
+  const raw = String(value).trim();
+  if (!raw || raw.toLowerCase() === 'pendiente') return null;
+  const n = Number(raw.replace(',', '.'));
+  return Number.isFinite(n) ? Math.max(0, n) : null;
+}
+
+function parseLoteAvailabilityFlagPOS(value){
+  if (value === true || value === 1) return true;
+  if (value === false || value === 0) return false;
+  const raw = String(value == null ? '' : value).trim().toLowerCase();
+  if (['true','1','si','sí','yes','on'].includes(raw)) return true;
+  if (['false','0','no','off'].includes(raw)) return false;
+  return null;
+}
+
+// Devuelve cantidad + nivel de autoridad. Un cero exacto bloquea cualquier caída
+// posterior a producción original; una disponibilidad marcada como inexistente
+// permite usar cantidadProducida/cantidadBase de esa misma fila o de otra fuente.
+function lotesPOSQtyInfoFromContractRowPOS(row){
+  if (!row || typeof row !== 'object') return { qty:0, exact:false, hasValue:false, field:'' };
+  const hasOwn = (key) => Object.prototype.hasOwnProperty.call(row, key);
+  const exactFlag = hasOwn('cantidadDisponibleExiste')
+    ? parseLoteAvailabilityFlagPOS(row.cantidadDisponibleExiste)
+    : null;
+  const availabilitySource = String(row.disponibilidadFuente || '').trim().toLowerCase();
+  const sourceWithoutSnapshot = availabilitySource.includes('sin_snapshot')
+    || availabilitySource.includes('pendiente')
+    || availabilitySource.includes('unknown');
+
+  if (hasOwn('cantidadDisponible')){
+    const qty = parseLoteContractQtyPOS(row.cantidadDisponible);
+    const exact = exactFlag === true || (exactFlag == null && !sourceWithoutSnapshot && qty != null);
+    if (exact){
+      return { qty:qty == null ? 0 : qty, exact:true, hasValue:true, field:'cantidadDisponible' };
+    }
+    // exactFlag=false / sin snapshot: no considerar el cero placeholder como saldo real.
+  }
+
+  for (const field of ['disponible','remaining','cantidadRestante']){
+    if (!hasOwn(field)) continue;
+    const qty = parseLoteContractQtyPOS(row[field]);
+    if (qty != null) return { qty, exact:true, hasValue:true, field };
+  }
+
+  for (const field of ['cantidadProducida','cantidadBase','loaded','cantidad','unidades','qty','quantity']){
+    if (!hasOwn(field)) continue;
+    const qty = parseLoteContractQtyPOS(row[field]);
+    if (qty != null) return { qty, exact:false, hasValue:true, field };
+  }
+
+  return { qty:0, exact:false, hasValue:false, field:'' };
 }
 
 function lotesPOSQtyFromContractRowPOS(row){
-  if (!row || typeof row !== 'object') return 0;
-  const preferred = [
-    row.cantidadDisponible,
-    row.disponible,
-    row.remaining,
-    row.cantidadRestante,
-    row.cantidadProducida,
-    row.cantidad,
-    row.unidades,
-    row.qty,
-    row.quantity
-  ];
-  for (const v of preferred){
-    if (v == null || String(v).trim() === '' || String(v).trim().toLowerCase() === 'pendiente') continue;
-    const n = Number(String(v).replace(',', '.'));
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return 0;
+  return lotesPOSQtyInfoFromContractRowPOS(row).qty;
 }
 
-function resolveProductFromLoteContractRowPOS(row, products){
-  const list = Array.isArray(products) ? products : [];
-  const normLocal = s => (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
-  const rawPid = String(row && (row.productId ?? row.productoId ?? row.id) || '').trim();
-  if (rawPid){
-    const byId = list.find(p => p && String(p.id) === rawPid);
-    if (byId) return byId;
-  }
+function resolveProductFromLoteContractRowPOS(row, productsOrIndex){
+  const index = productsOrIndex && productsOrIndex.__a33ProductIdentityIndex
+    ? productsOrIndex
+    : buildProductIdentityIndexPOS(productsOrIndex);
+  const list = index.list || [];
+  const identity = resolveCatalogProductIdentityPOS(row, index, { allowLegacy:true });
+  if (identity.ok) return identity.product;
 
-  const letter = String(row && (row.Letra ?? row.letra ?? row.letter) || '').trim().toUpperCase();
-  if (letter){
-    const byLetter = list.find(p => p && String(p.letra ?? p.Letra ?? p.letter ?? '').trim().toUpperCase() === letter);
-    if (byLetter) return byLetter;
-  }
-
+  // Compatibilidad muy antigua: legacyField representa P/M/D/L/G, no una identidad oficial.
   const legacyId = String(row && (row.legacyId ?? row.legacyField ?? row.field) || '').trim().toLowerCase();
   if (legacyId){
     const byLegacy = list.find(p => p && mapProductNameToFinishedId(p.name || p.nombre || '') === legacyId);
     if (byLegacy) return byLegacy;
   }
-
-  const name = String(row && (row.nombreSnapshot ?? row.nombre ?? row.name ?? row.productName) || '').trim();
-  if (name){
-    const n = normLocal(name);
-    const exact = list.find(p => p && normLocal(p.name || p.nombre || '') === n);
-    if (exact) return exact;
-    const legacyFromName = mapProductNameToFinishedId(name);
-    if (legacyFromName){
-      const byNameLegacy = list.find(p => p && mapProductNameToFinishedId(p.name || p.nombre || '') === legacyFromName);
-      if (byNameLegacy) return byNameLegacy;
-    }
-  }
-
   return null;
 }
 
+function normalizeLoteContentLetterPOS(value){
+  return productIdentityNormPOS(value).toUpperCase();
+}
+
+function formatLoteContentQtyPOS(value){
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return String(Number.isInteger(n) ? n : Number(n.toFixed(3)));
+}
+
+// Fuente única para selector + aplicación. Consolida contratos modernos, snapshots
+// sin disponibilidad exacta y productos producidos sin duplicar ni persistir derivados.
+function buildLoteAvailableLoadPlanPOS(lote, products){
+  if (!lote || typeof lote !== 'object') return { items:[], total:0, summary:'', parts:[], unresolved:[] };
+  const list = Array.isArray(products) ? products : [];
+  const index = buildProductIdentityIndexPOS(list);
+  const selectedByProduct = new Map();
+  const unresolved = [];
+
+  const considerRow = (row, source) => {
+    const qtyInfo = lotesPOSQtyInfoFromContractRowPOS(row);
+    if (!qtyInfo.hasValue) return;
+
+    const prod = resolveProductFromLoteContractRowPOS(row, index);
+    if (!prod){
+      unresolved.push({ source, row, reason:'PRODUCT_UNRESOLVED' });
+      return;
+    }
+
+    const identity = resolveCatalogProductIdentityPOS(prod, index, { allowLegacy:true });
+    const productInternalId = identity.ok ? identity.internalId : catalogProductInternalIdPOS(prod);
+    const stableId = identity.ok ? identity.stableId : catalogProductStableIdPOS(prod);
+    const letter = normalizeLoteContentLetterPOS(identity.ok ? identity.letter : (prod.letra ?? prod.Letra ?? prod.letter));
+    if (!productInternalId || !letter){
+      unresolved.push({ source, row, reason:!productInternalId ? 'INTERNAL_ID_UNRESOLVED' : 'LETTER_UNRESOLVED' });
+      return;
+    }
+
+    const productKey = stableId ? ('PID:' + stableId) : ('IID:' + productInternalId);
+    const candidate = {
+      productId:productInternalId,
+      qty:qtyInfo.qty,
+      exact:qtyInfo.exact,
+      unitCost:saleCostFromFieldsPOS(row) || saleCostFromFieldsPOS(lote),
+      nombreSnapshot:row && (row.nombreSnapshot || row.nombre || row.name) || prod.name || prod.nombre || '',
+      loteProductId:row && (row.productId ?? row.productoId) != null ? (row.productId ?? row.productoId) : null,
+      letra:letter,
+      source:source || '',
+      qtyField:qtyInfo.field
+    };
+
+    const existing = selectedByProduct.get(productKey);
+    if (!existing){
+      selectedByProduct.set(productKey, candidate);
+      return;
+    }
+    // Una disponibilidad exacta de una fuente prioritaria manda, incluso si es cero.
+    if (existing.exact) return;
+    // Una fuente posterior exacta corrige un snapshot anterior no concluyente.
+    if (candidate.exact) selectedByProduct.set(productKey, candidate);
+  };
+
+  const sources = lotesPOSContractSourcesPOS(lote);
+  for (const source of sources){
+    for (const row of source.rows) considerRow(row, source.source);
+  }
+
+  // Compatibilidad legacy solo cuando no existe ninguna identidad contractual resuelta.
+  if (!selectedByProduct.size){
+    const norm = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+    const legacyRows = [
+      { field:'pulso', name:'Pulso 250ml' },
+      { field:'media', name:'Media 375ml' },
+      { field:'djeba', name:'Djeba 750ml' },
+      { field:'litro', name:'Litro 1000ml' },
+      { field:'galon', name:'Galón 3720 ml' }
+    ];
+    for (const legacy of legacyRows){
+      const qty = parseLoteContractQtyPOS(lote && lote[legacy.field]);
+      if (!(qty > 0)) continue;
+      let prod = list.find(p => norm(p && (p.name || p.nombre)) === norm(legacy.name))
+        || list.find(p => p && mapProductNameToFinishedId(p.name || p.nombre || '') === legacy.field)
+        || null;
+      if (!prod && legacy.field === 'galon'){
+        prod = list.find(p => norm(p && (p.name || p.nombre)) === norm('Galón 3750 ml')) || null;
+      }
+      if (prod) considerRow({ legacyField:legacy.field, cantidad:qty }, 'lotes_legacy');
+    }
+  }
+
+  const items = Array.from(selectedByProduct.values()).filter(item => Number.isFinite(Number(item.qty)) && Number(item.qty) > 0);
+  const byLetter = new Map();
+  for (const item of items){
+    const letter = normalizeLoteContentLetterPOS(item.letra);
+    const qty = Number(item.qty);
+    if (!letter || !Number.isFinite(qty) || qty <= 0) continue;
+    byLetter.set(letter, (byLetter.get(letter) || 0) + qty);
+  }
+  const parts = [];
+  for (const [letter, qty] of byLetter.entries()){
+    const formatted = formatLoteContentQtyPOS(qty);
+    if (formatted) parts.push(formatted + letter);
+  }
+  const total = items.reduce((sum, item) => sum + Number(item.qty), 0);
+  return { items, total, summary:parts.join(' '), parts, unresolved };
+}
+
+function isRecoverableLoteProductsReadErrorPOS(error){
+  const name = String(error && error.name || '').trim();
+  const message = String(error && error.message || '').toLowerCase();
+  return ['InvalidStateError','TransactionInactiveError','NotFoundError','AbortError'].includes(name)
+    || message.includes('database connection is closing')
+    || message.includes('transaction')
+    || message.includes('not found');
+}
+
+async function readProductsForLotePlanPOS(){
+  try{
+    const rows = await getAll('products');
+    return Array.isArray(rows) ? rows : [];
+  }catch(firstError){
+    if (!isRecoverableLoteProductsReadErrorPOS(firstError)) throw firstError;
+    try{ if (db && typeof db.close === 'function') db.close(); }catch(_){ }
+    db = null;
+    await openDB();
+    const rows = await getAll('products');
+    return Array.isArray(rows) ? rows : [];
+  }
+}
+
 async function guardLotAvailabilityBeforeSalePOS(eventId, productName, qty, productId, productObj){
-  const legacyKey = presKeyFromProductNamePOS(productName);
   const recipeEnabled = productRecipeEnabledForProductionPOS(productObj || { name: productName });
 
   // Productos vendibles sin Receta (ej. Vaso) no pasan por Lotes/FIFO.
   // POS solo valida Activo/POS/Precio/Stock; Reempaque alimenta su stock antes de vender.
-  if (!legacyKey && !recipeEnabled){
+  if (!recipeEnabled){
     return { ok:true, presKey:'', nonRecipe:true };
   }
 
-  const key = legacyKey || lotFifoKeyFromProductPOS(productObj || null, productId, productName);
+  const key = lotFifoKeyFromProductPOS(productObj || null, productId, productName);
   if (!key) return { ok:true, presKey:'' };
 
   try{
@@ -9964,7 +12684,14 @@ async function saveSaleAndEventAtomicPOS({ saleRecord, eventUpdated }){
 
       let saleId = null;
 
-      tr.oncomplete = ()=> ok(saleId);
+      tr.oncomplete = ()=>{
+        try{
+          if (saleRecord && normalizePaymentMethodPOS(saleRecord.payment || saleRecord.paymentMethod || '') === 'credito'){
+            notifyCreditStateChangedPOS({ eventId:saleRecord.eventId, saleId:saleRecord.id != null ? saleRecord.id : saleId, reason:'sale' });
+          }
+        }catch(_){ }
+        ok(saleId);
+      };
       tr.onabort = ()=> fail(tr.error || new Error('Transacción abortada (venta).'));
       tr.onerror = ()=> fail(tr.error || new Error('Error de transacción (venta).'));
 
@@ -10135,14 +12862,16 @@ async function computeDailySnapshotFromSalesPOS(eventId, dateKey){
   const saleName = (sale) => baseName(getSaleProductNameSnapshotPOS(sale) || (sale && (sale.productName || sale.name || sale.producto || sale.product)) || '');
 
   const isA33CostableSale = (s) => {
-    if (!s || s.isExtra) return false;
+    if (!s) return false;
+    const lineCost = getSaleLineCostSnapshotPOS(s);
+    const hasCostSnapshot = Math.abs(Number(lineCost || 0)) > 1e-9 || getSaleCostUnitSnapshotPOS(s) > 0;
+    if (hasCostSnapshot) return true;
+    if (s.isExtra) return false;
     if (s.vaso === true) return true;
     const bn = saleName(s);
     if (mapProductNameToPresId(bn)) return true;
-    const lineCost = getSaleLineCostSnapshotPOS(s);
-    const hasCostSnapshot = Math.abs(Number(lineCost || 0)) > 1e-9 || getSaleCostUnitSnapshotPOS(s) > 0;
     const hasDynamicProductId = saleProductIdForInventoryPOS(s) != null;
-    return !!(hasCostSnapshot || hasDynamicProductId);
+    return !!hasDynamicProductId;
   };
 
   const addBreakdown = (s, isCourtesy, lineCost) => {
@@ -10191,16 +12920,17 @@ async function computeDailySnapshotFromSalesPOS(eventId, dateKey){
     const qty = Number(s.qty || 0);
     const absQty = Math.abs(qty || 0);
     const unitPrice = getSaleUnitPriceSnapshotPOS(s);
-    const discountLine = getSaleDiscountTotalPOS(s) * ((s.isReturn || qty < 0) ? -1 : 1);
-    gross += round2((unitPrice || 0) * absQty * ((s.isReturn || qty < 0) ? -1 : 1));
-    discountTotal += round2(discountLine);
+    const sign = (s.isReturn || qty < 0) ? -1 : 1;
+    const discountLine = getSaleDiscountTotalPOS(s) * sign;
     if (s.isReturn || qty < 0){ returnQty += absQty; returnTotal += Math.abs(total || 0); }
 
-    // Cortesías: no generan ingresos, pero sí consumen costo.
+    // Cortesías: valor comercial informativo, ingreso real cero y costo real separado.
     if (courtesy){
       courtesyQty += absQty;
-      courtesyValue += round2((unitPrice || 0) * absQty * ((s.isReturn || qty < 0) ? -1 : 1));
+      courtesyValue += round2((unitPrice || 0) * absQty * sign);
     } else {
+      gross += round2((unitPrice || 0) * absQty * sign);
+      discountTotal += round2(discountLine);
       paidQty += absQty;
       const pay = normalizePaymentMethodPOS(s.payment || '') || 'otros';
       byPay[pay] = (byPay[pay] || 0) + total;
@@ -10236,7 +12966,11 @@ async function computeDailySnapshotFromSalesPOS(eventId, dateKey){
   const ventaBruta = round2(gross);
   const ventaNeta = round2(grand);
   const utilidadBruta = round2(ventaNeta - costoVentasTotal);
-  const utilidadNetaOperativa = round2(utilidadBruta - costoCortesiasTotal);
+  const cardCommissions = collectSaleCardCommissionsPOS(filtered);
+  const comisionTarjetaTotal = round2(cardCommissions.total);
+  const utilidadAntesComision = round2(utilidadBruta - costoCortesiasTotal);
+  const utilidadDespuesComision = round2(utilidadAntesComision - comisionTarjetaTotal);
+  const utilidadNetaOperativa = utilidadDespuesComision;
 
   return {
     dayKey: dk,
@@ -10246,6 +12980,11 @@ async function computeDailySnapshotFromSalesPOS(eventId, dateKey){
     descuentosTotal: round2(discountTotal),
     ventaNeta,
     utilidadBruta,
+    comisionTarjetaTotal,
+    comisionesTarjeta: cardCommissions.byLabel,
+    commissionUndeterminedCount: cardCommissions.undeterminedCount,
+    utilidadAntesComision,
+    utilidadDespuesComision,
     utilidadNetaOperativa,
     cortesiaCantidad: courtesyQty,
     cortesiaValorReferencia: round2(courtesyValue),
@@ -10323,11 +13062,18 @@ function validateDailyClosureBeforePersistPOS({ record, lockPatch }){
   const cq = Number(t.cortesiaCantidad);
   if (!Number.isFinite(cq) || cq < -0.00001) return { ok:false, msg:'Cierre inválido: cortesías inválidas.' };
 
-  const optionalNums = ['ventaBruta','descuentosTotal','ventaNeta','utilidadBruta','utilidadNetaOperativa','cortesiaValorReferencia','devolucionCantidad','devolucionValor'];
+  const optionalNums = ['ventaBruta','descuentosTotal','ventaNeta','utilidadBruta','comisionTarjetaTotal','utilidadAntesComision','utilidadDespuesComision','utilidadNetaOperativa','cortesiaValorReferencia','devolucionCantidad','devolucionValor','commissionUndeterminedCount'];
   for (const k of optionalNums){
     if (t[k] == null) continue;
     const n = Number(t[k]);
     if (!Number.isFinite(n)) return { ok:false, msg:`Cierre inválido: ${k} inválido.` };
+  }
+
+  if (Array.isArray(t.comisionesTarjeta)){
+    for (const item of t.comisionesTarjeta){
+      if (!item || !String(item.label || '').trim()) return { ok:false, msg:'Cierre inválido: etiqueta de comisión Tarjeta inválida.' };
+      if (!Number.isFinite(Number(item.total))) return { ok:false, msg:'Cierre inválido: comisión Tarjeta inválida.' };
+    }
   }
 
   // Costos: permitir negativos si hubo devoluciones (reversos), pero jamás NaN
@@ -10417,6 +13163,11 @@ async function closeDailyPOS({ event, dateKey, source }){
       descuentosTotal: snapshot.descuentosTotal,
       ventaNeta: snapshot.ventaNeta,
       utilidadBruta: snapshot.utilidadBruta,
+      comisionTarjetaTotal: snapshot.comisionTarjetaTotal,
+      comisionesTarjeta: snapshot.comisionesTarjeta,
+      commissionUndeterminedCount: snapshot.commissionUndeterminedCount,
+      utilidadAntesComision: snapshot.utilidadAntesComision,
+      utilidadDespuesComision: snapshot.utilidadDespuesComision,
       utilidadNetaOperativa: snapshot.utilidadNetaOperativa,
       cortesiaCantidad: snapshot.cortesiaCantidad,
       cortesiaValorReferencia: snapshot.cortesiaValorReferencia,
@@ -10644,141 +13395,24 @@ async function updateSellEnabled(){
 
 // Normalizar Vaso como producto vendible normal alimentado por Inventario → Reempaque.
 async function normalizeVasoProductForReempaquePOS(){
-  try{
-    const products = await getAll('products');
-    if (!Array.isArray(products) || !products.length) return;
-
-    const vasoProducts = products.filter(p => p && (
-      normKeyPOS(p.name || '') === normKeyPOS('Vaso') ||
-      p.internalType === 'cup_portion'
-    ));
-    if (!vasoProducts.length) return;
-
-    let canon = vasoProducts.find(p => normKeyPOS(p.name || '') === normKeyPOS('Vaso') && productActiveForSalePOS(p))
-      || vasoProducts.find(p => normKeyPOS(p.name || '') === normKeyPOS('Vaso'))
-      || vasoProducts[0];
-
-    let changed = false;
-    if (canon.name !== 'Vaso'){ canon.name = 'Vaso'; changed = true; }
-    // Vaso queda como vendible normal sin Receta. Respetar Activo/POS/Inventario si el usuario ya los definió.
-    if (!hasExplicitActiveFlagPOS(canon)){ canon.active = true; changed = true; }
-    if (!hasExplicitManageStockFlagPOS(canon)){ canon.manageStock = true; changed = true; }
-    if (!hasExplicitPosFlagPOS(canon)){ canon.pos = true; changed = true; }
-    if (canon.receta !== false){ canon.receta = false; changed = true; }
-    if (String(canon.letra ?? '').trim() !== ''){ canon.letra = ''; changed = true; }
-    if (!isValidCatalogPricePOS(canon.price)){ canon.price = 100; changed = true; }
-    // Dejar de tratarlo como producto interno/virtual: ahora se vende como cualquier SKU normal.
-    if (canon.internalType === 'cup_portion'){ try{ delete canon.internalType; changed = true; }catch(_){ canon.internalType = ''; changed = true; } }
-    if (typeof canon.capacityMl === 'undefined') { canon.capacityMl = null; changed = true; }
-    if (changed) await put('products', canon);
-
-    // Duplicados legacy: no borrar ni tocar ventas antiguas; solo ocultarlos para evitar doble Vaso en venta.
-    for (const p of vasoProducts){
-      if (!p || p.id === canon.id) continue;
-      let ch = false;
-      if (p.active !== false){ p.active = false; ch = true; }
-      if (!hasExplicitManageStockFlagPOS(p)){ p.manageStock = true; ch = true; }
-      if (ch) await put('products', p);
-    }
-  }catch(e){
-    console.warn('No se pudo normalizar producto Vaso para Reempaque', e);
-  }
+  // Neutralizado: POS no renombra, reactiva, completa ni desactiva productos.
+  return { ok:true, skipped:true, reason:'catalogos_productos_fuente_unica' };
 }
 
-// Normalizar producto Galón (legacy 3800ml -> 3750ml)
+// Normalizar producto Galón (legacy 3750/3800 ml -> 3720 ml)
 async function normalizeLegacyGallonProductPOS(){
-  try{
-    const products = await getAll('products');
-    if (!Array.isArray(products) || !products.length) return;
-
-    const canonicalName = CANON_GALON_LABEL;
-    const canonicalKey = normKeyPOS(canonicalName);
-    const defaultGallon = (SEED.find(x => normKeyPOS(x.name) === canonicalKey) || {}).price || DEFAULT_GALON_PRICE_POS;
-
-    // Identificar productos tipo "galón" con la misma heurística usada por inventario.
-    const galonProducts = products.filter(p => p && legacyGallonVendibleNamePOS(p.name || ''));
-    if (!galonProducts.length) return;
-
-    const activeValidLegacy = galonProducts.find(p =>
-      normKeyPOS(p.name) !== canonicalKey && p.active !== false && isValidCatalogPricePOS(p.price)
-    );
-
-    // Elegir canon de forma conservadora: preferir el canónico activo; si no existe, usar un legacy activo válido.
-    let canon = galonProducts.find(p => normKeyPOS(p.name) === canonicalKey && p.active !== false)
-      || galonProducts.find(p => normKeyPOS(p.name) === canonicalKey)
-      || activeValidLegacy
-      || galonProducts.find(p => normName(p.name).includes('3750'))
-      || galonProducts[0];
-
-    // Precio a conservar: si el canon no tiene precio válido, tomar otro precio válido existente.
-    // Migración suave: el viejo default C$800 pasa a C$900; otros precios manuales se respetan.
-    let preservedPrice = isValidCatalogPricePOS(canon.price) ? Number(canon.price) : null;
-    if (Number(preservedPrice) === LEGACY_DEFAULT_GALON_PRICE_POS){ preservedPrice = Number(defaultGallon); }
-    if (activeValidLegacy && (!isValidCatalogPricePOS(canon.price) || (Number(canon.price) === Number(defaultGallon) && Number(activeValidLegacy.price) !== LEGACY_DEFAULT_GALON_PRICE_POS))){
-      preservedPrice = Number(activeValidLegacy.price);
-    }
-    if (Number(preservedPrice) === LEGACY_DEFAULT_GALON_PRICE_POS){ preservedPrice = Number(defaultGallon); }
-    if (!isValidCatalogPricePOS(preservedPrice)){
-      const anyValid = galonProducts.find(p => isValidCatalogPricePOS(p.price) && Number(p.price) !== LEGACY_DEFAULT_GALON_PRICE_POS);
-      preservedPrice = anyValid ? Number(anyValid.price) : Number(defaultGallon);
-    }
-
-    // Canon: label estándar + estructura. El precio solo se llena si faltaba/era inválido.
-    let changedCanon = false;
-    if (canon.name !== canonicalName){ canon.name = canonicalName; changedCanon = true; }
-    if (!isValidCatalogPricePOS(canon.price)){ canon.price = preservedPrice; changedCanon = true; }
-    else if (Number(canon.price) !== Number(preservedPrice) && activeValidLegacy){ canon.price = preservedPrice; changedCanon = true; }
-    if (typeof canon.manageStock === 'undefined'){ canon.manageStock = true; changedCanon = true; }
-    if (!hasExplicitPosFlagPOS(canon)){ canon.pos = true; changedCanon = true; }
-    if (typeof canon.receta === 'undefined'){ canon.receta = true; changedCanon = true; }
-    if (typeof canon.letra === 'undefined'){ canon.letra = 'G'; changedCanon = true; }
-    if (typeof canon.active === 'undefined'){ canon.active = true; changedCanon = true; }
-    if (changedCanon) await put('products', canon);
-
-    // Duplicados: mantener data (sin borrar) pero evitar duplicación en UI/ventas.
-    for (const p of galonProducts){
-      if (!p || p.id === canon.id) continue;
-      let ch = false;
-      // No pisar precios válidos de duplicados/legacy: solo completar si faltaba o era inválido.
-      if (!isValidCatalogPricePOS(p.price)){ p.price = preservedPrice; ch = true; }
-      // Ocultar de catálogo de venta; no borrar ni tocar ventas históricas.
-      if (p.active !== false){ p.active = false; ch = true; }
-      if (typeof p.manageStock === 'undefined'){ p.manageStock = true; ch = true; }
-      if (ch) await put('products', p);
-    }
-  }catch(e){
-    console.warn('No se pudo normalizar producto Galón', e);
-  }
+  // Neutralizado: cualquier normalización del catálogo corresponde a Catálogos → Productos.
+  return { ok:true, skipped:true, reason:'catalogos_productos_fuente_unica' };
 }
 
 
 // Ensure defaults
 async function ensureDefaults(){
-  let products = await getAll('products');
-  // Migración suave: Vaso pasa a producto vendible normal y Galón queda canónico.
-  await normalizeVasoProductForReempaquePOS();
-  await normalizeLegacyGallonProductPOS();
-  products = await getAll('products');
-  if (!products.length){
-    await seedMissingDefaults(false);
-  } else {
-    for (const p of products){
-      let changed = false;
-      if (typeof p.active === 'undefined'){ p.active = true; changed = true; }
-      if (typeof p.manageStock === 'undefined'){ p.manageStock = true; changed = true; }
-      const seed = SEED.find(s => normKeyPOS(s.name) === normKeyPOS(p.name || '') || (normKeyPOS(s.name) === normKeyPOS(CANON_GALON_LABEL) && legacyGallonVendibleNamePOS(p.name || '')));
-      if (seed && applyProductSaleCatalogDefaultsPOS(p, seed)){ changed = true; }
-      if (changed) await put('products', p);
-    }
-  }
-  products = await getAll('products');
-  if (products.length < 5) await seedMissingDefaults(true);
-  else await seedMissingDefaults(false);
-
+  // Productos permanece exactamente como fue definido en Catálogos/importación/sincronización.
+  // En particular, una lectura vacía continúa vacía al abrir, recargar o actualizar POS.
   const events = await getAll('events');
   if (!events.length){
     for (const ev of DEFAULT_EVENTS) await put('events', {...ev, createdAt:new Date().toISOString()});
-  } else {
   }
   const hasKey = (await getAll('meta')).some(m=>m.id==='currentEventId');
   if (!hasKey){
@@ -10786,7 +13420,7 @@ async function ensureDefaults(){
     if (evs.length) await setMeta('currentEventId', evs[0].id);
   }
 
-  // Bancos (catálogo para transferencias / tarjeta)
+  // Otros catálogos legítimos de POS conservan su inicialización independiente.
   await ensureBanksDefaults();
 }
 
@@ -10837,6 +13471,232 @@ function normalizeBankCommissionPOS(value){
 function getBankCommissionPctPOS(bank){
   if (!bank || typeof bank !== 'object') return 0;
   return normalizeBankCommissionPOS(bank.commissionPct ?? bank.commission ?? bank.feePct ?? 0);
+}
+
+function formatBankCommissionPctLabelPOS(value){
+  const pct = normalizeBankCommissionPOS(value);
+  return pct.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+}
+
+function buildSaleCardCommissionSnapshotPOS({ payment, bank, ventaNeta, utilidadAntesComision, courtesy }){
+  const pay = normalizePaymentMethodPOS(payment);
+  if (pay !== 'tarjeta') return null;
+
+  const bankId = Number(bank && bank.id);
+  const bankName = String((bank && bank.name) || '').trim();
+  const bankType = getBankTypePOS(bank);
+  const commissionPctSnapshot = getBankCommissionPctPOS(bank);
+  const netSale = round2(Number(ventaNeta) || 0);
+  const before = round2(Number(utilidadAntesComision) || 0);
+  const commissionAmountSnapshot = courtesy
+    ? 0
+    : round2(netSale * commissionPctSnapshot / 100);
+  const utilidadDespuesComision = round2(before - commissionAmountSnapshot);
+  const pctLabel = formatBankCommissionPctLabelPOS(commissionPctSnapshot);
+
+  return {
+    bankId: Number.isFinite(bankId) && bankId > 0 ? bankId : null,
+    bankName,
+    bankType,
+    commissionPctSnapshot,
+    commissionAmountSnapshot,
+    commissionLabelSnapshot: `Comisión ${bankName} ${pctLabel}%`,
+    utilidadAntesComision: before,
+    utilidadDespuesComision
+  };
+}
+
+function applySaleCardCommissionSnapshotPOS(economicSnapshot, cardSnapshot){
+  if (!economicSnapshot || typeof economicSnapshot !== 'object' || !cardSnapshot) return economicSnapshot;
+  Object.assign(economicSnapshot, cardSnapshot);
+  const finalUtility = round2(cardSnapshot.utilidadDespuesComision);
+  economicSnapshot.lineProfit = finalUtility;
+  economicSnapshot.utility = finalUtility;
+  economicSnapshot.utilidad = finalUtility;
+  economicSnapshot.profit = finalUtility;
+  return economicSnapshot;
+}
+
+function validateSaleCardCommissionSnapshotPOS(sale){
+  if (!sale || normalizePaymentMethodPOS(sale.payment) !== 'tarjeta') return { ok:true, msg:'' };
+
+  const bid = Number(sale.bankId);
+  if (!(Number.isFinite(bid) && bid > 0)) return { ok:false, msg:'Venta Tarjeta inválida: falta snapshot de banco.' };
+  const bankName = String(sale.bankName || '').trim();
+  if (!bankName) return { ok:false, msg:'Venta Tarjeta inválida: falta nombre snapshot del banco.' };
+  if (normalizeBankTypePOS(sale.bankType) !== 'tarjeta') return { ok:false, msg:'Venta Tarjeta inválida: tipo de banco inconsistente.' };
+
+  const pct = Number(sale.commissionPctSnapshot);
+  const amount = Number(sale.commissionAmountSnapshot);
+  const before = Number(sale.utilidadAntesComision);
+  const after = Number(sale.utilidadDespuesComision);
+  if (!Number.isFinite(pct) || pct < 0) return { ok:false, msg:'Venta Tarjeta inválida: comisión snapshot inválida.' };
+  if (!Number.isFinite(amount)) return { ok:false, msg:'Venta Tarjeta inválida: monto de comisión inválido.' };
+  if (!Number.isFinite(before) || !Number.isFinite(after)) return { ok:false, msg:'Venta Tarjeta inválida: utilidad snapshot inválida.' };
+
+  const expectedAmount = sale.courtesy ? 0 : round2((Number(sale.total) || 0) * pct / 100);
+  const expectedBefore = round2((Number(sale.total) || 0) - (Number(getSaleLineCostSnapshotPOS(sale)) || 0));
+  const expectedAfter = round2(expectedBefore - expectedAmount);
+  if (!moneyEquals(amount, expectedAmount)) return { ok:false, msg:'Venta Tarjeta inválida: monto de comisión inconsistente.' };
+  if (!moneyEquals(before, expectedBefore)) return { ok:false, msg:'Venta Tarjeta inválida: utilidad antes de comisión inconsistente.' };
+  if (!moneyEquals(after, expectedAfter)) return { ok:false, msg:'Venta Tarjeta inválida: utilidad después de comisión inconsistente.' };
+  if (!moneyEquals(Number(sale.utilidad), expectedAfter)) return { ok:false, msg:'Venta Tarjeta inválida: utilidad económica final inconsistente.' };
+
+  const expectedLabel = `Comisión ${bankName} ${formatBankCommissionPctLabelPOS(pct)}%`;
+  if (String(sale.commissionLabelSnapshot || '') !== expectedLabel) return { ok:false, msg:'Venta Tarjeta inválida: etiqueta de comisión inconsistente.' };
+  return { ok:true, msg:'' };
+}
+
+const CARD_COMMISSION_SNAPSHOT_STATUS_DETERMINED_POS = 'determinada';
+const CARD_COMMISSION_SNAPSHOT_STATUS_UNDETERMINED_POS = 'no_determinada';
+
+function readFiniteSaleSnapshotNumberPOS(sale, key){
+  if (!sale || typeof sale !== 'object' || !Object.prototype.hasOwnProperty.call(sale, key)) return null;
+  const raw = sale[key];
+  if (raw == null || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function isCompleteSaleCardCommissionSnapshotPOS(sale){
+  if (!sale || normalizePaymentMethodPOS(sale.payment) !== 'tarjeta') return false;
+  return readFiniteSaleSnapshotNumberPOS(sale, 'commissionPctSnapshot') != null
+    && readFiniteSaleSnapshotNumberPOS(sale, 'commissionAmountSnapshot') != null
+    && readFiniteSaleSnapshotNumberPOS(sale, 'utilidadAntesComision') != null
+    && readFiniteSaleSnapshotNumberPOS(sale, 'utilidadDespuesComision') != null
+    && !!String(sale.commissionLabelSnapshot || '').trim();
+}
+
+function getSaleCardCommissionSnapshotAmountPOS(sale){
+  if (!sale || normalizePaymentMethodPOS(sale.payment) !== 'tarjeta' || isCourtesySalePOS(sale)) return 0;
+  const n = readFiniteSaleSnapshotNumberPOS(sale, 'commissionAmountSnapshot');
+  return n == null ? 0 : round2(n);
+}
+
+function getSaleUtilityBeforeCommissionPOS(sale){
+  const saved = readFiniteSaleSnapshotNumberPOS(sale, 'utilidadAntesComision');
+  if (saved != null) return round2(saved);
+  return round2((Number(sale && sale.total) || 0) - (Number(getSaleLineCostSnapshotPOS(sale)) || 0));
+}
+
+function getSaleUtilityAfterCommissionPOS(sale){
+  const saved = readFiniteSaleSnapshotNumberPOS(sale, 'utilidadDespuesComision');
+  if (saved != null) return round2(saved);
+  const before = getSaleUtilityBeforeCommissionPOS(sale);
+  const amount = readFiniteSaleSnapshotNumberPOS(sale, 'commissionAmountSnapshot');
+  return amount == null ? before : round2(before - amount);
+}
+
+function collectSaleCardCommissionsPOS(sales){
+  const byLabel = new Map();
+  let total = 0;
+  let undeterminedCount = 0;
+  let determinedCount = 0;
+  for (const sale of (Array.isArray(sales) ? sales : [])){
+    if (!sale || normalizePaymentMethodPOS(sale.payment) !== 'tarjeta' || isCourtesySalePOS(sale)) continue;
+    const amount = readFiniteSaleSnapshotNumberPOS(sale, 'commissionAmountSnapshot');
+    const label = String(sale.commissionLabelSnapshot || '').trim();
+    const status = String(sale.commissionSnapshotStatus || '').trim();
+    if (amount == null || !label || status === CARD_COMMISSION_SNAPSHOT_STATUS_UNDETERMINED_POS){
+      undeterminedCount += 1;
+      continue;
+    }
+    determinedCount += 1;
+    const value = round2(amount);
+    total = round2(total + value);
+    const cur = byLabel.get(label) || { label, total:0, count:0 };
+    cur.total = round2(cur.total + value);
+    cur.count += 1;
+    byLabel.set(label, cur);
+  }
+  return {
+    total: round2(total),
+    byLabel: Array.from(byLabel.values()).sort((a,b)=>String(a.label||'').localeCompare(String(b.label||''),'es-NI')),
+    undeterminedCount,
+    determinedCount
+  };
+}
+
+function resolveLegacyCardBankPOS(sale, banks){
+  const list = (Array.isArray(banks) ? banks : []).filter(b => b && getBankTypePOS(b) === 'tarjeta');
+  const bid = Number(sale && sale.bankId);
+  if (Number.isFinite(bid) && bid > 0){
+    const exact = list.find(b => Number(b.id) === bid);
+    if (exact) return exact;
+  }
+  const name = String((sale && sale.bankName) || '').trim();
+  if (!name) return null;
+  const key = name.toLocaleLowerCase('es-NI');
+  const matches = list.filter(b => String(b.name || '').trim().toLocaleLowerCase('es-NI') === key);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function getExplicitBankCommissionPctPOS(bank){
+  if (!bank || typeof bank !== 'object') return null;
+  for (const key of ['commissionPct','commission','feePct']){
+    if (!Object.prototype.hasOwnProperty.call(bank, key)) continue;
+    const raw = bank[key];
+    if (raw == null || raw === '') continue;
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 0) return normalizeBankCommissionPOS(n);
+  }
+  return null;
+}
+
+async function backfillLegacyCardCommissionSnapshotsPOS(){
+  const sales = await getAll('sales');
+  const banks = await getAllBanksSafe();
+  let updated = 0;
+  let undetermined = 0;
+  for (const sale of (sales || [])){
+    if (!sale || normalizePaymentMethodPOS(sale.payment) !== 'tarjeta') continue;
+    const status = String(sale.commissionSnapshotStatus || '').trim();
+    if (isCompleteSaleCardCommissionSnapshotPOS(sale)
+        || status === CARD_COMMISSION_SNAPSHOT_STATUS_DETERMINED_POS
+        || status === CARD_COMMISSION_SNAPSHOT_STATUS_UNDETERMINED_POS) continue;
+
+    const next = { ...sale };
+    const beforeExisting = readFiniteSaleSnapshotNumberPOS(sale, 'utilidadAntesComision');
+    const before = beforeExisting != null ? round2(beforeExisting) : getSaleUtilityBeforeCommissionPOS(sale);
+    const bank = resolveLegacyCardBankPOS(sale, banks);
+    const pctExisting = readFiniteSaleSnapshotNumberPOS(sale, 'commissionPctSnapshot');
+    const pctCurrent = bank ? getExplicitBankCommissionPctPOS(bank) : null;
+    const pct = pctExisting != null ? normalizeBankCommissionPOS(pctExisting) : pctCurrent;
+    const bankName = String((sale && sale.bankName) || (bank && bank.name) || '').trim();
+    const canDetermine = !!bank && pct != null && !!bankName;
+    const backfilledAt = Date.now();
+
+    if (canDetermine){
+      const amountExisting = readFiniteSaleSnapshotNumberPOS(sale, 'commissionAmountSnapshot');
+      const amount = amountExisting != null ? round2(amountExisting)
+        : (isCourtesySalePOS(sale) ? 0 : round2((Number(sale.total) || 0) * pct / 100));
+      const afterExisting = readFiniteSaleSnapshotNumberPOS(sale, 'utilidadDespuesComision');
+      const after = afterExisting != null ? round2(afterExisting) : round2(before - amount);
+      const label = String(sale.commissionLabelSnapshot || '').trim()
+        || `Comisión ${bankName} ${formatBankCommissionPctLabelPOS(pct)}%`;
+      if (pctExisting == null) next.commissionPctSnapshot = pct;
+      if (amountExisting == null) next.commissionAmountSnapshot = amount;
+      if (!String(sale.commissionLabelSnapshot || '').trim()) next.commissionLabelSnapshot = label;
+      if (beforeExisting == null) next.utilidadAntesComision = before;
+      if (afterExisting == null) next.utilidadDespuesComision = after;
+      next.commissionSnapshotStatus = CARD_COMMISSION_SNAPSHOT_STATUS_DETERMINED_POS;
+      next.commissionSnapshotOrigin = 'legacy_backfill';
+      next.commissionSnapshotBackfilledAt = backfilledAt;
+    } else {
+      if (!Object.prototype.hasOwnProperty.call(next, 'commissionPctSnapshot')) next.commissionPctSnapshot = null;
+      if (!Object.prototype.hasOwnProperty.call(next, 'commissionAmountSnapshot')) next.commissionAmountSnapshot = null;
+      if (!String(next.commissionLabelSnapshot || '').trim()) next.commissionLabelSnapshot = 'Comisión no determinada';
+      if (beforeExisting == null) next.utilidadAntesComision = before;
+      if (!Object.prototype.hasOwnProperty.call(next, 'utilidadDespuesComision')) next.utilidadDespuesComision = null;
+      next.commissionSnapshotStatus = CARD_COMMISSION_SNAPSHOT_STATUS_UNDETERMINED_POS;
+      next.commissionSnapshotOrigin = 'legacy_backfill';
+      next.commissionSnapshotBackfilledAt = backfilledAt;
+      undetermined += 1;
+    }
+    await put('sales', next);
+    updated += 1;
+  }
+  return { updated, undetermined };
 }
 
 function isBankForPaymentPOS(bank, payment){
@@ -11095,15 +13955,15 @@ function productEditReempaqueRecordTouchesPOS(record, product){
 
 async function productEditHasMovementsPOS(product){
   if (!product) return false;
-  const pid = String(product.id ?? '').trim();
-  const pname = productEditNormKeyPOS(product.name || product.nombre || '');
+  const pid = catalogProductStableIdPOS(product);
+  const internalId = catalogProductInternalIdPOS(product);
   try{
     const sales = await getAll('sales');
-    if ((sales || []).some(s => s && ((pid && String(s.productId ?? '').trim() === pid) || (pname && productEditNormKeyPOS(s.productName || s.name || '') === pname)))) return true;
+    if ((sales || []).some(s => saleMatchesCatalogProductPOS(s, product))) return true;
   }catch(_){ }
   try{
     const inv = await getAll('inventory');
-    if ((inv || []).some(i => i && pid && String(i.productId ?? '').trim() === pid)) return true;
+    if ((inv || []).some(i => i && ((internalId && Number(i.productId) === internalId) || (pid && String(i.productId ?? '').trim() === pid)))) return true;
   }catch(_){ }
   try{
     const reempaques = await getAll(REEMPAQUE_STORE_POS);
@@ -11121,183 +13981,61 @@ function closeProductEditModalPOS(){
 }
 
 async function openProductEditModalPOS(productId){
+  void productId;
+  toast('Los Productos se administran en Catálogos → Productos');
   const modal = document.getElementById('product-edit-modal');
-  if (!modal) return;
-  const id = Number(productId);
-  if (!Number.isFinite(id) || id <= 0){ toast('Producto inválido'); return; }
-  const products = await getAll('products');
-  const product = (products || []).find(p => Number(p && p.id) === id);
-  if (!product){ toast('Producto no existe'); return; }
-
-  modal.dataset.productId = String(product.id);
-  const current = document.getElementById('product-edit-current');
-  if (current) current.textContent = 'Producto actual: ' + String(product.name || '—');
-  const nameEl = document.getElementById('product-edit-name');
-  const priceEl = document.getElementById('product-edit-price');
-  const capEl = document.getElementById('product-edit-capacity');
-  const costEl = document.getElementById('product-edit-unit-cost');
-  const activeEl = document.getElementById('product-edit-active');
-  const manageEl = document.getElementById('product-edit-manage');
-  if (nameEl) nameEl.value = String(product.name || '');
-  if (priceEl) priceEl.value = String(productEditMoneyPOS(product.price, 0));
-  const cap = productEditGetCapacityPOS(product);
-  if (capEl) capEl.value = cap > 0 ? String(cap) : '';
-  const cost = productEditGetUnitCostPOS(product);
-  if (costEl) costEl.value = cost > 0 ? String(cost) : '';
-  if (activeEl) activeEl.checked = product.active !== false;
-  if (manageEl) manageEl.checked = product.manageStock !== false;
-  const note = document.getElementById('product-edit-history-note');
-  if (note){
-    note.style.display = 'none';
-    productEditHasMovementsPOS(product).then(has => {
-      try{ note.style.display = has ? 'block' : 'none'; }catch(_){ }
-    }).catch(()=>{});
-  }
-  productEditSetMsgPOS('');
-  openModalPOS('product-edit-modal');
-  setTimeout(()=>{ try{ nameEl?.focus({ preventScroll:true }); nameEl?.select(); }catch(_){ } }, 60);
+  if (modal) modal.style.display = 'none';
+  return { ok:false, blocked:true, reason:'catalogos_productos_fuente_unica' };
 }
 
 async function saveProductEditModalPOS(){
-  const modal = document.getElementById('product-edit-modal');
-  if (!modal) return;
-  const id = Number(modal.dataset.productId || 0);
-  const products = await getAll('products');
-  const product = (products || []).find(p => Number(p && p.id) === id);
-  if (!product){ productEditSetMsgPOS('El producto no existe. Recarga el POS e intenta de nuevo.', 'warn'); return; }
-
-  const name = String(document.getElementById('product-edit-name')?.value || '').trim();
-  const priceRaw = String(document.getElementById('product-edit-price')?.value || '').trim();
-  const capRaw = String(document.getElementById('product-edit-capacity')?.value || '').trim();
-  const costRaw = String(document.getElementById('product-edit-unit-cost')?.value || '').trim();
-
-  if (!name){ productEditSetMsgPOS('Nombre obligatorio.', 'warn'); return; }
-  const price = Number(priceRaw);
-  if (!priceRaw || !Number.isFinite(price) || price < 0){ productEditSetMsgPOS('Precio de venta inválido. Debe ser 0 o mayor.', 'warn'); return; }
-
-  const existingCapacity = productEditGetCapacityPOS(product);
-  const createdFromReempaque = String(product.createdFrom || product.origen || '').toLowerCase().includes('reempaque');
-  const capacityRequired = existingCapacity > 0 || createdFromReempaque;
-  let capacity = 0;
-  if (capRaw){
-    capacity = Number(capRaw);
-    if (!Number.isFinite(capacity) || capacity <= 0){ productEditSetMsgPOS('ml por unidad inválido. Debe ser mayor que 0.', 'warn'); return; }
-  } else if (capacityRequired){
-    productEditSetMsgPOS('ml por unidad obligatorio para este producto. Debe ser mayor que 0.', 'warn');
-    return;
-  }
-
-  let unitCost = 0;
-  if (costRaw){
-    unitCost = Number(costRaw);
-    if (!Number.isFinite(unitCost) || unitCost < 0){ productEditSetMsgPOS('Costo unitario inválido. Debe ser 0 o mayor.', 'warn'); return; }
-  }
-
-  const newKey = productEditNormKeyPOS(name);
-  const dup = (products || []).find(p => p && Number(p.id) !== id && productEditNormKeyPOS(p.name || p.nombre || '') === newKey);
-  if (dup){ productEditSetMsgPOS('Ya existe otro producto con ese nombre. No se duplicó nada.', 'warn'); return; }
-
-  const now = new Date().toISOString();
-  const next = { ...product };
-  next.name = name;
-  next.price = productEditMoneyPOS(price, 0);
-  next.capacityMl = capRaw ? productEditQtyPOS(capacity, 0) : 0;
-  next.capacidadMl = next.capacityMl;
-  next.volumeMl = next.capacityMl;
-  next.volumenMl = next.capacityMl;
-  next.unitCost = productEditMoneyPOS(unitCost, 0);
-  next.costoUnitario = next.unitCost;
-  next.costPerUnit = next.unitCost;
-  const activeEl = document.getElementById('product-edit-active');
-  const manageEl = document.getElementById('product-edit-manage');
-  if (activeEl) next.active = !!activeEl.checked;
-  if (manageEl) next.manageStock = !!manageEl.checked;
-  next.updatedAt = now;
-  next.updatedFrom = 'productos_edit_modal';
-
-  try{
-    await put('products', next);
-    closeProductEditModalPOS();
-    await renderProductos();
-    await refreshProductSelect();
-    await renderInventario();
-    try{ await reempaquePopulateSelectorsPOS(); }catch(_){ }
-    try{ await reempaqueRefreshUiPOS(); }catch(_){ }
-    toast('Producto actualizado');
-  }catch(err){
-    console.error('No se pudo guardar edición de producto', err);
-    productEditSetMsgPOS('No se pudo guardar. Revisa si el nombre ya existe o si hay datos inválidos.', 'warn');
-  }
+  productEditSetMsgPOS('Los Productos se administran únicamente en Gestión Operativa → Catálogos → Productos.', 'warn');
+  toast('Edición bloqueada: usa Catálogos → Productos');
+  return { ok:false, blocked:true, reason:'catalogos_productos_fuente_unica' };
 }
 
 function setupProductEditModalPOS(){
   const modal = document.getElementById('product-edit-modal');
   if (!modal || modal.dataset.bound === '1') return;
   modal.dataset.bound = '1';
+  const block = () => {
+    productEditSetMsgPOS('Los Productos se administran únicamente en Gestión Operativa → Catálogos → Productos.', 'warn');
+    toast('Edición bloqueada: usa Catálogos → Productos');
+  };
   const closeBtn = document.getElementById('product-edit-close');
   const cancelBtn = document.getElementById('product-edit-cancel');
   const saveBtn = document.getElementById('product-edit-save');
   if (closeBtn) closeBtn.addEventListener('click', closeProductEditModalPOS);
   if (cancelBtn) cancelBtn.addEventListener('click', closeProductEditModalPOS);
-  if (saveBtn) saveBtn.addEventListener('click', ()=> saveProductEditModalPOS().catch(err=>{
-    console.error(err);
-    productEditSetMsgPOS('No se pudo guardar el producto.', 'warn');
-  }));
+  if (saveBtn){ saveBtn.disabled = true; saveBtn.addEventListener('click', block); }
   modal.addEventListener('click', (e)=>{ if (e.target === modal) closeProductEditModalPOS(); });
   modal.addEventListener('keydown', (e)=>{
     if (e.key === 'Escape') closeProductEditModalPOS();
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter'){
-      e.preventDefault();
-      saveProductEditModalPOS().catch(err=>console.error(err));
-    }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter'){ e.preventDefault(); block(); }
   });
 }
 
 async function renderProductos(){
-  const list = await getAll('products');
-  const wrap = $('#productos-list');
+  // Guardia para HTML antiguo en caché: la vista legacy queda estrictamente informativa.
+  const wrap = document.getElementById('productos-list');
   if (!wrap) return;
+  const list = await getAll('products').catch(()=>[]);
   wrap.innerHTML = '';
-  if (!list.length){
-    const p = document.createElement('div'); p.className = 'warn'; p.textContent = 'No hay productos. Agrega los de Arcano 33 abajo.'; wrap.appendChild(p);
-  }
-  const rows = (Array.isArray(list) ? list : []).slice().sort((a,b)=>{
-    const aa = (a && a.active === false) ? 1 : 0;
-    const bb = (b && b.active === false) ? 1 : 0;
-    if (aa !== bb) return aa - bb;
-    return String((a && a.name) || '').localeCompare(String((b && b.name) || ''), 'es-NI', { sensitivity:'base' });
-  });
-  for (const p of rows) {
+  const notice = document.createElement('div');
+  notice.className = list.length ? 'info' : 'warn';
+  notice.textContent = list.length
+    ? 'Productos en modo lectura. Administra altas, cambios y borrados en Gestión Operativa → Catálogos → Productos.'
+    : 'No hay productos. Créelos primero en Gestión Operativa → Catálogos → Productos.';
+  wrap.appendChild(notice);
+  for (const p of (Array.isArray(list) ? list : [])){
     if (!p) continue;
     const row = document.createElement('div');
     row.className = 'card product-card-a33';
-    const name = String(p.name || 'Producto sin nombre').trim() || 'Producto sin nombre';
-    const price = productEditMoneyPOS(p.price, 0);
-    const cap = productEditGetCapacityPOS(p);
-    const cost = productEditGetUnitCostPOS(p);
-    const active = p.active === false ? 'Inactivo' : 'Activo';
-    const manage = p.manageStock === false ? 'No' : 'Sí';
-    row.innerHTML = `
-      <div class="product-main-a33">
-        <div class="product-title">${escapeHtml(name)}</div>
-        <div class="product-meta-grid">
-          <div class="product-meta-item"><small>Precio</small><b>${escapeHtml(productEditDisplayMoneyPOS(price))}</b></div>
-          <div class="product-meta-item"><small>ml/unidad</small><b>${escapeHtml(productEditDisplayMlPOS(cap))}</b></div>
-          <div class="product-meta-item"><small>Costo ref.</small><b>${escapeHtml(productEditDisplayMoneyPOS(cost))}</b></div>
-          <div class="product-meta-item"><small>Estado</small><b>${escapeHtml(active)} · Inv: ${escapeHtml(manage)}</b></div>
-        </div>
-      </div>
-      <div class="product-actions-a33">
-        <button data-id="${escapeHtml(String(p.id))}" class="btn-ok btn-pill btn-edit-product" type="button">Editar</button>
-        <button data-id="${escapeHtml(String(p.id))}" class="btn-danger btn-pill btn-del" type="button">Eliminar</button>
-      </div>
-    `;
+    const name = String(p.name || p.nombre || 'Producto sin nombre').trim() || 'Producto sin nombre';
+    const status = p.active === false ? 'Inactivo' : 'Activo';
+    row.innerHTML = `<div class="product-main-a33"><div class="product-title">${escapeHtml(name)}</div><small class="muted">${escapeHtml(status)} · Solo lectura desde POS</small></div>`;
     wrap.appendChild(row);
   }
-  await renderProductChips();
-
-  // Bancos (gestión en pestaña Productos)
-  await renderBancos();
 }
 
 // Productos internos/virtuales del POS que NO deben aparecer en selector ni inventario.
@@ -11306,50 +14044,34 @@ async function getHiddenProductIdsPOS(){
   return new Set();
 }
 
-// Catálogos Etapa 2: lectura canónica de productos para venta POS.
-// La administración se movió a Gestión Operativa → Catálogos → Productos.
-function posProductCanonicalGroupKey(product){
-  const name = String((product && (product.name || product.nombre)) || '').trim();
-  const fid = (typeof mapProductNameToFinishedId === 'function') ? mapProductNameToFinishedId(name) : null;
-  return fid ? ('sku:' + fid) : ('name:' + productEditNormKeyPOS(name));
-}
-
-function posProductCanonicalScore(product){
-  if (!product) return -9999;
-  const name = String(product.name || product.nombre || '');
-  const fid = (typeof mapProductNameToFinishedId === 'function') ? mapProductNameToFinishedId(name) : null;
-  const nk = productEditNormKeyPOS(name);
-  let score = 0;
-  if (productActiveForSalePOS(product)) score += 1000;
-  if (productPosEnabledForSalePOS(product)) score += 200;
-  if (isValidCatalogPricePOS(product.price)) score += 100;
-  if (productManageStockForSalePOS(product, true)) score += 15;
-  if (fid) score += 20;
-  if (fid === 'galon'){
-    if (nk === productEditNormKeyPOS(CANON_GALON_LABEL)) score += 80;
-    if (normName(name).includes('3750')) score += 40;
-    if (Number(product.price) === LEGACY_DEFAULT_GALON_PRICE_POS) score -= 60;
-    if (Number(product.price) === DEFAULT_GALON_PRICE_POS) score += 12;
-  }
-  try{
-    const t = Date.parse(product.updatedAt || product.createdAt || '');
-    if (Number.isFinite(t)) score += Math.min(10, t / 1e15);
-  }catch(_){ }
-  const id = Number(product.id);
-  if (Number.isFinite(id)) score -= Math.min(1, id / 1000000);
-  return score;
-}
-
+// Catálogos → Productos es la única fuente del selector POS.
+// Solo se elimina un duplicado cuando repite exactamente el mismo productId; nunca por nombre o familia.
 function posCanonicalProductsForSale(products){
-  const groups = new Map();
-  for (const p of (Array.isArray(products) ? products : [])){
-    if (!productSellableInPOS(p)) continue;
-    const key = posProductCanonicalGroupKey(p);
-    if (!key || key === 'name:') continue;
-    const cur = groups.get(key);
-    if (!cur || posProductCanonicalScore(p) > posProductCanonicalScore(cur)) groups.set(key, p);
+  const byProductId = new Map();
+  for (const product of (Array.isArray(products) ? products : [])){
+    if (!productSellableInPOS(product)) continue;
+    const productId = catalogProductStableIdPOS(product);
+    if (!productId || byProductId.has(productId)) continue;
+    byProductId.set(productId, product);
   }
-  return Array.from(groups.values());
+  return Array.from(byProductId.values());
+}
+
+function posDuplicateNameCounts(products){
+  const counts = new Map();
+  (Array.isArray(products) ? products : []).forEach((product) => {
+    const key = productEditNormKeyPOS(product && (product.name || product.nombre || ''));
+    if (key) counts.set(key, (counts.get(key) || 0) + 1);
+  });
+  return counts;
+}
+
+function posProductDisplayLabel(product, duplicateNames){
+  const name = String((product && (product.name || product.nombre)) || 'Producto').trim() || 'Producto';
+  const key = productEditNormKeyPOS(name);
+  if (!duplicateNames || (duplicateNames.get(key) || 0) < 2) return name;
+  const productId = catalogProductStableIdPOS(product);
+  return `${name} · ${productId.slice(-6)}`;
 }
 
 // Chips de productos (activos + POS marcado desde Catálogos)
@@ -11359,6 +14081,7 @@ async function renderProductChips(){
 
   const hiddenIds = await getHiddenProductIdsPOS();
   let list = posCanonicalProductsForSale((await getAll('products')).filter(p=>p && !hiddenIds.has(p.id)));
+  const duplicateNames = posDuplicateNameCounts(list);
 
   // Orden con prioridad de Arcano 33
   const priority = ['pulso','media','djeba','litro','galon','galón','galon 3750','galón 3750','galon 3800','galón 3800'];
@@ -11383,16 +14106,18 @@ async function renderProductChips(){
     const c = document.createElement('button');
     c.className = 'chip';
     c.dataset.kind = 'product';
-    c.dataset.id = p.id;
+    c.dataset.productId = catalogProductStableIdPOS(p);
+    c.dataset.internalId = String(catalogProductInternalIdPOS(p) || '');
     if (!enabled) c.classList.add('disabled');
-    c.textContent = p.name;
-    if (selected && selected.kind==='product' && p.id === selected.id) c.classList.add('active');
+    c.textContent = posProductDisplayLabel(p, duplicateNames);
+    if (selected && selected.kind==='product' && catalogProductStableIdPOS(p) === selected.productId) c.classList.add('active');
 
     c.onclick = async()=>{
       if (!isSellEnabledNowPOS()) return;
       const prev = parseSelectedSellItemValue(sel.value);
-      sel.value = String(p.id);
-      const same = prev && prev.kind==='product' && prev.id === p.id;
+      const stableId = catalogProductStableIdPOS(p);
+      sel.value = `product:${encodeURIComponent(stableId)}`;
+      const same = prev && prev.kind==='product' && prev.productId === stableId;
       if (same) { $('#sale-qty').value = Math.max(1, parseFloat($('#sale-qty').value||'1')) + 1; }
       else { $('#sale-qty').value = 1; }
       $('#sale-price').value = p.price;
@@ -11458,46 +14183,24 @@ async function renderProductChips(){
 // Delegación de eventos para Productos
 document.addEventListener('change', async (e)=>{
   if (e.target.classList.contains('p-name') || e.target.classList.contains('p-price') || e.target.classList.contains('p-manage') || e.target.classList.contains('p-active')){
-    const id = parseInt(e.target.dataset.id||'0',10);
-    if (!id) return;
-    const all = await getAll('products');
-    const cur = all.find(px=>px.id===id); if (!cur) return;
-    if (e.target.classList.contains('p-name')) cur.name = e.target.value.trim();
-    if (e.target.classList.contains('p-price')) cur.price = parseFloat(e.target.value||'0');
-    if (e.target.classList.contains('p-manage')) cur.manageStock = e.target.checked;
-    if (e.target.classList.contains('p-active')) cur.active = e.target.checked;
-    try{
-      await put('products', cur);
-      await renderProductos(); 
-      await refreshProductSelect(); 
-      await renderInventario();
-      toast('Producto actualizado');
-    }catch(err){
-      alert('No se pudo guardar el producto. ¿Nombre duplicado?');
-    }
+    e.preventDefault();
+    await renderProductos();
+    toast('Cambios bloqueados: usa Catálogos → Productos');
   }
 });
 document.addEventListener('click', async (e)=>{
   const editBtn = e.target.closest('.btn-edit-product');
   if (editBtn){
-    const id = parseInt(editBtn.dataset.id || '0', 10);
-    await openProductEditModalPOS(id);
+    e.preventDefault();
+    toast('Edición bloqueada: usa Catálogos → Productos');
     return;
   }
 
   const delBtn = e.target.closest('.btn-del');
   if (delBtn){
-    const id = parseInt(delBtn.dataset.id,10);
-    if (!confirm('¿Eliminar este producto? Esto no borra ventas pasadas.')) return;
-    try{
-      const all = await getAll('products');
-      const product = all.find(p => p && Number(p.id) === Number(id));
-      if (product) rememberCatalogDeletedPOS('products', product);
-    }catch(_){ }
-    await del('products', id);
-    await renderProductos(); await refreshProductSelect(); await renderInventario();
-    try{ await reempaquePopulateSelectorsPOS(); }catch(_){ }
-    toast('Producto eliminado');
+    e.preventDefault();
+    toast('Borrado bloqueado: usa Catálogos → Productos');
+    return;
   }
 });
 
@@ -11707,6 +14410,9 @@ function setTab(name){
   // Compatibilidad: si llega "vender" por URL/hash/estado viejo, mapear a "venta".
   try{
     if (name === 'vender') name = 'venta';
+    // Compatibilidad legacy: Checklist ya no tiene interfaz en POS.
+    // Cualquier ruta/estado antiguo vuelve de forma segura a Vender.
+    if (name === 'checklist') name = 'venta';
   }catch(_){ }
 
   // Checklist: antes de salir, intentar persistir texto pendiente (best-effort)
@@ -11763,10 +14469,9 @@ const tabs = $$('.tab');
   if (name==='resumen') renderSummary();
   if (name==='extras') { renderExtrasUI().catch(err=>console.error(err)); renderBancos().catch(err=>console.error(err)); }
   if (name==='eventos') renderEventos();
-  if (name==='inventario') renderInventario();
+  if (name==='inventario') { setLotesCargadosExpandedPOS(false); renderInventario(); }
   if (name==='efectivo') renderEfectivoTab().catch(err=>console.error(err));
   if (name==='calculadora') onOpenPosCalculatorTab().catch(err=>console.error(err));
-  if (name==='checklist') renderChecklistTab().catch(err=>console.error(err));
   if (name==='venta') {
     syncExchangeRateInputs().catch(err=>console.error(err));
     try{ setupSaleCashTenderUIOnce(); refreshSaleCashTenderUiPOS({ forceFx:true }); }catch(_){ }
@@ -11776,41 +14481,31 @@ const tabs = $$('.tab');
 // --- Deep-link mínimo (Centro de Mando -> POS)
 function getTabFromUrlPOS(){
   try{
-    const allowed = new Set(['venta','inventario','eventos','efectivo','resumen','extras','calculadora','checklist']);
-    // Querystring
-    const qs = new URLSearchParams(window.location.search || '');
-    const qTab = (qs.get('tab') || '').trim();
-    if (qTab){
-      const qt = (qTab === 'vender') ? 'venta' : (qTab === 'productos' ? 'extras' : qTab);
-      if (allowed.has(qt)) return qt;
-    }
+    const allowed = new Set(['venta','inventario','eventos','efectivo','resumen','extras','calculadora']);
+    const normalizeLegacyTab = (raw)=>{
+      const value = String(raw || '').trim();
+      if (!value) return null;
+      if (value === 'vender') return 'venta';
+      if (value === 'productos') return 'extras';
+      // Checklist fue retirado visualmente: rutas viejas nunca dejan pantalla vacía.
+      if (value === 'checklist' || value === 'checklist-reminders' || value === 'checklist-reminders-card' || value.startsWith('checklist-reminders')) return 'venta';
+      return allowed.has(value) ? value : null;
+    };
 
-    // Hash: #tab=venta o #venta (compat: #tab=vender / #vender)
+    const qs = new URLSearchParams(window.location.search || '');
+    const fromQuery = normalizeLegacyTab(qs.get('tab'));
+    if (fromQuery) return fromQuery;
+
     const h = (window.location.hash || '').replace(/^#/, '').trim();
     if (!h) return null;
-    // Alias: CdM → Recordatorios (abre Checklist)
-    if (h === 'checklist-reminders' || h === 'checklist-reminders-card') return 'checklist';
-    if (h.startsWith('checklist-reminders')) return 'checklist';
-    if (h.startsWith('tab=')){
-      const ht = h.slice(4).trim();
-      const htab = (ht === 'vender') ? 'venta' : (ht === 'productos' ? 'extras' : ht);
-      if (allowed.has(htab)) return htab;
-    }
-    const hh = (h === 'vender') ? 'venta' : (h === 'productos' ? 'extras' : h);
-    if (allowed.has(hh)) return hh;
+    const fromHash = normalizeLegacyTab(h.startsWith('tab=') ? h.slice(4) : h);
+    if (fromHash) return fromHash;
   }catch(_){ }
   return null;
 }
 
 function getDeepScrollTargetFromUrlPOS(){
-  try{
-    const h = (window.location.hash || '').replace(/^#/, '').trim();
-    if (!h) return null;
-    // CdM: #checklist-reminders -> scroll a la card real
-    if (h === 'checklist-reminders' || h === 'checklist-reminders-card' || h.startsWith('checklist-reminders')){
-      return 'checklist-reminders-card';
-    }
-  }catch(_){ }
+  // Compatibilidad: los deep-links antiguos de Checklist se redirigen a Vender.
   return null;
 }
 
@@ -13309,6 +16004,7 @@ async function refreshProductSelect(opts){
   const hiddenIds = await getHiddenProductIdsPOS();
   const all = await getAll('products');
   const list = posCanonicalProductsForSale(all.filter(p => p && !hiddenIds.has(p.id)));
+  const duplicateNames = posDuplicateNameCounts(list);
 
   const sel = $('#sale-product');
   if (!sel) return;
@@ -13316,12 +16012,24 @@ async function refreshProductSelect(opts){
   const prevVal = keepSelection ? String(sel.value || '').trim() : '';
   sel.innerHTML = '';
 
-  // Productos
+  // Productos reales del Catálogo
   for (const p of list) {
+    const productId = catalogProductStableIdPOS(p);
     const opt = document.createElement('option');
-    opt.value = p.id;
-    opt.textContent = `${p.name} (C${fmt(p.price)})${p.active===false?' [inactivo]':''}`;
+    opt.value = `product:${encodeURIComponent(productId)}`;
+    opt.dataset.productId = productId;
+    opt.dataset.internalId = String(catalogProductInternalIdPOS(p) || '');
+    opt.textContent = `${posProductDisplayLabel(p, duplicateNames)} (C${fmt(p.price)})`;
     sel.appendChild(opt);
+  }
+
+  if (!list.length){
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = 'No hay productos activos habilitados para POS';
+    empty.disabled = true;
+    empty.selected = true;
+    sel.appendChild(empty);
   }
 
   // Extras del evento activo
@@ -13378,11 +16086,10 @@ async function refreshSaleStockLabel(){
     return;
   }
 
-  const prodId = item.id;
   const products = await getAll('products');
-  const p = products.find(pp=>pp.id===prodId);
+  const p = findCatalogProductByStableIdPOS(products, item.productId);
   if (!p || !productManageStockForSalePOS(p, true)) { $('#sale-stock').textContent='—'; return; }
-  const st = await computeStock(parseInt(curId,10), prodId);
+  const st = await computeStock(parseInt(curId,10), p);
   $('#sale-stock').textContent = st;
 }
 
@@ -13397,9 +16104,16 @@ function parseSelectedSellItemValue(val){
     if (!Number.isFinite(id) || id <= 0) return null;
     return { kind:'extra', id };
   }
-  const id = parseInt(v, 10);
-  if (!Number.isFinite(id) || id <= 0) return null;
-  return { kind:'product', id };
+  if (v.startsWith('product:')){
+    let productId = '';
+    try{ productId = decodeURIComponent(v.slice(8)); }catch(_){ productId = v.slice(8); }
+    productId = String(productId || '').trim();
+    return productId ? { kind:'product', productId } : null;
+  }
+  // Compatibilidad visual con HTML antiguo en caché: un valor numérico solo puede resolver un producto existente.
+  const legacyId = parseInt(v, 10);
+  if (Number.isFinite(legacyId) && legacyId > 0) return { kind:'product-legacy', internalId:legacyId };
+  return null;
 }
 
 function sanitizeExtrasPOS(raw){
@@ -13457,9 +16171,12 @@ async function setSalePriceFromSelectionPOS(){
   if (!sel) return;
   const item = parseSelectedSellItemValue(sel.value);
   if (!item) return;
-  if (item.kind === 'product'){
-    const p = (await getAll('products')).find(x => x.id === item.id);
-    if (p) $('#sale-price').value = p.price;
+  if (item.kind === 'product' || item.kind === 'product-legacy'){
+    const products = await getAll('products');
+    const p = item.kind === 'product'
+      ? findCatalogProductByStableIdPOS(products, item.productId)
+      : products.find(x => Number(x && x.id) === Number(item.internalId));
+    if (p && productSellableInPOS(p)) $('#sale-price').value = p.price;
     return;
   }
   const ev = await getActiveEventPOS();
@@ -13477,7 +16194,7 @@ function updateChipsActiveFromSelectionPOS(){
     let isActive = false;
     if (item){
       if (item.kind === 'product' && kind === 'product'){
-        isActive = (parseInt(btn.dataset.id || '0', 10) === item.id);
+        isActive = (String(btn.dataset.productId || '') === item.productId);
       }
       if (item.kind === 'extra' && kind === 'extra'){
         isActive = (parseInt(btn.dataset.extraId || '0', 10) === item.id);
@@ -13835,26 +16552,41 @@ async function addRestock(eventId, productId, qty, extra){
   await put('inventory', row);
 }
 
-async function addAdjust(eventId, productId, qty, notes){ if (!qty) throw new Error('Ajuste no puede ser 0'); await put('inventory', {eventId, productId, type:'adjust', qty, notes: notes||'Ajuste', time:new Date().toISOString()}); }
-async function computeStock(eventId, productId){
+async function addAdjust(eventId, productId, qty, notes){
+  if (!qty) throw new Error('Ajuste no puede ser 0');
+  await put('inventory', {eventId, productId, type:'adjust', qty, notes: notes||'Ajuste', time:new Date().toISOString()});
+  // Ajustes/recálculos y sus reversiones deben refrescar el disponible del lote.
+  try{ await queueLotsUsageSyncPOS(eventId); }catch(_){ }
+}
+async function computeStock(eventId, productRef){
   const evId = Number(eventId);
-  const pid = Number(productId);
+  const products = await getAll('products');
+  let product = null;
+  if (productRef && typeof productRef === 'object') product = productRef;
+  else {
+    const raw = String(productRef == null ? '' : productRef).trim();
+    product = findCatalogProductByStableIdPOS(products, raw)
+      || (Number.isFinite(Number(raw)) ? (products || []).find(p => Number(p && p.id) === Number(raw)) : null);
+  }
+  if (!product) return 0;
+
+  const internalId = catalogProductInternalIdPOS(product);
+  const stableId = catalogProductStableIdPOS(product);
+  if (!internalId || !stableId) return 0;
+
   const inv = await getInventoryEntries(evId);
   const ledger = (Array.isArray(inv) ? inv : [])
-    .filter(i => i && Number(i.productId) === pid)
+    .filter(i => i && (Number(i.productId) === internalId || String(i.productId || '').trim() === stableId))
     .reduce((a,b)=> a + (Number(b && b.qty) || 0), 0);
 
   const allSales = await getAll('sales');
   const salesForProduct = (Array.isArray(allSales) ? allSales : [])
-    .filter(s => s && Number(s.eventId) === evId && Number(s.productId) === pid);
+    .filter(s => s && Number(s.eventId) === evId && saleMatchesCatalogProductPOS(s, product));
 
   // Compatibilidad: event.fractionBatches solo representa Vaso ya convertido/disponible en flujos viejos.
-  // Una venta nueva de Vaso descuenta su propio productId; no descuenta Galón, líquido, envase ni tapa.
-  try{
-    const products = await getAll('products');
-    const prod = (products || []).find(p => p && Number(p.id) === pid);
-    const isVaso = !!(prod && normName(prod.name || '') === 'vaso');
-    if (isVaso){
+  const isVaso = normName(product.name || product.nombre || '') === 'vaso';
+  if (isVaso){
+    try{
       const ev = await getEventByIdPOS(evId).catch(()=>null);
       const legacyBatches = sanitizeFractionBatches(ev && ev.fractionBatches);
       const legacyRemaining = legacyBatches.reduce((a,b)=> a + safeInt(b && b.cupsRemaining, 0), 0);
@@ -13863,8 +16595,8 @@ async function computeStock(eventId, productId){
         .reduce((a,b)=> a + (Number(b && b.qty) || 0), 0);
       const vasoOut = ledger + legacyRemaining - normalSold;
       return Number.isFinite(vasoOut) ? vasoOut : 0;
-    }
-  }catch(_){ }
+    }catch(_){ }
+  }
 
   const sold = salesForProduct.reduce((a,b)=> a + (Number(b && b.qty) || 0), 0);
   const out = ledger - sold;
@@ -13915,40 +16647,76 @@ function saleCostFromFieldsPOS(obj){
   return 0;
 }
 
-function getSaleCostUnitSnapshotPOS(sale){
-  if (!sale || typeof sale !== 'object') return 0;
-  const candidates = [
-    sale.costPerUnit, sale.costUnitSnapshot, sale.unitCostSnapshot, sale.costoUnitarioSnapshot,
-    sale.costoUnitario, sale.unitCost, sale.costUnit,
-    sale.productSnapshot && sale.productSnapshot.unitCost,
-    sale.productSnapshot && sale.productSnapshot.costPerUnit,
-    sale.productSnapshot && sale.productSnapshot.costoUnitario
+function resolveSaleCostSnapshotPOS(sale){
+  if (!sale || typeof sale !== 'object') return { unitCost: 0, lineCost: 0, source: 'sin_costo' };
+
+  const qtyRaw = Number(sale.qty ?? sale.cantidad ?? sale.units ?? 0);
+  const qtyAbs = Number.isFinite(qtyRaw) ? Math.abs(qtyRaw) : 0;
+  const isReturn = !!(sale.isReturn || sale.returned || qtyRaw < 0);
+  const sign = isReturn ? -1 : 1;
+
+  const normalizeLine = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n) || Math.abs(n) <= 1e-9) return null;
+    return round2(sign * Math.abs(n));
+  };
+  const normalizeUnit = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 1e-9) return null;
+    return round2(Math.abs(n));
+  };
+
+  // Prioridad contractual: lineCost -> costTotal -> equivalentes legacy -> costo unitario × cantidad.
+  const totalGroups = [
+    ['lineCost', sale.lineCost],
+    ['costTotal', sale.costTotal],
+    ['costoTotal', sale.costoTotal],
+    ['totalCost', sale.totalCost],
+    ['costoTotalSnapshot', sale.costoTotalSnapshot],
+    ['lineCostSnapshot', sale.lineCostSnapshot],
+    ['costTotalSnapshot', sale.costTotalSnapshot],
+    ['costoLinea', sale.costoLinea],
+    ['costoTotalLinea', sale.costoTotalLinea],
+    ['costoRealTotal', sale.costoRealTotal]
   ];
-  let zeroSeen = false;
-  for (const c of candidates){
-    const n = Number(c);
-    if (!Number.isFinite(n) || n < 0) continue;
-    if (Math.abs(n) > 1e-9) return round2(n);
-    zeroSeen = true;
+
+  for (const [source, value] of totalGroups){
+    const lineCost = normalizeLine(value);
+    if (lineCost == null) continue;
+    const unitCost = qtyAbs > 0 ? round2(Math.abs(lineCost) / qtyAbs) : 0;
+    return { unitCost, lineCost, source };
   }
-  return zeroSeen ? 0 : 0;
+
+  const unitGroups = [
+    ['costPerUnit', sale.costPerUnit],
+    ['costUnitSnapshot', sale.costUnitSnapshot],
+    ['unitCostSnapshot', sale.unitCostSnapshot],
+    ['costoUnitarioSnapshot', sale.costoUnitarioSnapshot],
+    ['costoUnitario', sale.costoUnitario],
+    ['unitCost', sale.unitCost],
+    ['costUnit', sale.costUnit],
+    ['cost', sale.cost],
+    ['productSnapshot.unitCost', sale.productSnapshot && sale.productSnapshot.unitCost],
+    ['productSnapshot.costPerUnit', sale.productSnapshot && sale.productSnapshot.costPerUnit],
+    ['productSnapshot.costoUnitario', sale.productSnapshot && sale.productSnapshot.costoUnitario]
+  ];
+
+  for (const [source, value] of unitGroups){
+    const unitCost = normalizeUnit(value);
+    if (unitCost == null) continue;
+    const lineCost = qtyAbs > 0 ? round2(sign * unitCost * qtyAbs) : 0;
+    return { unitCost, lineCost, source };
+  }
+
+  return { unitCost: 0, lineCost: 0, source: 'sin_costo' };
+}
+
+function getSaleCostUnitSnapshotPOS(sale){
+  return resolveSaleCostSnapshotPOS(sale).unitCost;
 }
 
 function getSaleLineCostSnapshotPOS(sale){
-  if (!sale || typeof sale !== 'object') return 0;
-  const candidates = [sale.lineCost, sale.costTotal, sale.costoTotal, sale.totalCost, sale.costoTotalSnapshot];
-  let zeroSeen = false;
-  for (const c of candidates){
-    const n = Number(c);
-    if (!Number.isFinite(n)) continue;
-    if (Math.abs(n) > 1e-9) return round2(n);
-    zeroSeen = true;
-  }
-  if (zeroSeen) return 0;
-  const cpu = getSaleCostUnitSnapshotPOS(sale);
-  const qty = Number(sale.qty);
-  if (Number.isFinite(cpu) && Number.isFinite(qty)) return round2(cpu * qty);
-  return 0;
+  return resolveSaleCostSnapshotPOS(sale).lineCost;
 }
 
 function buildSaleEconomicSnapshotPOS({ unitPrice, qty, discount, total, unitCost, costSource, courtesy, isReturn }){
@@ -13992,17 +16760,25 @@ function buildSaleEconomicSnapshotPOS({ unitPrice, qty, discount, total, unitCos
   };
 }
 
-async function getLotFifoUnitCostForSalePOS(eventId, productId, productName){
+async function getLotFifoUnitCostForSalePOS(eventId, productRef, productName, productsOrIndex){
   try{
     const evId = Number(eventId);
-    const pid = Number(productId);
-    if (!Number.isFinite(evId) || evId <= 0 || !Number.isFinite(pid) || pid <= 0) return 0;
+    if (!Number.isFinite(evId) || evId <= 0) return 0;
+
+    const products = productsOrIndex && productsOrIndex.__a33ProductIdentityIndex
+      ? productsOrIndex.list
+      : (Array.isArray(productsOrIndex) ? productsOrIndex : await getAll('products'));
+    const index = productsOrIndex && productsOrIndex.__a33ProductIdentityIndex
+      ? productsOrIndex
+      : buildProductIdentityIndexPOS(products);
+    const identity = resolveCatalogProductIdentityPOS(productRef, index, { allowLegacy:true });
+    if (!identity.ok || (!identity.internalId && !identity.stableId)) return 0;
 
     const entries = await getInventoryEntries(evId);
     let weightedCost = 0;
     let weightedQty = 0;
     for (const e of (Array.isArray(entries) ? entries : [])){
-      if (!e || Number(e.productId) !== pid) continue;
+      if (!e || !productIdentityMatchesRefPOS(identity, e)) continue;
       if (e.type !== 'restock') continue;
       const looksLot = !!(e.loteCodigo || e.loteId || e.loteCargaId || e.loteGroupKey || e.source === 'lote');
       if (!looksLot) continue;
@@ -14014,18 +16790,17 @@ async function getLotFifoUnitCostForSalePOS(eventId, productId, productName){
     }
     if (weightedQty > 0 && weightedCost > 0) return round2(weightedCost / weightedQty);
 
-    // Segundo intento defensivo: algunos lotes guardan el costo en arcano33_lotes, no en inventory.
+    // Segundo intento defensivo: lotes aún no materializados con costo en inventory.
     const lotes = readLotesLS_POS();
     if (!Array.isArray(lotes) || !lotes.length) return 0;
-    const products = await getAll('products');
     let lotWeightedCost = 0;
     let lotWeightedQty = 0;
     for (const l of lotes){
       if (!l || Number(l.assignedEventId) !== evId) continue;
       const rows = lotesPOSContractRowsPOS(l);
       for (const row of rows){
-        const prod = resolveProductFromLoteContractRowPOS(row, products);
-        if (!prod || Number(prod.id) !== pid) continue;
+        const rowIdentity = resolveCatalogProductIdentityPOS(row, index, { allowLegacy:true });
+        if (!rowIdentity.ok || rowIdentity.product !== identity.product) continue;
         const q = lotesPOSQtyFromContractRowPOS(row);
         const c = saleCostFromFieldsPOS(row) || saleCostFromFieldsPOS(l);
         if (!(q > 0) || !(c > 0)) continue;
@@ -14040,17 +16815,25 @@ async function getLotFifoUnitCostForSalePOS(eventId, productId, productName){
   return 0;
 }
 
-async function getReempaqueUnitCostForSalePOS(eventId, productId){
+async function getReempaqueUnitCostForSalePOS(eventId, productRef, productsOrIndex){
   try{
     const evId = Number(eventId);
-    const pid = Number(productId);
-    if (!Number.isFinite(evId) || evId <= 0 || !Number.isFinite(pid) || pid <= 0) return 0;
+    if (!Number.isFinite(evId) || evId <= 0) return 0;
+
+    const products = productsOrIndex && productsOrIndex.__a33ProductIdentityIndex
+      ? productsOrIndex.list
+      : (Array.isArray(productsOrIndex) ? productsOrIndex : await getAll('products'));
+    const index = productsOrIndex && productsOrIndex.__a33ProductIdentityIndex
+      ? productsOrIndex
+      : buildProductIdentityIndexPOS(products);
+    const identity = resolveCatalogProductIdentityPOS(productRef, index, { allowLegacy:true });
+    if (!identity.ok || (!identity.internalId && !identity.stableId)) return 0;
+
     const entries = await getInventoryEntries(evId);
     let qtyCost = 0;
     let qtyTotal = 0;
-
     for (const e of (entries || [])){
-      if (!e || Number(e.productId) !== pid) continue;
+      if (!e || !productIdentityMatchesRefPOS(identity, e)) continue;
       const isReempaqueDest =
         e.reempaqueRole === 'destino' &&
         (e.source === 'reempaque' || e.sourceType === 'REEMPAQUE' || e.reempaqueId);
@@ -14062,26 +16845,70 @@ async function getReempaqueUnitCostForSalePOS(eventId, productId){
       qtyTotal += q;
       qtyCost += q * c;
     }
-
     if (qtyTotal > 0 && qtyCost > 0) return round2(qtyCost / qtyTotal);
+
+    // Compatibilidad defensiva: registros de Reempaque anteriores que conservan el costo
+    // en su propio store, aunque la fila de inventario no tenga snapshot completo.
+    const records = await getAll(REEMPAQUE_STORE_POS).catch(()=>[]);
+    let recordQty = 0;
+    let recordCost = 0;
+    for (const record of (Array.isArray(records) ? records : [])){
+      if (!record || Number(record.eventId ?? record.eventoId) !== evId) continue;
+      const destinos = Array.isArray(record.destinos) ? record.destinos : [];
+      if (destinos.length){
+        for (const d of destinos){
+          const dIdentity = resolveCatalogProductIdentityPOS(d, index, { allowLegacy:true });
+          if (!dIdentity.ok || dIdentity.product !== identity.product) continue;
+          const q = Math.max(0, Number(d.cantidadCreada ?? d.cantidadCreadaDestino ?? d.cantidadDestino ?? d.targetQty ?? d.qty ?? d.cantidad) || 0);
+          const c = saleCostFromFieldsPOS(d);
+          if (!(q > 0) || !(c > 0)) continue;
+          recordQty += q;
+          recordCost += q * c;
+        }
+        continue;
+      }
+      const targetRef = {
+        productId: record.targetProductId ?? record.productoDestinoId,
+        productInternalId: record.targetProductId ?? record.productoDestinoId,
+        productName: record.targetProductName ?? record.productoDestinoNombre ?? record.productoDestino,
+        product: record.targetProduct
+      };
+      const targetIdentity = resolveCatalogProductIdentityPOS(targetRef, index, { allowLegacy:true });
+      if (!targetIdentity.ok || targetIdentity.product !== identity.product) continue;
+      const q = Math.max(0, Number(record.cantidadFinalRegistrada ?? record.cantidadCreadaDestino ?? record.cantidadDestino ?? record.targetQty) || 0);
+      const c = saleCostFromFieldsPOS(record);
+      if (!(q > 0) || !(c > 0)) continue;
+      recordQty += q;
+      recordCost += q * c;
+    }
+    if (recordQty > 0 && recordCost > 0) return round2(recordCost / recordQty);
   }catch(err){
     console.warn('No se pudo leer costo unitario desde Reempaque para venta', err);
   }
   return 0;
 }
 
-async function resolveSaleUnitCostPOS(eventId, productId, productName, productObj){
-  // Etapa 5/6: costo dinámico por prioridad, sin fallback accidental a Galón/Pulso.
-  const fromLotFifo = await getLotFifoUnitCostForSalePOS(eventId, productId, productName);
+async function resolveSaleUnitCostPOS(eventId, productRef, productName, productObj, products, lotAllocations){
+  // Costo dinámico por prioridad. La identidad se resuelve una sola vez y se adapta
+  // al productId estable o al id interno que espera cada fuente existente.
+  const list = Array.isArray(products) ? products : await getAll('products').catch(()=>[]);
+  const index = buildProductIdentityIndexPOS(list);
+  const identity = resolveCatalogProductIdentityPOS(productObj || productRef, index, { allowLegacy:true });
+  if (!identity.ok) return { unitCost:0, source:'sin_costo_confiable' };
+
+  const fromExactLot = await getExactLotUnitCostPOS(eventId, identity.product, lotAllocations, index);
+  if (fromExactLot > 0) return { unitCost: fromExactLot, source: 'lote_exacto' };
+
+  const fromLotFifo = await getLotFifoUnitCostForSalePOS(eventId, identity.product, productName, index);
   if (fromLotFifo > 0) return { unitCost: fromLotFifo, source: 'lote_fifo' };
 
-  const fromReempaque = await getReempaqueUnitCostForSalePOS(eventId, productId);
+  const fromReempaque = await getReempaqueUnitCostForSalePOS(eventId, identity.product, index);
   if (fromReempaque > 0) return { unitCost: fromReempaque, source: 'reempaque' };
 
-  const fromProduct = getProductStoredUnitCostPOS(productObj);
+  const fromProduct = getProductStoredUnitCostPOS(identity.product);
   if (fromProduct > 0) return { unitCost: fromProduct, source: 'producto_catalogo' };
 
-  const fromCalc = saleCostFieldValuePOS(getCostoUnitarioProducto(productName));
+  const fromCalc = saleCostFieldValuePOS(getCostoUnitarioProducto(productName || identity.name));
   if (fromCalc > 0) return { unitCost: fromCalc, source: 'calculadora_legacy' };
 
   return { unitCost: 0, source: 'sin_costo_confiable' };
@@ -14098,9 +16925,8 @@ function reempaqueInventoryQtyPOS(value){
 }
 
 function reempaqueFindProductByIdPOS(products, productId){
-  const sid = String(productId ?? '').trim();
-  if (!sid) return null;
-  return (Array.isArray(products) ? products : []).find(p => p && String(p.id) === sid) || null;
+  const identity = resolveCatalogProductIdentityPOS(productId, products, { allowLegacy:false });
+  return identity.ok ? identity.product : null;
 }
 
 function reempaqueMovementNotePOS(kind, srcName, dstName, note){
@@ -14110,7 +16936,7 @@ function reempaqueMovementNotePOS(kind, srcName, dstName, note){
   return extra ? `${base}: ${pair}. ${extra}` : `${base}: ${pair}`;
 }
 
-function reempaqueCommitInventoryMovementPOS(record, sourceRow, targetRow){
+function reempaqueCommitInventoryMovementPOS(record, sourceRow, targetRow, mermaBalance){
   return new Promise((resolve, reject)=>{
     try{
       if (!db) throw reempaqueMovementErrorPOS('Base de datos no disponible.');
@@ -14120,9 +16946,16 @@ function reempaqueCommitInventoryMovementPOS(record, sourceRow, targetRow){
       let srcKey = null;
       let dstKey = null;
       let recordQueued = false;
+      let mermaQueued = !mermaBalance;
+
+      if (mermaBalance){
+        const m = rpStore.put({ ...mermaBalance, exists:undefined });
+        m.onerror = ()=> { try{ tr.abort(); }catch(_){ } };
+        m.onsuccess = ()=> { mermaQueued = true; queueRecordIfReady(); };
+      }
 
       function queueRecordIfReady(){
-        if (recordQueued || srcKey === null || dstKey === null) return;
+        if (recordQueued || srcKey === null || dstKey === null || !mermaQueued) return;
         recordQueued = true;
         const finalRecord = {
           ...record,
@@ -14156,8 +16989,7 @@ function reempaqueCommitInventoryMovementPOS(record, sourceRow, targetRow){
   });
 }
 
-
-function reempaqueCommitMultipleInventoryMovementPOS(record, sourceRow, targetRows){
+function reempaqueCommitMultipleInventoryMovementPOS(record, sourceRow, targetRows, mermaBalances){
   return new Promise((resolve, reject)=>{
     try{
       if (!db) throw reempaqueMovementErrorPOS('Base de datos no disponible.');
@@ -14169,10 +17001,12 @@ function reempaqueCommitMultipleInventoryMovementPOS(record, sourceRow, targetRo
       let srcKey = null;
       const targetKeys = [];
       let recordQueued = false;
+      const balances = Array.isArray(mermaBalances) ? mermaBalances.filter(Boolean) : [];
+      let pendingMermaWrites = balances.length;
 
-      function queueRecordIfReady(){
+      const queueRecordIfReady = ()=>{
         const readyTargets = targetKeys.filter(k => k !== null && typeof k !== 'undefined').length;
-        if (recordQueued || srcKey === null || readyTargets !== rows.length) return;
+        if (recordQueued || srcKey === null || readyTargets !== rows.length || pendingMermaWrites > 0) return;
         recordQueued = true;
         const finalRecord = {
           ...record,
@@ -14187,7 +17021,13 @@ function reempaqueCommitMultipleInventoryMovementPOS(record, sourceRow, targetRo
         const r = rpStore.put(finalRecord);
         r.onerror = ()=> { try{ tr.abort(); }catch(_){ } };
         r.onsuccess = ()=> { record = finalRecord; };
-      }
+      };
+
+      balances.forEach((balance)=>{
+        const m = rpStore.put({ ...balance, exists:undefined });
+        m.onerror = ()=>{ try{ tr.abort(); }catch(_){ } };
+        m.onsuccess = ()=>{ pendingMermaWrites = Math.max(0, pendingMermaWrites - 1); queueRecordIfReady(); };
+      });
 
       const srcReq = invStore.add(sourceRow);
       srcReq.onsuccess = ()=>{ srcKey = srcReq.result; queueRecordIfReady(); };
@@ -14195,15 +17035,11 @@ function reempaqueCommitMultipleInventoryMovementPOS(record, sourceRow, targetRo
 
       rows.forEach((row, idx)=>{
         const req = invStore.add(row);
-        req.onsuccess = ()=>{
-          targetKeys[idx] = req.result;
-          if (targetKeys.filter(k => k !== null && typeof k !== 'undefined').length === rows.length){
-            queueRecordIfReady();
-          }
-        };
+        req.onsuccess = ()=>{ targetKeys[idx] = req.result; queueRecordIfReady(); };
         req.onerror = ()=>{ try{ tr.abort(); }catch(_){ } };
       });
 
+      queueRecordIfReady();
       tr.oncomplete = ()=> resolve(record);
       tr.onerror = ()=> reject(tr.error || reempaqueMovementErrorPOS('No se pudo guardar el movimiento múltiple de inventario.'));
       tr.onabort = ()=> reject(tr.error || reempaqueMovementErrorPOS('No se pudo guardar el movimiento múltiple de inventario.'));
@@ -14237,6 +17073,7 @@ async function reempaqueApplyMultipleMovementPOS(input={}){
     throw reempaqueMovementErrorPOS('El producto origen no existe en el catálogo.');
   }
 
+  const sourceLotTrace = reempaqueNormalizeLotTracePOS(input.loteOrigen || input.sourceLot || base.loteOrigen || base.sourceLot || base);
   const qtySource = reempaqueInventoryQtyPOS(base.cantidadOrigen ?? base.sourceQty ?? base.qtyOrigen);
   if (!(qtySource > 0)){
     throw reempaqueMovementErrorPOS('Cantidad origen mayor que 0.');
@@ -14246,6 +17083,11 @@ async function reempaqueApplyMultipleMovementPOS(input={}){
   if ((stockSource + 0.0001) < qtySource){
     throw reempaqueMovementErrorPOS('No hay inventario suficiente del producto origen.');
   }
+  const selectedLotCheck = await reempaqueValidateSelectedLotPOS(eventId, sourceProduct, qtySource, sourceLotTrace, products);
+  if (!selectedLotCheck.ok) throw reempaqueMovementErrorPOS(selectedLotCheck.msg);
+  const selectedLotTrace = selectedLotCheck.trace;
+  const inventoryLotFields = reempaqueInventoryLotFieldsPOS(selectedLotTrace);
+  const recordLotFields = reempaqueRecordLotFieldsPOS(selectedLotTrace);
 
   const now = reempaqueNowISOPOS();
   const srcName = String(sourceProduct.name || base.sourceProductName || base.productoOrigen || 'Origen').trim();
@@ -14259,6 +17101,8 @@ async function reempaqueApplyMultipleMovementPOS(input={}){
   const targetRows = [];
   const targetIds = [];
   const targetNames = [];
+  const mermaBalances = [];
+  const mermaOperaciones = [];
   for (const d of destinos){
     const targetId = Number(d.targetProductId ?? d.productoDestinoId ?? (d.targetProduct && d.targetProduct.id));
     if (!Number.isFinite(targetId) || !(targetId > 0)){
@@ -14267,18 +17111,45 @@ async function reempaqueApplyMultipleMovementPOS(input={}){
     if (targetId === sourceId){
       throw reempaqueMovementErrorPOS('El producto origen y destino no deberían ser el mismo.');
     }
+    if (targetIds.includes(targetId)){
+      throw reempaqueMovementErrorPOS('No repitas el mismo producto destino dentro de un Reempaque múltiple.');
+    }
     const targetProduct = reempaqueFindProductByIdPOS(products, targetId);
     if (!targetProduct){
       throw reempaqueMovementErrorPOS('Un producto destino no existe en el catálogo.');
     }
     const dstName = String(targetProduct.name || d.targetProductName || d.productoDestino || 'Destino').trim();
-    const qtyTarget = reempaqueInventoryQtyPOS(d.cantidadCreada ?? d.cantidadCreadaDestino ?? d.cantidadDestino ?? d.targetQty ?? d.qty ?? d.cantidad);
-    const unitTarget = reempaqueMoneyPOS(d.costoUnitarioCalculado ?? d.costoUnitarioDestino ?? d.targetUnitCost ?? 0);
-    const costoLiquidoUnitario = reempaqueMoneyPOS(d.costoLiquidoUnitario ?? d.costoUnitarioLiquido ?? 0);
-    const costoLiquidoTotal = reempaqueMoneyPOS(d.costoLiquidoTotal ?? d.costoLiquidoAsignado ?? (costoLiquidoUnitario > 0 && qtyTarget > 0 ? costoLiquidoUnitario * qtyTarget : 0));
+    const targetCap = reempaquePositivePOS(d.mlPorUnidad ?? d.capacidadDestinoMl ?? reempaqueCapacityMlFromProductPOS(targetProduct));
+    if (!(targetCap > 0)) throw reempaqueMovementErrorPOS(`El destino ${dstName} necesita capacidad en ml.`);
+    const rawQty = reempaquePositivePOS(d.cantidadSolicitadaRaw ?? (d.raw && d.raw.cantidadSolicitadaRaw) ?? d.cantidadCreada ?? d.cantidadCreadaDestino ?? d.cantidadDestino ?? d.targetQty ?? d.qty ?? d.cantidad);
+    const baseQty = reempaqueFloorUnitsPOS(rawQty);
+    const fractionMl = reempaqueRound4POS(Math.max(reempaquePositivePOS(d.fraccionMermaMl ?? (d.raw && d.raw.fraccionMermaMl)), (rawQty - baseQty) * targetCap));
+    const currentLiquidCostWhole = reempaqueMoneyPOS(base.costoPorMl > 0 ? (baseQty * targetCap * base.costoPorMl) : (d.costoLiquidoTotal ?? d.costoLiquidoAsignado));
+    const currentFractionCost = reempaqueMoneyPOS(base.costoPorMl > 0 ? (fractionMl * base.costoPorMl) : 0);
+    const beforeMerma = await reempaqueLoadMermaBalancePOS(eventId, selectedLotTrace, targetProduct, targetCap);
+    const fractionPlan = reempaqueBuildMermaPlanPOS({ before:beforeMerma, sourceVolumeMl:fractionMl, sourceLiquidCost:currentFractionCost, targetCapacityMl:targetCap });
+    const qtyTarget = baseQty + fractionPlan.extraUnits;
+    const extraConsumedCost = reempaqueMoneyPOS(fractionPlan.consumedRemainderLiquidCost);
+    const costoLiquidoTotal = round2(currentLiquidCostWhole + extraConsumedCost);
+    const costoLiquidoUnitario = qtyTarget > 0 ? round2(costoLiquidoTotal / qtyTarget) : 0;
     const costoAdicionalUnitario = reempaqueMoneyPOS(d.costoAdicionalUnitario ?? d.costoEmpaqueUnitario ?? 0);
-    const costoAdicionalTotal = reempaqueMoneyPOS(d.costoAdicionalTotal ?? d.costoEmpaqueTotal ?? (costoAdicionalUnitario > 0 && qtyTarget > 0 ? costoAdicionalUnitario * qtyTarget : 0));
-    const costoAsignado = reempaqueMoneyPOS(d.costoTotalAsignado ?? (unitTarget > 0 && qtyTarget > 0 ? unitTarget * qtyTarget : 0));
+    const costoAdicionalTotal = qtyTarget > 0 && costoAdicionalUnitario > 0 ? round2(costoAdicionalUnitario * qtyTarget) : 0;
+    const costoAsignado = round2(costoLiquidoTotal + costoAdicionalTotal);
+    const unitTarget = qtyTarget > 0 ? round2(costoAsignado / qtyTarget) : 0;
+    const mermaKey = beforeMerma.mermaKey || reempaqueMermaKeyPOS(eventId, selectedLotTrace, targetId);
+    const afterMerma = reempaqueBuildMermaBalanceAfterPOS(beforeMerma, fractionPlan, {
+      mermaKey, eventId, loteId:selectedLotTrace.loteId, loteCodigo:selectedLotTrace.loteCodigo, loteCargaId:selectedLotTrace.loteCargaId, loteGroupKey:selectedLotTrace.loteGroupKey,
+      targetProductId:targetId, targetProductName:dstName, targetCapacityMl:targetCap
+    });
+    mermaBalances.push(afterMerma);
+    mermaOperaciones.push({
+      mermaKey, targetProductId:targetId, targetProductName:dstName, targetCapacityMl:targetCap,
+      cantidadBaseConversion:baseQty, cantidadExtraMerma:fractionPlan.extraUnits, cantidadFinal:qtyTarget,
+      mermaNuevaMl:fractionPlan.newRemainderMl, mermaNuevaCosto:fractionPlan.newRemainderLiquidCost,
+      mermaConsumidaMl:fractionPlan.consumedRemainderMl, mermaConsumidaCosto:fractionPlan.consumedRemainderLiquidCost,
+      mermaPendienteMl:fractionPlan.pendingRemainderMl, mermaPendienteCosto:fractionPlan.pendingRemainderLiquidCost,
+      before:reempaqueMermaSnapshotPOS(beforeMerma), after:reempaqueMermaSnapshotPOS(afterMerma)
+    });
     const tipoDestinoRaw = String(d.tipoDestino ?? d.destinoTipo ?? (d.productoNuevoCreado ? 'NUEVO' : (d.destinoNuevo || d.productoNuevoDestino ? 'NUEVO' : 'EXISTENTE'))).toUpperCase();
     const tipoDestino = (tipoDestinoRaw === 'NUEVO' || tipoDestinoRaw === 'NUEVO_EXISTENTE') ? tipoDestinoRaw : 'EXISTENTE';
     if (!(qtyTarget > 0)){
@@ -14288,6 +17159,7 @@ async function reempaqueApplyMultipleMovementPOS(input={}){
     targetNames.push(dstName);
     targetRows.push({
       eventId,
+      ...inventoryLotFields,
       source: 'reempaque',
       sourceType: 'REEMPAQUE',
       reempaqueId: base.id,
@@ -14319,15 +17191,25 @@ async function reempaqueApplyMultipleMovementPOS(input={}){
       costoEmpaqueTotal: costoAdicionalTotal,
       costoUnitarioDestino: unitTarget,
       costoTotalAsignado: costoAsignado,
-      volumenTotalDestinoMl: reempaquePositivePOS(d.volumenTotalDestinoMl),
-      mlPorUnidad: reempaquePositivePOS(d.mlPorUnidad ?? d.capacidadDestinoMl),
+      volumenTotalDestinoMl: reempaqueTotalVolumePOS(qtyTarget, targetCap),
+      mlPorUnidad: targetCap,
+      cantidadBaseConversion: baseQty,
+      cantidadExtraMerma: fractionPlan.extraUnits,
+      mermaKey,
+      mermaPendienteMl: fractionPlan.pendingRemainderMl,
       sourceProductId: sourceId,
       sourceProductName: srcName
     });
   }
 
+  const mermaNuevaTotalMl = reempaqueRound4POS(mermaOperaciones.reduce((a,x)=>a + reempaquePositivePOS(x.mermaNuevaMl),0));
+  const mermaNuevaTotalCosto = round2(mermaOperaciones.reduce((a,x)=>a + reempaqueMoneyPOS(x.mermaNuevaCosto),0));
+  const mermaNoAsignadaMl = reempaqueRound4POS(Math.max(0, reempaquePositivePOS(base.mlSobranteMerma) - mermaNuevaTotalMl));
+  const costoMermaNoAsignada = round2(Math.max(0, reempaqueMoneyPOS(base.costoSobranteMerma) - mermaNuevaTotalCosto));
+
   const record = {
     ...base,
+    ...recordLotFields,
     eventId,
     eventoId: eventId,
     sourceProductId: sourceId,
@@ -14365,13 +17247,26 @@ async function reempaqueApplyMultipleMovementPOS(input={}){
     })),
     targetProductIds: targetIds,
     targetProductNames: targetNames,
-    etapa: 'REEMPAQUE_MULTIPLE_BASE_INTERNA',
+    volumenTotalDestinoMl: reempaqueRound4POS(targetRows.reduce((a,row)=>a + reempaquePositivePOS(row.volumenTotalDestinoMl),0)),
+    costoLiquidoDistribuido: round2(targetRows.reduce((a,row)=>a + reempaqueMoneyPOS(row.costoLiquidoTotal),0)),
+    costoAdicionalTotal: round2(targetRows.reduce((a,row)=>a + reempaqueMoneyPOS(row.costoAdicionalTotal),0)),
+    costoAdicionalDestinos: round2(targetRows.reduce((a,row)=>a + reempaqueMoneyPOS(row.costoAdicionalTotal),0)),
+    costoTotalDistribuido: round2(targetRows.reduce((a,row)=>a + reempaqueMoneyPOS(row.costoTotalAsignado),0)),
+    costoTotalFinalDestinos: round2(targetRows.reduce((a,row)=>a + reempaqueMoneyPOS(row.costoTotalAsignado),0)),
+    mermaOperaciones,
+    cantidadExtraMerma: mermaOperaciones.reduce((a,x)=>a + reempaqueFloorUnitsPOS(x.cantidadExtraMerma),0),
+    mermaNoAsignadaMl,
+    costoMermaNoAsignada,
+    mlSobranteMerma: reempaqueRound4POS(mermaOperaciones.reduce((a,x)=>a + reempaquePositivePOS(x.mermaPendienteMl),0) + mermaNoAsignadaMl),
+    costoSobranteMerma: round2(mermaOperaciones.reduce((a,x)=>a + reempaqueMoneyPOS(x.after && x.after.remainderLiquidCost),0) + costoMermaNoAsignada),
+    etapa: 'REEMPAQUE_MULTIPLE_ENTEROS_MERMA_RECUPERABLE',
     updatedAt: now,
     createdAt: base.createdAt || now
   };
 
   const sourceRow = {
     eventId,
+    ...inventoryLotFields,
     source: 'reempaque',
     sourceType: 'REEMPAQUE',
     reempaqueId: record.id,
@@ -14391,18 +17286,20 @@ async function reempaqueApplyMultipleMovementPOS(input={}){
     costoOrigenTotal: base.costoOrigenTotal,
     costoTotalOrigen: base.costoTotalOrigen,
     costoPorMl: base.costoPorMl,
-    costoLiquidoDistribuido: base.costoLiquidoDistribuido,
-    costoAdicionalTotal: base.costoAdicionalTotal,
-    costoAdicionalDestinos: base.costoAdicionalDestinos,
-    costoTotalDistribuido: base.costoTotalDistribuido,
-    costoTotalFinalDestinos: base.costoTotalFinalDestinos,
-    costoSobranteMerma: base.costoSobranteMerma,
-    mlSobranteMerma: base.mlSobranteMerma,
+    costoLiquidoDistribuido: record.costoLiquidoDistribuido,
+    costoAdicionalTotal: record.costoAdicionalTotal,
+    costoAdicionalDestinos: record.costoAdicionalDestinos,
+    costoTotalDistribuido: record.costoTotalDistribuido,
+    costoTotalFinalDestinos: record.costoTotalFinalDestinos,
+    costoSobranteMerma: record.costoSobranteMerma,
+    mlSobranteMerma: record.mlSobranteMerma,
     targetProductIds: targetIds,
     targetProductNames: targetNames
   };
 
-  return await reempaqueCommitMultipleInventoryMovementPOS(record, sourceRow, targetRows);
+  const saved = await reempaqueCommitMultipleInventoryMovementPOS(record, sourceRow, targetRows, mermaBalances);
+  try{ await queueLotsUsageSyncPOS(eventId); }catch(_){ }
+  return saved;
 }
 
 async function reempaqueApplyMovementPOS(input={}){
@@ -14411,191 +17308,323 @@ async function reempaqueApplyMovementPOS(input={}){
   }
   if (!db) await openDB();
   const base = input && input.id ? { ...input } : await reempaqueCreateBaseRecordPOS(input || {});
-  const validation = reempaqueValidateRecordPOS(base);
-  if (!validation.ok){
-    throw reempaqueMovementErrorPOS('Datos incompletos para registrar Reempaque.');
-  }
 
   const eventId = Number(base.eventId ?? base.eventoId);
-  if (!Number.isFinite(eventId) || !(eventId > 0)){
-    throw reempaqueMovementErrorPOS('Selecciona un evento.');
-  }
+  if (!Number.isFinite(eventId) || !(eventId > 0)) throw reempaqueMovementErrorPOS('Selecciona un evento.');
 
   const sourceId = Number(base.sourceProductId ?? base.productoOrigenId ?? (base.sourceProduct && base.sourceProduct.id));
   const targetId = Number(base.targetProductId ?? base.productoDestinoId ?? (base.targetProduct && base.targetProduct.id));
-  if (!Number.isFinite(sourceId) || !(sourceId > 0)){
-    throw reempaqueMovementErrorPOS('El producto origen no existe en el catálogo.');
-  }
-  if (!Number.isFinite(targetId) || !(targetId > 0)){
-    throw reempaqueMovementErrorPOS('El producto destino no existe en el catálogo.');
-  }
-  if (sourceId === targetId){
-    throw reempaqueMovementErrorPOS('El producto origen y destino no deberían ser el mismo.');
-  }
+  if (!Number.isFinite(sourceId) || !(sourceId > 0)) throw reempaqueMovementErrorPOS('El producto origen no existe en el catálogo.');
+  if (!Number.isFinite(targetId) || !(targetId > 0)) throw reempaqueMovementErrorPOS('El producto destino no existe en el catálogo.');
+  if (sourceId === targetId) throw reempaqueMovementErrorPOS('El producto origen y destino no deberían ser el mismo.');
 
   const products = await getAll('products').catch(()=>[]);
   const sourceProduct = reempaqueFindProductByIdPOS(products, sourceId);
   const targetProduct = reempaqueFindProductByIdPOS(products, targetId);
-  if (!sourceProduct){
-    throw reempaqueMovementErrorPOS('El producto origen no existe en el catálogo.');
-  }
-  if (!targetProduct){
-    throw reempaqueMovementErrorPOS('El producto destino no existe en el catálogo.');
-  }
+  if (!sourceProduct) throw reempaqueMovementErrorPOS('El producto origen no existe en el catálogo.');
+  if (!targetProduct) throw reempaqueMovementErrorPOS('El producto destino no existe en el catálogo.');
 
+  const sourceLotTrace = reempaqueNormalizeLotTracePOS(input.loteOrigen || input.sourceLot || base.loteOrigen || base.sourceLot || base);
   const qtySource = reempaqueInventoryQtyPOS(base.cantidadOrigen ?? base.sourceQty ?? base.qtyOrigen);
-  const qtyTarget = reempaqueInventoryQtyPOS(base.cantidadFinalRegistrada ?? base.cantidadCreadaDestino ?? base.cantidadDestino ?? base.targetQty);
-  if (!(qtySource > 0)){
-    throw reempaqueMovementErrorPOS('Cantidad origen mayor que 0.');
-  }
-  if (!(qtyTarget > 0)){
-    throw reempaqueMovementErrorPOS('Cantidad creada mayor que 0.');
-  }
+  if (!(qtySource > 0)) throw reempaqueMovementErrorPOS('Cantidad origen mayor que 0.');
 
   const stockSource = reempaqueInventoryQtyPOS(await computeStock(eventId, sourceId));
-  if ((stockSource + 0.0001) < qtySource){
-    throw reempaqueMovementErrorPOS('No hay inventario suficiente del producto origen.');
-  }
+  if ((stockSource + 0.0001) < qtySource) throw reempaqueMovementErrorPOS('No hay inventario suficiente del producto origen.');
+  const selectedLotCheck = await reempaqueValidateSelectedLotPOS(eventId, sourceProduct, qtySource, sourceLotTrace, products);
+  if (!selectedLotCheck.ok) throw reempaqueMovementErrorPOS(selectedLotCheck.msg);
+  const selectedLotTrace = selectedLotCheck.trace;
+  const inventoryLotFields = reempaqueInventoryLotFieldsPOS(selectedLotTrace);
+  const recordLotFields = reempaqueRecordLotFieldsPOS(selectedLotTrace);
 
   const now = reempaqueNowISOPOS();
   const srcName = String(sourceProduct.name || base.sourceProductName || base.productoOrigen || 'Origen').trim();
   const dstName = String(targetProduct.name || base.targetProductName || base.productoDestino || 'Destino').trim();
   const note = String(base.nota || base.note || '').trim();
-  const sourceCapacityMl = reempaqueCapacityMlFromProductPOS(sourceProduct) || base.capacidadOrigenMl || null;
-  const targetCapacityMl = reempaqueCapacityMlFromProductPOS(targetProduct) || base.capacidadDestinoMl || null;
+  const sourceCapacityMl = reempaquePositivePOS(reempaqueCapacityMlFromProductPOS(sourceProduct) || base.capacidadOrigenMl);
+  const targetCapacityMl = reempaquePositivePOS(reempaqueCapacityMlFromProductPOS(targetProduct) || base.capacidadDestinoMl);
+  if (!(sourceCapacityMl > 0)) throw reempaqueMovementErrorPOS('El producto origen necesita capacidad en ml para Reempaque.');
+  if (!(targetCapacityMl > 0)) throw reempaqueMovementErrorPOS('El producto destino necesita capacidad en ml para Reempaque.');
+
+  const sourceVolumeMl = reempaqueTotalVolumePOS(qtySource, sourceCapacityMl);
   const costoUnitarioOrigen = reempaqueMoneyPOS(base.costoUnitarioOrigen ?? base.costoOrigenUnitario ?? base.sourceUnitCost ?? base.unitCostOrigin ?? 0);
   const costoOrigenTotalManual = reempaqueMoneyPOS(base.costoOrigenTotal ?? base.sourceCostTotal ?? 0);
-  const costoOrigenTotal = costoOrigenTotalManual > 0
-    ? costoOrigenTotalManual
-    : ((costoUnitarioOrigen > 0 && qtySource > 0) ? round2(costoUnitarioOrigen * qtySource) : 0);
-  const costoAdicionalUnitarioInput = reempaqueMoneyPOS(base.costoAdicionalUnitario ?? base.costoEmpaqueUnitario ?? base.extraUnitCost ?? base.additionalUnitCost ?? 0);
-  const costoAdicionalTotalManual = reempaqueMoneyPOS(base.costoAdicionalTotal ?? base.costoEmpaqueTotal ?? base.extraCostTotal ?? 0);
-  const costoAdicionalTotal = (costoAdicionalUnitarioInput > 0 && qtyTarget > 0)
-    ? round2(costoAdicionalUnitarioInput * qtyTarget)
-    : costoAdicionalTotalManual;
-  const costoAdicionalUnitario = costoAdicionalUnitarioInput > 0
-    ? costoAdicionalUnitarioInput
-    : ((qtyTarget > 0 && costoAdicionalTotal > 0) ? round2(costoAdicionalTotal / qtyTarget) : 0);
-  const costoLiquidoTotal = costoOrigenTotal;
-  const costoLiquidoUnitario = (qtyTarget > 0 && costoLiquidoTotal > 0) ? round2(costoLiquidoTotal / qtyTarget) : 0;
-  const costoTotalManual = reempaqueMoneyPOS(base.costoTotalReempaque ?? base.totalCostReempaque ?? 0);
-  const costoTotalReempaque = (costoLiquidoTotal > 0 || costoAdicionalTotal > 0)
-    ? round2(costoLiquidoTotal + costoAdicionalTotal)
-    : costoTotalManual;
-  const costoUnitarioDestino = (costoTotalReempaque > 0 && qtyTarget > 0)
-    ? round2(costoTotalReempaque / qtyTarget)
-    : reempaqueMoneyPOS(base.costoUnitarioDestino ?? base.targetUnitCost ?? 0);
+  const costoOrigenTotal = costoOrigenTotalManual > 0 ? costoOrigenTotalManual : ((costoUnitarioOrigen > 0) ? round2(costoUnitarioOrigen * qtySource) : 0);
+  const costoAdicionalUnitario = reempaqueMoneyPOS(base.costoAdicionalUnitario ?? base.costoEmpaqueUnitario ?? base.extraUnitCost ?? base.additionalUnitCost ?? 0);
+
+  const beforeBalance = await reempaqueLoadMermaBalancePOS(eventId, selectedLotTrace, targetProduct, targetCapacityMl);
+  const mermaPlan = reempaqueBuildMermaPlanPOS({
+    before: beforeBalance,
+    sourceVolumeMl,
+    sourceLiquidCost: costoOrigenTotal,
+    targetCapacityMl
+  });
+  const qtyTarget = reempaqueFloorUnitsPOS(mermaPlan.totalUnits);
+  if (!(qtyTarget > 0)) throw reempaqueMovementErrorPOS('El volumen disponible todavía no alcanza para crear una unidad completa. La merma queda pendiente.');
+
+  const mermaKey = beforeBalance.mermaKey || reempaqueMermaKeyPOS(eventId, selectedLotTrace, targetId);
+  const mermaAfter = reempaqueBuildMermaBalanceAfterPOS(beforeBalance, mermaPlan, {
+    mermaKey,
+    eventId,
+    loteId:selectedLotTrace.loteId,
+    loteCodigo:selectedLotTrace.loteCodigo,
+    loteCargaId:selectedLotTrace.loteCargaId,
+    loteGroupKey:selectedLotTrace.loteGroupKey,
+    targetProductId:targetId,
+    targetProductName:dstName,
+    targetCapacityMl
+  });
+  const costoLiquidoTotal = reempaqueMoneyPOS(mermaPlan.assignedLiquidCost);
+  const costoLiquidoUnitario = qtyTarget > 0 ? round2(costoLiquidoTotal / qtyTarget) : 0;
+  const costoAdicionalTotal = costoAdicionalUnitario > 0 ? round2(costoAdicionalUnitario * qtyTarget) : 0;
+  const costoTotalReempaque = round2(costoLiquidoTotal + costoAdicionalTotal);
+  const costoUnitarioDestino = qtyTarget > 0 ? round2(costoTotalReempaque / qtyTarget) : 0;
+  const rawSuggested = sourceVolumeMl > 0 && targetCapacityMl > 0 ? reempaqueRound4POS(sourceVolumeMl / targetCapacityMl) : 0;
 
   const record = {
     ...base,
-    eventId,
-    eventoId: eventId,
-    sourceProductId: sourceId,
-    productoOrigenId: sourceId,
-    sourceProductName: srcName,
-    productoOrigenNombre: srcName,
-    productoOrigen: srcName,
-    sourceProduct: { id: sourceId, name: srcName, capacityMl: sourceCapacityMl },
-    capacidadOrigenMl: sourceCapacityMl,
-    capacidadVolumenOrigen: sourceCapacityMl,
-    targetProductId: targetId,
-    productoDestinoId: targetId,
-    targetProductName: dstName,
-    productoDestinoNombre: dstName,
-    productoDestino: dstName,
-    targetProduct: { id: targetId, name: dstName, capacityMl: targetCapacityMl },
-    capacidadDestinoMl: targetCapacityMl,
-    capacidadVolumenDestino: targetCapacityMl,
-    cantidadOrigen: qtySource,
-    cantidadCreadaDestino: qtyTarget,
-    cantidadFinalRegistrada: qtyTarget,
-    cantidadSugeridaPorVolumen: base.cantidadSugeridaPorVolumen ?? reempaqueComputeSuggestedQtyByVolumePOS(qtySource, sourceCapacityMl, targetCapacityMl),
+    ...recordLotFields,
+    eventId, eventoId:eventId,
+    sourceProductId:sourceId, productoOrigenId:sourceId,
+    sourceProductName:srcName, productoOrigenNombre:srcName, productoOrigen:srcName,
+    sourceProduct:{ id:sourceId, name:srcName, capacityMl:sourceCapacityMl },
+    capacidadOrigenMl:sourceCapacityMl, capacidadVolumenOrigen:sourceCapacityMl,
+    targetProductId:targetId, productoDestinoId:targetId,
+    targetProductName:dstName, productoDestinoNombre:dstName, productoDestino:dstName,
+    targetProduct:{ id:targetId, name:dstName, capacityMl:targetCapacityMl },
+    capacidadDestinoMl:targetCapacityMl, capacidadVolumenDestino:targetCapacityMl,
+    cantidadOrigen:qtySource,
+    cantidadSugeridaPorVolumen:rawSuggested,
+    cantidadConversionBase:mermaPlan.baseUnits,
+    cantidadBaseConversion:mermaPlan.baseUnits,
+    cantidadExtraMerma:mermaPlan.extraUnits,
+    cantidadCreadaDestino:qtyTarget,
+    cantidadFinalRegistrada:qtyTarget,
     costoUnitarioOrigen,
-    costoFuenteOrigen: String(base.costoFuenteOrigen || base.costSourceOrigin || '').trim(),
+    costoFuenteOrigen:String(base.costoFuenteOrigen || base.costSourceOrigin || '').trim(),
     costoOrigenTotal,
     costoLiquidoTotal,
-    costoLiquidoDistribuido: costoLiquidoTotal,
+    costoLiquidoDistribuido:costoLiquidoTotal,
     costoLiquidoUnitario,
-    costoUnitarioLiquido: costoLiquidoUnitario,
+    costoUnitarioLiquido:costoLiquidoUnitario,
     costoAdicionalUnitario,
-    costoEmpaqueUnitario: costoAdicionalUnitario,
+    costoEmpaqueUnitario:costoAdicionalUnitario,
     costoAdicionalTotal,
-    costoEmpaqueTotal: costoAdicionalTotal,
+    costoEmpaqueTotal:costoAdicionalTotal,
     costoTotalReempaque,
     costoUnitarioDestino,
-    estado: 'REGISTRADO',
-    movimientoAplicado: true,
-    movimientoTipo: 'INVENTARIO',
-    movimientoOrigen: 'REEMPAQUE',
-    afectaVentas: false,
-    afectaCaja: false,
-    afectaEfectivo: false,
-    afectaDiarioIngreso: false,
-    noVenta: true,
-    noCaja: true,
-    stockOrigenAntes: stockSource,
-    stockOrigenDespues: reempaqueRound4POS(stockSource - qtySource),
-    deltaOrigen: reempaqueRound4POS(-qtySource),
-    deltaDestino: qtyTarget,
-    etapa: '4_COSTEO_GENERICO',
-    updatedAt: now,
-    createdAt: base.createdAt || now
-  };
-
-  const common = {
-    eventId,
-    source: 'reempaque',
-    sourceType: 'REEMPAQUE',
-    reempaqueId: record.id,
-    time: now,
-    createdAt: now,
-    affectsSales: false,
-    affectsCash: false,
-    affectsAccountingIncome: false,
-    costoTotalReempaque,
-    costoUnitarioDestino,
-    costoLiquidoTotal,
-    costoLiquidoUnitario,
-    costoAdicionalUnitario,
-    costoAdicionalTotal
+    mermaKey,
+    mermaAnteriorMl:mermaPlan.previousRemainderMl,
+    mermaAnteriorCosto:mermaPlan.previousRemainderLiquidCost,
+    mermaNuevaMl:mermaPlan.newRemainderMl,
+    mermaNuevaCosto:mermaPlan.newRemainderLiquidCost,
+    mermaConsumidaMl:mermaPlan.consumedRemainderMl,
+    mermaConsumidaCosto:mermaPlan.consumedRemainderLiquidCost,
+    mermaPendienteMl:mermaPlan.pendingRemainderMl,
+    mermaPendienteCosto:mermaPlan.pendingRemainderLiquidCost,
+    mlSobranteMerma:mermaPlan.pendingRemainderMl,
+    costoSobranteMerma:mermaPlan.pendingRemainderLiquidCost,
+    merma:{ ml:mermaPlan.pendingRemainderMl, costo:mermaPlan.pendingRemainderLiquidCost },
+    mermaBalanceBefore:reempaqueMermaSnapshotPOS(beforeBalance),
+    mermaBalanceAfter:reempaqueMermaSnapshotPOS(mermaAfter),
+    costoConservacion:{
+      openingRemainderLiquidCost:reempaqueMoneyPOS(mermaPlan.previousRemainderLiquidCost),
+      sourceLiquidCost:costoOrigenTotal,
+      assignedLiquidCost:costoLiquidoTotal,
+      closingRemainderLiquidCost:reempaqueMoneyPOS(mermaPlan.pendingRemainderLiquidCost)
+    },
+    estado:'REGISTRADO', movimientoAplicado:true, movimientoTipo:'INVENTARIO', movimientoOrigen:'REEMPAQUE',
+    afectaVentas:false, afectaCaja:false, afectaEfectivo:false, afectaDiarioIngreso:false, noVenta:true, noCaja:true,
+    stockOrigenAntes:stockSource, stockOrigenDespues:reempaqueRound4POS(stockSource - qtySource),
+    deltaOrigen:reempaqueRound4POS(-qtySource), deltaDestino:qtyTarget,
+    etapa:'4_ENTEROS_MERMA_RECUPERABLE', updatedAt:now, createdAt:base.createdAt || now
   };
 
   const sourceRow = {
-    ...common,
-    productId: sourceId,
-    productName: srcName,
-    type: 'adjust',
-    qty: reempaqueRound4POS(-qtySource),
-    notes: reempaqueMovementNotePOS('salida', srcName, dstName, note),
-    reempaqueRole: 'origen',
-    costoUnitarioOrigen,
-    costoOrigenTotal,
-    costoLiquidoTotal,
-    costoLiquidoUnitario,
-    costoAdicionalUnitario,
-    costoAdicionalTotal,
-    targetProductId: targetId,
-    targetProductName: dstName
+    eventId, ...inventoryLotFields,
+    source:'reempaque', sourceType:'REEMPAQUE', reempaqueId:record.id,
+    time:now, createdAt:now, affectsSales:false, affectsCash:false, affectsAccountingIncome:false,
+    productId:sourceId, productName:srcName, type:'adjust', qty:reempaqueRound4POS(-qtySource),
+    notes:reempaqueMovementNotePOS('salida', srcName, dstName, note), reempaqueRole:'origen',
+    costoUnitarioOrigen, costoOrigenTotal, costoLiquidoTotal:costoOrigenTotal,
+    targetProductId:targetId, targetProductName:dstName,
+    mermaKey, mermaNuevaMl:mermaPlan.newRemainderMl, mermaPendienteMl:mermaPlan.pendingRemainderMl
   };
-
   const targetRow = {
-    ...common,
-    productId: targetId,
-    productName: dstName,
-    type: 'adjust',
-    qty: qtyTarget,
-    notes: reempaqueMovementNotePOS('entrada', srcName, dstName, note),
-    reempaqueRole: 'destino',
-    costoUnitarioDestino,
-    costoLiquidoTotal,
-    costoLiquidoUnitario,
-    costoAdicionalUnitario,
-    costoAdicionalTotal,
-    sourceProductId: sourceId,
-    sourceProductName: srcName
+    eventId, ...inventoryLotFields,
+    source:'reempaque', sourceType:'REEMPAQUE', reempaqueId:record.id,
+    time:now, createdAt:now, affectsSales:false, affectsCash:false, affectsAccountingIncome:false,
+    productId:targetId, productName:dstName, type:'adjust', qty:qtyTarget,
+    notes:reempaqueMovementNotePOS('entrada', srcName, dstName, note), reempaqueRole:'destino',
+    costoUnitarioDestino, costoTotalReempaque, costoLiquidoTotal, costoLiquidoUnitario,
+    costoUnitarioLiquido:costoLiquidoUnitario, costoAdicionalUnitario, costoAdicionalTotal,
+    sourceProductId:sourceId, sourceProductName:srcName,
+    cantidadConversionBase:mermaPlan.baseUnits, cantidadExtraMerma:mermaPlan.extraUnits,
+    mermaKey, mermaPendienteMl:mermaPlan.pendingRemainderMl
   };
 
-  return await reempaqueCommitInventoryMovementPOS(record, sourceRow, targetRow);
+  const saved = await reempaqueCommitInventoryMovementPOS(record, sourceRow, targetRow, mermaAfter);
+  try{ await queueLotsUsageSyncPOS(eventId); }catch(_){ }
+  return saved;
+}
+
+// Reverso seguro e idempotente de Reempaque + merma técnica.
+async function reempaqueIsLatestForMermaKeysPOS(record){
+  const r = record || {};
+  const keys = [];
+  if (r.mermaKey) keys.push(String(r.mermaKey));
+  if (Array.isArray(r.mermaOperaciones)) r.mermaOperaciones.forEach(x=>{ if (x && x.mermaKey) keys.push(String(x.mermaKey)); });
+  if (!keys.length) return true;
+  const all = await getAll(REEMPAQUE_STORE_POS).catch(()=>[]);
+  for (const key of Array.from(new Set(keys))){
+    const active = (all || []).filter(x => x && !reempaqueIsMermaTechnicalRecordPOS(x) && !x.reversedAt && !x.revertidoAt && (
+      String(x.mermaKey || '') === key || (Array.isArray(x.mermaOperaciones) && x.mermaOperaciones.some(op=>String(op && op.mermaKey || '') === key))
+    )).sort((a,b)=> Number(b.timestamp || Date.parse(b.createdAt || 0) || 0) - Number(a.timestamp || Date.parse(a.createdAt || 0) || 0));
+    if (active.length && String(active[0].id) !== String(r.id)) return false;
+  }
+  return true;
+}
+
+function reempaqueMermaBeforeSnapshotsPOS(record){
+  const r = record || {};
+  if (Array.isArray(r.mermaOperaciones)){
+    return r.mermaOperaciones.map(op=>({
+      key:String(op && op.mermaKey || ''),
+      before:op && op.before,
+      after:op && op.after,
+      targetProductId:op && op.targetProductId,
+      targetProductName:String(op && op.targetProductName || ''),
+      targetCapacityMl:reempaquePositivePOS(op && op.targetCapacityMl)
+    })).filter(x=>x.key);
+  }
+  return r.mermaKey ? [{
+    key:String(r.mermaKey),
+    before:r.mermaBalanceBefore,
+    after:r.mermaBalanceAfter,
+    targetProductId:r.targetProductId ?? r.productoDestinoId ?? null,
+    targetProductName:String(r.targetProductName || r.productoDestinoNombre || r.productoDestino || ''),
+    targetCapacityMl:reempaquePositivePOS(r.capacidadDestinoMl)
+  }] : [];
+}
+
+async function reempaqueReversePOS(recordOrId){
+  if (!db) await openDB();
+  let record = recordOrId && typeof recordOrId === 'object' ? recordOrId : await getOne(REEMPAQUE_STORE_POS, recordOrId);
+  if (!record || reempaqueIsMermaTechnicalRecordPOS(record)) throw reempaqueMovementErrorPOS('Reempaque no encontrado.');
+  if (record.reversedAt || record.revertidoAt || String(record.estado || '').toUpperCase() === 'REVERSADO') return record;
+  if (!(await reempaqueIsLatestForMermaKeysPOS(record))) throw reempaqueMovementErrorPOS('Para conservar la merma correctamente, primero reversa el Reempaque más reciente del mismo lote y producto destino.');
+
+  const eventId = Number(record.eventId ?? record.eventoId);
+  const sourceId = Number(record.sourceProductId ?? record.productoOrigenId ?? (record.sourceProduct && record.sourceProduct.id));
+  const qtySource = reempaqueInventoryQtyPOS(record.cantidadOrigen ?? record.sourceQty ?? record.qtyOrigen);
+  const targets = [];
+  if (Array.isArray(record.deltaDestinos) && record.deltaDestinos.length){
+    record.deltaDestinos.forEach(d=>{
+      const id = Number(d && (d.productId ?? d.targetProductId));
+      const qty = reempaqueFloorUnitsPOS(d && (d.qty ?? d.cantidad));
+      if (id > 0 && qty > 0) targets.push({ productId:id, productName:String(d.productName || d.targetProductName || 'Destino'), qty });
+    });
+  }else{
+    const targetId = Number(record.targetProductId ?? record.productoDestinoId ?? (record.targetProduct && record.targetProduct.id));
+    const qty = reempaqueFloorUnitsPOS(record.cantidadFinalRegistrada ?? record.cantidadCreadaDestino ?? record.deltaDestino);
+    if (targetId > 0 && qty > 0) targets.push({ productId:targetId, productName:String(record.targetProductName || record.productoDestinoNombre || record.productoDestino || 'Destino'), qty });
+  }
+  if (!(eventId > 0) || !(sourceId > 0) || !(qtySource > 0) || !targets.length) throw reempaqueMovementErrorPOS('El Reempaque no tiene trazabilidad suficiente para reversar.');
+  for (const t of targets){
+    const stock = reempaqueInventoryQtyPOS(await computeStock(eventId, t.productId));
+    if ((stock + 0.0001) < t.qty) throw reempaqueMovementErrorPOS(`No se puede reversar: ${t.productName} ya no tiene las ${t.qty} unidades creadas disponibles.`);
+  }
+
+  const now = reempaqueNowISOPOS();
+  const lotFields = reempaqueInventoryLotFieldsPOS(record.loteOrigen || record.sourceLot || record);
+  const srcName = String(record.sourceProductName || record.productoOrigenNombre || record.productoOrigen || 'Origen');
+  const reverseRows = [{
+    eventId, ...lotFields, source:REEMPAQUE_REVERSE_SOURCE_POS, sourceType:'REEMPAQUE_REVERSO', reempaqueId:record.id,
+    reversesReempaqueId:record.id, time:now, createdAt:now, affectsSales:false, affectsCash:false, affectsAccountingIncome:false,
+    productId:sourceId, productName:srcName, type:'adjust', qty:qtySource, reempaqueRole:'reverso_origen',
+    notes:`Reverso Reempaque: restaura ${srcName}`
+  }];
+  targets.forEach(t=>reverseRows.push({
+    eventId, ...lotFields, source:REEMPAQUE_REVERSE_SOURCE_POS, sourceType:'REEMPAQUE_REVERSO', reempaqueId:record.id,
+    reversesReempaqueId:record.id, time:now, createdAt:now, affectsSales:false, affectsCash:false, affectsAccountingIncome:false,
+    productId:t.productId, productName:t.productName, type:'adjust', qty:-t.qty, reempaqueRole:'reverso_destino',
+    notes:`Reverso Reempaque: retira ${t.productName}`
+  }));
+
+  const snapshots = reempaqueMermaBeforeSnapshotsPOS(record);
+  const result = await new Promise((resolve,reject)=>{
+    try{
+      const tr = db.transaction(['inventory', REEMPAQUE_STORE_POS], 'readwrite');
+      const inv = tr.objectStore('inventory');
+      const rp = tr.objectStore(REEMPAQUE_STORE_POS);
+      const reverseIds = new Array(reverseRows.length);
+      let pendingReverseWrites = reverseRows.length;
+      let pendingMermaWrites = snapshots.length;
+      let recordQueued = false;
+      let updated = null;
+
+      const queueUpdatedIfReady = ()=>{
+        if (recordQueued || pendingReverseWrites > 0 || pendingMermaWrites > 0) return;
+        recordQueued = true;
+        updated = {
+          ...record,
+          estado:'REVERSADO', reversedAt:now, revertidoAt:now, movimientoAplicado:false,
+          reverseInventoryMovementIds:reverseIds.slice(), updatedAt:now
+        };
+        const putReq = rp.put(updated);
+        putReq.onerror=()=>{ try{ tr.abort(); }catch(_){ } };
+      };
+
+      reverseRows.forEach((row,idx)=>{
+        const req = inv.add(row);
+        req.onsuccess=()=>{
+          reverseIds[idx]=req.result;
+          pendingReverseWrites=Math.max(0,pendingReverseWrites-1);
+          queueUpdatedIfReady();
+        };
+        req.onerror=()=>{ try{ tr.abort(); }catch(_){ } };
+      });
+
+      snapshots.forEach(item=>{
+        const before = item.before || {};
+        const balanceId = String(before.id || reempaqueMermaIdPOS(item.key));
+        let req = null;
+        if (before.exists){
+          const currentBase = {
+            id:balanceId, tipo:REEMPAQUE_MERMA_TYPE_POS, technicalMerma:true, isTechnicalRemainder:true,
+            mermaKey:item.key,
+            eventId:record.eventId, eventoId:record.eventId,
+            loteId:record.loteOrigenId ?? record.productionLotId ?? null,
+            loteCodigo:String(record.loteOrigenCodigo || record.productionLotCode || ''),
+            loteCargaId:record.loteCargaIdOrigen || null,
+            loteGroupKey:String(record.loteGroupKeyOrigen || ''),
+            targetProductId:item.targetProductId ?? record.targetProductId ?? record.productoDestinoId ?? null,
+            targetProductName:String(item.targetProductName || record.targetProductName || record.productoDestinoNombre || ''),
+            targetProductNameSnapshot:String(item.targetProductName || record.targetProductName || record.productoDestinoNombre || ''),
+            targetCapacityMl:reempaquePositivePOS(item.targetCapacityMl || record.capacidadDestinoMl),
+            targetCapacityMlSnapshot:reempaquePositivePOS(item.targetCapacityMl || record.capacidadDestinoMl),
+            createdAt:record.createdAt || now
+          };
+          const restored = { ...currentBase, ...before, id:balanceId, updatedAt:now };
+          delete restored.exists;
+          req = rp.put(restored);
+        }else{
+          req = rp.delete(balanceId);
+        }
+        req.onsuccess=()=>{
+          pendingMermaWrites=Math.max(0,pendingMermaWrites-1);
+          queueUpdatedIfReady();
+        };
+        req.onerror=()=>{ try{ tr.abort(); }catch(_){ } };
+      });
+
+      queueUpdatedIfReady();
+      tr.oncomplete=()=>resolve(updated || { ...record, estado:'REVERSADO', reversedAt:now, revertidoAt:now, movimientoAplicado:false, reverseInventoryMovementIds:reverseIds.slice(), updatedAt:now });
+      tr.onerror=()=>reject(tr.error || reempaqueMovementErrorPOS('No se pudo reversar Reempaque.'));
+      tr.onabort=()=>reject(tr.error || reempaqueMovementErrorPOS('No se pudo reversar Reempaque.'));
+    }catch(err){ reject(err); }
+  });
+  try{ await queueLotsUsageSyncPOS(eventId); }catch(_){ }
+  return result;
 }
 
 // =========================================================
@@ -14606,12 +17635,19 @@ async function reempaqueApplyMovementPOS(input={}){
 // =========================================================
 
 function lotFifoKeyFromProductPOS(product, productId, fallbackName){
-  // Clave por presentación: preferimos P/M/D/L/G; fallback: PID:<id>
-  const name = (product && product.name) ? product.name : (fallbackName || '');
-  const k = presKeyFromProductNamePOS(name || '');
-  if (k) return k;
-  const pid = Number(productId);
-  if (Number.isFinite(pid) && pid > 0) return 'PID:' + pid;
+  // Identidad FIFO: productId estable manda. El nombre solo conserva históricos sin identidad.
+  const stableFromProduct = catalogProductStableIdPOS(product);
+  const rawRef = String(productId == null ? '' : productId).trim();
+  const rawIsLegacyInternal = /^\d+$/.test(rawRef);
+  const stableId = stableFromProduct || (!rawIsLegacyInternal ? rawRef : '');
+  if (stableId) return 'PID:' + stableId;
+
+  const name = (product && (product.name || product.nombre)) ? (product.name || product.nombre) : (fallbackName || '');
+  const legacyKey = presKeyFromProductNamePOS(name || '');
+  if (legacyKey) return legacyKey;
+
+  const internalId = Number(rawRef);
+  if (Number.isFinite(internalId) && internalId > 0) return 'PID-LEGACY:' + internalId;
   return '';
 }
 
@@ -14644,6 +17680,24 @@ async function computeLotFifoForEvent(eventId){
 
   const products = await getAll('products');
   const pMap = new Map((products || []).map(p => [Number(p.id), p]));
+  const pStableMap = new Map((products || []).map(p => [catalogProductStableIdPOS(p), p]).filter(([id]) => !!id));
+  const keyMeta = {};
+  const rememberKeyMeta = (key, product, rawRef, fallbackName) => {
+    const fifoKey = String(key || '').trim();
+    if (!fifoKey) return;
+    const p = product && typeof product === 'object' ? product : null;
+    const stableId = catalogProductStableIdPOS(p) || ((!/^\d+$/.test(String(rawRef || '').trim())) ? String(rawRef || '').trim() : '');
+    const internalId = catalogProductInternalIdPOS(p) || (Number.isFinite(Number(rawRef)) && Number(rawRef) > 0 ? Number(rawRef) : null);
+    const letter = productIdentityNormPOS(p && (p.letra ?? p.Letra ?? p.letter)).toUpperCase();
+    const name = catalogProductSnapshotNamePOS(p) || String(fallbackName || '').trim();
+    const prev = keyMeta[fifoKey] && typeof keyMeta[fifoKey] === 'object' ? keyMeta[fifoKey] : {};
+    keyMeta[fifoKey] = {
+      productId: stableId || prev.productId || '',
+      internalId: internalId || prev.internalId || null,
+      Letra: letter || prev.Letra || (fifoKey.length <= 4 && !fifoKey.includes(':') ? fifoKey.toUpperCase() : ''),
+      nombreSnapshot: name || prev.nombreSnapshot || '',
+    };
+  };
 
   const entries = await getInventoryEntries(evId);
   const inv = Array.isArray(entries) ? entries : [];
@@ -14659,24 +17713,25 @@ async function computeLotFifoForEvent(eventId){
 
   const soldNeedByKey = {};
   for (const s of sales){
-    const pid = Number(s.productId);
-    if (!Number.isFinite(pid) || pid <= 0) continue;
-    const prod = pMap.get(pid) || null;
-    const key = lotFifoKeyFromProductPOS(prod, pid, s.productName);
+    const stableId = saleStableProductIdPOS(s);
+    const internalId = saleInternalProductIdPOS(s);
+    const prod = (stableId && pStableMap.get(stableId)) || (internalId && pMap.get(internalId)) || null;
+    const identityRef = stableId || internalId || '';
+    const key = lotFifoKeyFromProductPOS(prod, identityRef, s.productName || s.productNameSnapshot);
     if (!key) continue;
+    rememberKeyMeta(key, prod, identityRef, s.productName || s.productNameSnapshot);
     const q = Number(s.qty) || 0;
     if (!q) continue;
     soldNeedByKey[key] = (Number(soldNeedByKey[key]) || 0) + q;
   }
-  // Incluir también consumos que NO pasan por "sales" pero sí descuentan inventario del evento.
-  // Ej: fraccionamiento de galones a vasos (adjust negativo del Galón) o ajustes manuales negativos.
-  // Nota: excluimos reversos/ajustes vinculados a lotes para no doble-contar (ya afectan la carga neta del lote).
+  // Incluir también movimientos que NO pasan por "sales" pero sí consumen o restauran inventario.
+  // Negativos consumen; positivos restauran consumo previo sin exceder la carga original.
+  // Los movimientos ligados a un lote se procesan más abajo como redistribución neta del propio lote.
   for (const e of inv){
     if (!e || e.type !== 'adjust') continue;
     const qtyAdj = Number(e.qty) || 0;
-    if (!(qtyAdj < 0)) continue;
+    if (!qtyAdj) continue;
 
-    // Si está ligado a un lote (reverso/corrección por lote), NO cuenta como consumo adicional:
     if (e.source === 'lote_reverso' || e.loteCargaId != null || e.loteGroupKey != null) continue;
 
     const pid = Number(e.productId);
@@ -14684,8 +17739,9 @@ async function computeLotFifoForEvent(eventId){
     const prod = pMap.get(pid) || null;
     const key = lotFifoKeyFromProductPOS(prod, pid, (prod && prod.name) ? prod.name : '');
     if (!key) continue;
+    rememberKeyMeta(key, prod, pid, (prod && prod.name) ? prod.name : '');
 
-    soldNeedByKey[key] = (Number(soldNeedByKey[key]) || 0) + Math.abs(qtyAdj);
+    soldNeedByKey[key] = (Number(soldNeedByKey[key]) || 0) - qtyAdj;
   }
 
 
@@ -14712,6 +17768,7 @@ async function computeLotFifoForEvent(eventId){
       lots: {},
       unassigned: { byKey: unassignedByKey, total: unassignedTotal },
       keys: Object.keys(unassignedByKey),
+      keyMeta,
       evidenceLotIds: [],
       evidenceLotCodes: []
     };
@@ -14799,6 +17856,7 @@ async function computeLotFifoForEvent(eventId){
       const prod = pMap.get(Number(pid)) || null;
       const key = lotFifoKeyFromProductPOS(prod, pid, (prod && prod.name) ? prod.name : '');
       if (!key) continue;
+      rememberKeyMeta(key, prod, pid, (prod && prod.name) ? prod.name : '');
       loadedByKey[key] = (Number(loadedByKey[key]) || 0) + qty;
       loadedTotal += qty;
     }
@@ -14843,6 +17901,7 @@ async function computeLotFifoForEvent(eventId){
       loteId: (g.loteId != null ? g.loteId : null),
       loteCodigo: (g.loteCodigo || ''),
       loteCargaId: (g.loteCargaId || null),
+      loteGroupKey: String(g.groupKey || ''),
       loadedAt: (g.time || ''),
       soldByKey: {},
       remainingByKey: {},
@@ -14932,9 +17991,325 @@ async function computeLotFifoForEvent(eventId){
     lotOrder,
     keys,
     unassigned: { byKey: unassignedByKey, total: unassignedTotal },
+    keyMeta,
     evidenceLotIds: Array.from(evidence.lotIds),
     evidenceLotCodes: Array.from(evidence.lotCodes)
   };
+}
+
+
+function reempaqueLegacyFractionPartPOS(value){
+  const n = reempaqueRound4POS(Math.max(0, reempaqueNumPOS(value,0)));
+  const whole = reempaqueFloorUnitsPOS(n);
+  const fraction = reempaqueRound4POS(Math.max(0, n - whole));
+  return fraction > 0.0001 ? fraction : 0;
+}
+
+function reempaqueLegacyLotTracePOS(lot){
+  const l=lot || {};
+  return reempaqueNormalizeLotTracePOS({
+    loteId:l.loteId ?? null,
+    loteCodigo:l.loteCodigo || '',
+    loteCargaId:l.loteCargaId ?? null,
+    loteGroupKey:l.loteGroupKey || ''
+  });
+}
+
+function reempaqueLegacySanitationIdPOS(eventId, trace, productId, fractionQty){
+  const signature=[
+    Number(eventId)||0,
+    reempaqueLotIdentityForMermaPOS(trace),
+    String(productId ?? ''),
+    reempaqueRound4POS(fractionQty)
+  ].join('|');
+  return REEMPAQUE_SANEAMIENTO_PREFIX_POS + reempaqueHashTextPOS(signature);
+}
+
+
+async function reempaqueHasLegacyFractionEvidencePOS(eventId, trace, productId){
+  const rows=await getInventoryEntries(Number(eventId)).catch(()=>[]);
+  for (const row of (rows || [])){
+    if (!row || Number(row.productId) !== Number(productId)) continue;
+    if (!inventoryEntryMatchesLotPOS(row, trace)) continue;
+    const src=String(row.sourceType || row.source || '').toUpperCase();
+    if (!src.includes('REEMPAQUE')) continue;
+    const role=String(row.reempaqueRole || '').toLowerCase();
+    if (role && role !== 'destino') continue;
+    const qty=Math.abs(reempaqueNumPOS(row.qty,0));
+    if (reempaqueLegacyFractionPartPOS(qty) > 0.0001) return true;
+  }
+  return false;
+}
+
+async function reempaqueResolveLegacyFractionLiquidCostPOS(eventId, trace, productId, fractionQty){
+  const rows=await getInventoryEntries(Number(eventId)).catch(()=>[]);
+  const candidates=[];
+  for (const row of (rows || [])){
+    if (!row || Number(row.productId) !== Number(productId)) continue;
+    if (!inventoryEntryMatchesLotPOS(row, trace)) continue;
+    const src=String(row.sourceType || row.source || '').toUpperCase();
+    if (!src.includes('REEMPAQUE')) continue;
+    const qty=Math.abs(reempaqueNumPOS(row.qty,0));
+    if (!(qty > 0)) continue;
+    let unit=0;
+    const direct=[
+      row.costoLiquidoUnitario,
+      row.costoUnitarioLiquido,
+      row.liquidUnitCost
+    ];
+    for (const v of direct){
+      const n=reempaqueNumPOS(v,0);
+      if (n > 0){ unit=n; break; }
+    }
+    if (!(unit > 0)){
+      const totals=[row.costoLiquidoTotal,row.costoLiquidoAsignado,row.liquidCostTotal];
+      for (const v of totals){
+        const n=reempaqueNumPOS(v,0);
+        if (n > 0){ unit=n/qty; break; }
+      }
+    }
+    if (unit > 0) candidates.push(unit);
+  }
+  if (!candidates.length){
+    return { reliable:false, unitCost:0, cost:0, warning:'Costo líquido histórico no determinable con seguridad.' };
+  }
+  const min=Math.min(...candidates), max=Math.max(...candidates);
+  if ((max-min) > 0.01){
+    return { reliable:false, unitCost:0, cost:0, warning:'Existen costos líquidos históricos distintos en el mismo lote/producto; no se inventó un costo.' };
+  }
+  const unit=candidates.reduce((a,b)=>a+b,0)/candidates.length;
+  return {
+    reliable:true,
+    unitCost:round2(unit),
+    cost:round2(unit * reempaquePositivePOS(fractionQty)),
+    warning:''
+  };
+}
+
+async function reempaqueCommitLegacyFractionSanitationPOS(payload){
+  if (!db) await openDB();
+  const p=payload || {};
+  const eid=Number(p.eventId);
+  const product=p.product || {};
+  const productId=Number(product.id ?? p.productId);
+  const trace=reempaqueLegacyLotTracePOS(p.trace || {});
+  const fractionQty=reempaqueLegacyFractionPartPOS(p.fractionQty);
+  const cap=reempaquePositivePOS(p.capacityMl);
+  if (!eid || !productId || !(fractionQty > 0) || !(cap > 0)) return {applied:false, reason:'invalid'};
+
+  const sanitationId=reempaqueLegacySanitationIdPOS(eid,trace,productId,fractionQty);
+  const existing=await getOne(REEMPAQUE_STORE_POS,sanitationId).catch(()=>null);
+  if (existing && existing.applied === true) return {applied:false,reason:'already',record:existing};
+
+  const before=await reempaqueLoadMermaBalancePOS(eid,trace,product,cap);
+  const costInfo=p.costInfo || {reliable:false,cost:0,warning:'Costo líquido histórico no determinable con seguridad.'};
+  const fractionMl=reempaqueRound4POS(fractionQty*cap);
+  const sourceCost=costInfo.reliable ? reempaqueMoneyPOS(costInfo.cost) : 0;
+  const plan=reempaqueBuildMermaPlanPOS({
+    before,
+    sourceVolumeMl:fractionMl,
+    sourceLiquidCost:sourceCost,
+    targetCapacityMl:cap
+  });
+  const mermaKey=before.mermaKey || reempaqueMermaKeyPOS(eid,trace,productId);
+  const after=reempaqueBuildMermaBalanceAfterPOS(before,plan,{
+    mermaKey,eventId:eid,
+    loteId:trace.loteId,loteCodigo:trace.loteCodigo,loteCargaId:trace.loteCargaId,loteGroupKey:trace.loteGroupKey,
+    targetProductId:productId,targetProductName:String(product.name || p.productName || '').trim(),targetCapacityMl:cap
+  });
+  const priorCostKnown = !(reempaquePositivePOS(before.remainderMl) > 0.0001) || reempaqueMoneyPOS(before.remainderLiquidCost) > 0;
+  const costReliable = !!costInfo.reliable && priorCostKnown && !String(before.costWarning || before.advertenciaCosto || '').trim();
+  const warning = costReliable ? '' : String(costInfo.warning || before.costWarning || before.advertenciaCosto || 'Costo histórico parcialmente indeterminado; se preservó la disponibilidad sin inventar costo.').trim();
+  after.costReliable=costReliable;
+  after.costWarning=warning;
+  after.advertenciaCosto=warning;
+  after.sanitizedLegacy=true;
+
+  const now=reempaqueNowISOPOS();
+  const lotFields=reempaqueInventoryLotFieldsPOS(trace);
+  const removeRow={
+    eventId:eid,...lotFields,
+    source:'reempaque_saneamiento_legacy',sourceType:'REEMPAQUE_SANEAMIENTO_LEGACY',
+    type:'adjust',qty:reempaqueRound4POS(-fractionQty),
+    productId,productName:String(product.name || p.productName || '').trim(),
+    time:now,createdAt:now,affectsSales:false,affectsCash:false,affectsAccountingIncome:false,
+    noVenta:true,noCaja:true,reempaqueRole:'legacy_fraction_to_merma',
+    sanitationId,mermaKey,mlConvertidosAMerma:fractionMl,
+    notes:'Saneamiento compensatorio de fracción legacy: stock vendible entero; fracción trasladada a merma técnica.'
+  };
+  const extraUnits=reempaqueFloorUnitsPOS(plan.extraUnits);
+  const recoveredCost=costReliable ? reempaqueMoneyPOS(plan.consumedRemainderLiquidCost) : 0;
+  const recoveryRow=extraUnits > 0 ? {
+    eventId:eid,...lotFields,
+    source:'reempaque_saneamiento_legacy',sourceType:'REEMPAQUE_SANEAMIENTO_LEGACY',
+    type:'adjust',qty:extraUnits,
+    productId,productName:String(product.name || p.productName || '').trim(),
+    time:now,createdAt:now,affectsSales:false,affectsCash:false,affectsAccountingIncome:false,
+    noVenta:true,noCaja:true,reempaqueRole:'legacy_merma_recovered',
+    sanitationId,mermaKey,cantidadExtraMerma:extraUnits,
+    costoLiquidoUnitario:extraUnits>0 ? round2(recoveredCost/extraUnits) : 0,
+    costoUnitarioLiquido:extraUnits>0 ? round2(recoveredCost/extraUnits) : 0,
+    costoLiquidoTotal:recoveredCost,costoAdicionalUnitario:0,costoAdicionalTotal:0,
+    notes:'Unidad completa recuperada durante saneamiento legacy por merma acumulada.'
+  } : null;
+
+  let resultRecord=null;
+  await new Promise((resolve,reject)=>{
+    try{
+      const tr=db.transaction(['inventory',REEMPAQUE_STORE_POS],'readwrite');
+      const inv=tr.objectStore('inventory');
+      const rp=tr.objectStore(REEMPAQUE_STORE_POS);
+      const check=rp.get(sanitationId);
+      check.onsuccess=()=>{
+        const prior=check.result;
+        if (prior && prior.applied === true){ resultRecord=prior; return; }
+        const movementIds=[];
+        const r1=inv.add(removeRow);
+        r1.onerror=()=>{try{tr.abort();}catch(_){}};
+        r1.onsuccess=()=>{
+          movementIds.push(r1.result);
+          const finish=()=>{
+            rp.put({ ...after, exists:undefined });
+            resultRecord={
+              id:sanitationId,
+              tipo:REEMPAQUE_SANEAMIENTO_TYPE_POS,
+              isLegacyFractionSanitation:true,
+              applied:true,
+              eventId:eid,eventoId:eid,
+              loteId:trace.loteId ?? null,loteCodigo:trace.loteCodigo || '',loteCargaId:trace.loteCargaId ?? null,loteGroupKey:trace.loteGroupKey || '',
+              targetProductId:productId,targetProductName:String(product.name || p.productName || '').trim(),
+              targetCapacityMl:cap,
+              fractionQtyBefore:fractionQty,
+              fractionMl,
+              extraUnitsRecovered:extraUnits,
+              remainderMlAfter:plan.pendingRemainderMl,
+              remainderLiquidCostAfter:plan.pendingRemainderLiquidCost,
+              costReliable,
+              costWarning:warning,
+              inventoryMovementIds:movementIds,
+              mermaKey,
+              affectsSales:false,affectsCash:false,noVenta:true,noCaja:true,
+              createdAt:now,updatedAt:now
+            };
+            rp.put(resultRecord);
+          };
+          if (recoveryRow){
+            const r2=inv.add(recoveryRow);
+            r2.onerror=()=>{try{tr.abort();}catch(_){}};
+            r2.onsuccess=()=>{movementIds.push(r2.result);finish();};
+          }else finish();
+        };
+      };
+      check.onerror=()=>{try{tr.abort();}catch(_){}};
+      tr.oncomplete=()=>resolve(true);
+      tr.onerror=()=>reject(tr.error || new Error('No se pudo sanear la fracción legacy.'));
+      tr.onabort=()=>reject(tr.error || new Error('Transacción abortada saneando fracción legacy.'));
+    }catch(err){reject(err);}
+  });
+  return {applied:!!(resultRecord && resultRecord.id===sanitationId),record:resultRecord,extraUnits,remainderMl:plan.pendingRemainderMl};
+}
+
+async function reempaqueRegisterLegacySanitationWarningPOS(payload){
+  const p=payload || {};
+  const trace=reempaqueLegacyLotTracePOS(p.trace || {});
+  const fraction=reempaqueLegacyFractionPartPOS(p.fractionQty);
+  const id=reempaqueLegacySanitationIdPOS(p.eventId,trace,p.productId,fraction) + '_warn';
+  const existing=await getOne(REEMPAQUE_STORE_POS,id).catch(()=>null);
+  if (existing && existing.warningOnly === true) return existing;
+  const now=reempaqueNowISOPOS();
+  const row={
+    id,tipo:REEMPAQUE_SANEAMIENTO_TYPE_POS,isLegacyFractionSanitation:true,applied:false,warningOnly:true,
+    eventId:Number(p.eventId)||null,eventoId:Number(p.eventId)||null,
+    loteId:trace.loteId ?? null,loteCodigo:trace.loteCodigo || '',loteCargaId:trace.loteCargaId ?? null,loteGroupKey:trace.loteGroupKey || '',
+    targetProductId:p.productId ?? null,targetProductName:String(p.productName || '').trim(),
+    fractionQtyBefore:fraction,
+    costReliable:false,
+    costWarning:String(p.warning || 'No fue posible determinar capacidad en ml; no se alteró la disponibilidad.'),
+    affectsSales:false,affectsCash:false,noVenta:true,noCaja:true,
+    createdAt:now,updatedAt:now
+  };
+  await put(REEMPAQUE_STORE_POS,row);
+  return row;
+}
+
+async function sanitizeLegacyFractionalAvailabilityPOS(){
+  if (!db) await openDB();
+  const products=await getAll('products').catch(()=>[]);
+  const pMap=new Map((products || []).filter(p=>p && p.id!=null).map(p=>[Number(p.id),p]));
+  const events=await getAll('events').catch(()=>[]);
+  let sanitized=0, extraUnits=0, warnings=0;
+  const touchedEvents=new Set();
+
+  for (const ev of (events || [])){
+    const eid=Number(ev && ev.id);
+    if (!Number.isFinite(eid) || !(eid>0)) continue;
+    const fifo=await computeLotFifoForEvent(eid).catch(()=>null);
+    if (!fifo || !fifo.lots) continue;
+    const order=Array.isArray(fifo.lotOrder) ? fifo.lotOrder : Object.keys(fifo.lots);
+    for (const lotKey of order){
+      const lot=fifo.lots[lotKey];
+      if (!lot) continue;
+      const trace=reempaqueLegacyLotTracePOS(lot);
+      for (const [fifoKey,rawAvailable] of Object.entries(lot.remainingByKey || {})){
+        const fraction=reempaqueLegacyFractionPartPOS(rawAvailable);
+        if (!(fraction>0)) continue;
+        const meta=(fifo.keyMeta && fifo.keyMeta[fifoKey]) || {};
+        const internalId=Number(meta.internalId);
+        const product=Number.isFinite(internalId) && internalId>0 ? pMap.get(internalId) : null;
+        if (!product){
+          warnings++;
+          await reempaqueRegisterLegacySanitationWarningPOS({
+            eventId:eid,trace,productId:internalId || meta.productId || null,productName:meta.nombreSnapshot || '',
+            fractionQty:fraction,warning:'Producto legacy no resoluble de forma segura; no se alteró la disponibilidad.'
+          });
+          continue;
+        }
+        const hasLegacyEvidence=await reempaqueHasLegacyFractionEvidencePOS(eid,trace,product.id);
+        if (!hasLegacyEvidence) continue;
+        const cap=reempaquePositivePOS(reempaqueCapacityMlFromProductPOS(product));
+        if (!(cap>0)){
+          warnings++;
+          await reempaqueRegisterLegacySanitationWarningPOS({
+            eventId:eid,trace,productId:product.id,productName:product.name || '',fractionQty:fraction,
+            warning:'Capacidad histórica en ml no determinable; no se alteró la disponibilidad.'
+          });
+          continue;
+        }
+        const costInfo=await reempaqueResolveLegacyFractionLiquidCostPOS(eid,trace,product.id,fraction);
+        if (!costInfo.reliable) warnings++;
+        const res=await reempaqueCommitLegacyFractionSanitationPOS({
+          eventId:eid,trace,product,fractionQty:fraction,capacityMl:cap,costInfo
+        });
+        if (res && res.applied){
+          sanitized++;
+          extraUnits += reempaqueFloorUnitsPOS(res.extraUnits);
+          touchedEvents.add(eid);
+        }
+      }
+    }
+  }
+
+  for (const eid of touchedEvents){
+    try{ await queueLotsUsageSyncPOS(eid); }catch(_){ }
+  }
+
+  // Eventos ya cerrados no deben conservar saldo recuperable después de una migración legacy.
+  for (const ev of (events || [])){
+    const eid=Number(ev && ev.id);
+    if (!eid || !ev.closedAt) continue;
+    try{
+      await reempaqueFinalizeMermaForEventPOS(eid,{
+        provisional:false,
+        eventClosedAt:ev.closedAt,
+        reason:'SANEAMIENTO_LEGACY_EVENTO_CERRADO'
+      });
+    }catch(err){ console.warn('Merma final legacy en evento cerrado',eid,err); }
+  }
+
+  if (sanitized || warnings){
+    console.info('Reempaque legacy saneado', {sanitized,extraUnits,warnings});
+  }
+  return {sanitized,extraUnits,warnings};
 }
 
 // Exponer canónicamente (para etapas siguientes / debug)
@@ -14947,7 +18322,203 @@ const __A33_LOTS_USAGE_SYNC = { inFlight: new Map() };
 
 function isPlainObjPOS(o){ return !!o && typeof o === 'object' && !Array.isArray(o); }
 function safeNumPOS(v){ const n = Number(v); return Number.isFinite(n) ? n : 0; }
-function normLotCodePOS(v){ return String(v || '').trim().toLowerCase(); }
+function lotCodeDisplayPOS(value){
+  const raw = String(value == null ? '' : value).trim();
+  if (!raw) return '';
+  try{
+    const api = (typeof window !== 'undefined' && window.A33LotCode) ? window.A33LotCode : null;
+    const recognized = api && typeof api.recognize === 'function' ? api.recognize(raw) : null;
+    // Solo el formato oficial nuevo se canoniza. Históricos/AV se conservan tal como fueron guardados.
+    if (recognized && recognized.ok && recognized.format === 'new'){
+      return String(recognized.code || raw).replace(/X/g, 'x');
+    }
+  }catch(_){ }
+  return raw;
+}
+
+function lotCodeExcelCellPOS(value){
+  const literal = String(value == null ? '' : value);
+  try{
+    const api = (typeof window !== 'undefined' && window.A33LotCode) ? window.A33LotCode : null;
+    if (api && typeof api.excelTextCell === 'function') return api.excelTextCell(literal);
+  }catch(_){ }
+  return { t:'s', v:literal, z:'@' };
+}
+
+function lotCodeKeyPOS(value){
+  return lotCodeDisplayPOS(value).replace(/\s+/g, '').toLowerCase();
+}
+
+function normLotCodePOS(v){ return lotCodeKeyPOS(v); }
+
+function saleLotAllocationsPOS(sale){
+  const raw = sale && (sale.loteAllocations || sale.lotAllocations || (sale.lotTrace && sale.lotTrace.allocations));
+  return Array.isArray(raw) ? raw.filter(Boolean) : [];
+}
+
+function getSaleLotCodePOS(sale){
+  if (!sale) return '';
+  const allocations = saleLotAllocationsPOS(sale);
+  const codes = [];
+  for (const a of allocations){
+    const code = lotCodeDisplayPOS(a && (a.loteCodigo ?? a.lotCode ?? a.batchCode));
+    if (code && !codes.some(x => lotCodeKeyPOS(x) === lotCodeKeyPOS(code))) codes.push(code);
+  }
+  if (codes.length) return codes.join(' + ');
+  const direct = sale.loteCodigo ?? sale.lotCode ?? sale.batchCode ?? sale.codigoLote ?? '';
+  return String(direct || '').trim() ? lotCodeDisplayPOS(direct) : '';
+}
+
+function lotTraceFromFifoPOS(lotKey, lot, remaining, fifoKey){
+  const code = lotCodeDisplayPOS(lot && lot.loteCodigo);
+  return {
+    lotKey: String(lotKey || ''),
+    loteId: lot && lot.loteId != null ? lot.loteId : null,
+    loteCodigo: code,
+    lotCode: code,
+    batchCode: code,
+    loteCargaId: lot && lot.loteCargaId != null ? String(lot.loteCargaId) : null,
+    loteGroupKey: lot && lot.loteGroupKey != null ? String(lot.loteGroupKey) : '',
+    fifoKey: String(fifoKey || ''),
+    remaining: Math.max(0, Number(remaining) || 0),
+    loadedAt: String((lot && lot.loadedAt) || '')
+  };
+}
+
+function lotTraceMatchesPOS(a, b){
+  if (!a || !b) return false;
+  const pairs = [
+    ['loteCargaId','loteCargaId'],
+    ['loteGroupKey','loteGroupKey'],
+    ['loteId','loteId'],
+    ['loteCodigo','loteCodigo']
+  ];
+  for (const [ka,kb] of pairs){
+    const av = a[ka];
+    const bv = b[kb];
+    if (av == null || bv == null || String(av).trim() === '' || String(bv).trim() === '') continue;
+    if (ka === 'loteCodigo') return lotCodeKeyPOS(av) === lotCodeKeyPOS(bv);
+    return String(av) === String(bv);
+  }
+  return false;
+}
+
+async function getAvailableLotsForProductPOS(eventId, productRef, productName, productsOrIndex){
+  const evId = Number(eventId);
+  if (!Number.isFinite(evId) || evId <= 0) return [];
+  const products = productsOrIndex && productsOrIndex.__a33ProductIdentityIndex
+    ? productsOrIndex.list
+    : (Array.isArray(productsOrIndex) ? productsOrIndex : await getAll('products').catch(()=>[]));
+  const index = productsOrIndex && productsOrIndex.__a33ProductIdentityIndex
+    ? productsOrIndex
+    : buildProductIdentityIndexPOS(products);
+  const identity = resolveCatalogProductIdentityPOS(productRef, index, { allowLegacy:true });
+  if (!identity.ok) return [];
+  const fifoKey = lotFifoKeyFromProductPOS(identity.product, identity.stableId || identity.internalId || productRef, productName || identity.name);
+  if (!fifoKey) return [];
+  const fifo = await computeLotFifoForEvent(evId);
+  const order = Array.isArray(fifo && fifo.lotOrder) ? fifo.lotOrder : Object.keys((fifo && fifo.lots) || {});
+  const out = [];
+  for (const lotKey of order){
+    const lot = fifo && fifo.lots ? fifo.lots[lotKey] : null;
+    if (!lot) continue;
+    const remaining = Math.max(0, Number(lot.remainingByKey && lot.remainingByKey[fifoKey]) || 0);
+    if (!(remaining > 0)) continue;
+    const trace = lotTraceFromFifoPOS(lotKey, lot, remaining, fifoKey);
+    trace.unitCost = await getExactLotUnitCostPOS(evId, identity.product, [trace], index);
+    out.push(trace);
+  }
+  return out;
+}
+
+async function resolveSaleLotAllocationPOS(eventId, productRef, productName, qty, productsOrIndex){
+  let need = Math.max(0, Number(qty) || 0);
+  const available = await getAvailableLotsForProductPOS(eventId, productRef, productName, productsOrIndex);
+  const allocations = [];
+  for (const lot of available){
+    if (!(need > 0)) break;
+    const take = Math.min(need, Math.max(0, Number(lot.remaining) || 0));
+    if (!(take > 0)) continue;
+    allocations.push({ ...lot, qty: take, cantidad: take });
+    need -= take;
+  }
+  return { allocations, unassignedQty: Math.max(0, need), available };
+}
+
+function inventoryEntryMatchesLotPOS(entry, trace){
+  if (!entry || !trace) return false;
+  return lotTraceMatchesPOS({
+    loteCargaId: entry.loteCargaId,
+    loteGroupKey: entry.loteGroupKey,
+    loteId: entry.loteId,
+    loteCodigo: entry.loteCodigo ?? entry.lotCode ?? entry.batchCode
+  }, trace);
+}
+
+async function getExactLotUnitCostPOS(eventId, productRef, allocations, productsOrIndex){
+  const list = Array.isArray(allocations) ? allocations.filter(Boolean) : [];
+  if (!list.length) return 0;
+  const products = productsOrIndex && productsOrIndex.__a33ProductIdentityIndex
+    ? productsOrIndex.list
+    : (Array.isArray(productsOrIndex) ? productsOrIndex : await getAll('products').catch(()=>[]));
+  const index = productsOrIndex && productsOrIndex.__a33ProductIdentityIndex
+    ? productsOrIndex
+    : buildProductIdentityIndexPOS(products);
+  const identity = resolveCatalogProductIdentityPOS(productRef, index, { allowLegacy:true });
+  if (!identity.ok) return 0;
+  const entries = await getInventoryEntries(Number(eventId));
+  let finalQty = 0;
+  let finalCost = 0;
+  for (const allocation of list){
+    const rows = (entries || []).filter(e => {
+      if (!e || !productIdentityMatchesRefPOS(identity, e)) return false;
+      if (!inventoryEntryMatchesLotPOS(e, allocation)) return false;
+      const q = Number(e.qty) || 0;
+      return q > 0 && (e.type === 'restock' || e.type === 'adjust');
+    });
+    let sourceQty = 0;
+    let sourceCost = 0;
+    for (const row of rows){
+      const q = Math.max(0, Number(row.qty) || 0);
+      const c = saleCostFromFieldsPOS(row);
+      if (!(q > 0) || !(c > 0)) continue;
+      sourceQty += q;
+      sourceCost += q * c;
+    }
+    const unit = sourceQty > 0 && sourceCost > 0 ? sourceCost / sourceQty : Math.max(0, Number(allocation.unitCost) || 0);
+    const allocatedQty = Math.max(0, Number(allocation.qty ?? allocation.cantidad ?? 1) || 0);
+    if (!(unit > 0) || !(allocatedQty > 0)) continue;
+    finalQty += allocatedQty;
+    finalCost += allocatedQty * unit;
+  }
+  return finalQty > 0 && finalCost > 0 ? round2(finalCost / finalQty) : 0;
+}
+
+async function resolveReturnLotAllocationPOS(eventId, productStableId, qty){
+  try{
+    const rows = (await getAll('sales')).filter(s => s && Number(s.eventId) === Number(eventId) && !s.isReturn && saleStableProductIdPOS(s) === String(productStableId || ''));
+    rows.sort((a,b)=> saleSortKeyPOS(b) - saleSortKeyPOS(a));
+    const source = rows.find(s => saleLotAllocationsPOS(s).length) || null;
+    if (!source) return { allocations:[], unassignedQty:Math.max(0, Number(qty)||0), available:[] };
+    let need = Math.max(0, Number(qty) || 0);
+    const allocations = [];
+    for (const item of saleLotAllocationsPOS(source)){
+      if (!(need > 0)) break;
+      const priorQty = Math.max(0, Number(item.qty ?? item.cantidad) || 0);
+      const take = Math.min(need, priorQty || need);
+      allocations.push({ ...item, qty:take, cantidad:take, returnedFromSaleId: source.id || null });
+      need -= take;
+    }
+    return { allocations, unassignedQty:Math.max(0, need), available:allocations };
+  }catch(_){
+    return { allocations:[], unassignedQty:Math.max(0, Number(qty)||0), available:[] };
+  }
+}
+
+function saleTouchesLotsPOS(sale){
+  return !!(sale && (saleLotAllocationsPOS(sale).length || getSaleLotCodePOS(sale) || presKeyFromProductNamePOS(getSaleProductNameSnapshotPOS(sale))));
+}
+
 
 function cloneNumMapPOS(obj){
   const out = {};
@@ -14960,17 +18531,74 @@ function cloneNumMapPOS(obj){
   return out;
 }
 
-function normalizeUsageSnapshotPOS(raw, stamp){
+function normalizeUsageSnapshotPOS(raw, stamp, rawKeyMeta){
+  const loadedByKey = cloneNumMapPOS(raw && raw.loadedByKey);
   const soldByKey = cloneNumMapPOS(raw && raw.soldByKey);
   const remainingByKey = cloneNumMapPOS(raw && raw.remainingByKey);
+  const keyMeta = isPlainObjPOS(rawKeyMeta) ? rawKeyMeta : {};
+  const loadedByProductId = {};
+  const soldByProductId = {};
+  const remainingByProductId = {};
+  const loadedByLetter = {};
+  const soldByLetter = {};
+  const remainingByLetter = {};
+  const availabilityProducts = [];
+  const allKeys = Array.from(new Set(Object.keys(loadedByKey).concat(Object.keys(soldByKey), Object.keys(remainingByKey))));
+
+  const add = (map, key, value) => {
+    const id = String(key || '').trim();
+    const qty = Math.max(0, safeNumPOS(value));
+    if (!id || !(qty >= 0)) return;
+    map[id] = (safeNumPOS(map[id]) || 0) + qty;
+  };
+
+  for (const fifoKey of allKeys){
+    const meta = isPlainObjPOS(keyMeta[fifoKey]) ? keyMeta[fifoKey] : {};
+    const parsedProductId = String(meta.productId || (String(fifoKey).startsWith('PID:') ? String(fifoKey).slice(4) : '')).trim();
+    const parsedLetter = productIdentityNormPOS(meta.Letra || meta.letra || ((String(fifoKey).length <= 4 && !String(fifoKey).includes(':')) ? fifoKey : '')).toUpperCase();
+    const loaded = Math.max(0, safeNumPOS(loadedByKey[fifoKey]));
+    const sold = Math.max(0, safeNumPOS(soldByKey[fifoKey]));
+    const remaining = Math.max(0, safeNumPOS(remainingByKey[fifoKey]));
+
+    if (parsedProductId){
+      add(loadedByProductId, parsedProductId, loaded);
+      add(soldByProductId, parsedProductId, sold);
+      add(remainingByProductId, parsedProductId, remaining);
+    }
+    if (parsedLetter){
+      add(loadedByLetter, parsedLetter, loaded);
+      add(soldByLetter, parsedLetter, sold);
+      add(remainingByLetter, parsedLetter, remaining);
+    }
+    availabilityProducts.push({
+      fifoKey,
+      productId: parsedProductId,
+      internalId: meta.internalId || null,
+      nombreSnapshot: String(meta.nombreSnapshot || '').trim(),
+      Letra: parsedLetter,
+      cantidadBase: loaded,
+      cantidadVendida: sold,
+      cantidadDisponible: remaining,
+    });
+  }
+
   let soldTotal = safeNumPOS(raw && raw.soldTotal);
   let remainingTotal = safeNumPOS(raw && raw.remainingTotal);
   if (soldTotal < 0) soldTotal = 0;
   if (remainingTotal < 0) remainingTotal = 0;
   return {
+    schema: 2,
     updatedAt: (stamp != null ? stamp : Date.now()),
+    loadedByKey,
     soldByKey,
     remainingByKey,
+    loadedByProductId,
+    soldByProductId,
+    remainingByProductId,
+    loadedByLetter,
+    soldByLetter,
+    remainingByLetter,
+    availabilityProducts,
     soldTotal,
     remainingTotal
   };
@@ -14983,6 +18611,41 @@ function upsertLotEventUsagePOS(lote, eventId, snap){
   eu[eid] = snap;
   lote.eventUsage = eu;
   return true;
+}
+
+function deriveLotAvailabilityStatePOS(lote, snap){
+  const operational = effectiveLoteStatusPOS(lote);
+  if (operational !== 'EN_EVENTO') return operational;
+
+  const rows = Array.isArray(snap && snap.availabilityProducts)
+    ? snap.availabilityProducts.filter(row => Math.max(0, safeNumPOS(row && (row.cantidadBase ?? row.cantidadProducida ?? row.loaded ?? 0))) > 0)
+    : [];
+  if (rows.length){
+    return rows.some(row => Math.max(0, safeNumPOS(row && (row.cantidadDisponible ?? row.remaining ?? 0))) > 0)
+      ? 'PARCIAL'
+      : 'VENDIDO';
+  }
+
+  const map = isPlainObjPOS(snap && snap.remainingByProductId)
+    ? snap.remainingByProductId
+    : (isPlainObjPOS(snap && snap.remainingByLetter) ? snap.remainingByLetter : (isPlainObjPOS(snap && snap.remainingByKey) ? snap.remainingByKey : null));
+  if (map && Object.keys(map).length){
+    return Object.values(map).some(value => Math.max(0, safeNumPOS(value)) > 0) ? 'PARCIAL' : 'VENDIDO';
+  }
+
+  const remainingTotal = Number(snap && snap.remainingTotal);
+  return Number.isFinite(remainingTotal) && remainingTotal <= 0 ? 'VENDIDO' : 'PARCIAL';
+}
+
+function setLotAvailabilityStatePOS(lote, snap, stamp){
+  if (!lote) return;
+  lote.availabilityState = deriveLotAvailabilityStatePOS(lote, snap);
+  try{
+    const d = new Date(stamp != null ? stamp : Date.now());
+    lote.availabilityUpdatedAt = Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+  }catch(_){
+    lote.availabilityUpdatedAt = new Date().toISOString();
+  }
 }
 
 async function syncLotsUsageForEvent(eventId){
@@ -15023,9 +18686,10 @@ async function syncLotsUsageForEvent(eventId){
   const applySnap = (lotObj, rawSnapOrNull) => {
     if (!lotObj) return;
     const snap = rawSnapOrNull
-      ? normalizeUsageSnapshotPOS(rawSnapOrNull, stamp)
-      : normalizeUsageSnapshotPOS({ soldByKey:{}, remainingByKey:{}, soldTotal:0, remainingTotal:0 }, stamp);
+      ? normalizeUsageSnapshotPOS(rawSnapOrNull, stamp, fifo && fifo.keyMeta)
+      : normalizeUsageSnapshotPOS({ loadedByKey:{}, soldByKey:{}, remainingByKey:{}, soldTotal:0, remainingTotal:0 }, stamp, fifo && fifo.keyMeta);
     if (upsertLotEventUsagePOS(lotObj, evId, snap)){
+      setLotAvailabilityStatePOS(lotObj, snap, stamp);
       updated += 1;
       if (lotObj.id != null) touched.add(String(lotObj.id));
     }
@@ -15134,15 +18798,45 @@ function sanitizeFractionBatches(raw){
   });
 }
 
-function isCupSaleRecord(sale){
-  if (!sale) return false;
+function saleVasoClassSnapshotPOS(sale){
+  if (!sale || typeof sale !== 'object') return '';
+  const snap = sale.productSnapshot && typeof sale.productSnapshot === 'object' ? sale.productSnapshot : {};
+  return String(
+    sale.productClassSnapshot ?? sale.presentationClassSnapshot ?? sale.productClass ?? sale.presentationClass ??
+    snap.productClass ?? snap.presentationClass ?? ''
+  ).trim().toLowerCase();
+}
+
+function isModernVasoSalePOS(sale){
+  if (!sale || typeof sale !== 'object' || sale.isExtra) return false;
+  // Identidad estable obligatoria. La clase puede venir congelada en el snapshot o del ID de Vaso físico.
+  const stableProductId = saleStableProductIdPOS(sale);
+  if (!stableProductId) return false;
+  const explicitClass = saleVasoClassSnapshotPOS(sale);
+  const physicalCupId = salePhysicalCupInventoryIdPOS(sale);
+  return explicitClass === 'vaso' || !!physicalCupId;
+}
+
+function isLegacyCupSaleRecordPOS(sale){
+  if (!sale || typeof sale !== 'object') return false;
+  // Moderno gana siempre: un mismo registro jamás activa flujo moderno y legacy a la vez.
+  if (isModernVasoSalePOS(sale)) return false;
   if (sale.vaso === true) return true;
   if (Array.isArray(sale.fifoBreakdown) && sale.fifoBreakdown.length) return true;
   return false;
 }
 
+function isVasoCategorySalePOS(sale){
+  return isModernVasoSalePOS(sale) || isLegacyCupSaleRecordPOS(sale);
+}
+
+// Alias interno conservado para rutas históricas: desde Etapa 4 significa exclusivamente legacy.
+function isCupSaleRecord(sale){
+  return isLegacyCupSaleRecordPOS(sale);
+}
+
 function isLegacyCupCostFallbackSalePOS(sale){
-  if (!isCupSaleRecord(sale)) return false;
+  if (!isLegacyCupSaleRecordPOS(sale)) return false;
   // Los Vasos nuevos son productos POS normales con productId/costo propio.
   // Solo estimamos desde Galón para registros legacy sin productId y con evidencia antigua de fraccionamiento.
   return saleProductIdForInventoryPOS(sale) == null;
@@ -15218,13 +18912,6 @@ async function revertCupConsumptionFromSalePOS(sale){
 
 // Importar inventario desde Control de Lotes
 	// Inventario (POS): Modal "Seleccionar lote" — Etapa 1 (solo lectura)
-	function normalizeLoteNotesPOS(notas){
-	  if (notas == null) return '';
-	  if (Array.isArray(notas)){
-	    return notas.map(x=>String(x ?? '').trim()).filter(Boolean).join(' | ');
-	  }
-	  return String(notas);
-	}
 	function formatLoteDatePOS(createdAt){
 	  const s = (createdAt != null) ? String(createdAt) : '';
 	  if (!s) return '';
@@ -15380,21 +19067,26 @@ async function revertCupConsumptionFromSalePOS(sale){
 	    return ib.localeCompare(ia);
 	  });
 
-	  // Filtro rápido: código / notas (case-insensitive)
+	  // Filtro rápido: código (case-insensitive). La Nota permanece intacta en Lotes,
+	  // pero deja de formar parte visible de este selector.
 	  let view = base;
 	  if (q){
-	    view = base.filter(l=>{
-	      const code = String(l?.codigo ?? '').toLowerCase();
-	      const notes = normalizeLoteNotesPOS(l?.notas).toLowerCase();
-	      return code.includes(q) || notes.includes(q);
-	    });
+	    view = base.filter(l=> String(l?.codigo ?? '').toLowerCase().includes(q));
 	  }
 
-	  const usableView = view.reduce((acc,l)=> acc + (loteIsUsablePOS(l) ? 1 : 0), 0);
+	  let products = [];
+	  let productsReadError = null;
+	  try{
+	    products = await readProductsForLotePlanPOS();
+	  }catch(error){
+	    productsReadError = error;
+	    console.error('[POS][Agregar desde lote] No se pudieron leer Productos.', error);
+	  }
+
 
 	  // Mensajería clara
 	  if (msgEl){
-	    let msg = '';
+	    let msg = productsReadError ? 'No se pudieron leer los productos. Cierra y vuelve a abrir Inventario.' : '';
 	    if (!evId) msg = 'Selecciona un evento para poder usar un lote.';
 	    // "No hay lotes disponibles" solo aplica como estado vacío.
 	    // Si hay filas, NO se muestra este mensaje (aunque estén deshabilitadas).
@@ -15415,21 +19107,18 @@ async function revertCupConsumptionFromSalePOS(sale){
 	  for (const l of view){
 	    const codigo = String(l?.codigo ?? '').trim();
 	    const fecha = formatLoteDatePOS(l?.createdAt);
-	    const nota = normalizeLoteNotesPOS(l?.notas);
 	    const estado = computeLoteEstadoPOS_UI(l);
+	    const loadPlan = buildLoteAvailableLoadPlanPOS(l, products);
 
 	    const tr = document.createElement('tr');
 	    const td1 = document.createElement('td'); td1.textContent = codigo;
 	    const td2 = document.createElement('td'); td2.textContent = fecha;
 	    const td3 = document.createElement('td');
-	    // Notas: wrap + altura controlada + ver más
-	    const wrap = document.createElement('div');
-	    wrap.className = 'note-wrap';
-	    const clamp = document.createElement('div');
-	    clamp.className = 'note-clamp';
-	    clamp.textContent = String(nota ?? '');
-	    wrap.appendChild(clamp);
-	    td3.appendChild(wrap);
+	    td3.className = 'inv-lote-content-cell';
+	    const content = document.createElement('span');
+	    content.className = 'inv-lote-content-summary';
+	    content.textContent = loadPlan.summary || '—';
+	    td3.appendChild(content);
 
 	    const td4 = document.createElement('td'); td4.textContent = estado;
 	    const td5 = document.createElement('td');
@@ -15437,10 +19126,11 @@ async function revertCupConsumptionFromSalePOS(sale){
 	    btn.className = 'btn-outline btn-pill btn-pill-mini';
 	    btn.type = 'button';
 	    btn.textContent = 'Usar';
-	    const canUse = !!evId && loteIsUsablePOS(l);
+	    const canUse = !!evId && loteIsUsablePOS(l) && loadPlan.items.length > 0;
 	    btn.disabled = !canUse;
 	    if (!evId) btn.title = 'Selecciona un evento para poder usar un lote.';
-	    else if (!canUse) btn.title = 'Este lote no está disponible.';
+	    else if (!loteIsUsablePOS(l)) btn.title = 'Este lote no está disponible.';
+	    else if (!loadPlan.items.length) btn.title = 'Este lote no tiene unidades disponibles con Letra válida.';
 	    if (canUse){
 	      btn.addEventListener('click', ()=>{ handleUseLoteFromSelectorPOS(btn, l); });
 	    }
@@ -15649,55 +19339,18 @@ async function importFromLoteToInventory(opts){
   const stamp = new Date().toISOString();
   const cargaId = 'lc-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,7);
 
-  const products = await getAll('products');
-  const norm = s => (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
-
-  const items = [];
-  let total = 0;
-
-  const contractRows = lotesPOSContractRowsPOS(loteAny);
-  if (contractRows.length){
-    // Contrato dinámico Lotes → POS: Product ID manda y evita sumar dos veces legacy + dinámico.
-    for (const row of contractRows){
-      const qty = lotesPOSQtyFromContractRowPOS(row);
-      if (!(qty > 0)) continue;
-      const prod = resolveProductFromLoteContractRowPOS(row, products);
-      if (!prod) continue;
-      const unitCost = saleCostFromFieldsPOS(row) || saleCostFromFieldsPOS(loteAny);
-      items.push({
-        productId: prod.id,
-        qty,
-        unitCost,
-        nombreSnapshot: row.nombreSnapshot || row.nombre || row.name || prod.name || '',
-        loteProductId: row.productId ?? row.productoId ?? null,
-        letra: row.Letra || row.letra || '',
-        source: 'lotes_productId'
-      });
-      total += qty;
-    }
-  } else {
-    const map = [
-      { field: 'pulso', name: 'Pulso 250ml' },
-      { field: 'media', name: 'Media 375ml' },
-      { field: 'djeba', name: 'Djeba 750ml' },
-      { field: 'litro', name: 'Litro 1000ml' },
-      { field: 'galon', name: 'Galón 3750 ml' }
-    ];
-
-    for (const m of map){
-      const rawQty = (loteAny[m.field] ?? '0').toString();
-      const qty = parseInt(rawQty, 10);
-      if (!(qty > 0)) continue;
-      let prod = products.find(p => norm(p.name) === norm(m.name));
-      // Compat Galón: permitir legacy 'Galón 3750 ml' y/o cualquier nombre que mapee a 'galon'
-      if (!prod && m.field === 'galon') {
-        prod = products.find(p => norm(p.name) === norm('Galón 3750 ml')) || products.find(p => mapProductNameToFinishedId(p.name) === 'galon') || null;
-      }
-      if (!prod) continue;
-      items.push({ productId: prod.id, qty, unitCost: saleCostFromFieldsPOS(loteAny), source: 'lotes_legacy' });
-      total += qty;
-    }
+  let products = [];
+  try{
+    products = await readProductsForLotePlanPOS();
+  }catch(error){
+    console.error('[POS][Agregar desde lote] No se pudieron leer Productos para aplicar el lote.', error);
+    try{ showToast('No se pudieron leer los productos. No se aplicó el lote.', 'error', 4200); }catch(_){ }
+    return { ok:false, reason:'PRODUCTS_READ_FAIL' };
   }
+  const loadPlan = buildLoteAvailableLoadPlanPOS(loteAny, products);
+  const items = loadPlan.items;
+  const total = loadPlan.total;
+  const contentSummary = loadPlan.summary;
   if (!items.length){
     try{ showToast('Ese lote no trae unidades para cargar (todo está en 0).', 'error', 3800); }catch(_){ }
     return { ok:false, reason:'EMPTY' };
@@ -15719,6 +19372,8 @@ async function importFromLoteToInventory(opts){
       lotes[idx] = {
         ...prev,
         status: 'EN_EVENTO',
+        availabilityState: 'PARCIAL',
+        availabilityUpdatedAt: stamp,
         assignedEventId: evId,
         assignedEventName: evName || ('Evento #' + evId),
         assignedAt: stamp,
@@ -15758,97 +19413,239 @@ async function importFromLoteToInventory(opts){
 
   await renderInventario();
   await refreshSaleStockLabel();
-  try{ showToast('Lote aplicado: "' + (loteAny.codigo || '') + '" (' + total + ' u.)', 'ok', 2200); }catch(_){ }
+  const unitLabel = total === 1 ? 'unidad' : 'unidades';
+  try{ showToast('Lote aplicado: “' + (loteAny.codigo || '') + '” · ' + contentSummary + ' · ' + formatLoteContentQtyPOS(total) + ' ' + unitLabel, 'ok', 3200); }catch(_){ }
 
   // FIFO (Etapa 2): snapshot por evento/lote (entrada de lote al evento)
   try{ queueLotsUsageSyncPOS(evId); }catch(_){ }
 
-  return { ok:true, evId, loteCodigo: (loteAny.codigo || ''), total };
+  return { ok:true, evId, loteCodigo: (loteAny.codigo || ''), total, contentSummary };
 }
 
 
+// Lotes cargados: histórico plegable, desacoplado de las operaciones
+function setLotesCargadosExpandedPOS(expanded){
+  const block = document.getElementById('lotes-evento-block');
+  const header = block ? block.querySelector('.lotes-block-head') : null;
+  const content = document.getElementById('lotes-evento-content');
+  if (!header || !content) return;
+  const isOpen = expanded === true;
+  header.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  content.hidden = !isOpen;
+  block.classList.toggle('is-open', isOpen);
+}
+
+function toggleLotesCargadosPOS(){
+  const block = document.getElementById('lotes-evento-block');
+  const header = block ? block.querySelector('.lotes-block-head') : null;
+  if (!header) return;
+  setLotesCargadosExpandedPOS(header.getAttribute('aria-expanded') !== 'true');
+}
+
+function setupLotesCargadosDisclosurePOS(){
+  const block = document.getElementById('lotes-evento-block');
+  const header = block ? block.querySelector('.lotes-block-head') : null;
+  if (!block || !header || block.dataset.disclosureBound === '1'){
+    setLotesCargadosExpandedPOS(false);
+    return;
+  }
+  block.dataset.disclosureBound = '1';
+  setLotesCargadosExpandedPOS(false);
+
+  block.addEventListener('click', (event)=>{
+    const clickedHeader = event && event.target && typeof event.target.closest === 'function'
+      ? event.target.closest('.lotes-block-head')
+      : null;
+    if (!clickedHeader || !block.contains(clickedHeader)) return;
+    toggleLotesCargadosPOS();
+  });
+
+  header.addEventListener('keydown', (event)=>{
+    if (!event || (event.key !== 'Enter' && event.key !== ' ')) return;
+    event.preventDefault();
+    toggleLotesCargadosPOS();
+  });
+}
+
+// La tabla histórica usa únicamente la Letra guardada al momento de cargar el lote.
+// No consulta Catálogos ni deriva Letras por nombre: la fotografía original queda intacta.
+function loteHistoryLetterSnapshotPOS(entry){
+  const row = entry && typeof entry === 'object' ? entry : {};
+  const productSnapshot = row.loteProductSnapshot && typeof row.loteProductSnapshot === 'object'
+    ? row.loteProductSnapshot
+    : null;
+  const candidates = [
+    row.loteLetra,
+    row.loteLetter,
+    row.loteProductLetter,
+    row.Letra,
+    row.letra,
+    productSnapshot && (productSnapshot.Letra ?? productSnapshot.letra ?? productSnapshot.letter)
+  ];
+  for (const value of candidates){
+    const letter = normalizeLoteContentLetterPOS(value);
+    if (letter) return letter;
+  }
+  return '';
+}
+
+function buildLotesCargadosHistoryModelPOS(entries){
+  const all = Array.isArray(entries) ? entries.filter(Boolean) : [];
+  const rows = all.filter(e => e.type === 'restock' && (e.loteCodigo || e.source === 'lote'));
+
+  // Detectar reversos solo para señal visual; no altera cantidades ni columnas históricas.
+  const revByGroupKey = new Map();
+  for (const r of all){
+    if (!r || r.type !== 'adjust' || r.source !== 'lote_reverso') continue;
+    const keyRaw = r.loteGroupKey || r.loteCargaId || '';
+    const key = keyRaw ? String(keyRaw) : '';
+    if (!key) continue;
+    const time = String(r.time || '');
+    const previous = revByGroupKey.get(key);
+    if (!previous || time.localeCompare(previous) > 0) revByGroupKey.set(key, time);
+  }
+
+  const letters = [];
+  const seenLetters = new Set();
+  const groups = new Map();
+
+  // Se recorre en el orden persistido. Una Letra nueva se agrega al final sin reordenar las existentes.
+  for (const it of rows){
+    const loteCodigo = String(it.loteCodigo || '').trim();
+    const time = String(it.time || '');
+    const groupKey = it.loteCargaId
+      ? String(it.loteCargaId)
+      : ((loteCodigo || '—') + '|' + time);
+    let group = groups.get(groupKey);
+    if (!group){
+      group = {
+        loteCodigo:loteCodigo || '—',
+        time,
+        groupKey,
+        quantities:Object.create(null),
+        reversedAt:revByGroupKey.get(groupKey) || ''
+      };
+      groups.set(groupKey, group);
+    }
+    if ((group.loteCodigo === '—' || !group.loteCodigo) && loteCodigo) group.loteCodigo = loteCodigo;
+    if (!group.time && time) group.time = time;
+    if (!group.reversedAt && revByGroupKey.has(groupKey)) group.reversedAt = revByGroupKey.get(groupKey);
+
+    const letter = loteHistoryLetterSnapshotPOS(it);
+    if (!letter) continue;
+    if (!seenLetters.has(letter)){
+      seenLetters.add(letter);
+      letters.push(letter);
+    }
+    const qty = Number(it.qty);
+    if (!Number.isFinite(qty)) continue;
+    group.quantities[letter] = (Number(group.quantities[letter]) || 0) + qty;
+  }
+
+  return {
+    letters,
+    groups:Array.from(groups.values()).sort((a,b)=> String(b.time || '').localeCompare(String(a.time || '')))
+  };
+}
+
+function renderLotesCargadosHeaderPOS(table, letters){
+  const row = table ? table.querySelector('#lotes-evento-head-row') : null;
+  if (!row) return;
+  row.textContent = '';
+  const appendHeader = (label) => {
+    const th = document.createElement('th');
+    th.scope = 'col';
+    th.textContent = String(label || '');
+    row.appendChild(th);
+  };
+  appendHeader('Código');
+  appendHeader('Fecha');
+  for (const letter of (Array.isArray(letters) ? letters : [])) appendHeader(letter);
+}
+
+// Los totales se calculan exclusivamente desde las filas ya renderizadas en tbody.
+// No consultan Inventario, Catálogos ni otra fuente y nunca se persisten.
+function renderLotesCargadosTotalsPOS(table, letters){
+  const totalsRow = table ? table.querySelector('#lotes-evento-totals-row') : null;
+  if (!table || !totalsRow) return;
+
+  const safeLetters = Array.isArray(letters) ? letters : [];
+  const totals = safeLetters.map(()=>0);
+  const renderedRows = table.querySelectorAll('tbody tr');
+
+  for (const renderedRow of renderedRows){
+    const cells = renderedRow && renderedRow.children ? renderedRow.children : [];
+    if (cells.length < 2 + safeLetters.length) continue;
+    for (let index = 0; index < safeLetters.length; index += 1){
+      const cell = cells[index + 2];
+      const raw = cell ? String(cell.textContent == null ? '' : cell.textContent).trim() : '';
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value < 0) continue;
+      totals[index] += value;
+    }
+  }
+
+  totalsRow.textContent = '';
+  const label = document.createElement('th');
+  label.scope = 'row';
+  label.colSpan = 2;
+  label.textContent = 'TOTALES';
+  totalsRow.appendChild(label);
+
+  for (const total of totals){
+    const th = document.createElement('th');
+    th.scope = 'col';
+    th.textContent = Number.isFinite(total) && total >= 0 ? String(total) : '0';
+    totalsRow.appendChild(th);
+  }
+}
+
 // Lotes cargados en este evento (solo informativo)
 async function renderLotesCargadosEvento(eventId){
-  const tbody = $('#tbl-lotes-evento tbody');
+  const table = $('#tbl-lotes-evento');
+  const tbody = table ? table.querySelector('tbody') : null;
   const badge = $('#lotes-count');
-  if (!tbody) return;
+  if (!table || !tbody) return;
 
-  tbody.innerHTML = '';
-
-  const entries = await getInventoryEntries(eventId);
-  const rows = (entries || [])
-    .filter(e => e && e.type === 'restock' && (e.loteCodigo || e.source === 'lote'))
-    .sort((a,b)=> (b.time||'').localeCompare(a.time||''));
-
-  // Detectar reversos (ajustes negativos) por grupo de carga, para marcar la historia sin ocultarla
-  const revRows = (entries || [])
-    .filter(e => e && e.type === 'adjust' && e.source === 'lote_reverso');
-  const revByGroupKey = new Map();
-  for (const r of revRows){
-    const k = (r.loteGroupKey || r.loteCargaId || '')
-      ? String(r.loteGroupKey || r.loteCargaId)
-      : '';
-    if (!k) continue;
-    const t = (r.time || '').toString();
-    const prev = revByGroupKey.get(k);
-    if (!prev || t.localeCompare(prev) > 0) revByGroupKey.set(k, t);
-  }
-
-  const prods = await getAll('products');
-  const pMap = new Map((prods||[]).map(p => [p.id, p]));
-
-  // Agrupar: 1 fila por cada "carga" de lote
-  const groups = new Map();
-  for (const it of rows){
-    const loteCodigo = (it.loteCodigo || '').toString().trim();
-    const time = (it.time || '').toString();
-    const gKey = it.loteCargaId
-      ? String(it.loteCargaId)
-      : ((loteCodigo || '—') + '|' + (time || ''));
-    let g = groups.get(gKey);
-    if (!g){
-      g = { loteCodigo: loteCodigo || '—', time: time || '', groupKey: gKey, P:0, M:0, D:0, L:0, G:0 };
-      groups.set(gKey, g);
-    }
-    if ((g.loteCodigo === '—' || !g.loteCodigo) && loteCodigo) g.loteCodigo = loteCodigo;
-    if (!g.time && time) g.time = time;
-
-    const p = pMap.get(it.productId);
-    const key = presKeyFromProductNamePOS(p ? (p.name || '') : '');
-    const qty = Number(it.qty) || 0;
-    if (key) g[key] = (Number(g[key]) || 0) + qty;
-
-    // marcar si esta carga fue reversada (para claridad)
-    if (!g.reversedAt && revByGroupKey.has(gKey)){
-      g.reversedAt = revByGroupKey.get(gKey);
-    }
-  }
-
-  const out = Array.from(groups.values()).sort((a,b)=> (b.time||'').localeCompare(a.time||''));
+  tbody.textContent = '';
+  const model = buildLotesCargadosHistoryModelPOS(await getInventoryEntries(eventId));
+  const letters = model.letters;
+  const out = model.groups;
+  renderLotesCargadosHeaderPOS(table, letters);
   if (badge) badge.textContent = String(out.length || 0);
 
   if (!out.length){
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="7"><small class="muted">No hay lotes cargados en este evento.</small></td>';
+    const td = document.createElement('td');
+    const small = document.createElement('small');
+    td.colSpan = Math.max(2, 2 + letters.length);
+    small.className = 'muted';
+    small.textContent = 'No hay lotes cargados en este evento.';
+    td.appendChild(small);
+    tr.appendChild(td);
     tbody.appendChild(tr);
+    renderLotesCargadosTotalsPOS(table, letters);
     return;
   }
 
-  for (const g of out){
-    const dt = g.time ? new Date(g.time).toLocaleString('es-NI') : '';
+  const appendCell = (tr, value) => {
+    const td = document.createElement('td');
+    td.textContent = String(value == null ? '' : value);
+    tr.appendChild(td);
+  };
+
+  for (const group of out){
+    const date = group.time ? new Date(group.time).toLocaleString('es-NI') : '';
     const tr = document.createElement('tr');
-    const codeTxt = escapeHtml((g.loteCodigo || '—').toString()) + (g.reversedAt ? ' ↩︎ REV' : '');
-    tr.innerHTML = `
-      <td>${codeTxt}</td>
-      <td>${escapeHtml(dt || '')}</td>
-      <td>${Number(g.P)||0}</td>
-      <td>${Number(g.M)||0}</td>
-      <td>${Number(g.D)||0}</td>
-      <td>${Number(g.L)||0}</td>
-      <td>${Number(g.G)||0}</td>
-    `;
+    appendCell(tr, String(group.loteCodigo || '—') + (group.reversedAt ? ' ↩︎ REV' : ''));
+    appendCell(tr, date || '');
+    for (const letter of letters){
+      appendCell(tr, Number(group.quantities[letter]) || 0);
+    }
     tbody.appendChild(tr);
   }
+
+  renderLotesCargadosTotalsPOS(table, letters);
 }
 
 // ==============================
@@ -16081,6 +19878,151 @@ async function closeSobrantePanelPOS(){
   if (panel) panel.style.display = 'none';
 }
 
+
+function sobranteUsageSnapshotPOS(lote, eventId){
+  const eu = lote && lote.eventUsage && typeof lote.eventUsage === 'object' && !Array.isArray(lote.eventUsage) ? lote.eventUsage : null;
+  const snap = eu ? eu[String(eventId)] : null;
+  return snap && typeof snap === 'object' && !Array.isArray(snap) ? snap : null;
+}
+
+function sobranteQtyPOS(value){
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.round((n + Number.EPSILON) * 10000) / 10000 : 0;
+}
+
+function sobranteSnapshotQtyPOS(snapshot, productId, letter, fallback){
+  const pid = String(productId || '').trim();
+  const letKey = String(letter || '').trim().toUpperCase();
+  if (snapshot){
+    const byPid = snapshot.remainingByProductId && typeof snapshot.remainingByProductId === 'object' ? snapshot.remainingByProductId : null;
+    if (pid && byPid && Object.prototype.hasOwnProperty.call(byPid, pid)) return sobranteQtyPOS(byPid[pid]);
+    const byLetter = snapshot.remainingByLetter && typeof snapshot.remainingByLetter === 'object' ? snapshot.remainingByLetter : null;
+    if (letKey && byLetter && Object.prototype.hasOwnProperty.call(byLetter, letKey)) return sobranteQtyPOS(byLetter[letKey]);
+    const byKey = snapshot.remainingByKey && typeof snapshot.remainingByKey === 'object' ? snapshot.remainingByKey : null;
+    if (byKey){
+      if (pid && Object.prototype.hasOwnProperty.call(byKey, 'PID:' + pid)) return sobranteQtyPOS(byKey['PID:' + pid]);
+      if (letKey && Object.prototype.hasOwnProperty.call(byKey, letKey)) return sobranteQtyPOS(byKey[letKey]);
+    }
+  }
+  return sobranteQtyPOS(fallback);
+}
+
+function buildSobranteTransferItemsPOS(parent, eventId, legacyQty, products){
+  const snapshot = sobranteUsageSnapshotPOS(parent, eventId);
+  const snapshotRows = snapshot && Array.isArray(snapshot.availabilityProducts) ? snapshot.availabilityProducts : [];
+  const baseRows = snapshotRows.length ? snapshotRows : lotesPOSContractRowsPOS(parent);
+  const index = buildProductIdentityIndexPOS(products || []);
+  const legacyLetters = new Set(['P','M','D','L','G']);
+  const byIdentity = new Map();
+  const errors = [];
+
+  const addRow = (row, forcedQty, source) => {
+    if (!row || typeof row !== 'object') return;
+    const identity = resolveCatalogProductIdentityPOS(row, index, { allowLegacy:true });
+    const productId = String((identity.ok && identity.stableId) || row.productId || row.productoId || '').trim();
+    const letter = String((identity.ok && identity.letter) || row.Letra || row.letra || '').trim().toUpperCase();
+    const name = String((identity.ok && identity.name) || row.nombreSnapshot || row.productName || row.nombre || row.name || productId || letter).trim();
+    if (!productId && !letter) return;
+    const available = sobranteSnapshotQtyPOS(snapshot, productId, letter, row.cantidadDisponible ?? row.remaining ?? row.cantidadProducida ?? row.cantidad ?? row.unidades ?? row.qty);
+    const desired = forcedQty == null ? available : sobranteQtyPOS(forcedQty);
+    if (desired > available + 0.0001){
+      errors.push(`${letter || name}: el sobrante (${desired}) supera lo disponible (${available}).`);
+      return;
+    }
+    if (!(desired > 0)) return;
+    const key = productId ? ('PID:' + productId) : ('LET:' + letter);
+    const prev = byIdentity.get(key);
+    const qty = desired + (prev ? sobranteQtyPOS(prev.cantidad) : 0);
+    const product = identity.ok ? identity.product : null;
+    byIdentity.set(key, {
+      ...(prev || {}),
+      ...(row || {}),
+      id: productId || row.id || '',
+      productId,
+      nombre: name,
+      nombreSnapshot: name,
+      Letra: letter,
+      letra: letter,
+      cantidad: qty,
+      unidades: qty,
+      cantidadProducida: qty,
+      cantidadDisponible: qty,
+      legacy: false,
+      envaseId: String((product && (product.envaseId ?? product.packageId)) || row.envaseId || '').trim(),
+      tapaId: String((product && (product.tapaId ?? product.capId)) || row.tapaId || '').trim(),
+      fuenteTransferencia: source || 'sobrante',
+    });
+  };
+
+  for (const row of baseRows){
+    const identity = resolveCatalogProductIdentityPOS(row, index, { allowLegacy:true });
+    const letter = String((identity.ok && identity.letter) || row.Letra || row.letra || '').trim().toUpperCase();
+    const forced = legacyLetters.has(letter) ? sobranteQtyPOS(legacyQty && legacyQty[letter]) : null;
+    addRow(row, forced, legacyLetters.has(letter) ? 'sobrante_manual' : 'sobrante_automatico_dinamico');
+  }
+
+  for (const letter of legacyLetters){
+    const desired = sobranteQtyPOS(legacyQty && legacyQty[letter]);
+    if (!(desired > 0)) continue;
+    const already = Array.from(byIdentity.values()).some(row => String(row.Letra || '').toUpperCase() === letter);
+    if (already) continue;
+    const product = index.byLetter.get(letter) || null;
+    if (!product){
+      errors.push(`${letter}: no se encontró el producto correspondiente en Catálogos.`);
+      continue;
+    }
+    addRow(product, desired, 'sobrante_manual_legacy');
+  }
+
+  const items = Array.from(byIdentity.values()).filter(row => sobranteQtyPOS(row.cantidad) > 0);
+  const total = items.reduce((sum, row) => sum + sobranteQtyPOS(row.cantidad), 0);
+  return { ok: errors.length === 0 && total > 0, errors, items, total, snapshot };
+}
+
+function subtractSobranteFromParentSnapshotPOS(parent, eventId, transferItems){
+  const snap = sobranteUsageSnapshotPOS(parent, eventId);
+  if (!snap) return;
+  const next = { ...snap };
+  const maps = ['remainingByProductId','remainingByLetter','remainingByKey'];
+  for (const mapName of maps){
+    if (snap[mapName] && typeof snap[mapName] === 'object') next[mapName] = { ...snap[mapName] };
+  }
+  next.availabilityProducts = Array.isArray(snap.availabilityProducts) ? snap.availabilityProducts.map(row => ({ ...row })) : [];
+
+  for (const item of (Array.isArray(transferItems) ? transferItems : [])){
+    const qty = sobranteQtyPOS(item && (item.cantidad ?? item.unidades));
+    if (!(qty > 0)) continue;
+    const pid = String(item.productId || '').trim();
+    const letter = String(item.Letra || item.letra || '').trim().toUpperCase();
+    if (pid && next.remainingByProductId && Object.prototype.hasOwnProperty.call(next.remainingByProductId, pid)){
+      next.remainingByProductId[pid] = Math.max(0, sobranteQtyPOS(next.remainingByProductId[pid]) - qty);
+    }
+    if (letter && next.remainingByLetter && Object.prototype.hasOwnProperty.call(next.remainingByLetter, letter)){
+      next.remainingByLetter[letter] = Math.max(0, sobranteQtyPOS(next.remainingByLetter[letter]) - qty);
+    }
+    if (next.remainingByKey){
+      const candidates = [pid ? ('PID:' + pid) : '', letter].filter(Boolean);
+      for (const key of candidates){
+        if (Object.prototype.hasOwnProperty.call(next.remainingByKey, key)){
+          next.remainingByKey[key] = Math.max(0, sobranteQtyPOS(next.remainingByKey[key]) - qty);
+          break;
+        }
+      }
+    }
+    for (const row of next.availabilityProducts){
+      const samePid = pid && String(row.productId || '').trim() === pid;
+      const sameLetter = !pid && letter && String(row.Letra || row.letra || '').trim().toUpperCase() === letter;
+      if (samePid || sameLetter) row.cantidadDisponible = Math.max(0, sobranteQtyPOS(row.cantidadDisponible) - qty);
+    }
+  }
+  next.remainingTotal = Object.values(next.remainingByProductId || next.remainingByLetter || {}).reduce((sum, value) => sum + sobranteQtyPOS(value), 0);
+  next.updatedAt = Date.now();
+  next.transferenciaHijoAplicada = true;
+  const eu = parent.eventUsage && typeof parent.eventUsage === 'object' && !Array.isArray(parent.eventUsage) ? { ...parent.eventUsage } : {};
+  eu[String(eventId)] = next;
+  parent.eventUsage = eu;
+}
+
 async function createSobranteLotPOS(){
   const evId = parseInt((document.getElementById('inv-event') && document.getElementById('inv-event').value) || '0', 10);
   if (!evId) return alert('Selecciona un evento');
@@ -16090,9 +20032,9 @@ async function createSobranteLotPOS(){
   if (!parentId) return alert('Selecciona un lote original');
 
   const qty = getSobranteInputsPOS();
-  const total = Number(qty.P||0)+Number(qty.M||0)+Number(qty.D||0)+Number(qty.L||0)+Number(qty.G||0);
-  if (!(total > 0)) return alert('Ingresa al menos una cantidad sobrante (> 0).');
 
+  // Recalcular primero para usar el disponible real después de ventas, reempaques y ajustes.
+  try{ await syncLotsUsageForEvent(evId); }catch(_){ }
   const allLotes = readLotesLS_POS();
   const parent = allLotes.find(l => l && String(l.id) === String(parentId));
   if (!parent){
@@ -16118,6 +20060,13 @@ async function createSobranteLotPOS(){
   const evs = await getAll('events');
   const ev = evs.find(e => e && Number(e.id) === Number(evId)) || null;
   const evName = ev ? (ev.name || '') : '';
+  const products = await getAll('products').catch(()=>[]);
+  const transfer = buildSobranteTransferItemsPOS(parent, evId, qty, products);
+  if (!transfer.ok){
+    const detail = transfer.errors && transfer.errors.length ? ('\n\n' + transfer.errors.map(text => '• ' + text).join('\n')) : '';
+    alert('No se pudo crear el lote hijo con cantidades consistentes.' + detail);
+    return;
+  }
 
   const nowIso = new Date().toISOString();
   const newId = 'lot-child-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,6);
@@ -16128,15 +20077,50 @@ async function createSobranteLotPOS(){
     id: newId,
     codigo: makeSobranteCodePOS(evName || parent.assignedEventName || ('Evento ' + evId)),
 
-    // Cantidades sobrantes (presentaciones)
+    // Cantidades sobrantes (presentaciones legacy + contrato dinámico independiente)
     pulso: String(qty.P || 0),
     media: String(qty.M || 0),
     djeba: String(qty.D || 0),
     litro: String(qty.L || 0),
     galon: String(qty.G || 0),
+    productosProducidos: transfer.items.map(item => ({
+      ...item,
+      loteId: newId,
+      loteCodigo: '',
+      fecha: nowIso.slice(0,10),
+      cantidadDisponible: sobranteQtyPOS(item.cantidad),
+    })),
+    productosProducidosSchema: 2,
+    disponibilidadPOS: transfer.items.map(item => ({
+      productId: item.productId,
+      nombreSnapshot: item.nombreSnapshot || item.nombre || '',
+      Letra: item.Letra || item.letra || '',
+      cantidadProducida: sobranteQtyPOS(item.cantidad),
+      cantidadDisponible: sobranteQtyPOS(item.cantidad),
+      cantidadDisponibleExiste: true,
+      disponibilidadFuente: 'lote_hijo',
+      loteId: newId,
+      loteCodigo: '',
+    })),
+    eventUsage: {},
+    transferenciaLote: {
+      schema: 1,
+      tipo: 'PADRE_A_HIJO',
+      parentLotId: parent.id,
+      sourceEventId: evId,
+      createdAt: nowIso,
+      productos: transfer.items.map(item => ({
+        productId: item.productId,
+        nombreSnapshot: item.nombreSnapshot || item.nombre || '',
+        Letra: item.Letra || item.letra || '',
+        cantidad: sobranteQtyPOS(item.cantidad),
+      })),
+    },
 
     // Nuevo lote DISPONIBLE
     status: 'DISPONIBLE',
+    availabilityState: 'DISPONIBLE',
+    availabilityUpdatedAt: nowIso,
     assignedEventId: null,
     assignedEventName: '',
     assignedAt: null,
@@ -16149,6 +20133,15 @@ async function createSobranteLotPOS(){
 
     createdAt: nowIso
   };
+  child.productosProducidos = child.productosProducidos.map(item => ({ ...item, loteCodigo: child.codigo, codigo: child.codigo, batchCode: child.codigo }));
+  child.disponibilidadPOS = child.disponibilidadPOS.map(item => ({ ...item, loteCodigo: child.codigo }));
+  child.salidaPOS = undefined;
+  child.contratoPOS = undefined;
+  child.assignedCargaId = null;
+  child.sobranteLotId = null;
+  child.closedAt = null;
+  child.reversedAt = null;
+  child.reversedReason = null;
 
   // Notas: dejar rastro sin romper lo existente
   try{
@@ -16157,10 +20150,24 @@ async function createSobranteLotPOS(){
     child.notas = (parent.notas ? String(parent.notas).trim() + '\n' : '') + line;
   }catch(_){ }
 
-  // Cerrar lote original (mantener Evento asignado visible)
+  // Transferencia real en el control de disponibilidad: descontar al padre antes de cerrarlo.
+  subtractSobranteFromParentSnapshotPOS(parent, evId, transfer.items);
   parent.status = 'CERRADO';
+  parent.availabilityState = 'CERRADO';
+  parent.availabilityUpdatedAt = nowIso;
   parent.closedAt = nowIso;
   parent.sobranteLotId = newId;
+  parent.transferenciaHijo = {
+    schema: 1,
+    childLotId: newId,
+    sourceEventId: evId,
+    createdAt: nowIso,
+    productos: transfer.items.map(item => ({
+      productId: item.productId,
+      Letra: item.Letra || item.letra || '',
+      cantidad: sobranteQtyPOS(item.cantidad),
+    })),
+  };
 
   // Guardar
   const next = allLotes.map(l => (l && String(l.id) === String(parent.id)) ? parent : l);
@@ -16471,6 +20478,8 @@ async function reverseAssignSelectedLotePOS(){
   lotes[idx] = {
     ...prev,
     status: 'DISPONIBLE',
+    availabilityState: 'DISPONIBLE',
+    availabilityUpdatedAt: nowIso,
     prevAssignedEventId: prev.assignedEventId,
     prevAssignedEventName: prev.assignedEventName,
     prevAssignedAt: prev.assignedAt,
@@ -16604,13 +20613,11 @@ function reempaqueIsOpenPOS(){
 }
 
 async function reempaqueSelectableProductsPOS(){
-  let hiddenIds = new Set();
-  try{ hiddenIds = await getHiddenProductIdsPOS(); }catch(_){ hiddenIds = new Set(); }
+  // Reempaque consume productos reales y activos exactamente como existen en Catálogos.
+  // No agrupa, completa ni identifica por nombre; cada opción conserva su identidad real.
   const all = await getAll('products').catch(()=>[]);
-  const base = (Array.isArray(all) ? all : []).filter(p => p && p.id != null && !hiddenIds.has(p.id));
-  const canonical = (typeof posCanonicalProductsForSale === 'function') ? posCanonicalProductsForSale(base) : base.filter(p => p && p.active !== false);
-  return canonical
-    .filter(p => p && p.active !== false)
+  return (Array.isArray(all) ? all : [])
+    .filter(p => p && p.id != null && p.active !== false && p.deleted !== true)
     .sort((a,b)=>{
       const rank = (name)=>{
         const k = (typeof mapProductNameToFinishedId === 'function') ? mapProductNameToFinishedId(name || '') : '';
@@ -16620,7 +20627,9 @@ async function reempaqueSelectableProductsPOS(){
       const ra = rank(a && a.name);
       const rb = rank(b && b.name);
       if (ra !== rb) return ra - rb;
-      return String(a.name || '').localeCompare(String(b.name || ''), 'es-NI', { sensitivity:'base' });
+      const byName = String(a.name || '').localeCompare(String(b.name || ''), 'es-NI', { sensitivity:'base' });
+      if (byName) return byName;
+      return String(a.productId || a.id || '').localeCompare(String(b.productId || b.id || ''));
     });
 }
 
@@ -16642,83 +20651,32 @@ function reempaqueFindProductByNamePOS(products, name){
 }
 
 function reempaqueReadNewTargetPOS(){
-  const name = String(document.getElementById('rp-new-target-name')?.value || '').trim();
-  const capacityMl = reempaquePositivePOS(document.getElementById('rp-new-target-capacity')?.value || 0);
-  const price = reempaqueMoneyPOS(document.getElementById('rp-new-target-price')?.value || 0);
-  return { name, capacityMl, price };
+  // Campos legacy ignorados incluso si un HTML antiguo quedó en caché.
+  return { name:'', capacityMl:0, price:0 };
 }
 
 async function reempaqueEnsureCentralTargetProductPOS(input){
   if (!db) await openDB();
-  const name = String((input && input.name) || '').trim();
-  if (!name) return null;
+  const ref = (input && typeof input === 'object') ? input : {};
+  const internalId = String(ref.id ?? ref.legacyId ?? '').trim();
+  const productId = String(ref.productId ?? ref.productoId ?? ref.catalogProductId ?? '').trim();
+  if (!internalId && !productId) return null;
 
-  const capacityMl = reempaquePositivePOS(input && input.capacityMl);
-  const price = reempaqueMoneyPOS(input && input.price);
-  const unitCost = reempaqueMoneyPOS(input && (input.unitCost ?? input.costoUnitario ?? input.costoUnitarioDestino));
-  const createdFrom = String((input && input.createdFrom) || 'reempaque').trim() || 'reempaque';
-  const now = reempaqueNowISOPOS();
   const products = await getAll('products').catch(()=>[]);
-  let existing = reempaqueFindProductByNamePOS(products, name);
+  const existing = (Array.isArray(products) ? products : []).find((p) => {
+    if (!p || p.active === false || p.deleted === true) return false;
+    const pInternalId = String(p.id ?? '').trim();
+    const pProductId = String(p.productId ?? p.productoId ?? p.catalogProductId ?? '').trim();
+    return (!!internalId && pInternalId === internalId) || (!!productId && pProductId === productId);
+  }) || null;
 
-  if (existing){
-    let changed = false;
-    if (existing.active !== true){ existing.active = true; changed = true; }
-    if (existing.manageStock !== true){ existing.manageStock = true; changed = true; }
-    if (capacityMl > 0 && !(reempaqueCapacityMlFromProductPOS(existing) > 0)){
-      existing.capacityMl = capacityMl;
-      existing.capacidadMl = capacityMl;
-      changed = true;
-    }
-    if (price > 0 && !(Number(existing.price) > 0)){
-      existing.price = price;
-      changed = true;
-    }
-    if (unitCost > 0 && !(getProductStoredUnitCostPOS(existing) > 0)){
-      existing.unitCost = unitCost;
-      existing.costoUnitario = unitCost;
-      existing.costPerUnit = unitCost;
-      changed = true;
-    }
-    existing.updatedAt = existing.updatedAt || now;
-    if (changed){
-      existing.updatedAt = now;
-      await put('products', existing);
-    }
-    return { ...existing, __rpqCreated:false, __rpqMatchedExisting:true };
-  }
-
-  const product = {
-    name,
-    price: price > 0 ? price : 0,
-    manageStock: true,
-    active: true,
-    capacityMl: capacityMl > 0 ? capacityMl : null,
-    capacidadMl: capacityMl > 0 ? capacityMl : null,
-    unitCost: unitCost > 0 ? unitCost : 0,
-    costoUnitario: unitCost > 0 ? unitCost : 0,
-    costPerUnit: unitCost > 0 ? unitCost : 0,
-    createdFrom,
-    createdAt: now,
-    updatedAt: now
-  };
-  const newId = await put('products', product);
-  product.id = newId;
-  return { ...product, __rpqCreated:true, __rpqMatchedExisting:false };
+  return existing ? { ...existing, __rpqCreated:false, __rpqMatchedExisting:true } : null;
 }
 
 async function reempaqueRollbackCreatedTargetProductsPOS(createdTargets){
-  const list = Array.isArray(createdTargets) ? createdTargets : [];
-  for (let i = list.length - 1; i >= 0; i--){
-    const product = list[i] || {};
-    const id = product.id ?? product.productId;
-    if (id === null || typeof id === 'undefined' || id === '') continue;
-    try{
-      await del('products', id);
-    }catch(err){
-      console.warn('No se pudo revertir producto nuevo de Reempaque fallido', product && (product.name || product.nombre || id), err);
-    }
-  }
+  // Ya no existen destinos creados por Reempaque; no borrar productos desde aquí.
+  void createdTargets;
+  return { ok:true, skipped:true };
 }
 
 function reempaqueGetSourceCostInfoPOS(productLike){
@@ -16778,11 +20736,12 @@ async function reempaqueFillSelectPOS(sel, products){
   if (!sel) return;
   const prev = String(sel.value || '').trim();
   sel.innerHTML = '';
+  const list = Array.isArray(products) ? products : [];
   const ph = document.createElement('option');
   ph.value = '';
-  ph.textContent = 'Seleccionar producto';
+  ph.textContent = list.length ? 'Seleccionar producto' : 'Sin productos activos en Catálogos';
   sel.appendChild(ph);
-  for (const p of products){
+  for (const p of list){
     const opt = document.createElement('option');
     opt.value = String(p.id);
     opt.textContent = reempaqueBuildProductOptionTextPOS(p);
@@ -16801,7 +20760,125 @@ async function reempaquePopulateSelectorsPOS(){
   for (const sel of multiSelects){
     await reempaqueFillSelectPOS(sel, products);
   }
+  await reempaquePopulateSourceLotsPOS(products);
   return products;
+}
+
+
+function reempaqueSelectedSourceLotPOS(){
+  const sel = document.getElementById('rp-source-lot');
+  const list = (typeof window !== 'undefined' && Array.isArray(window.__A33_REEMPAQUE_SOURCE_LOTS)) ? window.__A33_REEMPAQUE_SOURCE_LOTS : [];
+  const key = sel ? String(sel.value || '') : '';
+  return list.find(x => x && String(x.lotKey || '') === key) || null;
+}
+
+async function reempaquePopulateSourceLotsPOS(productsArg, preferred){
+  const sel = document.getElementById('rp-source-lot');
+  const meta = document.getElementById('rp-source-lot-meta');
+  if (!sel) return { lots:[], selected:null, required:false };
+  const products = Array.isArray(productsArg) ? productsArg : await reempaqueSelectableProductsPOS();
+  const evEl = document.getElementById('inv-event');
+  const sourceEl = document.getElementById('rp-source-product');
+  const eventId = preferred && preferred.eventId != null ? Number(preferred.eventId) : Number(evEl && evEl.value);
+  const source = preferred && preferred.source ? preferred.source : reempaqueFindProductPOS(products, sourceEl ? sourceEl.value : '');
+  const previous = String(sel.value || '');
+  let lots = [];
+  if (Number.isFinite(eventId) && eventId > 0 && source){
+    try{ lots = await getAvailableLotsForProductPOS(eventId, source, source.name || '', products); }catch(_){ lots = []; }
+  }
+  try{ if (typeof window !== 'undefined') window.__A33_REEMPAQUE_SOURCE_LOTS = lots; }catch(_){ }
+  sel.innerHTML = '';
+  if (lots.length){
+    const ph = document.createElement('option');
+    ph.value = '';
+    ph.textContent = 'Seleccionar lote origen';
+    sel.appendChild(ph);
+    for (const lot of lots){
+      const opt = document.createElement('option');
+      opt.value = String(lot.lotKey || '');
+      const code = lotCodeDisplayPOS(lot.loteCodigo) || 'Lote sin código';
+      const costTxt = Number(lot.unitCost) > 0 ? ` · ${reempaqueFmtMoneyPOS(lot.unitCost)} c/u` : '';
+      opt.textContent = `${code} · disponible ${reempaqueFmtQtyPOS(lot.remaining)}${costTxt}`;
+      sel.appendChild(opt);
+    }
+    sel.disabled = false;
+    if (previous && lots.some(x => String(x.lotKey || '') === previous)) sel.value = previous;
+    else if (lots.length === 1) sel.value = String(lots[0].lotKey || '');
+    if (meta) meta.textContent = 'El código se conserva completo; las x minúsculas no se transforman.';
+  }else{
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = source && eventId ? 'Inventario general / histórico sin lote disponible' : 'Selecciona evento y producto';
+    sel.appendChild(opt);
+    sel.disabled = true;
+    if (meta) meta.textContent = source && eventId
+      ? 'No hay lote disponible para esta presentación; se mantiene compatibilidad con inventario histórico.'
+      : 'Selecciona evento y producto para resolver el lote.';
+  }
+  const selected = reempaqueSelectedSourceLotPOS();
+  return { lots, selected, required:lots.length > 0, eventId, source };
+}
+
+function reempaqueNormalizeLotTracePOS(input){
+  const raw = input && typeof input === 'object' ? input : {};
+  const code = lotCodeDisplayPOS(raw.loteCodigo ?? raw.lotCode ?? raw.batchCode ?? raw.codigo ?? raw.codigoLote ?? '');
+  return {
+    lotKey: String(raw.lotKey ?? raw.key ?? ''),
+    loteId: raw.loteId ?? raw.lotId ?? null,
+    loteCodigo: code,
+    lotCode: code,
+    batchCode: code,
+    loteCargaId: raw.loteCargaId != null ? String(raw.loteCargaId) : (raw.loadId != null ? String(raw.loadId) : null),
+    loteGroupKey: String(raw.loteGroupKey ?? raw.groupKey ?? ''),
+    remaining: Math.max(0, Number(raw.remaining) || 0),
+    unitCost: Math.max(0, Number(raw.unitCost) || 0)
+  };
+}
+
+function reempaqueRecordLotFieldsPOS(trace){
+  const t = reempaqueNormalizeLotTracePOS(trace);
+  if (!t.loteId && !t.loteCodigo && !t.loteCargaId && !t.loteGroupKey) return {};
+  return {
+    loteOrigen: t,
+    sourceLot: t,
+    loteOrigenId: t.loteId,
+    sourceLotId: t.loteId,
+    loteOrigenCodigo: t.loteCodigo,
+    sourceLotCode: t.loteCodigo,
+    productionLotId: t.loteId,
+    productionLotCode: t.loteCodigo,
+    loteCargaIdOrigen: t.loteCargaId,
+    loteGroupKeyOrigen: t.loteGroupKey
+  };
+}
+
+function reempaqueInventoryLotFieldsPOS(trace){
+  const t = reempaqueNormalizeLotTracePOS(trace);
+  if (!t.loteId && !t.loteCodigo && !t.loteCargaId && !t.loteGroupKey) return {};
+  return {
+    loteId: t.loteId,
+    loteCodigo: t.loteCodigo,
+    lotCode: t.loteCodigo,
+    batchCode: t.loteCodigo,
+    loteCargaId: t.loteCargaId,
+    loteGroupKey: t.loteGroupKey,
+    loteOrigenId: t.loteId,
+    loteOrigenCodigo: t.loteCodigo,
+    productionLotId: t.loteId,
+    productionLotCode: t.loteCodigo
+  };
+}
+
+async function reempaqueValidateSelectedLotPOS(eventId, source, qty, trace, products){
+  const t = reempaqueNormalizeLotTracePOS(trace);
+  if (!t.loteId && !t.loteCodigo && !t.loteCargaId && !t.loteGroupKey) return { ok:true, historical:true, trace:t };
+  const available = await getAvailableLotsForProductPOS(eventId, source, source && source.name, products);
+  const current = available.find(x => lotTraceMatchesPOS(x, t));
+  if (!current) return { ok:false, msg:'El lote origen ya no está disponible para este producto.', trace:t };
+  if ((Number(current.remaining) + 0.0001) < Number(qty || 0)){
+    return { ok:false, msg:`El lote ${lotCodeDisplayPOS(current.loteCodigo) || 'seleccionado'} solo tiene ${reempaqueFmtQtyPOS(current.remaining)} disponibles.`, trace:current };
+  }
+  return { ok:true, trace:current };
 }
 
 async function reempaqueGetUiStatePOS(productsArg){
@@ -16813,44 +20890,49 @@ async function reempaqueGetUiStatePOS(productsArg){
   const unitCostEl = document.getElementById('rp-source-unit-cost');
   const extraCostEl = document.getElementById('rp-extra-cost');
   const source = reempaqueFindProductPOS(products, sourceEl ? sourceEl.value : '');
-  const newTarget = reempaqueReadNewTargetPOS();
-  const existingNewTarget = newTarget.name ? reempaqueFindProductByNamePOS(products, newTarget.name) : null;
+  const evEl = document.getElementById('inv-event');
+  const eventId = evEl && evEl.value ? parseInt(evEl.value, 10) : 0;
+  const lotState = await reempaquePopulateSourceLotsPOS(products, { eventId, source });
+  const sourceLot = lotState.selected;
   const selectedTarget = reempaqueFindProductPOS(products, targetEl ? targetEl.value : '');
-  const target = newTarget.name
-    ? (existingNewTarget || {
-        id: '__new_target__',
-        name: newTarget.name,
-        price: newTarget.price > 0 ? newTarget.price : 0,
-        capacityMl: newTarget.capacityMl > 0 ? newTarget.capacityMl : null,
-        capacidadMl: newTarget.capacityMl > 0 ? newTarget.capacityMl : null,
-        active: true,
-        manageStock: true,
-        __rpqNewTarget: true
-      })
-    : selectedTarget;
+  const target = selectedTarget;
+  const newTarget = { name:'', capacityMl:0, price:0 };
+  const exactLotCostInfo = sourceLot && Number(sourceLot.unitCost) > 0 ? { value:Number(sourceLot.unitCost), source:'lote_exacto' } : null;
   const sourceCostInfo = reempaqueSyncSourceCostFieldPOS(source);
+  if (exactLotCostInfo && unitCostEl && unitCostEl.dataset.rpqAutoCost !== '0'){
+    unitCostEl.value = reempaqueFmtQtyPOS(exactLotCostInfo.value);
+    unitCostEl.dataset.rpqAutoCost = '1';
+  }
   const qtySource = reempaquePositivePOS(qtySourceEl ? qtySourceEl.value : 0);
-  const qtyTarget = reempaquePositivePOS(qtyTargetEl ? qtyTargetEl.value : 0);
+  let qtyTarget = reempaqueFloorUnitsPOS(qtyTargetEl ? qtyTargetEl.value : 0);
   const sourceCap = source ? reempaqueCapacityMlFromProductPOS(source) : 0;
   const targetCap = target ? reempaqueCapacityMlFromProductPOS(target) : 0;
-  const suggested = reempaqueComputeSuggestedQtyByVolumePOS(qtySource, sourceCap, targetCap);
+  const suggestedRaw = reempaqueComputeSuggestedQtyByVolumePOS(qtySource, sourceCap, targetCap);
+  const suggested = suggestedRaw === null ? null : reempaqueFloorUnitsPOS(suggestedRaw);
   const fieldUnitCost = reempaqueMoneyPOS(unitCostEl ? unitCostEl.value : 0);
   const fieldIsManual = !!(unitCostEl && unitCostEl.dataset.rpqAutoCost === '0' && fieldUnitCost > 0);
-  const unitCost = fieldUnitCost > 0 ? fieldUnitCost : reempaqueMoneyPOS(sourceCostInfo.value);
-  const unitCostSource = fieldIsManual ? 'manual' : (sourceCostInfo.source || (unitCost > 0 ? 'manual' : ''));
+  const unitCost = fieldUnitCost > 0 ? fieldUnitCost : reempaqueMoneyPOS((exactLotCostInfo || sourceCostInfo).value);
+  const unitCostSource = fieldIsManual ? 'manual' : ((exactLotCostInfo && exactLotCostInfo.source) || sourceCostInfo.source || (unitCost > 0 ? 'manual' : ''));
   const extraCostInfo = reempaqueInputNumberInfoPOS(extraCostEl);
   const costAdditionalUnit = extraCostInfo.value > 0 ? round2(extraCostInfo.value) : 0;
-  const costAdditionalTotal = (qtyTarget > 0 && costAdditionalUnit > 0) ? round2(qtyTarget * costAdditionalUnit) : 0;
   const costOriginTotal = (unitCost > 0 && qtySource > 0) ? round2(unitCost * qtySource) : 0;
-  const liquidUnitTarget = (costOriginTotal > 0 && qtyTarget > 0) ? round2(costOriginTotal / qtyTarget) : 0;
-  const costTotal = (costOriginTotal > 0 || costAdditionalTotal > 0) ? round2(costOriginTotal + costAdditionalTotal) : 0;
+  const beforeMerma = (eventId && target && targetCap > 0) ? await reempaqueLoadMermaBalancePOS(eventId, sourceLot, target, targetCap) : reempaqueEmptyMermaBalancePOS(eventId, sourceLot, target || {}, targetCap);
+  const sourceVolumeMl = reempaqueTotalVolumePOS(qtySource, sourceCap);
+  const mermaPlan = reempaqueBuildMermaPlanPOS({ before:beforeMerma, sourceVolumeMl, sourceLiquidCost:costOriginTotal, targetCapacityMl:targetCap });
+  if (mermaPlan.totalUnits > 0) qtyTarget = mermaPlan.totalUnits;
+  const costAdditionalTotal = (qtyTarget > 0 && costAdditionalUnit > 0) ? round2(qtyTarget * costAdditionalUnit) : 0;
+  const liquidDistributed = reempaqueMoneyPOS(mermaPlan.assignedLiquidCost);
+  const liquidUnitTarget = (liquidDistributed > 0 && qtyTarget > 0) ? round2(liquidDistributed / qtyTarget) : 0;
+  const costTotal = (liquidDistributed > 0 || costAdditionalTotal > 0) ? round2(liquidDistributed + costAdditionalTotal) : 0;
   const unitTarget = (costTotal > 0 && qtyTarget > 0) ? round2(costTotal / qtyTarget) : 0;
+  let stockSource = null;
+  if (sourceLot) stockSource = Number(sourceLot.remaining);
+  else if (eventId && source && source.id != null){ try{ stockSource = reempaqueInventoryQtyPOS(await computeStock(eventId, source.id)); }catch(_){ stockSource = null; } }
   return {
-    products, source, target, selectedTarget, newTarget, qtySource, qtyTarget, sourceCap, targetCap, suggested,
-    unitCost, unitCostSource, costOriginTotal,
+    products, eventId, source, sourceLot, lotState, stockSource, target, selectedTarget, newTarget, qtySource, qtyTarget, sourceCap, targetCap, suggested, suggestedRaw,
+    unitCost, unitCostSource, costOriginTotal, sourceVolumeMl, beforeMerma, mermaPlan,
     extraCostInfo, costAdditionalUnit, costAdditionalTotal,
-    // Compatibilidad interna: costAdditional representa el TOTAL calculado.
-    costAdditional: costAdditionalTotal,
+    costAdditional: costAdditionalTotal, liquidDistributed,
     liquidUnitTarget, costTotal, unitTarget
   };
 }
@@ -16874,31 +20956,32 @@ async function reempaqueUpdatePreviewPOS(opts){
 
   if (sourceCapEl) sourceCapEl.textContent = reempaqueFmtMlPOS(state.sourceCap);
   if (targetCapEl) targetCapEl.textContent = reempaqueFmtMlPOS(state.targetCap);
-  if (suggestedEl) suggestedEl.textContent = (state.suggested !== null && state.suggested > 0) ? reempaqueFmtQtyPOS(state.suggested) : '—';
+  if (suggestedEl) suggestedEl.textContent = (state.suggestedRaw !== null && state.suggestedRaw > 0) ? `${reempaqueFmtQtyPOS(state.suggestedRaw)} → ${reempaqueFmtQtyPOS(state.mermaPlan.baseUnits)} enteras` : '—';
 
-  if (qtyTargetEl && state.suggested !== null && state.suggested > 0){
-    const cur = String(qtyTargetEl.value || '').trim();
-    const auto = qtyTargetEl.dataset.rpqAuto === '1';
-    if (!cur || auto || opts.forceSuggested){
-      qtyTargetEl.value = reempaqueFmtQtyPOS(state.suggested);
-      qtyTargetEl.dataset.rpqAuto = '1';
-      state.qtyTarget = reempaquePositivePOS(qtyTargetEl.value);
-      state.costAdditionalTotal = (state.qtyTarget > 0 && state.costAdditionalUnit > 0) ? round2(state.qtyTarget * state.costAdditionalUnit) : 0;
-      state.costAdditional = state.costAdditionalTotal;
-      state.liquidUnitTarget = (state.costOriginTotal > 0 && state.qtyTarget > 0) ? round2(state.costOriginTotal / state.qtyTarget) : 0;
-      state.costTotal = (state.costOriginTotal > 0 || state.costAdditionalTotal > 0) ? round2(state.costOriginTotal + state.costAdditionalTotal) : 0;
-      state.unitTarget = (state.costTotal > 0 && state.qtyTarget > 0) ? round2(state.costTotal / state.qtyTarget) : 0;
-    }
+  if (qtyTargetEl && state.mermaPlan){
+    qtyTargetEl.value = state.mermaPlan.totalUnits > 0 ? String(state.mermaPlan.totalUnits) : '';
+    qtyTargetEl.dataset.rpqAuto = '1';
+    state.qtyTarget = reempaqueFloorUnitsPOS(state.mermaPlan.totalUnits);
+    state.costAdditionalTotal = (state.qtyTarget > 0 && state.costAdditionalUnit > 0) ? round2(state.qtyTarget * state.costAdditionalUnit) : 0;
+    state.costAdditional = state.costAdditionalTotal;
+    state.liquidDistributed = reempaqueMoneyPOS(state.mermaPlan.assignedLiquidCost);
+    state.liquidUnitTarget = (state.liquidDistributed > 0 && state.qtyTarget > 0) ? round2(state.liquidDistributed / state.qtyTarget) : 0;
+    state.costTotal = (state.liquidDistributed > 0 || state.costAdditionalTotal > 0) ? round2(state.liquidDistributed + state.costAdditionalTotal) : 0;
+    state.unitTarget = (state.costTotal > 0 && state.qtyTarget > 0) ? round2(state.costTotal / state.qtyTarget) : 0;
   }
 
   if (costOriginEl) costOriginEl.textContent = reempaqueFmtMoneyPOS(state.costOriginTotal);
   if (costAdditionalUnitEl) costAdditionalUnitEl.textContent = reempaqueFmtMoneyPOS(state.costAdditionalUnit, reempaqueFormatCordobasPOS(0));
   if (targetQtySummaryEl) targetQtySummaryEl.textContent = state.qtyTarget > 0 ? reempaqueFmtQtyPOS(state.qtyTarget) : '—';
   if (costAdditionalEl) costAdditionalEl.textContent = reempaqueFmtMoneyPOS(state.costAdditionalTotal, reempaqueFormatCordobasPOS(0));
-  if (liquidDistributedEl) liquidDistributedEl.textContent = reempaqueFmtMoneyPOS(state.costOriginTotal);
+  if (liquidDistributedEl) liquidDistributedEl.textContent = reempaqueFmtMoneyPOS(state.liquidDistributed);
   if (liquidUnitEl) liquidUnitEl.textContent = reempaqueFmtMoneyPOS(state.liquidUnitTarget);
   if (costTotalEl) costTotalEl.textContent = reempaqueFmtMoneyPOS(state.costTotal);
   if (unitTargetEl) unitTargetEl.textContent = reempaqueFmtMoneyPOS(state.unitTarget);
+  reempaqueSetTextPOS('rp-base-units', state.mermaPlan ? String(state.mermaPlan.baseUnits) : '—');
+  reempaqueSetTextPOS('rp-extra-units', state.mermaPlan && state.mermaPlan.extraUnits > 0 ? `+${state.mermaPlan.extraUnits} ${reempaquePluralProductNamePOS(state.target && state.target.name, state.mermaPlan.extraUnits)} extra por merma acumulada` : '0');
+  reempaqueSetTextPOS('rp-total-units', state.mermaPlan ? String(state.mermaPlan.totalUnits) : '—');
+  reempaqueSetTextPOS('rp-pending-merma', state.mermaPlan ? reempaqueFmtMlPOS(state.mermaPlan.pendingRemainderMl) : '—');
   return state;
 }
 
@@ -16963,28 +21046,28 @@ function reempaqueInputNumberInfoPOS(el){
 }
 
 function reempaqueGetMultiDestinationKindPOS(card){
-  const raw = String(card?.querySelector('.rp-multi-target-kind')?.value || 'EXISTING').toUpperCase();
-  return raw === 'NEW' ? 'NEW' : 'EXISTING';
+  // Reempaque solo admite productos existentes del catálogo.
+  const selector = card?.querySelector('.rp-multi-target-kind');
+  if (selector) selector.value = 'EXISTING';
+  return 'EXISTING';
 }
 
 function reempaqueApplyMultiDestinationKindUiPOS(card){
   if (!card) return 'EXISTING';
-  const kind = reempaqueGetMultiDestinationKindPOS(card);
-  card.classList.toggle('rp-multi-new-mode', kind === 'NEW');
-  card.classList.toggle('rp-multi-existing-mode', kind !== 'NEW');
+  const selector = card.querySelector('.rp-multi-target-kind');
+  if (selector){ selector.value = 'EXISTING'; selector.disabled = true; }
+  card.classList.remove('rp-multi-new-mode');
+  card.classList.add('rp-multi-existing-mode');
   const existingWrap = card.querySelector('.rp-multi-existing-wrap');
   const newWrap = card.querySelector('.rp-multi-new-wrap');
-  if (existingWrap) existingWrap.hidden = kind === 'NEW';
-  if (newWrap) newWrap.hidden = kind !== 'NEW';
-  return kind;
+  if (existingWrap) existingWrap.hidden = false;
+  if (newWrap) newWrap.hidden = true;
+  return 'EXISTING';
 }
 
 function reempaqueReadMultiNewTargetPOS(card){
-  if (!card) return { name:'', capacityMl:0, price:0 };
-  const name = String(card.querySelector('.rp-multi-new-target-name')?.value || '').trim();
-  const capacityMl = reempaquePositivePOS(card.querySelector('.rp-multi-new-target-capacity')?.value || 0);
-  const price = reempaqueMoneyPOS(card.querySelector('.rp-multi-new-target-price')?.value || 0);
-  return { name, capacityMl, price };
+  void card;
+  return { name:'', capacityMl:0, price:0 };
 }
 
 function reempaqueDescribeDestinationKindPOS(rawKind){
@@ -17020,29 +21103,10 @@ function reempaqueCreateMultiDestinationCardPOS(){
       <b class="rp-multi-dest-title">Destino</b>
       <button class="btn-danger btn-pill btn-pill-mini rp-multi-remove" type="button">Quitar</button>
     </div>
-    <label>Tipo de destino</label>
-    <select class="rp-multi-target-kind" aria-label="Tipo de producto destino">
-      <option value="EXISTING" selected>Producto existente</option>
-      <option value="NEW">Producto nuevo</option>
-    </select>
     <div class="rp-multi-existing-wrap">
       <label>Producto destino</label>
       <select class="rp-multi-target-product"></select>
-    </div>
-    <div class="rp-multi-new-wrap reempaque-new-target" hidden>
-      <small class="muted">Producto nuevo: quedará disponible para vender y para futuros reempaques.</small>
-      <label>Nombre nuevo producto</label>
-      <input class="rp-multi-new-target-name" type="text" placeholder="Ej: Catrinita" autocomplete="off">
-      <div class="reempaque-inline-fields">
-        <div>
-          <label>Capacidad ml</label>
-          <input class="rp-multi-new-target-capacity a33-num" data-a33-default="0" type="number" inputmode="decimal" min="0" step="0.01" placeholder="Ej: 150">
-        </div>
-        <div>
-          <label>Precio venta</label>
-          <input class="rp-multi-new-target-price a33-num" data-a33-default="0" type="number" inputmode="decimal" min="0" step="0.01" placeholder="Ej: 80">
-        </div>
-      </div>
+      <small class="muted">Solo productos activos creados previamente en Catálogos → Productos.</small>
     </div>
     <div class="reempaque-mini-grid">
       <div>
@@ -17064,7 +21128,6 @@ function reempaqueCreateMultiDestinationCardPOS(){
     <div class="reempaque-kv"><span>Costo final unitario</span><b class="rp-multi-target-unit-cost">N/D</b></div>
     <div class="reempaque-kv"><span>Costo total destino</span><b class="rp-multi-target-total-cost">N/D</b></div>
   `;
-  reempaqueApplyMultiDestinationKindUiPOS(card);
   return card;
 }
 
@@ -17155,8 +21218,10 @@ function reempaqueReadMultiDestinationRowsPOS(products, costoPorMl){
     const extraInfo = reempaqueInputNumberInfoPOS(extraEl);
     const newCapInfo = reempaqueInputNumberInfoPOS(newCapEl);
     const newPriceInfo = reempaqueInputNumberInfoPOS(newPriceEl);
-    const qty = qtyInfo.value > 0 ? qtyInfo.value : 0;
+    const qtyRaw = qtyInfo.value > 0 ? qtyInfo.value : 0;
+    const qty = reempaqueFloorUnitsPOS(qtyRaw);
     const ml = mlInfo.value > 0 ? mlInfo.value : 0;
+    const fractionalRemainderMl = (qtyRaw > qty && ml > 0) ? reempaqueRound4POS((qtyRaw - qty) * ml) : 0;
     const extraUnitCost = extraInfo.value > 0 ? extraInfo.value : 0;
     const volume = reempaqueTotalVolumePOS(qty, ml);
     const liquidTotalCost = (costoPorMl > 0 && volume > 0) ? round2(volume * costoPorMl) : 0;
@@ -17166,7 +21231,7 @@ function reempaqueReadMultiDestinationRowsPOS(products, costoPorMl){
     const unitCost = (qty > 0 && totalCost > 0) ? round2(totalCost / qty) : 0;
     rows.push({
       card, index:idx, kind, isNewTarget, selectEl:sel, qtyEl, mlEl, extraEl, newNameEl, newCapEl, newPriceEl,
-      qtyInfo, mlInfo, extraInfo, newCapInfo, newPriceInfo, newTarget, existingNewTarget, selectedTarget, target, cap, qty, ml, volume,
+      qtyInfo, mlInfo, extraInfo, newCapInfo, newPriceInfo, newTarget, existingNewTarget, selectedTarget, target, cap, qtyRaw, qty, ml, fractionalRemainderMl, volume,
       liquidTotalCost, liquidUnitCost, extraUnitCost, extraTotalCost,
       totalCost, unitCost
     });
@@ -17184,9 +21249,16 @@ async function reempaqueGetMultipleUiStatePOS(productsArg){
   const evEl = document.getElementById('inv-event');
   const eventId = evEl && evEl.value ? parseInt(evEl.value, 10) : 0;
   const source = reempaqueFindProductPOS(products, sourceEl ? sourceEl.value : '');
+  const lotState = await reempaquePopulateSourceLotsPOS(products, { eventId, source });
+  const sourceLot = lotState.selected;
   reempaqueSyncSourceCostFieldPOS(source);
   reempaqueSyncSourceVolumeFieldPOS(source);
+  const exactLotCostInfo = sourceLot && Number(sourceLot.unitCost) > 0 ? { value:Number(sourceLot.unitCost), source:'lote_exacto' } : null;
   const sourceCostInfo = source ? reempaqueGetSourceCostInfoPOS(source) : { value:0, source:'' };
+  if (exactLotCostInfo && unitCostEl && unitCostEl.dataset.rpqAutoCost !== '0'){
+    unitCostEl.value = reempaqueFmtQtyPOS(exactLotCostInfo.value);
+    unitCostEl.dataset.rpqAutoCost = '1';
+  }
   const qtySourceInfo = reempaqueInputNumberInfoPOS(qtySourceEl);
   const unitCostInfo = reempaqueInputNumberInfoPOS(unitCostEl);
   const volumeManualInfo = reempaqueInputNumberInfoPOS(volumeManualEl);
@@ -17194,8 +21266,8 @@ async function reempaqueGetMultipleUiStatePOS(productsArg){
   const sourceUnitMl = source ? reempaqueCapacityMlFromProductPOS(source) : 0;
   const autoVolumeOrigin = reempaqueTotalVolumePOS(qtySource, sourceUnitMl);
   const volumeOrigin = volumeManualInfo.value > 0 ? reempaqueRound4POS(volumeManualInfo.value) : autoVolumeOrigin;
-  const unitCost = unitCostInfo.value > 0 ? unitCostInfo.value : reempaqueMoneyPOS(sourceCostInfo.value);
-  const unitCostSource = (unitCostEl && unitCostEl.dataset.rpqAutoCost === '0') ? 'manual' : (sourceCostInfo.source || (unitCost > 0 ? 'manual' : ''));
+  const unitCost = unitCostInfo.value > 0 ? unitCostInfo.value : reempaqueMoneyPOS((exactLotCostInfo || sourceCostInfo).value);
+  const unitCostSource = (unitCostEl && unitCostEl.dataset.rpqAutoCost === '0') ? 'manual' : ((exactLotCostInfo && exactLotCostInfo.source) || sourceCostInfo.source || (unitCost > 0 ? 'manual' : ''));
   const costOriginTotal = (unitCost > 0 && qtySource > 0) ? round2(unitCost * qtySource) : 0;
   const costPerMl = reempaqueCostPerMlPOS(costOriginTotal, volumeOrigin);
   const destinations = reempaqueReadMultiDestinationRowsPOS(products, costPerMl);
@@ -17205,12 +21277,12 @@ async function reempaqueGetMultipleUiStatePOS(productsArg){
   const costDistributed = round2(destinations.reduce((a,d)=>a + reempaqueMoneyPOS(d.totalCost), 0));
   const volumeLeft = reempaqueRound4POS(volumeOrigin - volumeDistributed);
   const costLeft = round2(costOriginTotal - liquidCostDistributed);
-  let stockSource = null;
-  if (eventId && source && source.id != null){
+  let stockSource = sourceLot ? Number(sourceLot.remaining) : null;
+  if (stockSource === null && eventId && source && source.id != null){
     try{ stockSource = reempaqueInventoryQtyPOS(await computeStock(eventId, source.id)); }catch(_){ stockSource = null; }
   }
   return {
-    products, eventId, source, sourceEl, qtySourceEl, unitCostEl, volumeManualEl,
+    products, eventId, source, sourceLot, lotState, sourceEl, qtySourceEl, unitCostEl, volumeManualEl,
     qtySourceInfo, unitCostInfo, volumeManualInfo,
     qtySource, sourceUnitMl, autoVolumeOrigin, volumeOrigin, unitCost, unitCostSource,
     costOriginTotal, costPerMl, destinations, volumeDistributed, liquidCostDistributed, additionalCostTotal, costDistributed, volumeLeft, costLeft, stockSource
@@ -17274,7 +21346,7 @@ async function reempaqueUpdateActivePreviewPOS(opts){
 }
 
 function reempaqueClearMultiValidationPOS(){
-  ['rp-source-product','rp-source-qty','rp-source-unit-cost','rp-source-total-ml-manual'].forEach(id=>reempaqueSetFieldInvalidPOS(id, false));
+  ['rp-source-product','rp-source-lot','rp-source-qty','rp-source-unit-cost','rp-source-total-ml-manual'].forEach(id=>reempaqueSetFieldInvalidPOS(id, false));
   document.querySelectorAll('#rp-multi-destinations .a33-invalid').forEach(el=>el.classList.remove('a33-invalid'));
 }
 
@@ -17291,6 +21363,8 @@ async function registrarReempaqueMultipleUiPOS(){
   if (!state.source){ errors.push('Producto origen requerido.'); reempaqueSetFieldInvalidPOS('rp-source-product', true); }
   if (state.qtySourceInfo.invalid){ errors.push('Cantidad origen inválida.'); reempaqueSetFieldInvalidPOS('rp-source-qty', true); }
   if (!(state.qtySource > 0)){ errors.push('Cantidad origen mayor que 0.'); reempaqueSetFieldInvalidPOS('rp-source-qty', true); }
+  if (state.lotState && state.lotState.required && !state.sourceLot){ errors.push('Selecciona el lote origen.'); reempaqueSetFieldInvalidPOS('rp-source-lot', true); }
+  if (state.sourceLot && (Number(state.sourceLot.remaining) + 0.0001) < state.qtySource){ errors.push('El lote origen no tiene existencia suficiente.'); reempaqueSetFieldInvalidPOS('rp-source-lot', true); reempaqueSetFieldInvalidPOS('rp-source-qty', true); }
   if (state.unitCostInfo.invalid || (!state.unitCostInfo.empty && state.unitCostInfo.value < 0)){ errors.push('Costo unitario origen inválido.'); reempaqueSetFieldInvalidPOS('rp-source-unit-cost', true); }
   if (!(state.costOriginTotal > 0)){ errors.push('Costo total origen requerido para distribuir costos.'); reempaqueSetFieldInvalidPOS('rp-source-unit-cost', true); }
   if (state.volumeManualInfo.invalid || (!state.volumeManualInfo.empty && state.volumeManualInfo.value < 0)){ errors.push('Volumen total origen inválido.'); reempaqueSetFieldInvalidPOS('rp-source-total-ml-manual', true); }
@@ -17305,11 +21379,8 @@ async function registrarReempaqueMultipleUiPOS(){
     const destNo = idx + 1;
     const destName = d.isNewTarget ? String(d.newTarget && d.newTarget.name || '').trim() : (d.target && d.target.name || '');
     if (d.isNewTarget){
-      if (!destName){ errors.push(`Destino ${destNo}: nombre del producto nuevo requerido.`); reempaqueSetElementInvalidPOS(d.newNameEl, true); }
-      if (d.newCapInfo.invalid || (!d.newCapInfo.empty && d.newCapInfo.value < 0)){ errors.push(`Destino ${destNo}: capacidad del producto nuevo inválida.`); reempaqueSetElementInvalidPOS(d.newCapEl, true); }
-      if (!(d.newTarget && d.newTarget.capacityMl > 0)){ errors.push(`Destino ${destNo}: capacidad ml del producto nuevo mayor que 0.`); reempaqueSetElementInvalidPOS(d.newCapEl, true); }
-      if (d.newPriceInfo.invalid || (!d.newPriceInfo.empty && d.newPriceInfo.value < 0)){ errors.push(`Destino ${destNo}: precio de venta inválido.`); reempaqueSetElementInvalidPOS(d.newPriceEl, true); }
-      if (!(d.newTarget && d.newTarget.price > 0)){ errors.push(`Destino ${destNo}: precio de venta del producto nuevo mayor que 0.`); reempaqueSetElementInvalidPOS(d.newPriceEl, true); }
+      errors.push(`Destino ${destNo}: Reempaque no puede crear productos. Créalo primero en Catálogos → Productos.`);
+      reempaqueSetElementInvalidPOS(d.newNameEl || d.selectEl, true);
     }
     if (!d.target){
       errors.push(`Destino ${destNo}: producto destino requerido.`);
@@ -17357,6 +21428,8 @@ async function registrarReempaqueMultipleUiPOS(){
       destinoNuevo: !!d.isNewTarget,
       productoNuevoDestino: !!d.isNewTarget,
       precioVentaDestino: d.isNewTarget ? d.newTarget.price : reempaqueMoneyPOS(d.target && d.target.price),
+      cantidadSolicitadaRaw: d.qtyRaw,
+      fraccionMermaMl: d.fractionalRemainderMl,
       cantidadCreada: d.qty,
       cantidadCreadaDestino: d.qty,
       mlPorUnidad: d.ml,
@@ -17377,6 +21450,7 @@ async function registrarReempaqueMultipleUiPOS(){
     const previewRecord = await reempaquePrepareMultiplePayloadPOS({
       eventId: state.eventId,
       productoOrigen: state.source,
+      loteOrigen: state.sourceLot,
       cantidadOrigen: state.qtySource,
       capacidadOrigenMl: capacidadOrigenMlPreview,
       volumenTotalOrigenMl: state.volumeOrigin,
@@ -17407,24 +21481,13 @@ async function registrarReempaqueMultipleUiPOS(){
     const capacidadOrigenMl = state.sourceUnitMl > 0 ? state.sourceUnitMl : (state.qtySource > 0 ? reempaqueRound4POS(state.volumeOrigin / state.qtySource) : 0);
     const destinosMovimiento = [];
     for (const d of state.destinations){
-      let targetForMovement = d.target;
-      let tipoDestino = d.isNewTarget ? 'NUEVO' : 'EXISTENTE';
-      let destinoNuevoCreado = false;
-      if (d.isNewTarget){
-        targetForMovement = await reempaqueEnsureCentralTargetProductPOS({
-          name: d.newTarget.name,
-          capacityMl: d.newTarget.capacityMl,
-          price: d.newTarget.price,
-          unitCost: d.unitCost,
-          createdFrom: 'reempaque_multiple'
-        });
-        if (!targetForMovement || targetForMovement.id == null){
-          throw new Error(`No se pudo crear el producto destino ${d.newTarget.name}.`);
-        }
-        destinoNuevoCreado = !!targetForMovement.__rpqCreated;
-        if (destinoNuevoCreado) createdTargetsForRollback.push(targetForMovement);
-        tipoDestino = destinoNuevoCreado ? 'NUEVO' : 'NUEVO_EXISTENTE';
+      if (d.isNewTarget) throw new Error('Reempaque no puede crear productos. Usa Catálogos → Productos.');
+      const targetForMovement = await reempaqueEnsureCentralTargetProductPOS(d.target);
+      if (!targetForMovement || targetForMovement.id == null){
+        throw new Error(`El producto destino ${d.target && d.target.name ? d.target.name : ''} no existe o está inactivo. Usa Catálogos → Productos.`);
       }
+      const tipoDestino = 'EXISTENTE';
+      const destinoNuevoCreado = false;
       destinosMovimiento.push({
         productoDestino: targetForMovement,
         tipoDestino,
@@ -17433,6 +21496,8 @@ async function registrarReempaqueMultipleUiPOS(){
         productoNuevoDestino: !!d.isNewTarget,
         productoNuevoCreado: destinoNuevoCreado,
         precioVentaDestino: d.isNewTarget ? d.newTarget.price : reempaqueMoneyPOS(targetForMovement && targetForMovement.price),
+        cantidadSolicitadaRaw: d.qtyRaw,
+        fraccionMermaMl: d.fractionalRemainderMl,
         cantidadCreada: d.qty,
         cantidadCreadaDestino: d.qty,
         mlPorUnidad: d.ml,
@@ -17482,8 +21547,9 @@ async function registrarReempaqueMultipleUiPOS(){
     try{ await refreshSaleStockLabel(); }catch(_){ }
     reempaqueSetModeUiPOS('MULTIPLE');
     await reempaqueRefreshUiPOS();
-    reempaqueSetMsgPOS('Reempaque múltiple registrado.', 'ok');
-    toast('Reempaque múltiple registrado');
+    const successSummary = reempaqueMultipleSuccessSummaryPOS(record);
+    reempaqueSetMsgPOS(successSummary, 'ok');
+    toast(record.cantidadExtraMerma > 0 ? successSummary : 'Reempaque múltiple registrado');
     return record;
   }catch(err){
     if (!movementCompleted && createdTargetsForRollback.length){
@@ -17642,9 +21708,12 @@ function reempaqueHistoryRecordPartsPOS(r){
     costoPorMl: reempaquePositivePOS(r.costoPorMl),
     costoUnitarioDestino: destinos.length === 1 ? reempaqueMoneyPOS(destinos[0].unitCost) : 0,
     nota: String(r.nota || r.note || '').trim(),
+    loteOrigenCodigo: lotCodeDisplayPOS(r.loteOrigenCodigo || r.sourceLotCode || r.productionLotCode || (r.loteOrigen && r.loteOrigen.loteCodigo) || (r.sourceLot && r.sourceLot.loteCodigo)),
     multiple: isMulti,
+    reversed: !!(r.reversedAt || r.revertidoAt || String(r.estado || '').toUpperCase() === 'REVERSADO'),
     mermaMl,
-    mermaCosto
+    mermaCosto,
+    extraMerma: reempaqueFloorUnitsPOS(r.cantidadExtraMerma || (Array.isArray(r.mermaOperaciones) ? r.mermaOperaciones.reduce((a,x)=>a + reempaqueFloorUnitsPOS(x && x.cantidadExtraMerma),0) : 0))
   };
 }
 
@@ -17685,7 +21754,10 @@ async function renderReempaqueHistoryPOS(eventId){
           <span><strong>Evento:</strong> ${escapeHtml(p.evento)}</span>
           <span><strong>Fecha/hora:</strong> ${escapeHtml(p.fecha)}</span>
           <span><strong>Tipo:</strong> ${escapeHtml(modeLabel)}</span>
+          <span><strong>Estado:</strong> ${p.reversed ? 'REVERSADO' : 'REGISTRADO'}</span>
+          ${p.extraMerma > 0 ? `<span><strong>Merma recuperada:</strong> +${p.extraMerma} unidad(es)</span>` : ''}
           <span><strong>Origen:</strong> ${escapeHtml(p.origen)}</span>
+          <span><strong>Lote origen:</strong> ${escapeHtml(p.loteOrigenCodigo || '—')}</span>
           <span><strong>Cantidad origen:</strong> ${escapeHtml(reempaqueFmtQtyPOS(p.qtyOrigen))}</span>
           <span><strong>Volumen origen:</strong> ${escapeHtml(reempaqueFmtMlPOS(p.volumenOrigen))}</span>
           <span><strong>Costo origen:</strong> ${escapeHtml(reempaqueFmtMoneyPOS(p.costoOrigen))}</span>
@@ -17693,6 +21765,9 @@ async function renderReempaqueHistoryPOS(eventId){
           <span><strong>Sobrante/merma:</strong> ${escapeHtml(mermaTxt)}</span>
           ${destinosHtml}
           <span class="reempaque-history-wide"><strong>Nota:</strong> ${escapeHtml(p.nota || '—')}</span>
+        </div>
+        <div class="actions end">
+          <button class="btn-danger btn-pill rp-reverse-btn" type="button" data-reempaque-id="${escapeHtml(String(r.id || ''))}" ${p.reversed ? 'disabled' : ''}>${p.reversed ? 'Reversado' : 'Reversar'}</button>
         </div>
       </article>`;
   }).join('');
@@ -17707,6 +21782,7 @@ async function reempaqueBuildExportRowsPOS(eventId){
     'Modo',
     'ID Reempaque',
     'Producto origen',
+    'Código de lote origen',
     'Cantidad origen',
     'ml origen/unidad',
     'Volumen origen total ml',
@@ -17740,6 +21816,7 @@ async function reempaqueBuildExportRowsPOS(eventId){
         p.multiple ? 'Múltiple' : 'Simple',
         p.id || '',
         p.origen,
+        lotCodeExcelCellPOS(p.loteOrigenCodigo || ''),
         p.qtyOrigen || 0,
         p.capacidadOrigen || '',
         p.volumenOrigen || '',
@@ -17763,6 +21840,40 @@ async function reempaqueBuildExportRowsPOS(eventId){
       ]);
     }
   }
+
+  // Merma final: trazabilidad separada, sin simular un Reempaque/venta/cortesía.
+  let finalMermas = [];
+  try{ finalMermas = await reempaqueLoadFinalMermaForEventPOS(eventId, { includeProvisional:true }); }catch(_){ finalMermas = []; }
+  for (const fm of finalMermas){
+    rows.push([
+      fm.date || fm.fecha || fm.createdAt || '',
+      fm.eventNameSnapshot || fm.eventName || '',
+      'Merma final',
+      fm.id || '',
+      '',
+      lotCodeExcelCellPOS(fm.loteCodigo || ''),
+      0,
+      '',
+      '',
+      0,
+      '',
+      fm.targetProductNameSnapshot || fm.targetProductName || '',
+      'Técnica',
+      0,
+      fm.targetCapacityMl || '',
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      fm.costoMermaFinal || 0,
+      0,
+      fm.mermaFinalMl || 0,
+      fm.costoMermaFinal || 0,
+      (fm.costWarning ? ('Merma final del evento · ' + fm.costWarning) : 'Merma final del evento')
+    ]);
+  }
   return rows;
 }
 
@@ -17770,19 +21881,22 @@ async function reempaqueRefreshUiPOS(){
   if (!document.getElementById('reempaque-block')) return;
   reempaqueSetModeUiPOS(reempaqueGetModePOS());
   const products = await reempaquePopulateSelectorsPOS();
+  const registerBtn = document.getElementById('btn-register-reempaque');
+  if (registerBtn) registerBtn.disabled = products.length === 0;
+  if (!products.length){
+    reempaqueSetMsgPOS('No hay productos activos. Créelos primero en Gestión Operativa → Catálogos → Productos.', 'warn');
+  }
   await reempaqueUpdateActivePreviewPOS({ products });
   await renderReempaqueHistoryPOS(reempaqueHistoryEventIdFromUiPOS());
 }
 
 function reempaqueClearValidationPOS(){
-  ['rp-source-product','rp-source-qty','rp-source-unit-cost','rp-source-total-ml-manual','rp-target-product','rp-target-qty','rp-extra-cost','rp-new-target-name','rp-new-target-capacity','rp-new-target-price'].forEach(id=>reempaqueSetFieldInvalidPOS(id, false));
+  ['rp-source-product','rp-source-lot','rp-source-qty','rp-source-unit-cost','rp-source-total-ml-manual','rp-target-product','rp-target-qty','rp-extra-cost','rp-new-target-name','rp-new-target-capacity','rp-new-target-price'].forEach(id=>reempaqueSetFieldInvalidPOS(id, false));
   try{ reempaqueClearMultiValidationPOS(); }catch(_){ }
 }
 
 async function registrarReempaqueUiPOS(){
-  if (reempaqueGetModePOS() === 'MULTIPLE'){
-    return await registrarReempaqueMultipleUiPOS();
-  }
+  if (reempaqueGetModePOS() === 'MULTIPLE') return await registrarReempaqueMultipleUiPOS();
   reempaqueClearValidationPOS();
   reempaqueSetMsgPOS('', '');
 
@@ -17793,14 +21907,15 @@ async function registrarReempaqueUiPOS(){
   const errors = [];
 
   if (!eventId) errors.push('Selecciona un evento.');
-  if (!state.source) { errors.push('Producto origen requerido.'); reempaqueSetFieldInvalidPOS('rp-source-product', true); }
-  if (!(state.qtySource > 0)) { errors.push('Cantidad origen mayor que 0.'); reempaqueSetFieldInvalidPOS('rp-source-qty', true); }
-  if (!state.target) { errors.push('Producto destino requerido.'); reempaqueSetFieldInvalidPOS('rp-target-product', true); }
-  if (state.newTarget && state.newTarget.name && !(state.newTarget.capacityMl > 0)){
-    errors.push('Capacidad ml del destino nuevo mayor que 0.');
-    reempaqueSetFieldInvalidPOS('rp-new-target-capacity', true);
+  if (!state.source){ errors.push('Producto origen requerido.'); reempaqueSetFieldInvalidPOS('rp-source-product', true); }
+  if (!(state.qtySource > 0)){ errors.push('Cantidad origen mayor que 0.'); reempaqueSetFieldInvalidPOS('rp-source-qty', true); }
+  if (state.lotState && state.lotState.required && !state.sourceLot){ errors.push('Selecciona el lote origen.'); reempaqueSetFieldInvalidPOS('rp-source-lot', true); }
+  if (state.sourceLot && (Number(state.sourceLot.remaining) + 0.0001) < state.qtySource){ errors.push('El lote origen no tiene existencia suficiente.'); reempaqueSetFieldInvalidPOS('rp-source-lot', true); reempaqueSetFieldInvalidPOS('rp-source-qty', true); }
+  if (!state.target){
+    errors.push('Selecciona un producto destino activo. Si no existe, créalo primero en Catálogos → Productos.');
+    reempaqueSetFieldInvalidPOS('rp-target-product', true);
   }
-  if (!(state.qtyTarget > 0)) { errors.push('Cantidad creada mayor que 0.'); reempaqueSetFieldInvalidPOS('rp-target-qty', true); }
+  if (!(state.mermaPlan && state.mermaPlan.totalUnits > 0)){ errors.push('El volumen todavía no alcanza para crear una unidad completa.'); reempaqueSetFieldInvalidPOS('rp-target-qty', true); }
   if (state.extraCostInfo && (state.extraCostInfo.invalid || (!state.extraCostInfo.empty && state.extraCostInfo.value < 0))){
     errors.push('Costo adicional unitario inválido.');
     reempaqueSetFieldInvalidPOS('rp-extra-cost', true);
@@ -17808,11 +21923,15 @@ async function registrarReempaqueUiPOS(){
   if (state.source && state.target && (String(state.source.id) === String(state.target.id) || ((typeof normKeyPOS === 'function') && normKeyPOS(state.source.name || '') === normKeyPOS(state.target.name || '')))){
     errors.push('El producto origen y destino no deberían ser el mismo.');
     reempaqueSetFieldInvalidPOS('rp-source-product', true);
-    reempaqueSetFieldInvalidPOS(state.newTarget && state.newTarget.name ? 'rp-new-target-name' : 'rp-target-product', true);
+    reempaqueSetFieldInvalidPOS('rp-target-product', true);
   }
 
-  if (errors.length){
-    reempaqueSetMsgPOS(errors[0], 'warn');
+  if (errors.length){ reempaqueSetMsgPOS(errors[0], 'warn'); return; }
+
+  const verifiedTarget = await reempaqueEnsureCentralTargetProductPOS(state.target);
+  if (!verifiedTarget){
+    reempaqueSetFieldInvalidPOS('rp-target-product', true);
+    reempaqueSetMsgPOS('El producto destino ya no existe o está inactivo. Créalo o actívalo en Catálogos → Productos.', 'warn');
     return;
   }
 
@@ -17822,21 +21941,11 @@ async function registrarReempaqueUiPOS(){
   if (btn){ btn.disabled = true; btn.textContent = 'Registrando…'; }
 
   try{
-    let targetForMovement = state.target;
-    if (state.newTarget && state.newTarget.name){
-      targetForMovement = await reempaqueEnsureCentralTargetProductPOS({
-        ...state.newTarget,
-        unitCost: state.unitTarget > 0 ? state.unitTarget : 0,
-        createdFrom: 'reempaque'
-      });
-      if (!targetForMovement || targetForMovement.id == null){
-        throw new Error('No se pudo crear el producto destino en el catálogo central.');
-      }
-    }
     const record = await reempaqueApplyMovementPOS({
       eventId,
       productoOrigen: state.source,
-      productoDestino: targetForMovement,
+      loteOrigen: state.sourceLot,
+      productoDestino: verifiedTarget,
       cantidadOrigen: state.qtySource,
       cantidadCreadaDestino: state.qtyTarget,
       cantidadFinalRegistrada: state.qtyTarget,
@@ -17854,22 +21963,16 @@ async function registrarReempaqueUiPOS(){
     const qtySourceEl = document.getElementById('rp-source-qty');
     const qtyTargetEl = document.getElementById('rp-target-qty');
     const extraCostEl = document.getElementById('rp-extra-cost');
-    const newTargetNameEl = document.getElementById('rp-new-target-name');
-    const newTargetCapEl = document.getElementById('rp-new-target-capacity');
-    const newTargetPriceEl = document.getElementById('rp-new-target-price');
     if (qtySourceEl) qtySourceEl.value = '';
     if (qtyTargetEl){ qtyTargetEl.value = ''; delete qtyTargetEl.dataset.rpqAuto; }
     if (extraCostEl) extraCostEl.value = '';
-    if (newTargetNameEl) newTargetNameEl.value = '';
-    if (newTargetCapEl) newTargetCapEl.value = '';
-    if (newTargetPriceEl) newTargetPriceEl.value = '';
     if (noteEl) noteEl.value = '';
     await renderInventario();
-    try{ await renderProductos(); }catch(_){ }
     try{ await refreshProductSelect({ keepSelection:true }); }catch(_){ try{ await renderProductChips(); }catch(__){ } }
     try{ await refreshSaleStockLabel(); }catch(_){ }
-    reempaqueSetMsgPOS('Reempaque registrado.', 'ok');
-    toast('Reempaque registrado');
+    const successSummary = reempaqueSuccessSummaryPOS(record);
+    reempaqueSetMsgPOS('Reempaque registrado. ' + successSummary, 'ok');
+    toast(record.cantidadExtraMerma > 0 ? `+${record.cantidadExtraMerma} ${reempaquePluralProductNamePOS(record.targetProductName, record.cantidadExtraMerma)} extra por merma acumulada` : 'Reempaque registrado');
     return record;
   }catch(err){
     console.error('No se pudo registrar Reempaque', err);
@@ -17930,8 +22033,8 @@ async function renderInventario(){
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${p.name}</td>
-      <td><input type="checkbox" class="inv-active" data-id="${p.id}" ${p.active===false?'':'checked'}></td>
-      <td><input type="checkbox" class="inv-manage" data-id="${p.id}" ${p.manageStock===false?'':'checked'}></td>
+      <td><input type="checkbox" class="inv-active" data-id="${p.id}" ${p.active===false?'':'checked'} disabled title="Administra Activo en Catálogos → Productos"></td>
+      <td><input type="checkbox" class="inv-manage" data-id="${p.id}" ${p.manageStock===false?'':'checked'} disabled title="Administra Manejar inventario en Catálogos → Productos"></td>
       <td><input class="inv-inicial a33-num" data-a33-default="${init?init.qty:0}" data-id="${p.id}" type="number" inputmode="numeric" step="1" value="${init?init.qty:0}" ${disabled}></td>
       <td><input class="inv-repo" data-id="${p.id}" type="number" inputmode="numeric" step="1" placeholder="+" ${disabled}></td>
       <td><input class="inv-ajuste" data-id="${p.id}" type="number" inputmode="numeric" step="1" placeholder="+/-" ${disabled}></td>
@@ -17984,13 +22087,9 @@ document.addEventListener('click', async (e)=>{
 
 document.addEventListener('change', async (e)=>{
   if (e.target.classList.contains('inv-manage') || e.target.classList.contains('inv-active')){
-    const id = parseInt(e.target.dataset.id||'0',10);
-    const all = await getAll('products');
-    const cur = all.find(px=>px.id===id); if (!cur) return;
-    if (e.target.classList.contains('inv-manage')) cur.manageStock = e.target.checked;
-    if (e.target.classList.contains('inv-active')) cur.active = e.target.checked;
-    await put('products', cur);
-    await renderInventario(); await renderProductChips(); await refreshProductSelect();
+    e.preventDefault();
+    await renderInventario();
+    toast('Propiedad de Producto bloqueada: usa Catálogos → Productos');
   }
 });
 
@@ -18001,6 +22100,25 @@ document.addEventListener('click', async (e)=>{
   if (!t) return;
   if (t.id === 'btn-toggle-reempaque'){
     reempaqueSetOpenPOS(!reempaqueIsOpenPOS());
+  }
+  if (t.classList && t.classList.contains('rp-reverse-btn')){
+    const id = String(t.dataset.reempaqueId || '').trim();
+    if (!id) return;
+    if (!confirm('¿Reversar este Reempaque? Se restaurará el origen, se retirarán las unidades destino y se restaurará la merma técnica previa.')) return;
+    const old = t.textContent;
+    t.disabled = true; t.textContent = 'Reversando…';
+    try{
+      await reempaqueReversePOS(id);
+      await renderInventario();
+      await renderReempaqueHistoryPOS(reempaqueHistoryEventIdFromUiPOS());
+      reempaqueSetMsgPOS('Reempaque reversado correctamente.', 'ok');
+      toast('Reempaque reversado');
+    }catch(err){
+      console.error('No se pudo reversar Reempaque', err);
+      reempaqueSetMsgPOS('No se pudo reversar Reempaque: ' + humanizeError(err), 'warn');
+      t.disabled = false; t.textContent = old || 'Reversar';
+    }
+    return;
   }
   if (t.id === 'btn-register-reempaque'){
     await registrarReempaqueUiPOS();
@@ -18027,11 +22145,11 @@ document.addEventListener('change', async (e)=>{
     reempaqueClearValidationPOS();
     reempaqueSetMsgPOS('', '');
   }
-  if (t.id === 'rp-source-product' || t.id === 'rp-target-product'){
+  if (t.id === 'rp-source-product' || t.id === 'rp-target-product' || t.id === 'rp-source-lot'){
     const qtyTargetEl = document.getElementById('rp-target-qty');
     const unitCostEl = document.getElementById('rp-source-unit-cost');
     if (qtyTargetEl) qtyTargetEl.dataset.rpqAuto = '1';
-    if (unitCostEl && t.id === 'rp-source-product') unitCostEl.dataset.rpqAutoCost = '1';
+    if (unitCostEl && (t.id === 'rp-source-product' || t.id === 'rp-source-lot')) unitCostEl.dataset.rpqAutoCost = '1';
     await reempaqueUpdateActivePreviewPOS();
     reempaqueClearValidationPOS();
     reempaqueSetMsgPOS('', '');
@@ -18123,7 +22241,7 @@ async function renderDay(){
       const seqTxt = getSaleSeqDisplayPOS(s);
       const timeTxt = getSaleTimeTextPOS(s);
       tr.innerHTML = `<td>${seqTxt ? ('#' + seqTxt + ' · ') : ''}${timeTxt}</td>
-        <td>${escapeHtml(uiProductNamePOS(s.productName))}</td>
+        <td>${escapeHtml(uiProductNamePOS(s.productName))}${getSaleLotCodePOS(s) ? `<div class="muted"><small>Lote: ${escapeHtml(getSaleLotCodePOS(s))}</small></div>` : ''}</td>
         <td>${s.qty}</td>
         <td>${fmt(s.unitPrice)}</td>
         <td>${fmt(getSaleDiscountTotalPOS(s))}</td>
@@ -18642,6 +22760,10 @@ function renderSummaryFromSnapshotPOS(archive){
   const courtesyTx = Number(m.courtesyTx || 0) || 0;
   const courtesyEquiv = Number(m.courtesyEquiv || 0) || 0;
   const profitAfterCourtesy = (m.profitAfterCourtesy != null) ? Number(m.profitAfterCourtesy || 0) : (grandProfit - courtesyCost);
+  const cardCommissionTotal = (m.cardCommissionTotal != null) ? Number(m.cardCommissionTotal || 0) : 0;
+  const profitAfterCommission = (m.profitAfterCommission != null) ? Number(m.profitAfterCommission || 0) : (profitAfterCourtesy - cardCommissionTotal);
+  const finalMermaCost = (m.finalMermaCost != null) ? Number(m.finalMermaCost || 0) : 0;
+  const profitAfterFinalMerma = (m.profitAfterFinalMerma != null) ? Number(m.profitAfterFinalMerma || 0) : (profitAfterCommission - finalMermaCost);
 
   // KPIs
   const grandTotalEl = document.getElementById('grand-total');
@@ -18654,8 +22776,12 @@ function renderSummaryFromSnapshotPOS(archive){
   if (profitEl) profitEl.textContent = fmt(grandProfit);
   const courCostEl = document.getElementById('grand-courtesy-cost');
   if (courCostEl) courCostEl.textContent = fmt(courtesyCost);
+  const commissionEl = document.getElementById('grand-card-commission');
+  if (commissionEl) commissionEl.textContent = fmt(cardCommissionTotal);
+  const finalMermaEl = document.getElementById('grand-final-merma');
+  if (finalMermaEl) finalMermaEl.textContent = fmt(finalMermaCost);
   const profitAfterEl = document.getElementById('grand-profit-after-courtesy');
-  if (profitAfterEl) profitAfterEl.textContent = fmt(profitAfterCourtesy);
+  if (profitAfterEl) profitAfterEl.textContent = fmt(profitAfterFinalMerma);
 
   // Cortesías
   const courTotalCostEl = document.getElementById('courtesy-total-cost');
@@ -18753,7 +22879,12 @@ function renderSummaryFromSnapshotPOS(archive){
   }
 
   const byPayRows = readSheetRowsPOS(sheets, 'PorPago').slice(1)
-    .map(r=>({ k: String((r&&r[0])||'').trim(), v: Number((r&&r[1])||0) || 0 }))
+    .map(r=>{
+      const k = String((r&&r[0])||'').trim();
+      const raw = (r&&r[1]) != null ? r[1] : '';
+      const n = Number(raw);
+      return { k, raw, v: Number.isFinite(n) ? n : 0 };
+    })
     .filter(it=>it.k);
   byPayRows.sort((a,b)=>a.k.localeCompare(b.k,'es-NI'));
 
@@ -18762,7 +22893,10 @@ function renderSummaryFromSnapshotPOS(archive){
     tbPay.innerHTML = '';
     for (const it of byPayRows){
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${escapeHtml(getPaymentMethodLabelPOS(it.k))}</td><td>${fmt(it.v)}</td>`;
+      const valueHtml = (it.k === 'Comisión no determinada')
+        ? `<span class="muted">${escapeHtml(String(it.raw || ''))}</span>`
+        : fmt(it.v);
+      tr.innerHTML = `<td>${escapeHtml(getPaymentMethodLabelPOS(it.k))}</td><td>${valueHtml}</td>`;
       tbPay.appendChild(tr);
     }
   }
@@ -18832,8 +22966,10 @@ async function renderSummary(){
   const products = await getAll('products');
 
   // Filtro por período (YYYY-MM) en Resumen
+  let activeSummaryPeriodKey = '';
   try{
     const periodKey = getActiveSummaryPeriodFilterPOS();
+    activeSummaryPeriodKey = String(periodKey || '').trim();
     if (periodKey){
       sales = (sales || []).filter(s => isSaleInPeriodPOS(s, periodKey));
     }
@@ -18912,6 +23048,7 @@ async function renderSummary(){
   const byDiscount = new Map();
   const byPay = new Map();
   const byEvent = new Map();
+  const summaryEconomicSales = [];
 
   // --- Cliente: resolver + filtro activo ---
   let resolver = null;
@@ -18963,6 +23100,7 @@ async function renderSummary(){
     const courtesy = isCourtesySale(s);
 
     if (!courtesy){
+      summaryEconomicSales.push(s);
       grand += total;
 
       const saleDiscount = getSummarySaleDiscountSignedTotalPOS(s);
@@ -18984,14 +23122,9 @@ async function renderSummary(){
         transferByBank.set(label, cur);
       }
 
-      // Costo y utilidad aproximada (ventas reales)
+      // Costo y utilidad antes de comisión; la comisión se resta por separado y no aumenta COGS.
       const lineCost = getLineCost(s);
-      let lineProfit = 0;
-      if (typeof s.lineProfit === 'number' && Number.isFinite(s.lineProfit)) {
-        lineProfit = Number(s.lineProfit || 0);
-      } else {
-        lineProfit = total - lineCost;
-      }
+      const lineProfit = total - lineCost;
       grandCost += lineCost;
       grandProfit += lineProfit;
 
@@ -19093,12 +23226,22 @@ async function renderSummary(){
         }
       }
 
-      // Nota: por ahora no tenemos costo/utilidad/cortesías archivados.
+      // Archivos antiguos de evento pueden no conservar el desglose dinámico de comisión.
+      // No se inventa una etiqueta genérica: solo las ventas/snapshots confiables alimentan el detalle visible.
+      // Archivos antiguos pueden no conservar costo/utilidad/cortesías/comisión.
     }
   }
   }
 
   const profitAfterCourtesy = grandProfit - courtesyCost;
+  const cardCommissions = collectSaleCardCommissionsPOS(summaryEconomicSales);
+  const cardCommissionTotal = round2(cardCommissions.total);
+  const profitAfterCommission = round2(profitAfterCourtesy - cardCommissionTotal);
+  const finalMermaSummary = isCustomerFilterActive
+    ? { ml:0, cost:0, records:[] }
+    : await reempaqueGetFinalMermaForSummaryPOS(selectedSummaryEventNum, activeSummaryPeriodKey);
+  const finalMermaCost = round2(finalMermaSummary.cost || 0);
+  const profitAfterFinalMerma = round2(profitAfterCommission - finalMermaCost);
 
   // --- Top KPIs ---
   const grandTotalEl = document.getElementById('grand-total');
@@ -19116,8 +23259,14 @@ async function renderSummary(){
   const courCostEl = document.getElementById('grand-courtesy-cost');
   if (courCostEl) courCostEl.textContent = fmt(courtesyCost);
 
+  const commissionEl = document.getElementById('grand-card-commission');
+  if (commissionEl) commissionEl.textContent = fmt(cardCommissionTotal);
+
+  const finalMermaEl = document.getElementById('grand-final-merma');
+  if (finalMermaEl) finalMermaEl.textContent = fmt(finalMermaCost);
+
   const profitAfterEl = document.getElementById('grand-profit-after-courtesy');
-  if (profitAfterEl) profitAfterEl.textContent = fmt(profitAfterCourtesy);
+  if (profitAfterEl) profitAfterEl.textContent = fmt(profitAfterFinalMerma);
 
 
   // --- Clientes (MVP) ---
@@ -19158,7 +23307,7 @@ async function renderSummary(){
   }
 
   // Compat: si no existe el bloque superior nuevo, intentamos crearlo sin romper el HTML viejo
-  if (!discountEl || !costEl || !profitEl || !courCostEl || !profitAfterEl){
+  if (!discountEl || !costEl || !profitEl || !courCostEl || !commissionEl || !finalMermaEl || !profitAfterEl){
     const totalSpan = document.getElementById('grand-total');
     if (totalSpan){
       const card = totalSpan.closest('.card') || totalSpan.parentElement || document.getElementById('tab-resumen') || document.body;
@@ -19173,7 +23322,9 @@ async function renderSummary(){
         <p>Costo estimado de producto: C$ <span id="grand-cost">${fmt(grandCost)}</span></p>
         <p>Utilidad bruta aproximada: C$ <span id="grand-profit">${fmt(grandProfit)}</span></p>
         <p>Cortesías (Costo real): C$ <span id="grand-courtesy-cost">${fmt(courtesyCost)}</span></p>
-        <p>Utilidad después de cortesías: C$ <span id="grand-profit-after-courtesy">${fmt(profitAfterCourtesy)}</span></p>
+        <p>Comisiones Tarjeta: C$ <span id="grand-card-commission">${fmt(cardCommissionTotal)}</span></p>
+        <p>Merma final: C$ <span id="grand-final-merma">${fmt(finalMermaCost)}</span></p>
+        <p>Utilidad después de comisión y merma: C$ <span id="grand-profit-after-courtesy">${fmt(profitAfterFinalMerma)}</span></p>
       `;
     }
   }
@@ -19242,6 +23393,16 @@ async function renderSummary(){
         tr.innerHTML = `<td>${escapeHtml(getPaymentMethodLabelPOS(k))}</td><td>${fmt(v)}</td>`;
         tbPay.appendChild(tr);
       });
+    for (const item of cardCommissions.byLabel){
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${escapeHtml(item.label)}</td><td>${fmt(item.total)}</td>`;
+      tbPay.appendChild(tr);
+    }
+    if (cardCommissions.undeterminedCount){
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>Comisión no determinada</td><td class="muted">${cardCommissions.undeterminedCount} venta(s)</td>`;
+      tbPay.appendChild(tr);
+    }
   }
 
   // Tabla: Transferencias por banco (Resumen)
@@ -20382,12 +24543,7 @@ async function computeSummaryDataForPeriodPOS(periodKey, selectedSummaryEventId)
       }
 
       const lineCost = getLineCost(s);
-      let lineProfit = 0;
-      if (typeof s.lineProfit === 'number' && Number.isFinite(s.lineProfit)) {
-        lineProfit = Number(s.lineProfit || 0);
-      } else {
-        lineProfit = total - lineCost;
-      }
+      const lineProfit = total - lineCost;
       grandCost += lineCost;
       grandProfit += lineProfit;
     } else {
@@ -20415,6 +24571,14 @@ async function computeSummaryDataForPeriodPOS(periodKey, selectedSummaryEventId)
   }
 
   const profitAfterCourtesy = grandProfit - courtesyCost;
+  const cardCommissions = collectSaleCardCommissionsPOS(sales);
+  const cardCommissionTotal = round2(cardCommissions.total);
+  const profitAfterCommission = round2(profitAfterCourtesy - cardCommissionTotal);
+  const summaryEventNum = parseSummaryEventIdPOS(selectedSummaryEventId);
+  const finalMermaSummary = await reempaqueGetFinalMermaForSummaryPOS(summaryEventNum, periodKey);
+  const finalMermaCost = round2(finalMermaSummary.cost || 0);
+  const finalMermaMl = reempaqueRound4POS(finalMermaSummary.ml || 0);
+  const profitAfterFinalMerma = round2(profitAfterCommission - finalMermaCost);
 
   // Totales por evento (en el período) + status de evento
   const eventTotals = new Map();
@@ -20446,6 +24610,12 @@ async function computeSummaryDataForPeriodPOS(periodKey, selectedSummaryEventId)
       grandProfit,
       courtesyCost,
       profitAfterCourtesy,
+      cardCommissionTotal,
+      profitAfterCommission,
+      finalMermaCost,
+      finalMermaMl,
+      profitAfterFinalMerma,
+      commissionUndeterminedCount: cardCommissions.undeterminedCount,
       courtesyQty,
       courtesyTx,
       courtesyEquiv
@@ -20456,6 +24626,8 @@ async function computeSummaryDataForPeriodPOS(periodKey, selectedSummaryEventId)
     byDiscount: discountList,
     byPay: sortMapDesc(byPay),
     transferByBank: transferList,
+    cardCommissions: cardCommissions.byLabel,
+    commissionUndeterminedCount: cardCommissions.undeterminedCount,
     courtesyByProd: courtesyList,
     events: events
   };
@@ -20478,6 +24650,13 @@ function buildSummarySheetsFromDataPOS(data){
   r.push(['Utilidad bruta', m.grandProfit || 0]);
   r.push(['Cortesías (Costo real)', m.courtesyCost || 0]);
   r.push(['Utilidad después de cortesías', m.profitAfterCourtesy || 0]);
+  r.push(['Comisiones Tarjeta', m.cardCommissionTotal || 0]);
+  for (const item of (data.cardCommissions || [])) r.push([item.label, item.total || 0]);
+  if (Number(data.commissionUndeterminedCount || 0) > 0) r.push(['Comisión no determinada', `${Number(data.commissionUndeterminedCount || 0)} venta(s)`]);
+  r.push(['Utilidad después de comisión', m.profitAfterCommission != null ? m.profitAfterCommission : (Number(m.profitAfterCourtesy || 0) - Number(m.cardCommissionTotal || 0))]);
+  r.push(['Merma final (ml)', m.finalMermaMl || 0]);
+  r.push(['Merma final (Costo C$)', m.finalMermaCost || 0]);
+  r.push(['Utilidad después de comisión y merma', m.profitAfterFinalMerma != null ? m.profitAfterFinalMerma : (Number(m.profitAfterCommission || 0) - Number(m.finalMermaCost || 0))]);
   r.push([]);
   r.push(['Cortesías (unidades)', m.courtesyQty || 0]);
   r.push(['Cortesías (movimientos)', m.courtesyTx || 0]);
@@ -20512,7 +24691,14 @@ function buildSummarySheetsFromDataPOS(data){
   // Hoja PorPago
   const payRows = [['Método','Total C$']];
   for (const it of (data.byPay || [])) payRows.push([getPaymentMethodLabelPOS(it.key), it.val || 0]);
+  for (const item of (data.cardCommissions || [])) payRows.push([item.label, item.total || 0]);
+  if (Number(data.commissionUndeterminedCount || 0) > 0) payRows.push(['Comisión no determinada', `${Number(data.commissionUndeterminedCount || 0)} venta(s)`]);
   sheets.push({ name: 'PorPago', rows: payRows });
+
+  const commissionRows = [['Comisión','Total C$','Transacciones']];
+  for (const item of (data.cardCommissions || [])) commissionRows.push([item.label, item.total || 0, item.count || 0]);
+  if (Number(data.commissionUndeterminedCount || 0) > 0) commissionRows.push(['Comisión no determinada','',Number(data.commissionUndeterminedCount || 0)]);
+  sheets.push({ name: 'ComisionesTarjeta', rows: commissionRows });
 
   // Hoja TransferenciasBanco
   const tb = [['Banco','Total C$','Transacciones']];
@@ -20948,7 +25134,7 @@ function renderSummaryArchivesTablePOS(list){
 //   - Cambio en ventas del período activo (salesRev[YYYY-MM])
 //   - Cambio del período mensual activo (YYYY-MM) (cache por periodKey)
 // -----------------------------
-const A33_POS_CONSOL_CACHE_VER = 1;
+const A33_POS_CONSOL_CACHE_VER = 2;
 const LS_A33_POS_CONSOL_ARCH_REV = 'a33_pos_consol_arch_rev_v1';
 const LS_A33_POS_CONSOL_SALES_REV_MAP = 'a33_pos_consol_sales_rev_map_v1';
 const LS_A33_POS_SUMMARY_ARCH_INDEX = 'a33_pos_summary_archives_index_v1';
@@ -21259,12 +25445,20 @@ function parseArchiveMetricsFromSummarySheetPOS(sheets){
     if (!label) continue;
     const val = __numPOS(r[1]);
     switch (label){
-      case 'Total general': out.grand = val; break;
-      case 'Total descuento': out.discountTotal = val; break;
-      case 'Costo estimado': out.grandCost = val; break;
+      case 'Total general':
+      case 'Venta neta': out.grand = val; break;
+      case 'Total descuento':
+      case 'Descuentos': out.discountTotal = val; break;
+      case 'Costo estimado':
+      case 'Costos de ventas': out.grandCost = val; break;
       case 'Utilidad bruta': out.grandProfit = val; break;
       case 'Cortesías (Costo real)': out.courtesyCost = val; break;
       case 'Utilidad después de cortesías': out.profitAfterCourtesy = val; break;
+      case 'Comisiones Tarjeta': out.cardCommissionTotal = val; break;
+      case 'Utilidad después de comisión': out.profitAfterCommission = val; break;
+      case 'Merma final (ml)': out.finalMermaMl = val; break;
+      case 'Merma final (Costo C$)': out.finalMermaCost = val; break;
+      case 'Utilidad después de comisión y merma': out.profitAfterFinalMerma = val; break;
       case 'Cortesías (unidades)': out.courtesyQty = val; break;
       case 'Cortesías (movimientos)': out.courtesyTx = val; break;
       case 'Cortesías (equivalente ventas)': out.courtesyEquiv = val; break;
@@ -21284,11 +25478,16 @@ function normalizeArchiveMetricsPOS(m){
   const courtesyTx = __numPOS(m && m.courtesyTx);
   const courtesyEquiv = __numPOS(m && m.courtesyEquiv);
   const profitAfterCourtesy = (m && m.profitAfterCourtesy != null) ? __numPOS(m.profitAfterCourtesy) : (grandProfit - courtesyCost);
-  return { grand, discountTotal, grandCost, grandProfit, courtesyCost, profitAfterCourtesy, courtesyQty, courtesyTx, courtesyEquiv };
+  const cardCommissionTotal = __numPOS(m && m.cardCommissionTotal);
+  const profitAfterCommission = (m && m.profitAfterCommission != null) ? __numPOS(m.profitAfterCommission) : (profitAfterCourtesy - cardCommissionTotal);
+  const finalMermaCost = __numPOS(m && m.finalMermaCost);
+  const finalMermaMl = __numPOS(m && m.finalMermaMl);
+  const profitAfterFinalMerma = (m && m.profitAfterFinalMerma != null) ? __numPOS(m.profitAfterFinalMerma) : (profitAfterCommission - finalMermaCost);
+  return { grand, discountTotal, grandCost, grandProfit, courtesyCost, profitAfterCourtesy, cardCommissionTotal, profitAfterCommission, finalMermaCost, finalMermaMl, profitAfterFinalMerma, courtesyQty, courtesyTx, courtesyEquiv };
 }
 
 function zeroArchiveMetricsPOS(){
-  return { grand:0, discountTotal:0, grandCost:0, grandProfit:0, courtesyCost:0, profitAfterCourtesy:0, courtesyQty:0, courtesyTx:0, courtesyEquiv:0 };
+  return { grand:0, discountTotal:0, grandCost:0, grandProfit:0, courtesyCost:0, profitAfterCourtesy:0, cardCommissionTotal:0, profitAfterCommission:0, finalMermaCost:0, finalMermaMl:0, profitAfterFinalMerma:0, courtesyQty:0, courtesyTx:0, courtesyEquiv:0 };
 }
 
 function sumArchiveMetricsPOS(a, b){
@@ -21301,6 +25500,11 @@ function sumArchiveMetricsPOS(a, b){
     grandProfit: x.grandProfit + y.grandProfit,
     courtesyCost: x.courtesyCost + y.courtesyCost,
     profitAfterCourtesy: x.profitAfterCourtesy + y.profitAfterCourtesy,
+    cardCommissionTotal: x.cardCommissionTotal + y.cardCommissionTotal,
+    profitAfterCommission: x.profitAfterCommission + y.profitAfterCommission,
+    finalMermaCost: x.finalMermaCost + y.finalMermaCost,
+    finalMermaMl: x.finalMermaMl + y.finalMermaMl,
+    profitAfterFinalMerma: x.profitAfterFinalMerma + y.profitAfterFinalMerma,
     courtesyQty: x.courtesyQty + y.courtesyQty,
     courtesyTx: x.courtesyTx + y.courtesyTx,
     courtesyEquiv: x.courtesyEquiv + y.courtesyEquiv,
@@ -21318,8 +25522,10 @@ function writeConsolidatedMetricsToCardPOS(prefix, m){
   if (elProfit) elProfit.textContent = fmt(__numPOS(nm.grandProfit));
   const elCourCost = id('courtesyCost');
   if (elCourCost) elCourCost.textContent = fmt(__numPOS(nm.courtesyCost));
+  const elCommission = id('cardCommissionTotal');
+  if (elCommission) elCommission.textContent = fmt(__numPOS(nm.cardCommissionTotal));
   const elPA = id('profitAfterCourtesy');
-  if (elPA) elPA.textContent = fmt(__numPOS(nm.profitAfterCourtesy));
+  if (elPA) elPA.textContent = fmt(__numPOS(nm.profitAfterFinalMerma));
   const elCQ = id('courtesyQty');
   if (elCQ) elCQ.textContent = String(Math.round(__numPOS(nm.courtesyQty)));
   const elCT = id('courtesyTx');
@@ -21450,7 +25656,10 @@ function buildConsolidatedGerenteSheetsPOS(payload){
     r.push(['Costo estimado', __numPOS(m.grandCost)]);
     r.push(['Utilidad bruta', __numPOS(m.grandProfit)]);
     r.push(['Cortesías (Costo real)', __numPOS(m.courtesyCost)]);
-    r.push(['Utilidad después de cortesías', __numPOS(m.profitAfterCourtesy)]);
+    r.push(['Comisiones Tarjeta', __numPOS(m.cardCommissionTotal)]);
+    r.push(['Utilidad después de comisión', __numPOS(m.profitAfterCommission)]);
+    r.push(['Merma final (Costo C$)', __numPOS(m.finalMermaCost)]);
+    r.push(['Utilidad después de comisión y merma', __numPOS(m.profitAfterFinalMerma)]);
   };
 
   addBlock('ARCHIVADO', arch);
@@ -21984,6 +26193,8 @@ function downloadExcel(filename, sheetName, rows){
     return;
   }
   const ws = XLSX.utils.aoa_to_sheet(rows);
+  const header = Array.isArray(rows && rows[0]) ? rows[0] : [];
+  ws['!cols'] = header.map((value) => ({ wch: /lote/i.test(String(value == null ? '' : value)) ? 25 : 16 }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName || 'Hoja1');
   XLSX.writeFile(wb, filename);
@@ -22002,7 +26213,7 @@ async function generateInventoryCSV(eventId){
     const inits = inv.filter(i=>i.productId===p.id && i.type==='init').reduce((a,b)=>a+(b.qty||0),0);
     const repo = inv.filter(i=>i.productId===p.id && i.type==='restock').reduce((a,b)=>a+(b.qty||0),0);
     const adj = inv.filter(i=>i.productId===p.id && i.type==='adjust').reduce((a,b)=>a+(b.qty||0),0);
-    const sold = sales.filter(s=>s.eventId===eventId && s.productId===p.id).reduce((a,b)=>a+(b.qty||0),0);
+    const sold = sales.filter(s=>s.eventId===eventId && saleMatchesCatalogProductPOS(s, p)).reduce((a,b)=>a+(b.qty||0),0);
     const stock = inits + repo + adj - sold;
     rows.push([p.name, p.manageStock!==false?1:0, inits, repo, adj, sold, stock]);
   }
@@ -22012,7 +26223,9 @@ async function generateInventoryCSV(eventId){
 
   const rpRows = await reempaqueBuildExportRowsPOS(eventId);
   if (rpRows.length > 1){
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rpRows), 'Reempaque');
+    const wsReempaque = XLSX.utils.aoa_to_sheet(rpRows);
+    wsReempaque['!cols'] = rpRows[0].map((h) => ({ wch: /lote/i.test(String(h || '')) ? 25 : 18 }));
+    XLSX.utils.book_append_sheet(wb, wsReempaque, 'Reempaque');
   }
 
   XLSX.writeFile(wb, 'inventario_evento.xlsx');
@@ -22124,50 +26337,8 @@ async function openEventView(eventId){
 
   const total = sales.reduce((a,b)=> a + (Number(b && b.total) || 0), 0);
 
-  // --- Costos (productos dinámicos: prioriza snapshot guardado; Galón solo para vasos legacy sin productId) ---
-  const fbatches = sanitizeFractionBatches(ev && ev.fractionBatches);
-  const batchMap = new Map();
-  for (const b of fbatches){
-    if (b && b.batchId) batchMap.set(String(b.batchId), b);
-  }
-
-  const costPerGallon = getCostoUnitarioProducto('Galón');
-  const canEstimateCupCost = costPerGallon > 0;
-
-  function estimateCupCostSigned(s){
-    const qRaw = Number(s && s.qty) || 0;
-    const absQ = Math.abs(qRaw);
-    const sign = (s && (s.isReturn || qRaw < 0)) ? -1 : 1;
-    if (!(absQ > 0)) return 0;
-    if (!canEstimateCupCost) return 0;
-
-    const breakdown = Array.isArray(s && s.fifoBreakdown) ? s.fifoBreakdown : [];
-    if (breakdown.length){
-      let costAbs = 0;
-      for (const it of breakdown){
-        if (!it) continue;
-        const take = Math.abs(Number(it.cupsTaken || 0));
-        if (!(take > 0)) continue;
-
-        let y = 0;
-        const b = it.batchId ? batchMap.get(String(it.batchId)) : null;
-        if (b && b.yieldCupsPerGallon) y = safeInt(b.yieldCupsPerGallon, 0);
-        if (!(y > 0)){
-          const mlpc = Number(it.mlPerCup || (b && b.mlPerCup) || 0);
-          if (mlpc > 0) y = Math.round(ML_PER_GALON / mlpc);
-        }
-        if (!(y > 0)) y = 22;
-
-        costAbs += take * (costPerGallon / Math.max(1, y));
-      }
-      return sign * costAbs;
-    }
-
-    // Sin breakdown (caso raro): usamos el último rendimiento conocido o default 22
-    const yFallback = safeInt((fbatches.length ? fbatches[fbatches.length-1].yieldCupsPerGallon : 22), 22);
-    return sign * absQ * (costPerGallon / Math.max(1, (yFallback > 0 ? yFallback : 22)));
-  }
-
+  // --- Costos: únicamente snapshots congelados en cada operación. ---
+  let costoVentasPagadas = 0;
   let costoProductos = 0;
 
   // Stats cortesías (para mostrar en VER)
@@ -22180,47 +26351,27 @@ async function openEventView(eventId){
     if (!s) continue;
     const qRaw = Number(s.qty || 0);
     const absQty = Math.abs(qRaw);
-    const isReturn = !!s.isReturn || qRaw < 0;
-    const qtyParaCosto = isReturn ? -absQty : absQty;
-
     const isCourtesy = !!(s.courtesy || s.isCourtesy);
+    const lineCost = getSaleLineCostSnapshotPOS(s);
 
-    if (isCupSaleRecord(s)){
-      // Preferir snapshot. Solo registros legacy sin productId pueden estimarse desde Galón/yield.
-      const stored = getSaleLineCostSnapshotPOS(s);
-      const estimated = isLegacyCupCostFallbackSalePOS(s) ? estimateCupCostSigned(s) : 0;
-      const lineCost = (Math.abs(stored) > 1e-9) ? stored : estimated;
+    costoProductos += lineCost;
+    if (!isCourtesy) {
+      costoVentasPagadas += lineCost;
+      continue;
+    }
 
-      costoProductos += lineCost;
-
-      if (isCourtesy){
-        cortesiasVasosU += absQty;
-        costoCortesiasVasos += lineCost;
-      }
+    if (isVasoCategorySalePOS(s)) {
+      cortesiasVasosU += absQty;
+      costoCortesiasVasos += lineCost;
     } else {
-      const storedLineCost = getSaleLineCostPOS(s);
-      const fallbackUnitCost = getCostoUnitarioProducto(getSaleProductNameSnapshotPOS(s));
-      const lineCost = (Math.abs(storedLineCost) > 1e-9)
-        ? storedLineCost
-        : ((fallbackUnitCost > 0 && qtyParaCosto !== 0) ? (fallbackUnitCost * qtyParaCosto) : 0);
-
-      if (Math.abs(lineCost) > 1e-9) {
-        costoProductos += lineCost;
-
-        if (isCourtesy){
-          cortesiasPresU += absQty;
-          costoCortesiasPres += lineCost;
-        }
-      } else {
-        // Sin costo conocido: igual contar cortesías en unidades
-        if (isCourtesy){
-          cortesiasPresU += absQty;
-        }
-      }
+      cortesiasPresU += absQty;
+      costoCortesiasPres += lineCost;
     }
   }
 
-  const utilidadBruta = total - costoProductos;
+  const utilidadAntesComision = total - costoProductos;
+  const eventCardCommissions = collectSaleCardCommissionsPOS(sales);
+  const utilidadDespuesComision = round2(utilidadAntesComision - eventCardCommissions.total);
 
   const byPay = sales.reduce((m,s)=>{ 
     const k = normalizePaymentMethodPOS((s && s.payment) || '') || '';
@@ -22228,17 +26379,21 @@ async function openEventView(eventId){
     return m; 
   },{});
 
-  const hayCostoCortesiasVasos = Math.abs(Number(costoCortesiasVasos || 0)) > 1e-9 || canEstimateCupCost;
-  const costoCortesiasTotalKnown = costoCortesiasPres + (hayCostoCortesiasVasos ? costoCortesiasVasos : 0);
+  const costoCortesiasTotalKnown = costoCortesiasPres + costoCortesiasVasos;
+  const commissionHtml = eventCardCommissions.byLabel.map(item => `<div><b>${escapeHtml(item.label)}:</b> C$ ${fmt(item.total)}</div>`).join('')
+    + (eventCardCommissions.undeterminedCount ? `<div><b>Comisión no determinada:</b> ${eventCardCommissions.undeterminedCount} venta(s)</div>` : '');
 
   $('#ev-totals').innerHTML = `<div><b>Total vendido (pagado):</b> C$ ${fmt(total)}</div>
   <div><b>Cortesías presentaciones:</b> ${Math.round(cortesiasPresU)} unid.</div>
   <div><b>Cortesías vasos:</b> ${Math.round(cortesiasVasosU)} vasos</div>
   <div><b>Costo cortesías presentaciones:</b> C$ ${fmt(costoCortesiasPres)}</div>
-  <div><b>Costo cortesías vasos:</b> ${hayCostoCortesiasVasos ? ('C$ ' + fmt(costoCortesiasVasos)) : 'N/D'}</div>
-  <div><b>Costo cortesías total:</b> ${hayCostoCortesiasVasos ? ('C$ ' + fmt(costoCortesiasTotalKnown)) : ('C$ ' + fmt(costoCortesiasPres) + ' + N/D')}</div>
-  <div><b>Costo estimado de producto:</b> C$ ${fmt(costoProductos)}</div>
-  <div><b>Utilidad bruta aprox.:</b> C$ ${fmt(utilidadBruta)}</div>
+  <div><b>Costo cortesías vasos:</b> C$ ${fmt(costoCortesiasVasos)}</div>
+  <div><b>Costo cortesías total:</b> C$ ${fmt(costoCortesiasTotalKnown)}</div>
+  <div><b>Costos de ventas:</b> C$ ${fmt(costoVentasPagadas)}</div>
+  <div><b>Costos totales:</b> C$ ${fmt(costoProductos)}</div>
+  <div><b>Utilidad antes de comisión:</b> C$ ${fmt(utilidadAntesComision)}</div>
+  ${commissionHtml}
+  <div><b>Utilidad después de comisión:</b> C$ ${fmt(utilidadDespuesComision)}</div>
   <div><b>Efectivo:</b> C$ ${fmt(byPay.efectivo||0)}</div>
   <div><b>Transferencia:</b> C$ ${fmt(byPay.transferencia||0)}</div>
   <div><b>Tarjeta:</b> C$ ${fmt(byPay.tarjeta||0)}</div>
@@ -22298,7 +26453,7 @@ async function openEventView(eventId){
   // Más reciente primero
   sales.sort((a,b)=> (saleSortKeyPOS(b) - saleSortKeyPOS(a))).forEach(s=>{
     const payLabel = getSalePaymentLabelPOS(s, bankMap);
-    const tr=document.createElement('tr'); tr.innerHTML = `<td>${getSaleSeqDisplayPOS(s)}</td><td>${s.date}</td><td>${getSaleTimeTextPOS(s)}</td><td>${escapeHtml(uiProductNamePOS(getSaleProductNameSnapshotPOS(s)))}</td><td>${s.qty}</td><td>${fmt(getSaleUnitPriceSnapshotPOS(s))}</td><td>${fmt(getSaleDiscountTotalPOS(s))}</td><td>${fmt(s.total)}</td><td>${payLabel}</td><td>${s.courtesy?'✓':''}</td><td>${s.isReturn?'✓':''}</td><td>${escapeHtml(getSaleCustomerSnapshotNamePOS(s))}</td><td>${s.courtesyTo||''}</td><td>${s.notes||''}</td>`;
+    const tr=document.createElement('tr'); tr.innerHTML = `<td>${getSaleSeqDisplayPOS(s)}</td><td>${s.date}</td><td>${getSaleTimeTextPOS(s)}</td><td>${escapeHtml(uiProductNamePOS(getSaleProductNameSnapshotPOS(s)))}${getSaleLotCodePOS(s) ? `<div class="muted"><small>Lote: ${escapeHtml(getSaleLotCodePOS(s))}</small></div>` : ''}</td><td>${s.qty}</td><td>${fmt(getSaleUnitPriceSnapshotPOS(s))}</td><td>${fmt(getSaleDiscountTotalPOS(s))}</td><td>${fmt(s.total)}</td><td>${payLabel}</td><td>${s.courtesy?'✓':''}</td><td>${s.isReturn?'✓':''}</td><td>${escapeHtml(getSaleCustomerSnapshotNamePOS(s))}</td><td>${s.courtesyTo||''}</td><td>${s.notes||''}</td>`;
     tb.appendChild(tr);
   });
 
@@ -22314,34 +26469,59 @@ async function exportEventSalesCSV(eventId){
   const bankMap = new Map();
   for (const b of banks){ if (b && b.id != null) bankMap.set(Number(b.id), b.name || ''); }
 
-  const rows = [['N°','id','fecha','hora','producto','cant','PU','desc_C$','total','pago','banco','cortesia','devolucion','cortesia_a','notas','cliente']];
+  const rows = [['N°','id','fecha','hora','producto','codigo_lote','cant','PU','desc_C$','total','costo_unit_C$','costo_total_C$','pago','banco','comision_pct_snapshot','comision_C$','etiqueta_comision','utilidad_antes_comision_C$','utilidad_despues_comision_C$','cortesia','devolucion','cortesia_a','notas','cliente']];
   const ordered = [...sales].sort((a,b)=> (saleSortKeyPOS(b) - saleSortKeyPOS(a)));
   for (const s of ordered){
     const bank = isBankPaymentMethodPOS(s.payment) ? getSaleBankLabel(s, bankMap) : '';
-    rows.push([ (s.seqId || ''), s.id, s.date, getSaleTimeTextPOS(s), uiProductNamePOS(getSaleProductNameSnapshotPOS(s)), s.qty, getSaleUnitPriceSnapshotPOS(s), getSaleDiscountTotalPOS(s), s.total, getPaymentMethodLabelPOS(s.payment), bank, s.courtesy?1:0, s.isReturn?1:0, s.courtesyTo||'', s.notes||'', getSaleCustomerSnapshotNamePOS(s)]);
+    rows.push([ (s.seqId || ''), s.id, s.date, getSaleTimeTextPOS(s), uiProductNamePOS(getSaleProductNameSnapshotPOS(s)), lotCodeExcelCellPOS(getSaleLotCodePOS(s)), s.qty, getSaleUnitPriceSnapshotPOS(s), getSaleDiscountTotalPOS(s), s.total, getSaleCostUnitSnapshotPOS(s), getSaleLineCostSnapshotPOS(s), getPaymentMethodLabelPOS(s.payment), bank, readFiniteSaleSnapshotNumberPOS(s,'commissionPctSnapshot') ?? '', readFiniteSaleSnapshotNumberPOS(s,'commissionAmountSnapshot') ?? '', s.commissionLabelSnapshot || '', readFiniteSaleSnapshotNumberPOS(s,'utilidadAntesComision') ?? '', readFiniteSaleSnapshotNumberPOS(s,'utilidadDespuesComision') ?? '', s.courtesy?1:0, s.isReturn?1:0, s.courtesyTo||'', s.notes||'', getSaleCustomerSnapshotNamePOS(s)]);
   }
   const safeName = (ev?ev.name:'evento').replace(/[^a-z0-9_\- ]/gi,'_');
   downloadExcel(`ventas_${safeName}.xlsx`, 'Ventas', rows);
 }
-function buildCorteSummaryRows(eName, sales){
+function buildCorteSummaryRows(eName, sales, mermaFinalCost=0){
   let efectivo=0, trans=0, tarjeta=0, credito=0, descuentos=0, cortesiasU=0, cortesiasVal=0, devolU=0, devolVal=0, bruto=0;
-  for (const s of sales){
-    const absQty = Math.abs(s.qty||0);
-    const absTotal = Math.abs(s.total||0);
+  let costoVentas=0, costoCortesias=0, ventaNeta=0;
+  const mermaFinalCosto = round2(Math.max(0, Number(mermaFinalCost) || 0));
+  for (const s of (sales || [])){
+    if (!s) continue;
+    const qtyRaw = Number(s.qty || 0);
+    const absQty = Math.abs(qtyRaw);
+    const absTotal = Math.abs(Number(s.total || 0));
+    const sign = (s.isReturn || qtyRaw < 0) ? -1 : 1;
+    const courtesy = !!(s.courtesy || s.isCourtesy);
     const disc = getSaleDiscountTotalPOS(s);
-    bruto += (s.courtesy ? (getSaleUnitPriceSnapshotPOS(s)*absQty) : (absTotal + disc));
-    descuentos += disc * (s.isReturn?-1:1);
-    if (s.courtesy){ cortesiasU += absQty; cortesiasVal += (getSaleUnitPriceSnapshotPOS(s)*absQty); }
-    if (s.isReturn){ devolU += absQty; devolVal += absTotal; }
+    const valueRef = getSaleUnitPriceSnapshotPOS(s) * absQty * sign;
+    const lineCost = getSaleLineCostSnapshotPOS(s);
+
+    bruto += courtesy ? 0 : ((absTotal + disc) * sign);
+    descuentos += disc * sign;
+    if (courtesy){
+      cortesiasU += absQty;
+      cortesiasVal += valueRef;
+      costoCortesias += lineCost;
+    } else {
+      ventaNeta += Number(s.total || 0);
+      costoVentas += lineCost;
+    }
+    if (s.isReturn || qtyRaw < 0){ devolU += absQty; devolVal += absTotal; }
+
     const pay = normalizePaymentMethodPOS(s.payment || '');
-    if (pay === 'efectivo') efectivo += s.total;
-    else if (pay === 'transferencia') trans += s.total;
-    else if (pay === 'tarjeta') tarjeta += s.total;
-    else if (pay === 'credito'){ credito += s.total; }
+    if (courtesy) continue;
+    if (pay === 'efectivo') efectivo += Number(s.total || 0);
+    else if (pay === 'transferencia') trans += Number(s.total || 0);
+    else if (pay === 'tarjeta') tarjeta += Number(s.total || 0);
+    else if (pay === 'credito'){ credito += Number(s.total || 0); }
   }
   const cobrado = efectivo + trans + tarjeta;
+  const costoTotal = round2(costoVentas + costoCortesias + mermaFinalCosto);
+  const utilidadBruta = ventaNeta - costoVentas;
+  const utilidadDespuesCortesias = utilidadBruta - costoCortesias;
+  const cardCommissions = collectSaleCardCommissionsPOS(sales);
+  const comisionTarjetaTotal = round2(cardCommissions.total);
+  const utilidadDespuesComision = round2(utilidadDespuesCortesias - comisionTarjetaTotal);
+  const utilidadDespuesMerma = round2(utilidadDespuesComision - mermaFinalCosto);
   const neto = cobrado;
-  return {efectivo, trans, tarjeta, credito, descuentos, cortesiasU, cortesiasVal, devolU, devolVal, bruto, cobrado, neto};
+  return {efectivo, trans, tarjeta, credito, descuentos, cortesiasU, cortesiasVal, devolU, devolVal, bruto, cobrado, neto, ventaNeta, costoVentas, costoCortesias, mermaFinalCosto, costoTotal, utilidadBruta, utilidadDespuesCortesias, comisionTarjetaTotal, comisionesTarjeta:cardCommissions.byLabel, commissionUndeterminedCount:cardCommissions.undeterminedCount, utilidadDespuesComision, utilidadDespuesMerma};
 }
 async function generateCorteCSV(eventId){
   const events = await getAll('events');
@@ -22362,7 +26542,8 @@ async function generateCorteCSV(eventId){
     cur.count += 1;
     transferByBank.set(label, cur);
   }
-  const sum = buildCorteSummaryRows(ev.name, sales);
+  const finalMerma = await reempaqueGetFinalMermaTotalsPOS(eventId, { includeProvisional:true });
+  const sum = buildCorteSummaryRows(ev.name, sales, finalMerma.cost);
   const rows = [];
   rows.push(['Corte de evento', ev.name]);
   rows.push(['Generado', new Date().toLocaleString()]);
@@ -22388,6 +26569,18 @@ async function generateCorteCSV(eventId){
   rows.push(['Descuentos aplicados (C$)', sum.descuentos.toFixed(2)]);
   rows.push(['Cortesías (unid.)', sum.cortesiasU]);
   rows.push(['Cortesías valor ref. (C$)', sum.cortesiasVal.toFixed(2)]);
+  rows.push(['Costo real de cortesías (C$)', sum.costoCortesias.toFixed(2)]);
+  rows.push(['Costos de ventas (C$)', sum.costoVentas.toFixed(2)]);
+  rows.push(['Merma final del evento (ml)', finalMerma.ml.toFixed(4)]);
+  rows.push(['Costo Merma final (C$)', sum.mermaFinalCosto.toFixed(2)]);
+  rows.push(['Costos totales (C$)', sum.costoTotal.toFixed(2)]);
+  rows.push(['Utilidad bruta (C$)', sum.utilidadBruta.toFixed(2)]);
+  rows.push(['Utilidad después de cortesías (C$)', sum.utilidadDespuesCortesias.toFixed(2)]);
+  rows.push(['Comisiones Tarjeta (C$)', sum.comisionTarjetaTotal.toFixed(2)]);
+  for (const item of (sum.comisionesTarjeta || [])) rows.push([item.label, Number(item.total || 0).toFixed(2)]);
+  if (sum.commissionUndeterminedCount) rows.push(['Comisión no determinada', `${sum.commissionUndeterminedCount} venta(s)`]);
+  rows.push(['Utilidad después de comisión (C$)', sum.utilidadDespuesComision.toFixed(2)]);
+  rows.push(['Utilidad después de comisión y merma (C$)', sum.utilidadDespuesMerma.toFixed(2)]);
   rows.push(['Devoluciones (unid.)', sum.devolU]);
   rows.push(['Devoluciones (C$)', sum.devolVal.toFixed(2)]);
   rows.push([]);
@@ -22395,11 +26588,11 @@ async function generateCorteCSV(eventId){
   rows.push(['Neto cobrado', sum.neto.toFixed(2)]);
   rows.push([]);
   rows.push(['Detalle de ventas']);
-  rows.push(['id','fecha','hora','producto','cant','PU','desc_C$','total','pago','T/C usado','USD recibido','Vuelto C$','Equivalente C$','banco','cortesia','devolucion','cortesia_a','notas','cliente']);
+  rows.push(['id','fecha','hora','producto','codigo_lote','cant','PU','desc_C$','total','costo_unit_C$','costo_total_C$','pago','T/C usado','USD recibido','Vuelto C$','Equivalente C$','banco','comision_pct_snapshot','comision_C$','etiqueta_comision','utilidad_antes_comision_C$','utilidad_despues_comision_C$','cortesia','devolucion','cortesia_a','notas','cliente']);
   for (const s of sales){
     const bank = isBankPaymentMethodPOS(s.payment) ? getSaleBankLabel(s, bankMap) : '';
     const tp = getSaleCashTenderPartsPOS(s);
-    rows.push([s.id, s.date, getSaleTimeTextPOS(s), uiProductNamePOS(getSaleProductNameSnapshotPOS(s)), s.qty, getSaleUnitPriceSnapshotPOS(s), getSaleDiscountTotalPOS(s), s.total, getPaymentMethodLabelPOS(s.payment), tp.fx || '', tp.usd || '', tp.change || '', tp.equivalent || '', bank, s.courtesy?1:0, s.isReturn?1:0, s.courtesyTo||'', s.notes||'', getSaleCustomerSnapshotNamePOS(s)]);
+    rows.push([s.id, s.date, getSaleTimeTextPOS(s), uiProductNamePOS(getSaleProductNameSnapshotPOS(s)), lotCodeExcelCellPOS(getSaleLotCodePOS(s)), s.qty, getSaleUnitPriceSnapshotPOS(s), getSaleDiscountTotalPOS(s), s.total, getSaleCostUnitSnapshotPOS(s), getSaleLineCostSnapshotPOS(s), getPaymentMethodLabelPOS(s.payment), tp.fx || '', tp.usd || '', tp.change || '', tp.equivalent || '', bank, readFiniteSaleSnapshotNumberPOS(s,'commissionPctSnapshot') ?? '', readFiniteSaleSnapshotNumberPOS(s,'commissionAmountSnapshot') ?? '', s.commissionLabelSnapshot || '', readFiniteSaleSnapshotNumberPOS(s,'utilidadAntesComision') ?? '', readFiniteSaleSnapshotNumberPOS(s,'utilidadDespuesComision') ?? '', s.courtesy?1:0, s.isReturn?1:0, s.courtesyTo||'', s.notes||'', getSaleCustomerSnapshotNamePOS(s)]);
   }
   const safeName = ev.name.replace(/[^a-z0-9_\- ]/gi,'_');
   downloadExcel(`corte_${safeName}.xlsx`, 'Corte', rows);
@@ -22446,9 +26639,32 @@ async function exportEventExcel(eventId){
   resumenRows.push(['Cerrado', ev.closedAt ? new Date(ev.closedAt).toLocaleString() : '']);
   resumenRows.push([]);
 
-  const totalVentas = sales.reduce((acc,s)=>acc + (s.total || 0), 0);
+  const finalMerma = await reempaqueGetFinalMermaTotalsPOS(eventId, { includeProvisional:true });
+  const eventSummary = buildCorteSummaryRows(ev.name, sales, finalMerma.cost);
+  const totalVentas = eventSummary.ventaNeta;
   resumenRows.push(['Resumen de ventas']);
-  resumenRows.push(['Total vendido C$', totalVentas]);
+  resumenRows.push(['Venta neta C$', totalVentas]);
+  resumenRows.push(['Descuentos C$', eventSummary.descuentos]);
+  resumenRows.push(['Cortesías (unid.)', eventSummary.cortesiasU]);
+  resumenRows.push(['Cortesías valor comercial C$', eventSummary.cortesiasVal]);
+  resumenRows.push(['Costo real de cortesías C$', eventSummary.costoCortesias]);
+  resumenRows.push(['Costos de ventas C$', eventSummary.costoVentas]);
+  resumenRows.push(['Merma final del evento ml', finalMerma.ml]);
+  resumenRows.push(['Costo Merma final C$', eventSummary.mermaFinalCosto]);
+  resumenRows.push(['Costos totales C$', eventSummary.costoTotal]);
+  resumenRows.push(['Utilidad bruta C$', eventSummary.utilidadBruta]);
+  resumenRows.push(['Utilidad después de cortesías C$', eventSummary.utilidadDespuesCortesias]);
+  resumenRows.push(['Comisiones Tarjeta C$', eventSummary.comisionTarjetaTotal]);
+  for (const item of (eventSummary.comisionesTarjeta || [])) resumenRows.push([item.label, item.total || 0]);
+  if (eventSummary.commissionUndeterminedCount) resumenRows.push(['Comisión no determinada', `${eventSummary.commissionUndeterminedCount} venta(s)`]);
+  resumenRows.push(['Utilidad después de comisión C$', eventSummary.utilidadDespuesComision]);
+  resumenRows.push(['Utilidad después de comisión y merma C$', eventSummary.utilidadDespuesMerma]);
+  const eventLotCodes = [];
+  for (const sale of sales){
+    const code = getSaleLotCodePOS(sale);
+    if (code && !eventLotCodes.some((item) => lotCodeKeyPOS(item) === lotCodeKeyPOS(code))) eventLotCodes.push(code);
+  }
+  resumenRows.push(['Códigos de lote', lotCodeExcelCellPOS(eventLotCodes.join(' + '))]);
 
   const byPay = sales.reduce((m,s)=>{
     const pay = normalizePaymentMethodPOS(s.payment || '') || 'desconocido';
@@ -22479,7 +26695,7 @@ async function exportEventExcel(eventId){
 
   // --- Hoja 3 opcional: Ventas_Detalle ---
   const ventasRows = [];
-  ventasRows.push(['N°','id','fecha','hora','producto','cantidad','PU_C$','descuento_C$','total_C$','costo_unit_C$','costo_total_C$','pago','T/C usado','USD recibido','Vuelto C$','Equivalente C$','banco','cortesia','devolucion','cortesia_a','notas','cliente']);
+  ventasRows.push(['N°','id','fecha','hora','producto','codigo_lote','cantidad','PU_C$','descuento_C$','total_C$','costo_unit_C$','costo_total_C$','pago','T/C usado','USD recibido','Vuelto C$','Equivalente C$','banco','comision_pct_snapshot','comision_C$','etiqueta_comision','utilidad_antes_comision_C$','utilidad_despues_comision_C$','cortesia','devolucion','cortesia_a','notas','cliente']);
   for (const s of sales){
     const qty = Number(s.qty || 0);
     const costUnit = getSaleCostUnitSnapshotPOS(s);
@@ -22490,6 +26706,7 @@ async function exportEventExcel(eventId){
       s.date || '',
       getSaleTimeTextPOS(s) || '',
       getSaleProductNameSnapshotPOS(s) || '',
+      lotCodeExcelCellPOS(getSaleLotCodePOS(s)),
       qty || 0,
       getSaleUnitPriceSnapshotPOS(s) || 0,
       getSaleDiscountTotalPOS(s) || 0,
@@ -22502,6 +26719,11 @@ async function exportEventExcel(eventId){
       getSaleCashTenderPartsPOS(s).change || '',
       getSaleCashTenderPartsPOS(s).equivalent || '',
       isBankPaymentMethodPOS(s.payment) ? getSaleBankLabel(s, bankMap) : '',
+      readFiniteSaleSnapshotNumberPOS(s,'commissionPctSnapshot') ?? '',
+      readFiniteSaleSnapshotNumberPOS(s,'commissionAmountSnapshot') ?? '',
+      s.commissionLabelSnapshot || '',
+      readFiniteSaleSnapshotNumberPOS(s,'utilidadAntesComision') ?? '',
+      readFiniteSaleSnapshotNumberPOS(s,'utilidadDespuesComision') ?? '',
       s.courtesy ? 1 : 0,
       s.isReturn ? 1 : 0,
       s.courtesyTo || '',
@@ -22510,11 +26732,14 @@ async function exportEventExcel(eventId){
     ]);
   }
   const wsVentas = XLSX.utils.aoa_to_sheet(ventasRows);
+  wsVentas['!cols'] = ventasRows[0].map((h) => ({ wch: /lote/i.test(String(h || '')) ? 25 : 16 }));
   XLSX.utils.book_append_sheet(wb, wsVentas, 'Ventas_Detalle');
 
   const rpRows = await reempaqueBuildExportRowsPOS(eventId);
   if (rpRows.length > 1){
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rpRows), 'Reempaque');
+    const wsReempaque = XLSX.utils.aoa_to_sheet(rpRows);
+    wsReempaque['!cols'] = rpRows[0].map((h) => ({ wch: /lote/i.test(String(h || '')) ? 25 : 18 }));
+    XLSX.utils.book_append_sheet(wb, wsReempaque, 'Reempaque');
   }
 
   const safeName = (ev.name || 'evento').replace(/[^a-z0-9_\- ]/gi,'_');
@@ -22536,6 +26761,20 @@ async function closeEvent(eventId){
   }
 
 
+  // Etapa 5/5: convertir la merma recuperable pendiente a Merma final antes del Corte,
+  // de forma provisional. Si el cierre se cancela/falla, se restaura atómicamente.
+  let finalMerma = { eventId, ids:[], ml:0, cost:0, provisional:true };
+  try{
+    finalMerma = await reempaqueFinalizeMermaForEventPOS(eventId, {
+      provisional:true,
+      reason:'CIERRE_EVENTO'
+    });
+  }catch(err){
+    console.error('reempaqueFinalizeMermaForEventPOS error', err);
+    alert('No se pudo cerrar de forma segura la merma recuperable. El evento permanece abierto.');
+    return;
+  }
+
   // Corte (Excel). Si falla, permitir cerrar de todas formas.
   try{
     await generateCorteCSV(eventId);
@@ -22545,14 +26784,28 @@ async function closeEvent(eventId){
       title: 'Corte falló',
       message: 'No se pudo generar el Corte (Excel) por un error.\n\n¿Cerrar el evento de todas formas?\n(Podrás exportar después desde Eventos: “Exportar (Excel)” o “CSV Corte”.)'
     });
-    if (!ok) return;
+    if (!ok){
+      try{ await reempaqueRollbackFinalMermaForEventPOS(finalMerma); }catch(rollbackErr){ console.error('rollback merma provisional', rollbackErr); }
+      return;
+    }
   }
 
   // Etapa 2C: NO mutar estado del evento hasta confirmar persistencia.
   const closedAtIso = new Date().toISOString();
   const evUpdated = Object.assign({}, ev, { closedAt: closedAtIso });
-  await put('events', evUpdated);
+  try{
+    await put('events', evUpdated);
+  }catch(err){
+    try{ await reempaqueRollbackFinalMermaForEventPOS(finalMerma); }catch(rollbackErr){ console.error('rollback merma provisional', rollbackErr); }
+    throw err;
+  }
   try{ ev.closedAt = closedAtIso; }catch(_){ }
+  try{
+    await reempaqueConfirmFinalMermaForEventPOS(finalMerma, closedAtIso);
+  }catch(err){
+    // El evento ya quedó cerrado; el reconciliador de inicio confirma este estado sin duplicar merma.
+    console.error('confirmación diferida de Merma final', err);
+  }
   const curId = await getMeta('currentEventId');
   if (curId === eventId){
     // Etapa 2: al dejar evento activo, limpiar cliente
@@ -22591,23 +26844,48 @@ async function deleteEvent(eventId){
   if (!ev){ alert('Evento no encontrado'); return; }
   const msg = '¿Eliminar evento "'+ev.name+'"? Se borrarán sus ventas e inventario. Esta acción NO se puede deshacer.';
   if (!confirm(msg)) return;
-  const t = db.transaction(['sales','events','inventory','meta'],'readwrite');
-  await new Promise((res)=>{ const r = t.objectStore('sales').getAll(); r.onsuccess = ()=>{ (r.result||[]).filter(s=>s.eventId===eventId).forEach(s=> t.objectStore('sales').delete(s.id)); res(); }; });
-  await new Promise((res)=>{ const r = t.objectStore('inventory').getAll(); r.onsuccess = ()=>{ (r.result||[]).filter(i=>i.eventId===eventId).forEach(i=> t.objectStore('inventory').delete(i.id)); res(); }; });
-  t.objectStore('events').delete(eventId);
-  const mreq = t.objectStore('meta').get('currentEventId');
-  mreq.onsuccess = ()=>{ const cur = mreq.result?.value; if (cur === eventId) t.objectStore('meta').put({id:'currentEventId', value:null}); };
-  await new Promise((res,rej)=>{ t.oncomplete=res; t.onerror=()=>rej(t.error); });
+  const eventSales = (await getAll('sales')).filter(s=>s && s.eventId===eventId);
+  const physicalCupTickets = [];
+  try{
+    for (const sale of eventSales){
+      const queued = enqueuePhysicalCupRestoreForSalePOS(sale, 'event-delete');
+      if (queued && queued.ok === false) throw new Error(queued.message || 'No se pudo preparar el reverso seguro del Vaso físico.');
+      if (queued && queued.ticket) physicalCupTickets.push(queued.ticket);
+    }
+  }catch(error){
+    physicalCupTickets.forEach(removePhysicalCupRestoreTicketPOS);
+    alert((error && error.message) || 'No se pudo preparar el reverso seguro de Vasos físicos. El evento no fue eliminado.');
+    return;
+  }
+
+  try{
+    const t = db.transaction(['sales','events','inventory','meta'],'readwrite');
+    await new Promise((res)=>{ const r = t.objectStore('sales').getAll(); r.onsuccess = ()=>{ (r.result||[]).filter(s=>s.eventId===eventId).forEach(s=> t.objectStore('sales').delete(s.id)); res(); }; });
+    await new Promise((res)=>{ const r = t.objectStore('inventory').getAll(); r.onsuccess = ()=>{ (r.result||[]).filter(i=>i.eventId===eventId).forEach(i=> t.objectStore('inventory').delete(i.id)); res(); }; });
+    t.objectStore('events').delete(eventId);
+    const mreq = t.objectStore('meta').get('currentEventId');
+    mreq.onsuccess = ()=>{ const cur = mreq.result?.value; if (cur === eventId) t.objectStore('meta').put({id:'currentEventId', value:null}); };
+    await new Promise((res,rej)=>{ t.oncomplete=res; t.onerror=()=>rej(t.error); t.onabort=()=>rej(t.error || new Error('Transacción abortada eliminando evento')); });
+  }catch(error){
+    physicalCupTickets.forEach(removePhysicalCupRestoreTicketPOS);
+    throw error;
+  }
+
+  let physicalCupPending = 0;
+  for (const ticket of physicalCupTickets){
+    try{
+      const result = await processPhysicalCupRestoreTicketPOS(ticket, { assumeDeleted:true });
+      if (!result || result.ok === false || !['restored','already_restored'].includes(String(result.reason || ''))) physicalCupPending++;
+    }catch(_){ physicalCupPending++; }
+  }
   await refreshEventUI(); await renderEventos(); await renderDay(); await renderSummary(); await renderInventario(); await renderProductos();
-  toast('Evento eliminado');
+  toast(physicalCupPending ? 'Evento eliminado; hay reversos de Vaso físico pendientes.' : 'Evento eliminado');
 }
 
 // Botón Restaurar productos base (A33)
 async function restoreSeed(){
-  clearCatalogDeletedPOS('products');
-  await seedMissingDefaults(true, { restoreDeleted:true });
-  await renderProductos(); await refreshProductSelect(); await renderInventario();
-  toast('Productos base restaurados');
+  toast('Restauración bloqueada: crea Productos en Catálogos → Productos');
+  return { ok:false, blocked:true, reason:'catalogos_productos_fuente_unica' };
 }
 
 // Init & bindings
@@ -22635,9 +26913,16 @@ async function init(){
 
   // Paso 2: defaults y migraciones
   await runStep('ensureDefaults', ensureDefaults);
+  await runStep('backfillLegacyCardCommissionSnapshotsPOS', backfillLegacyCardCommissionSnapshotsPOS);
+  await runStep('reempaqueReconcileProvisionalFinalMermaPOS', reempaqueReconcileProvisionalFinalMermaPOS);
+  await runStep('sanitizeLegacyFractionalAvailabilityPOS', sanitizeLegacyFractionalAvailabilityPOS);
+  await runStep('processPendingPhysicalCupRestores', processPendingPhysicalCupRestoresPOS);
+  await runStep('reconcilePhysicalCupConsumptions', reconcilePendingPhysicalCupConsumptionsPOS);
+  await runStep('bindPhysicalCupReconciliationHooks', async()=>{ bindPhysicalCupReconciliationHooksPOS(); });
 
   // Paso 2.0: navegación por tabs (delegación, idempotente)
   await runStep('bindTabbarOncePOS', async()=>{ bindTabbarOncePOS(); });
+  await runStep('setupLotesCargadosDisclosurePOS', async()=>{ setupLotesCargadosDisclosurePOS(); });
 
   // Paso 2.1: recuperación conservadora de grupos si events quedó vacío
   await runStep('recoverGroupsIfEventsEmpty', ensureGroupsAvailableAtStartupPOS);
@@ -22685,12 +26970,7 @@ async function init(){
   try{
     const deepTab = getTabFromUrlPOS();
     if (deepTab) setTab(deepTab);
-    // Deep-link extra: #checklist-reminders -> checklist + scroll a la card
-    const scrollTarget = getDeepScrollTargetFromUrlPOS();
-    if (scrollTarget){
-      setTab('checklist');
-      scheduleScrollToIdPOS(scrollTarget);
-    }
+    // Las rutas antiguas de Checklist ya son normalizadas por getTabFromUrlPOS().
   }catch(_){ }
 
   // Vender tab
@@ -22901,7 +27181,6 @@ async function init(){
     }catch(e){}
     try{ await renderSummaryDailyCloseCardPOS(); }catch(e){}
     try{ await refreshSaleStockLabel(); }catch(e){}
-    try{ if (window.__A33_ACTIVE_TAB === 'checklist') await renderChecklistTab(); }catch(e){}
     try{ if (window.__A33_ACTIVE_TAB === 'efectivo') await renderEfectivoTab(); }catch(e){}
   });
   const btnGoCaja = document.getElementById('btn-go-caja');
@@ -22991,7 +27270,7 @@ async function init(){
 
     // FIFO (Etapa 2): re-sincronizar snapshot por evento/lote
     try{
-      if (last && presKeyFromProductNamePOS(getSaleProductNameSnapshotPOS(last))) {
+      if (last && saleTouchesLotsPOS(last)) {
         queueLotsUsageSyncPOS(last.eventId).then(res=>{
           if (res && res.ok===false){
             showToast('FIFO/Lotes: no se pudo actualizar el uso de lotes para este evento. Revisa asignación de lotes.', 'error', 7000);
@@ -23062,7 +27341,7 @@ async function init(){
 
       // FIFO (Etapa 2): re-sincronizar snapshot por evento/lote
       try{
-        if (saleToDelete && presKeyFromProductNamePOS(getSaleProductNameSnapshotPOS(saleToDelete))) {
+        if (saleToDelete && saleTouchesLotsPOS(saleToDelete)) {
           queueLotsUsageSyncPOS(saleToDelete.eventId).then(res=>{
             if (res && res.ok===false){
               showToast('FIFO/Lotes: no se pudo actualizar el uso de lotes para este evento. Revisa asignación de lotes.', 'error', 7000);
@@ -23088,10 +27367,14 @@ async function init(){
   try{ setupProductEditModalPOS(); }catch(_){ }
   const legacyAddProdBtn = document.getElementById('btn-add-prod');
   if (legacyAddProdBtn){
-    legacyAddProdBtn.onclick = async()=>{ const name = $('#new-name').value.trim(); const price = parseFloat($('#new-price').value||'0'); if (!name || !(price>0)) return alert('Nombre y precio'); try{ await put('products', {name, price, manageStock:true, active:true, pos:false, receta:false, letra:'', capacityMl:0, capacidadMl:0, unitCost:0, costoUnitario:0, costPerUnit:0, createdAt:new Date().toISOString(), updatedAt:new Date().toISOString()}); $('#new-name').value=''; $('#new-price').value=''; await renderProductos(); await refreshProductSelect(); await renderInventario(); try{ await reempaquePopulateSelectorsPOS(); }catch(_){ } toast('Producto agregado'); }catch(err){ alert('No se pudo agregar. ¿Nombre duplicado?'); } };
+    legacyAddProdBtn.onclick = ()=> toast('Creación bloqueada: usa Catálogos → Productos');
+    legacyAddProdBtn.disabled = true;
   }
   const legacyRestoreSeedBtn = document.getElementById('btn-restore-seed');
-  if (legacyRestoreSeedBtn) legacyRestoreSeedBtn.onclick = restoreSeed;
+  if (legacyRestoreSeedBtn){
+    legacyRestoreSeedBtn.onclick = restoreSeed;
+    legacyRestoreSeedBtn.disabled = true;
+  }
 
   // Bancos: compatibilidad legacy; fuente maestra en Catálogos → Bancos
   const addBankBtn = document.getElementById('btn-add-bank');
@@ -23210,7 +27493,7 @@ async function exportEventosExcel(){
 
   // Modal close
   document.getElementById('ev-close').onclick = ()=> showEventView(false);
-  document.getElementById('event-view').addEventListener('click', (e)=>{ if (e.target.id==='event-view') showEventView(false); });
+  document.getElementById('event-view').addEventListener('click', (e)=>{ if (e.target === e.currentTarget) showEventView(false); });
 
   // Inventario tab
   $('#inv-event').addEventListener('change', renderInventario);
@@ -23321,7 +27604,7 @@ async function addSale(){
     await addExtraSale(parsed.id);
     return;
   }
-  const productId = (parsed && parsed.kind === 'product') ? parsed.id : parseInt(selVal||'0',10);
+  const selectedProductId = (parsed && parsed.kind === 'product') ? parsed.productId : '';
   const qtyRaw = parseNumPOS($('#sale-qty').value, 0);
   const qty = Math.abs(qtyRaw);
   const priceRaw = parseNumPOS($('#sale-price').value, 0);
@@ -23341,7 +27624,7 @@ async function addSale(){
   const customerName = (customerResolved && customerResolved.id && customerResolved.displayName) ? customerResolved.displayName : '';
   const courtesyTo = $('#sale-courtesy-to').value || '';
   const notes = $('#sale-notes').value || '';
-  if (!date || !productId || !qty) { alert('Completa fecha, producto y cantidad'); return; }
+  if (!date || !selectedProductId || !qty) { alert('Completa fecha, producto y cantidad'); return; }
 
   // Regla final: descuento por unidad NO puede superar el precio unitario (si no es cortesía)
   if (!courtesy && Number.isFinite(price) && discountPerUnit > price + 1e-9) {
@@ -23357,6 +27640,7 @@ async function addSale(){
   let bankId = null;
   let bankName = '';
   let bankType = null;
+  let selectedBankForSale = null;
   if (isBankPaymentMethodPOS(payment)){
     const activeBanks = (await getAllBanksSafe()).filter(b => isBankForPaymentPOS(b, payment));
     const label = getPaymentMethodLabelPOS(payment);
@@ -23379,6 +27663,7 @@ async function addSale(){
     bankId = id;
     bankName = (found && found.name) ? String(found.name) : '';
     bankType = getBankTypePOS(found);
+    selectedBankForSale = found;
   }
 
   const events = await getAll('events');
@@ -23389,7 +27674,7 @@ async function addSale(){
   if (!(await guardSellDayOpenOrToastPOS(event, date))) return;
 
   const products = await getAll('products');
-  const prod = products.find(p => String(p && p.id) === String(productId));
+  const prod = findCatalogProductByStableIdPOS(products, selectedProductId);
   if (!prod){
     alert('Producto no encontrado. Actualiza el selector de POS y vuelve a intentar.');
     await refreshProductSelect({ keepSelection:false });
@@ -23435,7 +27720,7 @@ async function addSale(){
   }
 
   if (prod && productManageStockForSalePOS(prod, true) && !isReturn){
-    const st = await computeStock(curId, productId);
+    const st = await computeStock(curId, prod);
     if (st < qty){
       const go = confirm(`Stock insuficiente de ${productName}: disponible ${st}, intentas vender ${qty}. ¿Continuar de todos modos?`);
       if (!go) return;
@@ -23450,7 +27735,12 @@ async function addSale(){
   const finalQty = isReturn ? -qty : qty;
   if (isReturn) total = -total;
 
-  const costInfo = await resolveSaleUnitCostPOS(curId, productSnap.productId, productName, prod);
+  const lotResolution = isReturn
+    ? await resolveReturnLotAllocationPOS(curId, productSnap.productId, qty)
+    : await resolveSaleLotAllocationPOS(curId, productSnap.productId, productName, qty, products);
+  const lotAllocations = Array.isArray(lotResolution && lotResolution.allocations) ? lotResolution.allocations : [];
+  const primaryLot = lotAllocations[0] || null;
+  const costInfo = await resolveSaleUnitCostPOS(curId, productSnap.productId, productName, prod, products, lotAllocations);
   const unitCost = Number(costInfo.unitCost || 0);
   const economicSnapshot = buildSaleEconomicSnapshotPOS({
     unitPrice: price,
@@ -23462,6 +27752,14 @@ async function addSale(){
     courtesy,
     isReturn
   });
+  const cardCommissionSnapshot = buildSaleCardCommissionSnapshotPOS({
+    payment,
+    bank: selectedBankForSale,
+    ventaNeta: economicSnapshot.ventaNeta,
+    utilidadAntesComision: economicSnapshot.utilidad,
+    courtesy
+  });
+  applySaleCardCommissionSnapshotPOS(economicSnapshot, cardCommissionSnapshot);
 
   const tenderCheck = validateSaleCashTenderPOS({ payment, total, courtesy, isReturn });
   if (!tenderCheck.ok){
@@ -23482,10 +27780,14 @@ async function addSale(){
     eventId:curId,
     eventName,
     productId: productSnap.productId,
+    productInternalId: productSnap.productInternalId,
     productName: productSnap.productName,
     productNameSnapshot: productSnap.productNameSnapshot,
     unitPrice: productSnap.unitPrice,
     unitPriceSnapshot: productSnap.unitPriceSnapshot,
+    vasoFisicoId: productSnap.vasoFisicoId,
+    physicalCupInventoryIdSnapshot: productSnap.physicalCupInventoryIdSnapshot,
+    productClassSnapshot: productSnap.productClassSnapshot,
     productSnapshot: productSnap.productSnapshot,
     qty:finalQty,
     discount,
@@ -23503,6 +27805,21 @@ async function addSale(){
     courtesyTo,
     total,
     notes,
+    loteId: primaryLot ? primaryLot.loteId : null,
+    loteCodigo: primaryLot ? lotCodeDisplayPOS(primaryLot.loteCodigo) : '',
+    lotCode: primaryLot ? lotCodeDisplayPOS(primaryLot.loteCodigo) : '',
+    batchCode: primaryLot ? lotCodeDisplayPOS(primaryLot.loteCodigo) : '',
+    loteCargaId: primaryLot ? primaryLot.loteCargaId : null,
+    loteGroupKey: primaryLot ? primaryLot.loteGroupKey : '',
+    loteAllocations: lotAllocations,
+    lotAllocations: lotAllocations,
+    lotTrace: {
+      loteId: primaryLot ? primaryLot.loteId : null,
+      loteCodigo: primaryLot ? lotCodeDisplayPOS(primaryLot.loteCodigo) : '',
+      loteCargaId: primaryLot ? primaryLot.loteCargaId : null,
+      loteGroupKey: primaryLot ? primaryLot.loteGroupKey : '',
+      allocations: lotAllocations
+    },
     ...economicSnapshot,
     economicSnapshot: {
       productId: productSnap.productId,
@@ -23515,7 +27832,17 @@ async function addSale(){
       costPerUnit: economicSnapshot.costPerUnit,
       costTotal: economicSnapshot.costTotal,
       utilidad: economicSnapshot.utilidad,
+      ...(cardCommissionSnapshot ? {
+        commissionPctSnapshot: cardCommissionSnapshot.commissionPctSnapshot,
+        commissionAmountSnapshot: cardCommissionSnapshot.commissionAmountSnapshot,
+        commissionLabelSnapshot: cardCommissionSnapshot.commissionLabelSnapshot,
+        utilidadAntesComision: cardCommissionSnapshot.utilidadAntesComision,
+        utilidadDespuesComision: cardCommissionSnapshot.utilidadDespuesComision
+      } : {}),
       costSource: economicSnapshot.costSourceSnapshot,
+      loteCodigo: primaryLot ? lotCodeDisplayPOS(primaryLot.loteCodigo) : '',
+      loteId: primaryLot ? primaryLot.loteId : null,
+      loteAllocations: lotAllocations,
       capturedAt: new Date().toISOString()
     }
   };
@@ -23524,6 +27851,8 @@ async function addSale(){
   // Validación mínima (bloqueante antes de guardar)
   const vMin = validateSaleMinimalPOS(saleRecord);
   if (!vMin.ok){ alert(vMin.msg); return; }
+  const vCardCommission = validateSaleCardCommissionSnapshotPOS(saleRecord);
+  if (!vCardCommission.ok){ alert(vCardCommission.msg); return; }
 
   // Etapa 2D: UID estable por intento + dedupe conservador (antes de insertar)
   try{
@@ -23532,6 +27861,12 @@ async function addSale(){
     saleRecord.uid = uid;
     const existing = await getSaleByUidPOS(uid);
     if (existing){
+      try{
+        const cupResult = await ensurePhysicalCupConsumptionForSalePOS(existing);
+        if (cupResult && cupResult.ok === false){
+          posBlockingAlert('Venta ya guardada, pero no se pudo registrar el consumo del Vaso físico. Recarga el POS para reintentar la conciliación.');
+        }
+      }catch(error){ console.warn('No se pudo conciliar Vaso físico en reintento de venta', error); }
       clearPendingSaleUidPOS();
       try{ await renderDay(); await renderSummary(); }catch(_){ }
       try{ if (typeof showToast === 'function') showToast('Venta ya guardada (duplicado bloqueado).', 'error', 4500); else alert('Venta ya guardada (duplicado bloqueado).'); }catch(_){ try{ alert('Venta ya guardada (duplicado bloqueado).'); }catch(__){ } }
@@ -23568,6 +27903,19 @@ async function addSale(){
   }catch(e){
     console.error('Inventario central: no se pudo registrar salida (venta ya guardada)', e);
     posBlockingAlert('Venta guardada, pero no se pudo actualizar Inventario central (storage lleno o bloqueado). Libera espacio y recarga.');
+  }
+
+  // Descontar Vaso físico asociado únicamente después de confirmar la venta/cortesía.
+  try{
+    const cupResult = await ensurePhysicalCupConsumptionForSalePOS(saleRecord);
+    if (cupResult && cupResult.ok === false){
+      posBlockingAlert('Venta guardada, pero no se pudo registrar el consumo del Vaso físico. Recarga el POS para reintentar la conciliación.');
+    } else if (cupResult && cupResult.reason === 'item_missing'){
+      posBlockingAlert('Venta guardada. El Vaso físico asociado ya no existe en Inventario Varios, por lo que no se aplicó el descuento.');
+    }
+  }catch(error){
+    console.error('No se pudo registrar el consumo del Vaso físico', error);
+    posBlockingAlert('Venta guardada, pero falló el consumo del Vaso físico. Recarga el POS para reintentar la conciliación.');
   }
 
   // Crear/actualizar asiento contable automático en Finanzas
@@ -23607,7 +27955,7 @@ async function addSale(){
 
   // FIFO (Etapa 2): persistir snapshot por evento/lote (solo si aplica a presentaciones)
   try{
-    if (presKeyFromProductNamePOS(productName)) {
+    if (saleTouchesLotsPOS(saleRecord)) {
       queueLotsUsageSyncPOS(curId).then(res=>{
         if (res && res.ok===false){
           showToast('FIFO/Lotes: no se pudo actualizar el uso de lotes para este evento. Revisa asignación de lotes.', 'error', 7000);
@@ -23655,6 +28003,7 @@ async function addExtraSale(extraId){
   let bankId = null;
   let bankName = '';
   let bankType = null;
+  let selectedBankForSale = null;
   if (isBankPaymentMethodPOS(payment)){
     const activeBanks = (await getAllBanksSafe()).filter(b => isBankForPaymentPOS(b, payment));
     const label = getPaymentMethodLabelPOS(payment);
@@ -23677,6 +28026,7 @@ async function addExtraSale(extraId){
     bankId = id;
     bankName = (found && found.name) ? String(found.name) : '';
     bankType = getBankTypePOS(found);
+    selectedBankForSale = found;
   }
 
   const extras = sanitizeExtrasPOS(ev.extras).filter(x=>x && x.active!==false);
@@ -23747,6 +28097,14 @@ async function addExtraSale(extraId){
     courtesy,
     isReturn
   });
+  const cardCommissionSnapshot = buildSaleCardCommissionSnapshotPOS({
+    payment,
+    bank: selectedBankForSale,
+    ventaNeta: economicSnapshot.ventaNeta,
+    utilidadAntesComision: economicSnapshot.utilidad,
+    courtesy
+  });
+  applySaleCardCommissionSnapshotPOS(economicSnapshot, cardCommissionSnapshot);
 
   const tenderCheck = validateSaleCashTenderPOS({ payment, total, courtesy, isReturn });
   if (!tenderCheck.ok){
@@ -23808,6 +28166,13 @@ async function addExtraSale(extraId){
       costPerUnit: economicSnapshot.costPerUnit,
       costTotal: economicSnapshot.costTotal,
       utilidad: economicSnapshot.utilidad,
+      ...(cardCommissionSnapshot ? {
+        commissionPctSnapshot: cardCommissionSnapshot.commissionPctSnapshot,
+        commissionAmountSnapshot: cardCommissionSnapshot.commissionAmountSnapshot,
+        commissionLabelSnapshot: cardCommissionSnapshot.commissionLabelSnapshot,
+        utilidadAntesComision: cardCommissionSnapshot.utilidadAntesComision,
+        utilidadDespuesComision: cardCommissionSnapshot.utilidadDespuesComision
+      } : {}),
       costSource: economicSnapshot.costSourceSnapshot,
       capturedAt: new Date().toISOString()
     }
@@ -23817,6 +28182,8 @@ async function addExtraSale(extraId){
   // Validación mínima (bloqueante antes de guardar)
   const vMin = validateSaleMinimalPOS(saleRecord);
   if (!vMin.ok){ alert(vMin.msg); return; }
+  const vCardCommission = validateSaleCardCommissionSnapshotPOS(saleRecord);
+  if (!vCardCommission.ok){ alert(vCardCommission.msg); return; }
 
   // Etapa 2D: UID estable por intento + dedupe conservador (antes de insertar)
   try{

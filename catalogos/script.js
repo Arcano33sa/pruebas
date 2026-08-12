@@ -2,18 +2,12 @@
   'use strict';
 
   const DB_NAME = 'a33-pos';
-  const DB_VER = 34;
+  const DB_VER = 37;
   const DEFAULT_GALON_PRICE = 900;
   const LEGACY_GALON_PRICE = 800;
-  const CANON_GALON_LABEL = 'Galón 3750 ml';
-  const SEED = [
-    { name:'Vaso', price:100, manageStock:true, active:true, capacityMl:null, receta:false, letra:'', pos:true, envaseId:'', tapaId:'' },
-    { name:'Pulso 250ml', price:120, manageStock:true, active:true, receta:true, letra:'P', pos:true, envaseId:'envase_pulso', tapaId:'tapa_pulso_litro' },
-    { name:'Media 375ml', price:150, manageStock:true, active:true, receta:true, letra:'M', pos:true, envaseId:'envase_media', tapaId:'tapa_djeba_media' },
-    { name:'Djeba 750ml', price:300, manageStock:true, active:true, receta:true, letra:'D', pos:true, envaseId:'envase_djeba', tapaId:'tapa_djeba_media' },
-    { name:'Litro 1000ml', price:330, manageStock:true, active:true, receta:true, letra:'L', pos:true, envaseId:'envase_litro', tapaId:'tapa_pulso_litro' },
-    { name:CANON_GALON_LABEL, price:DEFAULT_GALON_PRICE, manageStock:true, active:true, receta:true, letra:'G', pos:true, envaseId:'envase_galon', tapaId:'tapa_galon' }
-  ];
+  const CANON_GALON_LABEL = 'Galón 3720 ml';
+  // Productos no se siembran: Catálogos → Productos es la única fuente oficial.
+
 
   let db = null;
   let currentEditId = null;
@@ -22,6 +16,38 @@
   let currentEnvaseEditId = null;
   let currentTapaEditId = null;
   let currentCustomerEditId = null;
+  let currentCustomerViewId = null;
+  let currentRawMaterialEditId = null;
+  let rawMaterialCreateBusy = false;
+  let rawMaterialEditBusy = false;
+  let customerRenderTokenCAT = 0;
+  let customerSearchTimerCAT = null;
+  let customerLiveRefreshTimerCAT = null;
+  let customerInitializedCAT = false;
+  let customerLastPurchaseLoadPromiseCAT = null;
+  let customerLastPurchaseCacheCAT = { loaded:false, loadedAt:0, byId:new Map(), sourceSales:0, sourceArchives:0 };
+  const customerExpandedGroupsCAT = new Set();
+
+  const COSTS_STORAGE_KEY = 'a33_catalogos_costos_v1';
+  const INVENTORY_STORAGE_KEY = 'arcano33_inventario';
+  const COSTS_RECIPES_STORAGE_KEY = 'arcano33_recetas_v1';
+  const COSTS_SCHEMA_VERSION = 2;
+  const CATALOG_ACTIVE_TAB_KEY = 'a33_catalogos_active_tab_v1';
+  const CATALOG_ALLOWED_TABS = new Set(['productos','costos','materia-prima','envases','tapas','extras','bancos','clientes']);
+  const COST_LIQUIDS = [
+    { key:'vino', label:'Vino' },
+    { key:'vodka', label:'Vodka' },
+    { key:'jugo', label:'Jugo' },
+    { key:'sirope', label:'Sirope' },
+    { key:'agua_pura', label:'Agua pura', inputKey:'agua-pura' }
+  ];
+  const COST_RECIPE_INGREDIENT_KEYS = {
+    vino:['vino','vino_tinto','vinotinto'],
+    vodka:['vodka'],
+    jugo:['jugo','jugo_fruta','jugofruta','juice'],
+    sirope:['sirope','jarabe','syrup'],
+    agua_pura:['agua','agua_pura','aguapura','water']
+  };
 
   const CUSTOMER_CATALOG_KEY = 'a33_pos_customersCatalog';
   const CUSTOMER_DISABLED_KEY = 'a33_pos_customersDisabled';
@@ -42,7 +68,7 @@
     { id:'envase_media', name:'Botella Media', capacityMl:375, active:true },
     { id:'envase_djeba', name:'Botella Djeba', capacityMl:750, active:true },
     { id:'envase_litro', name:'Botella Litro', capacityMl:1000, active:true },
-    { id:'envase_galon', name:'Botella Galón', capacityMl:3750, active:true },
+    { id:'envase_galon', name:'Botella Galón', capacityMl:3720, active:true },
     { id:'envase_catrina', name:'Botella Catrina', capacityMl:null, active:true },
     { id:'envase_catrina_jr', name:'Botella Catrina Jr.', capacityMl:null, active:true }
   ];
@@ -62,52 +88,1242 @@
   function qsa(selector, root){ return Array.prototype.slice.call((root || document).querySelectorAll(selector)); }
   function byId(id){ return document.getElementById(id); }
 
-  function activateTab(target){
-    const key = String(target || '').trim();
-    if (!key) return;
-    qsa('.cat-tab').forEach((tab) => {
-      const active = tab.getAttribute('data-target') === key;
-      tab.classList.toggle('is-active', active);
-      tab.setAttribute('aria-selected', active ? 'true' : 'false');
+  function openModalCAT(id){
+    const modal = byId(id);
+    if (!modal) return false;
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+    try{ document.body.classList.add('cat-modal-open'); }catch(_){ }
+    try{
+      const panel = modal.querySelector('.cat-modal-panel');
+      if (panel) panel.scrollTop = 0;
+    }catch(_){ }
+    return true;
+  }
+
+  function closeModalCAT(id){
+    const modal = byId(id);
+    if (!modal) return false;
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+    try{
+      if (!qs('.cat-modal.show')) document.body.classList.remove('cat-modal-open');
+    }catch(_){ }
+    return true;
+  }
+
+  function bindDismissibleModalCAT(modalId, closeButtonIds, closeHandler){
+    const modal = byId(modalId);
+    if (!modal || typeof closeHandler !== 'function') return;
+    (closeButtonIds || []).forEach((buttonId) => {
+      byId(buttonId)?.addEventListener('click', closeHandler);
     });
-    qsa('.cat-panel').forEach((panel) => {
-      const active = panel.getAttribute('data-panel') === key;
-      panel.classList.toggle('is-active', active);
-      panel.hidden = !active;
+    modal.addEventListener('click', (event) => {
+      if (event.target === modal) closeHandler();
+    });
+    modal.addEventListener('keydown', (event) => {
+      if (event && event.key === 'Escape'){
+        event.preventDefault();
+        closeHandler();
+      }
     });
   }
 
-  function getInitialTabFromUrl(){
-    const allowed = new Set(['productos','envases','tapas','extras','bancos','clientes']);
+  const CATALOG_HISTORY_MARKER = 'a33-catalogos-vistas-v2';
+  const CATALOG_SECTION_LABELS = Object.freeze({
+    'productos':'Productos',
+    'costos':'Costos',
+    'materia-prima':'Materia Prima',
+    'envases':'Envases',
+    'tapas':'Tapas',
+    'extras':'Extras',
+    'bancos':'Bancos',
+    'clientes':'Clientes'
+  });
+  let catalogCurrentSection = '';
+  let catalogLastSection = '';
+  let catalogOverviewScrollY = 0;
+  let catalogNavigationBound = false;
+  let catalogModalHardeningBound = false;
+  const catalogModalFocusReturn = new WeakMap();
+
+  function normalizeCatalogSection(value){
+    const key = String(value || '').trim().toLowerCase();
+    return CATALOG_ALLOWED_TABS.has(key) ? key : '';
+  }
+
+  function getCatalogSectionFromLocation(){
     let key = '';
     try{
       key = String(new URLSearchParams(window.location.search || '').get('tab') || '').trim().toLowerCase();
     }catch(_){ key = ''; }
-    if (!key) {
-      key = String((window.location.hash || '').replace(/^#/, '')).trim().toLowerCase();
+    if (!key){
+      try{ key = decodeURIComponent(String(window.location.hash || '').replace(/^#/, '')).trim().toLowerCase(); }
+      catch(_){ key = String(window.location.hash || '').replace(/^#/, '').trim().toLowerCase(); }
     }
-    return allowed.has(key) ? key : '';
+    return normalizeCatalogSection(key);
   }
 
-  function activateTabFromUrl(){
-    const key = getInitialTabFromUrl();
-    if (key) activateTab(key);
+  function getCatalogOverviewUrl(){
+    try{
+      const url = new URL(window.location.href);
+      url.searchParams.delete('tab');
+      url.hash = '';
+      return url.pathname + url.search;
+    }catch(_){
+      return window.location.pathname || 'index.html';
+    }
   }
 
-  function bindTabs(){
-    qsa('.cat-tab').forEach((tab) => {
-      tab.addEventListener('click', () => {
-        const target = tab.getAttribute('data-target');
-        activateTab(target);
-        try { window.history.replaceState(null, '', '#' + target); } catch(_){ }
+  function getCatalogSectionUrl(target){
+    return getCatalogOverviewUrl() + '#' + encodeURIComponent(target);
+  }
+
+  function getCatalogHistoryState(view, section){
+    return {
+      a33Navigation: CATALOG_HISTORY_MARKER,
+      view: view === 'section' ? 'section' : 'overview',
+      section: view === 'section' ? normalizeCatalogSection(section) : ''
+    };
+  }
+
+  function setCatalogInert(element, inert){
+    if (!element) return;
+    try{ element.inert = !!inert; }catch(_){ }
+    try{
+      if (inert) element.setAttribute('inert', '');
+      else element.removeAttribute('inert');
+    }catch(_){ }
+  }
+
+  function updateCatalogContext(target){
+    const key = normalizeCatalogSection(target);
+    const label = key ? CATALOG_SECTION_LABELS[key] : '';
+    const title = qs('.a33-title');
+    const shell = qs('.cat-shell');
+    const nav = qs('.cat-section-nav');
+    try{ document.title = label ? `Suite A33 · Catálogos · ${label}` : 'Suite A33 · Catálogos'; }catch(_){ }
+    if (title) title.textContent = label ? `Catálogos · ${label}` : 'Catálogos';
+    if (shell) shell.setAttribute('aria-label', label ? `Catálogos: ${label}` : 'Apartados de Catálogos');
+    if (nav) nav.setAttribute('aria-label', label ? `Navegación de Catálogos: ${label}` : 'Navegación interna de Catálogos');
+  }
+
+  function setCatalogCardState(target){
+    qsa('.cat-tab[data-target]').forEach((card) => {
+      const active = !!target && card.getAttribute('data-target') === target;
+      card.classList.toggle('is-active', active);
+      card.setAttribute('aria-expanded', active ? 'true' : 'false');
+      if (active) card.setAttribute('aria-current', 'page');
+      else card.removeAttribute('aria-current');
+    });
+  }
+
+  function setCatalogPanelState(target){
+    qsa('.cat-panel[data-panel]').forEach((panel) => {
+      const active = !!target && panel.getAttribute('data-panel') === target;
+      panel.classList.toggle('is-active', active);
+      panel.hidden = !active;
+      panel.setAttribute('aria-hidden', active ? 'false' : 'true');
+      setCatalogInert(panel, !active);
+    });
+  }
+
+  function focusCatalogCard(target){
+    const card = qs('.cat-tab[data-target="' + target + '"]') || qs('.cat-tab[data-target]');
+    if (!card || typeof card.focus !== 'function') return;
+    window.setTimeout(() => {
+      try{ card.focus({ preventScroll:true }); }
+      catch(_){ try{ card.focus(); }catch(__){ } }
+    }, 60);
+  }
+
+  function focusCatalogSection(target){
+    const panel = qs('.cat-panel[data-panel="' + target + '"]');
+    const focusTarget = qs('[data-cat-back]') || panel;
+    if (!focusTarget || typeof focusTarget.focus !== 'function') return;
+    window.setTimeout(() => {
+      try{ focusTarget.focus({ preventScroll:true }); }
+      catch(_){ try{ focusTarget.focus(); }catch(__){ } }
+    }, 60);
+  }
+
+  function scrollCatalogTo(y){
+    const top = Math.max(0, Number(y) || 0);
+    window.requestAnimationFrame(() => {
+      try{ window.scrollTo({ top, left:0, behavior:'auto' }); }
+      catch(_){ try{ window.scrollTo(0, top); }catch(__){ } }
+    });
+  }
+
+  function showCatalogOverview(options){
+    const opts = options || {};
+    const cardsWrap = qs('.cat-tabs');
+    const panelsWrap = qs('.cat-panels');
+    const shell = qs('.cat-shell');
+    const previous = catalogCurrentSection || catalogLastSection;
+
+    catalogCurrentSection = '';
+    if (shell) shell.classList.remove('is-section-open');
+    if (cardsWrap){
+      cardsWrap.hidden = false;
+      cardsWrap.setAttribute('aria-hidden', 'false');
+      setCatalogInert(cardsWrap, false);
+    }
+    if (panelsWrap){
+      panelsWrap.hidden = true;
+      panelsWrap.setAttribute('aria-hidden', 'true');
+      setCatalogInert(panelsWrap, true);
+    }
+    setCatalogCardState('');
+    setCatalogPanelState('');
+    updateCatalogContext('');
+    try{ document.body.classList.remove('cat-catalog-section-open'); }catch(_){ }
+
+    if (opts.historyMode === 'replace'){
+      try{
+        window.history.replaceState(getCatalogHistoryState('overview'), '', getCatalogOverviewUrl());
+      }catch(_){ }
+    }
+
+    if (opts.focus) focusCatalogCard(previous);
+    if (opts.scroll !== false) scrollCatalogTo(opts.restoreScroll === false ? 0 : catalogOverviewScrollY);
+  }
+
+  function openCatalogSection(target, options){
+    const key = normalizeCatalogSection(target);
+    if (!key) return false;
+    const opts = options || {};
+    const cardsWrap = qs('.cat-tabs');
+    const panelsWrap = qs('.cat-panels');
+    const shell = qs('.cat-shell');
+    const panel = qs('.cat-panel[data-panel="' + key + '"]');
+    if (!panel) return false;
+
+    if (!catalogCurrentSection){
+      try{ catalogOverviewScrollY = Math.max(0, window.scrollY || window.pageYOffset || 0); }catch(_){ catalogOverviewScrollY = 0; }
+    }
+
+    if (catalogCurrentSection === key){
+      if (opts.focus) focusCatalogSection(key);
+      if (opts.scroll === true) scrollCatalogTo(0);
+      return true;
+    }
+
+    catalogCurrentSection = key;
+    catalogLastSection = key;
+    if (shell) shell.classList.add('is-section-open');
+    if (cardsWrap){
+      cardsWrap.hidden = true;
+      cardsWrap.setAttribute('aria-hidden', 'true');
+      setCatalogInert(cardsWrap, true);
+    }
+    if (panelsWrap){
+      panelsWrap.hidden = false;
+      panelsWrap.setAttribute('aria-hidden', 'false');
+      setCatalogInert(panelsWrap, false);
+    }
+    setCatalogCardState(key);
+    setCatalogPanelState(key);
+    updateCatalogContext(key);
+    if (key === 'clientes') scheduleCustomerLiveRefreshCAT({ forceLastPurchase:false, delay:0 });
+    try{ document.body.classList.add('cat-catalog-section-open'); }catch(_){ }
+    try{ localStorage.setItem(CATALOG_ACTIVE_TAB_KEY, key); }catch(_){ }
+
+    if (key === 'costos' && db) scheduleCostsProductsRefresh();
+
+    if (opts.historyMode === 'push'){
+      const state = window.history.state || {};
+      if (!(state.a33Navigation === CATALOG_HISTORY_MARKER && state.view === 'section' && state.section === key)){
+        try{
+          window.history.pushState(getCatalogHistoryState('section', key), '', getCatalogSectionUrl(key));
+        }catch(_){ }
+      }
+    }else if (opts.historyMode === 'replace'){
+      try{
+        window.history.replaceState(getCatalogHistoryState('section', key), '', getCatalogSectionUrl(key));
+      }catch(_){ }
+    }
+
+    if (opts.focus) focusCatalogSection(key);
+    if (opts.scroll !== false) scrollCatalogTo(0);
+    return true;
+  }
+
+  function handleCatalogBack(){
+    const state = window.history.state || {};
+    if (catalogCurrentSection && state.a33Navigation === CATALOG_HISTORY_MARKER && state.view === 'section'){
+      try{
+        window.history.back();
+        return;
+      }catch(_){ }
+    }
+    showCatalogOverview({ focus:true, historyMode:'replace', restoreScroll:true });
+  }
+
+  function syncCatalogNavigationFromHistory(event){
+    const state = event && event.state ? event.state : (window.history.state || {});
+    const sectionFromLocation = getCatalogSectionFromLocation();
+    const isPopState = !!(event && event.type === 'popstate');
+    if (state.a33Navigation === CATALOG_HISTORY_MARKER){
+      if (state.view === 'section' && normalizeCatalogSection(state.section)){
+        openCatalogSection(state.section, { focus:isPopState, historyMode:'none' });
+      }else if (sectionFromLocation){
+        openCatalogSection(sectionFromLocation, { focus:isPopState, historyMode:'replace' });
+      }else{
+        showCatalogOverview({ focus:isPopState, historyMode:'none', restoreScroll:true });
+      }
+      return;
+    }
+
+    if (sectionFromLocation) openCatalogSection(sectionFromLocation, { focus:isPopState, historyMode:'none' });
+    else showCatalogOverview({ focus:isPopState, historyMode:'none', restoreScroll:true });
+  }
+
+  function bindCatalogModalHardening(){
+    if (catalogModalHardeningBound) return;
+    catalogModalHardeningBound = true;
+    const modals = qsa('.cat-modal');
+    const syncModal = (modal) => {
+      if (!modal) return;
+      const open = modal.classList.contains('show');
+      modal.setAttribute('aria-hidden', open ? 'false' : 'true');
+      setCatalogInert(modal, !open);
+      if (open){
+        if (!catalogModalFocusReturn.has(modal)){
+          const active = document.activeElement;
+          if (active && active !== document.body && typeof active.focus === 'function') catalogModalFocusReturn.set(modal, active);
+        }
+        try{ document.body.classList.add('cat-modal-open'); }catch(_){ }
+        window.requestAnimationFrame(() => {
+          if (!modal.classList.contains('show') || modal.contains(document.activeElement)) return;
+          const first = modal.querySelector('input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])');
+          if (first && typeof first.focus === 'function'){
+            try{ first.focus({ preventScroll:true }); }catch(_){ try{ first.focus(); }catch(__){ } }
+          }
+        });
+      }else{
+        if (!qs('.cat-modal.show')){
+          try{ document.body.classList.remove('cat-modal-open'); }catch(_){ }
+        }
+        const returnFocus = catalogModalFocusReturn.get(modal);
+        catalogModalFocusReturn.delete(modal);
+        window.setTimeout(() => {
+          const active = document.activeElement;
+          if (returnFocus && returnFocus.isConnected && (!active || active === document.body || modal.contains(active))){
+            try{ returnFocus.focus({ preventScroll:true }); }catch(_){ try{ returnFocus.focus(); }catch(__){ } }
+          }
+        }, 0);
+      }
+    };
+    modals.forEach(syncModal);
+    try{
+      const observer = new MutationObserver((records) => {
+        records.forEach((record) => {
+          if (record && record.target && record.target.classList && record.target.classList.contains('cat-modal')) syncModal(record.target);
+        });
+      });
+      modals.forEach((modal) => observer.observe(modal, { attributes:true, attributeFilter:['class'] }));
+    }catch(_){ }
+  }
+
+  function bindCatalogNavigation(){
+    if (catalogNavigationBound) return;
+    catalogNavigationBound = true;
+
+    const cards = qsa('.cat-tab[data-target]');
+    cards.forEach((card, index) => {
+      card.addEventListener('click', (event) => {
+        if (event && event.detail > 1) event.preventDefault();
+        openCatalogSection(card.getAttribute('data-target'), { focus:true, historyMode:'push' });
+      });
+      card.addEventListener('keydown', (event) => {
+        if (!event || !['ArrowRight','ArrowLeft','ArrowDown','ArrowUp','Home','End'].includes(event.key)) return;
+        event.preventDefault();
+        let nextIndex = index;
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (index + 1) % cards.length;
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (index - 1 + cards.length) % cards.length;
+        if (event.key === 'Home') nextIndex = 0;
+        if (event.key === 'End') nextIndex = cards.length - 1;
+        const next = cards[nextIndex];
+        if (next && typeof next.focus === 'function'){
+          try{ next.focus({ preventScroll:true }); }
+          catch(_){ next.focus(); }
+        }
       });
     });
+
+    qsa('[data-cat-back]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        if (event && event.detail > 1) event.preventDefault();
+        handleCatalogBack();
+      });
+    });
+
+    window.addEventListener('popstate', syncCatalogNavigationFromHistory);
+    window.addEventListener('hashchange', (event) => {
+      const state = window.history.state || {};
+      const section = getCatalogSectionFromLocation();
+      const stateSection = state.a33Navigation === CATALOG_HISTORY_MARKER && state.view === 'section' ? normalizeCatalogSection(state.section) : '';
+      if (section === stateSection || (!section && state.view === 'overview')) return;
+      syncCatalogNavigationFromHistory(event);
+    });
+    window.addEventListener('pageshow', (event) => {
+      if (event && event.persisted) syncCatalogNavigationFromHistory();
+    });
+
+    const initialSection = getCatalogSectionFromLocation();
+    const state = window.history.state || {};
+
+    if (initialSection){
+      if (state.a33Navigation === CATALOG_HISTORY_MARKER && state.view === 'section' && state.section === initialSection){
+        openCatalogSection(initialSection, { focus:false, historyMode:'none' });
+      }else{
+        try{
+          window.history.replaceState(getCatalogHistoryState('overview'), '', getCatalogOverviewUrl());
+          window.history.pushState(getCatalogHistoryState('section', initialSection), '', getCatalogSectionUrl(initialSection));
+        }catch(_){ }
+        openCatalogSection(initialSection, { focus:false, historyMode:'none' });
+      }
+    }else{
+      showCatalogOverview({ focus:false, historyMode:'replace', scroll:false });
+    }
+
+    window.A33CatalogNavigation = {
+      openSection: openCatalogSection,
+      showOverview: showCatalogOverview,
+      currentSection: () => catalogCurrentSection
+    };
+  }
+
+
+  function setCostsStatus(message, kind){
+    const el = byId('cat-costs-status');
+    if (!el) return;
+    el.textContent = message || '';
+    el.className = 'cat-status' + (kind ? (' ' + kind) : '');
+  }
+
+  function emptyCostsState(){
+    const liquids = {};
+    COST_LIQUIDS.forEach((row) => { liquids[row.key] = { price:null, ml:null }; });
+    return {
+      schemaVersion:COSTS_SCHEMA_VERSION,
+      liquids,
+      consumablesByProduct:{},
+      updatedAt:null
+    };
+  }
+
+  function finiteNonNegativeOrNull(value){
+    if (value === null || value === undefined || String(value).trim() === '') return null;
+    const n = Number(String(value).trim().replace(',', '.'));
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+
+  function normalizeCostsState(raw){
+    const base = emptyCostsState();
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const liquids = src.liquids && typeof src.liquids === 'object' ? src.liquids : src;
+    COST_LIQUIDS.forEach((row) => {
+      const item = liquids && liquids[row.key] && typeof liquids[row.key] === 'object' ? liquids[row.key] : {};
+      base.liquids[row.key] = {
+        price: finiteNonNegativeOrNull(item.price),
+        ml: finiteNonNegativeOrNull(item.ml)
+      };
+    });
+
+    const consumables = (
+      src.consumablesByProduct && typeof src.consumablesByProduct === 'object' ? src.consumablesByProduct :
+      src.consumiblesPorProducto && typeof src.consumiblesPorProducto === 'object' ? src.consumiblesPorProducto :
+      {}
+    );
+    Object.entries(consumables).forEach(([rawProductId, rawItem]) => {
+      const productId = costsStringId(rawProductId);
+      if (!productId || !rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) return;
+      const bottle = finiteNonNegativeOrNull(rawItem.botella ?? rawItem.bottle);
+      const label = finiteNonNegativeOrNull(rawItem.calcomania ?? rawItem.calcomanía ?? rawItem.label ?? rawItem.sticker);
+      if (bottle === null && label === null) return;
+      base.consumablesByProduct[productId] = { botella:bottle, calcomania:label };
+    });
+
+    base.updatedAt = typeof src.updatedAt === 'string' ? src.updatedAt : null;
+    return base;
+  }
+
+  function readCostsState(){
+    try{
+      const raw = localStorage.getItem(COSTS_STORAGE_KEY);
+      if (!raw) return emptyCostsState();
+      return normalizeCostsState(JSON.parse(raw));
+    }catch(err){
+      try{ console.warn('[Suite A33] Costos: configuración local inválida.', err); }catch(_){ }
+      return emptyCostsState();
+    }
+  }
+
+  function writeCostsState(state){
+    const clean = normalizeCostsState(state);
+    clean.schemaVersion = COSTS_SCHEMA_VERSION;
+    clean.updatedAt = new Date().toISOString();
+    localStorage.setItem(COSTS_STORAGE_KEY, JSON.stringify(clean));
+    return clean;
+  }
+
+  function costsInputId(row, field){
+    return 'cat-cost-' + String(row.inputKey || row.key).replace(/_/g, '-') + '-' + field;
+  }
+
+  function renderCostsState(state){
+    const clean = normalizeCostsState(state);
+    COST_LIQUIDS.forEach((row) => {
+      ['price','ml'].forEach((field) => {
+        const input = byId(costsInputId(row, field));
+        if (!input) return;
+        const value = clean.liquids[row.key][field];
+        input.value = value === null ? '' : String(value);
+        input.setAttribute('aria-invalid', 'false');
+      });
+    });
+  }
+
+  function readCostsForm(){
+    const state = normalizeCostsState(readCostsState());
+    let firstInvalid = null;
+    let message = '';
+
+    const markInvalid = (input, text) => {
+      if (input) input.setAttribute('aria-invalid', 'true');
+      if (!firstInvalid){
+        firstInvalid = input;
+        message = text;
+      }
+    };
+
+    qsa('.cat-cost-input, .cat-cost-consumable-input').forEach((input) => input.setAttribute('aria-invalid', 'false'));
+
+    COST_LIQUIDS.forEach((row) => {
+      const priceInput = byId(costsInputId(row, 'price'));
+      const mlInput = byId(costsInputId(row, 'ml'));
+      const priceRaw = String((priceInput && priceInput.value) || '').trim().replace(',', '.');
+      const mlRaw = String((mlInput && mlInput.value) || '').trim().replace(',', '.');
+      const price = priceRaw === '' ? null : Number(priceRaw);
+      const ml = mlRaw === '' ? null : Number(mlRaw);
+
+      if (price !== null && (!Number.isFinite(price) || price < 0)) markInvalid(priceInput, `Precio inválido en ${row.label}.`);
+      if (ml !== null && (!Number.isFinite(ml) || ml < 0)) markInvalid(mlInput, `ML inválido en ${row.label}.`);
+      if (price !== null && Number.isFinite(price) && price >= 0 && (ml === null || !(ml > 0))){
+        markInvalid(mlInput, `Ingresa ML mayor que cero para ${row.label} cuando exista Precio.`);
+      }
+
+      state.liquids[row.key] = {
+        price:price !== null && Number.isFinite(price) && price >= 0 ? price : null,
+        ml:ml !== null && Number.isFinite(ml) && ml >= 0 ? ml : null
+      };
+    });
+
+    qsa('.cat-cost-consumable-input').forEach((input) => {
+      const productId = costsStringId(input.dataset.productId);
+      const field = String(input.dataset.costConsumable || '').trim();
+      if (!productId || !['botella','calcomania'].includes(field)) return;
+      const raw = String(input.value || '').trim().replace(',', '.');
+      const value = raw === '' ? null : Number(raw);
+      const label = field === 'botella' ? 'Botella' : 'Calcomanía';
+      const productName = String(input.dataset.productName || 'el producto');
+      if (value !== null && (!Number.isFinite(value) || value < 0)){
+        markInvalid(input, `${label} inválida en ${productName}.`);
+      }
+      const item = state.consumablesByProduct[productId] || { botella:null, calcomania:null };
+      item[field] = value !== null && Number.isFinite(value) && value >= 0 ? value : null;
+      if (item.botella === null && item.calcomania === null) delete state.consumablesByProduct[productId];
+      else state.consumablesByProduct[productId] = item;
+    });
+
+    return { ok:!firstInvalid, state, message, firstInvalid };
+  }
+
+  function saveCosts(){
+    const checked = readCostsForm();
+    if (!checked.ok){
+      setCostsStatus(checked.message, 'warn');
+      try{ checked.firstInvalid.focus({ preventScroll:false }); }catch(_){ try{ checked.firstInvalid.focus(); }catch(__){ } }
+      return;
+    }
+    try{
+      const saved = writeCostsState(checked.state);
+      renderCostsState(saved);
+      scheduleCostsProductsRefresh();
+      setCostsStatus('Costos guardados correctamente.', 'ok');
+      toast('Costos guardados correctamente');
+    }catch(err){
+      try{ console.error('[Suite A33] Costos: no se pudo guardar.', err); }catch(_){ }
+      setCostsStatus('No se pudieron guardar los costos en este dispositivo.', 'warn');
+    }
+  }
+
+  function bindCostsUi(){
+    byId('cat-save-costs')?.addEventListener('click', saveCosts);
+    qsa('.cat-cost-input').forEach((input) => {
+      input.addEventListener('input', () => {
+        input.setAttribute('aria-invalid', 'false');
+        if (byId('cat-costs-status')?.classList.contains('warn')) setCostsStatus('Cambios sin guardar.');
+        updateCostsComputedFromForm();
+      });
+      input.addEventListener('focus', () => {
+        try{ input.select(); }catch(_){ }
+      });
+      input.addEventListener('keydown', (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter'){
+          event.preventDefault();
+          saveCosts();
+        }
+      });
+    });
+
+    const body = byId('cat-costs-body');
+    body?.addEventListener('input', (event) => {
+      const input = event.target && event.target.closest ? event.target.closest('.cat-cost-consumable-input') : null;
+      if (!input) return;
+      input.setAttribute('aria-invalid', 'false');
+      setCostsStatus('Cambios sin guardar.');
+      updateCostsComputedFromForm();
+    });
+    body?.addEventListener('focusin', (event) => {
+      const input = event.target && event.target.closest ? event.target.closest('.cat-cost-consumable-input') : null;
+      if (!input) return;
+      setTimeout(() => { try{ input.select(); }catch(_){ } }, 0);
+    });
+    body?.addEventListener('keydown', (event) => {
+      const input = event.target && event.target.closest ? event.target.closest('.cat-cost-consumable-input') : null;
+      if (!input) return;
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter'){
+        event.preventDefault();
+        saveCosts();
+      }
+    });
+  }
+
+  function initCosts(){
+    const state = readCostsState();
+    renderCostsState(state);
+    setCostsStatus(state.updatedAt ? 'Configuración de costos cargada.' : 'Configura los líquidos y presiona Guardar.', state.updatedAt ? 'ok' : '');
+  }
+
+  function setCostsRecipeStatus(message, kind){
+    const el = byId('cat-costs-recipe-status');
+    if (!el) return;
+    el.textContent = message || '';
+    el.className = 'cat-status cat-costs-recipe-status' + (kind ? (' ' + kind) : '');
+  }
+
+  function costsPlainObject(value){
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function costsLookupKey(value){
+    return String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '');
+  }
+
+  function costsStringId(value){
+    return value === null || value === undefined ? '' : String(value).trim();
+  }
+
+  function costsRecipeNumber(value){
+    if (value === null || value === undefined || String(value).trim() === '') return 0;
+    const n = Number(String(value).trim().replace(',', '.'));
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+
+  function costsRecipeLooksLike(value){
+    if (!costsPlainObject(value)) return false;
+    const keys = Object.keys(value).map(costsLookupKey);
+    const known = new Set(Object.values(COST_RECIPE_INGREDIENT_KEYS).flat().map(costsLookupKey));
+    if (keys.some(key => known.has(key))) return true;
+    const nestedKeys = new Set(['ingredientes','ingredients','liquidos','liquids','receta','recipe']);
+    return Object.entries(value).some(([key, nested]) => nestedKeys.has(costsLookupKey(key)) && (costsPlainObject(nested) || Array.isArray(nested)));
+  }
+
+  function readCostsRecipesPayload(){
+    let raw = null;
+    try{
+      raw = window.A33Storage && typeof A33Storage.getItem === 'function'
+        ? A33Storage.getItem(COSTS_RECIPES_STORAGE_KEY)
+        : localStorage.getItem(COSTS_RECIPES_STORAGE_KEY);
+    }catch(_){ raw = null; }
+
+    if (raw === null || raw === undefined || String(raw).trim() === ''){
+      return { state:'empty', payload:null, recipes:{}, metadata:[], message:'No hay recetas guardadas en Calculadora de Producción.' };
+    }
+
+    let payload = null;
+    try{ payload = JSON.parse(raw); }
+    catch(err){
+      try{ console.warn('[Suite A33] Costos: arcano33_recetas_v1 contiene JSON inválido.', err); }catch(_){ }
+      return { state:'damaged', payload:null, recipes:{}, metadata:[], message:'Las recetas guardadas no se pudieron leer. Costos sigue operativo y no se borró información.' };
+    }
+
+    if (!costsPlainObject(payload)){
+      return { state:'damaged', payload:null, recipes:{}, metadata:[], message:'El formato de recetas no es válido. Costos sigue operativo y no se borró información.' };
+    }
+
+    let recipes = {};
+    if (costsPlainObject(payload.recetas)){
+      recipes = payload.recetas;
+    }else{
+      Object.entries(payload).forEach(([key, value]) => {
+        if (['version','productos','costospresentacion'].includes(costsLookupKey(key))) return;
+        if (costsRecipeLooksLike(value)) recipes[key] = value;
+      });
+    }
+
+    const cleanRecipes = {};
+    Object.entries(recipes).forEach(([key, value]) => {
+      if (!costsPlainObject(value)) return;
+      cleanRecipes[costsStringId(key)] = value;
+    });
+
+    const metadata = [];
+    const addMetadata = (value, fallbackId, source) => {
+      if (!costsPlainObject(value)) return;
+      const internalId = costsStringId(value.id ?? value.presentationId ?? value.presentacionId ?? value.recipeId ?? fallbackId);
+      const productId = costsStringId(value.productId ?? value.productoId ?? value.catalogProductId ?? value.idProducto);
+      const name = String(value.nombre ?? value.name ?? value.nombreSnapshot ?? value.productName ?? '').replace(/\s+/g, ' ').trim();
+      const letter = String(value.letra ?? value.Letra ?? value.letter ?? value.productionLetter ?? '').trim().toUpperCase();
+      const capacity = positiveNumberOrNull(value.capacidadMl ?? value.capacityMl ?? value.volumenMl ?? value.volumeMl ?? value.ml);
+      if (!internalId && !productId && !name && !letter && !capacity) return;
+      metadata.push({ internalId:internalId || costsStringId(fallbackId), productId, name, letter, capacity, source });
+    };
+
+    if (Array.isArray(payload.productos)){
+      payload.productos.forEach(value => addMetadata(value, '', 'productos'));
+    }else if (costsPlainObject(payload.productos)){
+      Object.entries(payload.productos).forEach(([key, value]) => addMetadata(value, key, 'productos'));
+    }
+    if (costsPlainObject(payload.costosPresentacion)){
+      Object.entries(payload.costosPresentacion).forEach(([key, value]) => addMetadata(value, key, 'costosPresentacion'));
+    }
+    Object.entries(cleanRecipes).forEach(([key, value]) => addMetadata(value, key, 'receta'));
+
+    const recipeCount = Object.keys(cleanRecipes).length;
+    return {
+      state:recipeCount ? 'ok' : 'empty',
+      payload,
+      recipes:cleanRecipes,
+      metadata,
+      message:recipeCount ? '' : 'No hay recetas guardadas en Calculadora de Producción.'
+    };
+  }
+
+  function costsProductId(product){
+    const row = product && typeof product === 'object' ? product : {};
+    try{
+      if (window.A33Products && typeof window.A33Products.getProductId === 'function'){
+        return costsStringId(window.A33Products.getProductId(row));
+      }
+    }catch(_){ }
+    return costsStringId(row.productId ?? row.productoId ?? row.catalogProductId);
+  }
+
+  function resolveCostsProductRecipe(product, recipeData){
+    const recipes = recipeData && costsPlainObject(recipeData.recipes) ? recipeData.recipes : {};
+    const metadata = recipeData && Array.isArray(recipeData.metadata) ? recipeData.metadata : [];
+    const productId = costsProductId(product);
+    if (!productId) return { status:'no_recipe', productId:'', reason:'missing_productId' };
+
+    // Relación estricta: solo la clave exacta productId o metadata con el mismo productId.
+    if (costsPlainObject(recipes[productId])){
+      return { status:'ok', id:productId, recipe:recipes[productId], reason:'productId', productId };
+    }
+
+    const exactIds = [];
+    metadata.forEach((meta) => {
+      if (costsStringId(meta && meta.productId) !== productId) return;
+      const internalId = costsStringId(meta && meta.internalId);
+      if (internalId && costsPlainObject(recipes[internalId])) exactIds.push(internalId);
+    });
+    const uniqueIds = Array.from(new Set(exactIds));
+    if (uniqueIds.length === 1){
+      return { status:'ok', id:uniqueIds[0], recipe:recipes[uniqueIds[0]], reason:'metadata_productId', productId };
+    }
+    if (uniqueIds.length > 1) return { status:'unresolved', productId, candidates:uniqueIds };
+    return { status:'no_recipe', productId, reason:'no_exact_productId_recipe' };
+  }
+
+  function costsIngredientValueFromObject(container, aliases){
+    if (!costsPlainObject(container)) return { found:false, value:0 };
+    const aliasKeys = aliases.map(costsLookupKey);
+    for (const alias of aliases){
+      if (Object.prototype.hasOwnProperty.call(container, alias)){
+        const value = costsRecipeNumber(container[alias]);
+        return { found:true, value, invalid:value === null };
+      }
+    }
+    for (const [key, raw] of Object.entries(container)){
+      if (!aliasKeys.includes(costsLookupKey(key))) continue;
+      const value = costsRecipeNumber(raw);
+      return { found:true, value, invalid:value === null };
+    }
+    return { found:false, value:0 };
+  }
+
+  function costsIngredientMl(recipe, liquidKey){
+    const aliases = COST_RECIPE_INGREDIENT_KEYS[liquidKey] || [liquidKey];
+    const direct = costsIngredientValueFromObject(recipe, aliases);
+    if (direct.found) return direct;
+
+    const nestedKeys = new Set(['ingredientes','ingredients','liquidos','liquids','receta','recipe']);
+    for (const [nestedKey, nested] of Object.entries(costsPlainObject(recipe) ? recipe : {})){
+      if (!nestedKeys.has(costsLookupKey(nestedKey))) continue;
+      const nestedObject = costsIngredientValueFromObject(nested, aliases);
+      if (nestedObject.found) return nestedObject;
+      if (Array.isArray(nested)){
+        for (const row of nested){
+          if (!costsPlainObject(row)) continue;
+          const rowId = costsLookupKey(row.id ?? row.key ?? row.codigo ?? row.ingrediente ?? row.name ?? row.nombre ?? row.tipo);
+          if (!aliases.map(costsLookupKey).includes(rowId)) continue;
+          const value = costsRecipeNumber(row.ml ?? row.cantidad ?? row.quantity ?? row.value ?? row.amount ?? row.volumenMl);
+          return { found:true, value, invalid:value === null };
+        }
+      }
+    }
+    return { found:false, value:0, invalid:false };
+  }
+
+  const COSTS_MONEY_FORMATTER = new Intl.NumberFormat('es-NI', {
+    minimumFractionDigits:2,
+    maximumFractionDigits:2
+  });
+
+  function costsMoney(value){
+    const n = Number(value);
+    return 'C$' + COSTS_MONEY_FORMATTER.format(Number.isFinite(n) && n >= 0 ? n : 0);
+  }
+
+  function costsConsumableItem(state, productId){
+    const clean = state && state.consumablesByProduct && typeof state.consumablesByProduct === 'object'
+      ? state.consumablesByProduct[costsStringId(productId)]
+      : null;
+    return clean && typeof clean === 'object'
+      ? { botella:finiteNonNegativeOrNull(clean.botella), calcomania:finiteNonNegativeOrNull(clean.calcomania) }
+      : { botella:null, calcomania:null };
+  }
+
+  function calculateCostsForProduct(resolution, costsState){
+    if (!resolution || resolution.status === 'no_recipe'){
+      return { status:'no_recipe', total:0, liquidCosts:{}, missing:['receta'] };
+    }
+    if (resolution.status === 'unresolved'){
+      return { status:'unresolved', total:0, liquidCosts:{}, missing:['relación de receta'] };
+    }
+
+    const liquidCosts = {};
+    const missing = [];
+    let total = 0;
+    COST_LIQUIDS.forEach((row) => {
+      const ingredient = costsIngredientMl(resolution.recipe, row.key);
+      if (ingredient.invalid){
+        liquidCosts[row.key] = { status:'invalid_recipe', cost:null, usedMl:null };
+        missing.push(`receta ${row.label}`);
+        return;
+      }
+      const liquid = costsState && costsState.liquids ? costsState.liquids[row.key] : null;
+      const price = liquid ? finiteNonNegativeOrNull(liquid.price) : null;
+      const purchasedMl = liquid ? finiteNonNegativeOrNull(liquid.ml) : null;
+      if (price === null || purchasedMl === null || !(purchasedMl > 0)){
+        liquidCosts[row.key] = { status:'pending', cost:null, usedMl:ingredient.value || 0 };
+        missing.push(row.label);
+        return;
+      }
+      const usedMl = ingredient.value || 0;
+      const costPerMl = price / purchasedMl;
+      const cost = costPerMl * usedMl;
+      if (!Number.isFinite(cost) || cost < 0){
+        liquidCosts[row.key] = { status:'invalid', cost:null, usedMl };
+        missing.push(row.label);
+        return;
+      }
+      liquidCosts[row.key] = { status:'ok', cost, usedMl, price, purchasedMl, costPerMl };
+      total += cost;
+    });
+
+    const consumables = costsConsumableItem(costsState, resolution.productId);
+    if (consumables.botella === null) missing.push('Botella');
+    else total += consumables.botella;
+    if (consumables.calcomania === null) missing.push('Calcomanía');
+    else total += consumables.calcomania;
+
+    return {
+      status:missing.length ? 'pending' : 'complete',
+      total:Number.isFinite(total) && total >= 0 ? total : 0,
+      liquidCosts,
+      consumables,
+      missing
+    };
+  }
+
+  function renderCostsLiquidCell(td, rowKey, productName, calculation){
+    if (!td) return;
+    td.replaceChildren();
+    const span = document.createElement('span');
+    span.className = 'cat-cost-cell-value';
+    if (!calculation || calculation.status === 'no_recipe'){
+      span.textContent = 'Sin receta';
+      span.classList.add('is-muted');
+      span.title = `No existe una receta guardada para ${productName}.`;
+      td.appendChild(span);
+      return;
+    }
+    if (calculation.status === 'unresolved'){
+      span.textContent = 'Sin relación';
+      span.classList.add('is-warning');
+      span.title = `La receta de ${productName} no pudo relacionarse de forma segura con su productId.`;
+      td.appendChild(span);
+      return;
+    }
+
+    const item = calculation.liquidCosts && calculation.liquidCosts[rowKey];
+    if (!item || item.status === 'pending'){
+      span.textContent = 'Pendiente';
+      span.classList.add('is-muted');
+      span.title = `Completa Precio y ML de ${rowKey.replace('_', ' ')} para calcular ${productName}.`;
+      td.appendChild(span);
+      return;
+    }
+    if (item.status === 'invalid_recipe'){
+      span.textContent = 'Revisar receta';
+      span.classList.add('is-warning');
+      span.title = `La cantidad de ${rowKey.replace('_', ' ')} en la receta de ${productName} no es válida.`;
+      td.appendChild(span);
+      return;
+    }
+    if (item.status !== 'ok'){
+      span.textContent = 'Costo incompleto';
+      span.classList.add('is-error');
+      td.appendChild(span);
+      return;
+    }
+
+    span.textContent = costsMoney(item.cost);
+    span.classList.add('is-calculated');
+    span.title = [
+      `${productName} · ${rowKey.replace('_', ' ')}`,
+      `Precio de compra: ${costsMoney(item.price)}`,
+      `ML comprados: ${item.purchasedMl}`,
+      `Costo por ml: ${item.costPerMl.toFixed(6)}`,
+      `ML utilizados: ${item.usedMl}`,
+      `Costo calculado: ${costsMoney(item.cost)}`
+    ].join('\n');
+    span.setAttribute('aria-label', `${rowKey.replace('_', ' ')} para ${productName}: ${costsMoney(item.cost)}`);
+    td.appendChild(span);
+  }
+
+  function renderCostsConsumableCell(td, field, productId, productName, costsState){
+    if (!td) return;
+    td.replaceChildren();
+    const item = costsConsumableItem(costsState, productId);
+    const input = document.createElement('input');
+    input.className = 'cat-cost-input cat-cost-consumable-input a33-num';
+    input.type = 'number';
+    input.inputMode = 'decimal';
+    input.step = '0.01';
+    input.min = '0';
+    input.placeholder = 'Vacío';
+    input.dataset.a33Num = '1';
+    input.dataset.a33Default = '';
+    input.dataset.productId = costsStringId(productId);
+    input.dataset.productName = productName;
+    input.dataset.costConsumable = field;
+    input.setAttribute('aria-invalid', 'false');
+    const label = field === 'botella' ? 'Botella' : 'Calcomanía';
+    input.setAttribute('aria-label', `${label} para ${productName}`);
+    const value = item[field];
+    input.value = value === null ? '' : String(value);
+    td.appendChild(input);
+  }
+
+  function renderCostsTotalCell(td, productName, calculation){
+    if (!td) return;
+    td.replaceChildren();
+    const wrap = document.createElement('span');
+    wrap.className = 'cat-cost-total-value';
+    if (!calculation || calculation.status === 'no_recipe'){
+      wrap.textContent = 'Sin receta';
+      wrap.classList.add('is-muted');
+    }else if (calculation.status === 'unresolved'){
+      wrap.textContent = 'Costo incompleto';
+      wrap.classList.add('is-warning');
+      wrap.title = 'La receta no pudo relacionarse de forma segura con el producto.';
+    }else if (calculation.status === 'complete'){
+      wrap.textContent = costsMoney(calculation.total);
+      wrap.classList.add('is-complete');
+      wrap.setAttribute('aria-label', `Costo total de ${productName}: ${costsMoney(calculation.total)}`);
+    }else{
+      wrap.classList.add('is-pending');
+      wrap.innerHTML = `<strong>${costsMoney(calculation.total)}</strong><small>Pendiente</small>`;
+      wrap.title = `Falta configurar: ${(calculation.missing || []).join(', ') || 'información de costos'}.`;
+      wrap.setAttribute('aria-label', `Costo parcial de ${productName}: ${costsMoney(calculation.total)}. Pendiente.`);
+    }
+    td.appendChild(wrap);
+  }
+
+  function findCostsProductCell(rowKey, productId){
+    const body = byId('cat-costs-body');
+    const row = qsa('tr[data-cost-row]', body).find((node) => String(node.dataset.costRow || '') === String(rowKey || ''));
+    if (!row) return null;
+    return qsa('td[data-product-id]', row).find((node) => String(node.dataset.productId || '') === String(productId || '')) || null;
+  }
+
+  let costsProductContexts = [];
+
+  function renderCostsSummary(contexts, costsState){
+    const list = Array.isArray(contexts) ? contexts : [];
+    let complete = 0;
+    let pending = 0;
+    let noRecipe = 0;
+    list.forEach((ctx) => {
+      const calculation = calculateCostsForProduct(ctx.resolution, costsState);
+      if (calculation.status === 'complete') complete += 1;
+      else if (calculation.status === 'no_recipe' || calculation.status === 'unresolved') noRecipe += 1;
+      else pending += 1;
+    });
+    const values = {
+      'cat-costs-summary-visible':list.length,
+      'cat-costs-summary-complete':complete,
+      'cat-costs-summary-pending':pending,
+      'cat-costs-summary-no-recipe':noRecipe
+    };
+    Object.entries(values).forEach(([id, value]) => {
+      const el = byId(id);
+      if (el) el.textContent = String(value);
+    });
+  }
+
+  function updateCostsComputedFromForm(){
+    const checked = readCostsForm();
+    const state = checked.state || readCostsState();
+    costsProductContexts.forEach((ctx) => {
+      const calculation = calculateCostsForProduct(ctx.resolution, state);
+      COST_LIQUIDS.forEach((row) => renderCostsLiquidCell(findCostsProductCell(row.key, ctx.productId), row.key, ctx.name, calculation));
+      renderCostsTotalCell(findCostsProductCell('total', ctx.productId), ctx.name, calculation);
+    });
+    renderCostsSummary(costsProductContexts, state);
+  }
+
+  let costsProductsRefreshTimer = null;
+  let costsProductsRenderToken = 0;
+
+  function positiveNumberOrNull(value){
+    const n = Number(String(value ?? '').trim().replace(',', '.'));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+
+  function costsProductOrderValue(product){
+    const p = product && typeof product === 'object' ? product : {};
+    const candidates = [p.order, p.orden, p.position, p.posicion, p.sortOrder, p.displayOrder, p.orderIndex];
+    for (const value of candidates){
+      const n = Number(value);
+      if (Number.isFinite(n)) return n;
+    }
+    return null;
+  }
+
+  function costsProductsInOperationalOrder(products){
+    const decorated = (Array.isArray(products) ? products : []).map((product, index) => ({
+      product,
+      index,
+      order:costsProductOrderValue(product)
+    }));
+    if (!decorated.some(item => item.order !== null)) return decorated.map(item => item.product);
+    decorated.sort((a, b) => {
+      if (a.order !== null && b.order !== null && a.order !== b.order) return a.order - b.order;
+      if (a.order !== null && b.order === null) return -1;
+      if (a.order === null && b.order !== null) return 1;
+      return a.index - b.index;
+    });
+    return decorated.map(item => item.product);
+  }
+
+  function costsCapacityFromName(name){
+    const text = String(name || '');
+    const match = text.match(/(\d+(?:[.,]\d+)?)\s*(ml|mililitros?|l|lt|litros?)\b/i);
+    if (!match) return null;
+    const value = positiveNumberOrNull(match[1]);
+    if (!value) return null;
+    const unit = String(match[2] || '').toLowerCase();
+    return unit.startsWith('l') && value < 100 ? Math.round(value * 1000) : Math.round(value);
+  }
+
+  function costsProductCapacityMl(product, envases){
+    const p = product && typeof product === 'object' ? product : {};
+    const finishedId = mapProductNameToFinishedId(p.name || p.nombre || '');
+    if (finishedId === 'galon') return 3720;
+
+    const directCandidates = [p.capacityMl, p.capacidadMl, p.capacity, p.capacidad, p.volumeMl, p.volumenMl, p.ml, p.mililitros, p.sizeMl];
+    for (const value of directCandidates){
+      const n = positiveNumberOrNull(value);
+      if (n) return Math.round(n);
+    }
+
+    const envaseId = productEnvaseId(p);
+    if (envaseId){
+      const envase = (Array.isArray(envases) ? envases : []).find(row => row && String(row.id || '').trim() === envaseId);
+      const envaseMl = envaseCapacity(envase);
+      if (envaseMl > 0) return envaseMl;
+    }
+
+    const fromName = costsCapacityFromName(p.name || p.nombre || '');
+    if (fromName) return fromName;
+
+    const legacy = { pulso:250, media:375, djeba:750, litro:1000, galon:3720 };
+    return legacy[finishedId || ''] || 0;
+  }
+
+  function costsProductHeaderName(product){
+    const p = product && typeof product === 'object' ? product : {};
+    const raw = String(p.name || p.nombre || 'Producto').replace(/\s+/g, ' ').trim() || 'Producto';
+    if (mapProductNameToFinishedId(raw) === 'galon') return 'Galón';
+    const withoutTrailingCapacity = raw.replace(/\s*[-–—·,/]*\s*\(?\d+(?:[.,]\d+)?\s*(?:ml|mililitros?|l|lt|litros?)\)?\s*$/i, '').trim();
+    return withoutTrailingCapacity || raw;
+  }
+
+  function clearCostsProductColumns(){
+    qsa('[data-cost-product-column="1"]').forEach((node) => node.remove());
+  }
+
+  function setCostsEmptyState(show, message){
+    const empty = byId('cat-costs-empty');
+    if (!empty) return;
+    empty.textContent = message || 'No hay productos activos con Receta disponibles para calcular.';
+    empty.hidden = !show;
+  }
+
+  async function renderCostsProductColumns(){
+    const table = qs('.cat-costs-table');
+    const colgroup = byId('cat-costs-colgroup');
+    const headRow = byId('cat-costs-head-row');
+    const body = byId('cat-costs-body');
+    if (!table || !colgroup || !headRow || !body) return;
+
+    const token = ++costsProductsRenderToken;
+    try{
+      await openDB();
+      const all = (window.A33Products && typeof window.A33Products.getAll === 'function')
+        ? await window.A33Products.getAll()
+        : await getAll('products');
+      if (token !== costsProductsRenderToken) return;
+
+      const activeProducts = costsProductsInOperationalOrder(all).filter((product) => product && product.active !== false && product.deleted !== true && !!costsProductId(product));
+      const products = activeProducts.filter((product) => {
+        if (!product || product.active === false || product.deleted === true || !productHasRecipe(product)) return false;
+        return !!costsProductId(product);
+      });
+      const duplicateHeaderCounts = new Map();
+      products.forEach((product) => {
+        const key = costsLookupKey(costsProductHeaderName(product));
+        if (key) duplicateHeaderCounts.set(key, (duplicateHeaderCounts.get(key) || 0) + 1);
+      });
+      const envases = readEnvaseCatalog();
+      const recipeData = readCostsRecipesPayload();
+      const costsState = readCostsState();
+      let linkedCount = 0;
+      let missingCount = 0;
+      let unresolvedCount = 0;
+
+      clearCostsProductColumns();
+      costsProductContexts = [];
+      table.dataset.productColumns = String(products.length);
+
+      products.forEach((product) => {
+        const productId = costsProductId(product);
+        const rawName = costsProductHeaderName(product);
+        const duplicateKey = costsLookupKey(rawName);
+        const name = (duplicateHeaderCounts.get(duplicateKey) || 0) > 1
+          ? `${rawName} · ${productId.slice(-6)}`
+          : rawName;
+        const capacityMl = costsProductCapacityMl(product, envases);
+        const recipeResolution = resolveCostsProductRecipe(product, recipeData);
+        recipeResolution.productId = productId;
+        if (recipeResolution.status === 'ok') linkedCount += 1;
+        else if (recipeResolution.status === 'unresolved') unresolvedCount += 1;
+        else missingCount += 1;
+
+        const context = { productId, name, capacityMl, resolution:recipeResolution };
+        costsProductContexts.push(context);
+        const calculation = calculateCostsForProduct(recipeResolution, costsState);
+
+        const col = document.createElement('col');
+        col.className = 'cat-cost-col-product';
+        col.dataset.costProductColumn = '1';
+        col.dataset.productId = productId;
+        colgroup.appendChild(col);
+
+        const th = document.createElement('th');
+        th.scope = 'col';
+        th.className = 'cat-cost-product-head';
+        th.dataset.costProductColumn = '1';
+        th.dataset.productId = productId;
+        th.innerHTML = `<span class="cat-cost-product-name">${escapeHtml(name)}</span><small>${capacityMl > 0 ? `${escapeHtml(String(capacityMl))} ml` : 'ML no definido'}</small>`;
+        headRow.appendChild(th);
+
+        qsa('tr[data-cost-row]', body).forEach((row) => {
+          const td = document.createElement('td');
+          td.className = 'cat-cost-product-cell';
+          td.dataset.costProductColumn = '1';
+          td.dataset.productId = productId;
+          const rowKey = String(row.dataset.costRow || '').trim();
+          if (COST_LIQUIDS.some((liquid) => liquid.key === rowKey)){
+            renderCostsLiquidCell(td, rowKey, name, calculation);
+          }else if (rowKey === 'botella' || rowKey === 'calcomania'){
+            renderCostsConsumableCell(td, rowKey, productId, name, costsState);
+          }else if (rowKey === 'total'){
+            renderCostsTotalCell(td, name, calculation);
+          }else{
+            td.textContent = '—';
+          }
+          row.appendChild(td);
+        });
+      });
+
+      setCostsEmptyState(!products.length, activeProducts.length
+        ? 'No hay productos activos con Receta. Active Receta desde Catálogos → Productos.'
+        : 'No hay productos activos. Cree productos desde Catálogos → Productos.');
+      renderCostsSummary(costsProductContexts, costsState);
+      if (recipeData.state === 'damaged'){
+        setCostsRecipeStatus(recipeData.message, 'warn');
+      }else if (recipeData.state === 'empty'){
+        setCostsRecipeStatus(products.length ? recipeData.message : 'No hay productos activos con Receta para mostrar.', products.length ? 'warn' : '');
+      }else if (unresolvedCount){
+        setCostsRecipeStatus(`${linkedCount} producto(s) conectado(s). ${unresolvedCount} producto(s) requieren revisar su relación con la receta.`, 'warn');
+      }else if (missingCount){
+        setCostsRecipeStatus(`${linkedCount} producto(s) conectado(s). ${missingCount} producto(s) todavía no tiene receta guardada.`, '');
+      }else{
+        setCostsRecipeStatus(`${linkedCount} producto(s) conectado(s) con sus recetas reales.`, 'ok');
+      }
+    }catch(err){
+      try{ console.warn('[Suite A33] Costos: no se pudieron reconstruir las columnas de productos.', err); }catch(_){ }
+      clearCostsProductColumns();
+      costsProductContexts = [];
+      table.dataset.productColumns = '0';
+      setCostsEmptyState(true, 'No hay productos activos con Receta disponibles para calcular.');
+      renderCostsSummary([], readCostsState());
+      setCostsRecipeStatus('No se pudieron leer las recetas o productos. La información existente no fue modificada.', 'warn');
+    }
+  }
+
+  function scheduleCostsProductsRefresh(){
+    clearTimeout(costsProductsRefreshTimer);
+    costsProductsRefreshTimer = setTimeout(() => {
+      renderCostsProductColumns().catch(() => {});
+    }, 0);
   }
 
   function registerServiceWorker(){
     if (!('serviceWorker' in navigator)) return;
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./sw.js?v=4.20.84&r=19').then((reg)=>{
+      navigator.serviceWorker.register('./sw.js?v=4.20.98&r=8').then((reg)=>{
         try{ reg.update(); }catch(_){ }
       }).catch(() => {});
     }, { once:true });
@@ -204,12 +1420,135 @@
     return String(p.tapaId ?? p.capId ?? p.corkId ?? p.packagingTapaId ?? '').trim();
   }
 
-  function buildRecipeLetterUsage(products, currentId){
+  function productVasoFisicoId(product){
+    const p = product && typeof product === 'object' ? product : {};
+    return String(p.vasoFisicoId ?? p.physicalCupInventoryId ?? p.cupInventoryItemId ?? '').trim();
+  }
+
+  function readInventoryDocumentForCatalog(){
+    try{
+      if (window.A33Storage && typeof window.A33Storage.sharedRead === 'function'){
+        const result = window.A33Storage.sharedRead(INVENTORY_STORAGE_KEY, {}, 'local');
+        if (result && result.data && typeof result.data === 'object') return result.data;
+      }
+    }catch(_){ }
+    try{
+      if (window.A33Storage && typeof window.A33Storage.sharedGet === 'function'){
+        const result = window.A33Storage.sharedGet(INVENTORY_STORAGE_KEY, {}, 'local');
+        if (result && typeof result === 'object') return result;
+      }
+    }catch(_){ }
+    try{
+      const raw = window.localStorage ? window.localStorage.getItem(INVENTORY_STORAGE_KEY) : null;
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    }catch(_){ return {}; }
+  }
+
+  function inventoryVariosRowsForProducts(){
+    const inventory = readInventoryDocumentForCatalog();
+    const source = Array.isArray(inventory && inventory.varios) ? inventory.varios : [];
+    const seen = new Set();
+    const rows = [];
+    source.forEach((item) => {
+      const row = item && typeof item === 'object' ? item : {};
+      const id = String(row.id || '').trim();
+      const name = String(row.producto ?? row.name ?? row.nombre ?? '').trim();
+      if (!id || !name || row.active === false || row.activo === false || row.deleted === true) return;
+      if (seen.has(id)) return;
+      seen.add(id);
+      const stockRaw = Number(row.stock);
+      const minimumRaw = Number(row.minimo ?? row.min ?? 0);
+      rows.push({
+        id,
+        name,
+        stock:Number.isFinite(stockRaw) ? Math.trunc(stockRaw) : 0,
+        minimum:Number.isFinite(minimumRaw) ? Math.max(0, Math.trunc(minimumRaw)) : 0
+      });
+    });
+    rows.sort((a,b)=>String(a.name || '').localeCompare(String(b.name || ''), 'es-NI', { sensitivity:'base' }));
+    return rows;
+  }
+
+  function inventoryVariosStatusLabel(row){
+    const item = row && typeof row === 'object' ? row : {};
+    const stock = Number.isFinite(Number(item.stock)) ? Math.trunc(Number(item.stock)) : 0;
+    const minimum = Number.isFinite(Number(item.minimum)) ? Math.max(0, Math.trunc(Number(item.minimum))) : 0;
+    if (stock <= 0) return 'Agotado';
+    if (stock <= minimum) return 'Bajo';
+    return 'Disponible';
+  }
+
+  function inventoryVariosNameById(rows, inventoryId){
+    const target = String(inventoryId || '').trim();
+    if (!target) return '';
+    const row = (Array.isArray(rows) ? rows : []).find(item => item && String(item.id || '').trim() === target);
+    return row ? String(row.name || '').trim() : '';
+  }
+
+  function populateProductPhysicalCupSelect(prefix, selectedId){
+    const select = byId(prefix + '-vaso-fisico');
+    if (!select) return;
+    const selected = String(selectedId ?? select.value ?? '').trim();
+    const rows = inventoryVariosRowsForProducts();
+    const parts = ['<option value="">Sin asociación</option>'];
+    rows.forEach((row) => {
+      const status = inventoryVariosStatusLabel(row);
+      const label = `${row.name} · Stock ${row.stock} · ${status}`;
+      parts.push(`<option value="${escapeHtml(row.id)}">${escapeHtml(label)}</option>`);
+    });
+    if (selected && !rows.some(row => row.id === selected)){
+      parts.push(`<option value="${escapeHtml(selected)}">Asociación no encontrada · ${escapeHtml(selected)}</option>`);
+    }
+    select.innerHTML = parts.join('');
+    select.value = selected && Array.from(select.options).some(option => option.value === selected) ? selected : '';
+  }
+
+  function refreshProductPhysicalCupSelects(){
+    const newSelect = byId('cat-new-vaso-fisico');
+    const editSelect = byId('cat-edit-vaso-fisico');
+    populateProductPhysicalCupSelect('cat-new', newSelect ? newSelect.value : '');
+    populateProductPhysicalCupSelect('cat-edit', editSelect ? editSelect.value : '');
+  }
+
+
+  function productStableId(product){
+    const p = product && typeof product === 'object' ? product : {};
+    try{
+      if (window.A33Products && typeof window.A33Products.getProductId === 'function'){
+        const id = window.A33Products.getProductId(p);
+        if (id) return String(id).trim();
+      }
+    }catch(_){ }
+    return String(p.productId ?? p.productoId ?? '').trim();
+  }
+
+  function findProductByProductId(list, productId){
+    const target = String(productId ?? '').trim();
+    if (!target) return null;
+    return (Array.isArray(list) ? list : []).find((row) => row && productStableId(row) === target) || null;
+  }
+
+  function prepareNewCatalogProduct(record, origin){
+    if (window.A33Products && typeof window.A33Products.prepareNew === 'function'){
+      return window.A33Products.prepareNew(record, { origin:origin || 'usuario' });
+    }
+    return { ...record, productId:'prd_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,10), origin:origin || 'usuario' };
+  }
+
+  function prepareExistingCatalogProduct(current, patch){
+    if (window.A33Products && typeof window.A33Products.prepareExisting === 'function'){
+      return window.A33Products.prepareExisting(current, patch);
+    }
+    return { ...current, ...patch, productId:productStableId(current) };
+  }
+
+  function buildRecipeLetterUsage(products, currentProductId){
     const map = new Map();
-    const cid = currentId == null ? '' : String(currentId).trim();
+    const cid = currentProductId == null ? '' : String(currentProductId).trim();
     for (const p of (Array.isArray(products) ? products : [])){
       if (!p || !productHasRecipe(p)) continue;
-      const pid = p.id == null ? '' : String(p.id).trim();
+      const pid = productStableId(p);
       if (cid && pid === cid) continue;
       const letter = productLetter(p);
       if (!letter) continue;
@@ -219,10 +1558,10 @@
     return map;
   }
 
-  function findDuplicateRecipeLetter(products, letter, currentId){
+  function findDuplicateRecipeLetter(products, letter, currentProductId){
     const clean = normalizeProductLetter(letter);
     if (!clean) return null;
-    const usage = buildRecipeLetterUsage(products, currentId);
+    const usage = buildRecipeLetterUsage(products, currentProductId);
     const list = usage.get(clean) || [];
     return list.length ? list[0] : null;
   }
@@ -254,7 +1593,8 @@
   function productDataContractSnapshot(product){
     const p = product && typeof product === 'object' ? product : {};
     return {
-      id: p.id,
+      productId: productStableId(p),
+      legacyId: p.id,
       nombre: p.name || p.nombre || '',
       activo: p.active !== false,
       precio: round2(p.price),
@@ -265,7 +1605,8 @@
       Letra: productLetter(p),
       POS: productPosEnabled(p),
       envaseId: productEnvaseId(p),
-      tapaId: productTapaId(p)
+      tapaId: productTapaId(p),
+      vasoFisicoId: productVasoFisicoId(p)
     };
   }
 
@@ -276,56 +1617,6 @@
     return row ? String(row.name || row.nombre || '').trim() : (missingLabel || 'Eliminado');
   }
 
-  function findCatalogIdByName(list, names, activeFn){
-    const arr = Array.isArray(list) ? list : [];
-    const wanted = (Array.isArray(names) ? names : [names]).map(normalizeEnvaseTapaLookupKey).filter(Boolean);
-    for (const key of wanted){
-      const row = arr.find(x => x && (!activeFn || activeFn(x)) && normalizeEnvaseTapaLookupKey(x.name || x.nombre || '') === key);
-      if (row && row.id) return String(row.id).trim();
-    }
-    for (const key of wanted){
-      const row = arr.find(x => x && normalizeEnvaseTapaLookupKey(x.name || x.nombre || '') === key);
-      if (row && row.id) return String(row.id).trim();
-    }
-    return '';
-  }
-
-  function normalizeEnvaseTapaLookupKey(value){
-    return normName(value).replace(/[^a-z0-9]+/g, '');
-  }
-
-  function productPackagingSuggestion(product, envases, tapas){
-    const name = String((product && (product.name || product.nombre)) || '');
-    const n = normName(name);
-    const finishedId = mapProductNameToFinishedId(name);
-    const out = { envaseId:'', tapaId:'' };
-
-    if (n.includes('catrina') && (n.includes('jr') || n.includes('junior'))){
-      out.envaseId = findCatalogIdByName(envases, ['Botella Catrina Jr.', 'Botella Catrina Junior'], envaseActive);
-      out.tapaId = findCatalogIdByName(tapas, ['Corcho Catrina Jr.', 'Corcho Catrina Junior', 'Tapa Catrina Jr.', 'Tapa Catrina Junior', 'Corcho Catrina'], tapaActive);
-      return out;
-    }
-    if (n.includes('catrina')){
-      out.envaseId = findCatalogIdByName(envases, ['Botella Catrina'], envaseActive);
-      out.tapaId = findCatalogIdByName(tapas, ['Corcho Catrina', 'Tapa Catrina'], tapaActive);
-      return out;
-    }
-
-    const map = {
-      pulso: { envase:['Botella Pulso'], tapa:['Tapa Pulso/Litro'] },
-      media: { envase:['Botella Media'], tapa:['Tapa Djeba/Media'] },
-      djeba: { envase:['Botella Djeba'], tapa:['Tapa Djeba/Media'] },
-      litro: { envase:['Botella Litro'], tapa:['Tapa Pulso/Litro'] },
-      galon: { envase:['Botella Galón', 'Botella Galon'], tapa:['Tapa Galón', 'Tapa Galon'] }
-    };
-    const cfg = map[finishedId || ''];
-    if (cfg){
-      out.envaseId = findCatalogIdByName(envases, cfg.envase, envaseActive);
-      out.tapaId = findCatalogIdByName(tapas, cfg.tapa, tapaActive);
-    }
-    return out;
-  }
-
   function catalogHasId(list, id){
     const key = String(id || '').trim();
     if (!key) return false;
@@ -334,28 +1625,17 @@
 
   function applyProductPackagingDefaults(product, envases, tapas){
     if (!product || typeof product !== 'object') return false;
-    const suggestion = productPackagingSuggestion(product, envases, tapas);
     let changed = false;
 
+    // Solo se normalizan relaciones que ya fueron configuradas explícitamente.
+    // Nunca se asigna Envase/Tapa por nombre, Letra, capacidad o presentación legacy.
     const currentEnvase = productEnvaseId(product);
     if (currentEnvase && product.envaseId !== currentEnvase){ product.envaseId = currentEnvase; changed = true; }
-    if ((!currentEnvase || !catalogHasId(envases, currentEnvase)) && suggestion.envaseId){
-      product.envaseId = suggestion.envaseId;
-      changed = true;
-    } else if (!hasOwn(product, 'envaseId')){
-      product.envaseId = '';
-      changed = true;
-    }
+    if (!hasOwn(product, 'envaseId')){ product.envaseId = ''; changed = true; }
 
     const currentTapa = productTapaId(product);
     if (currentTapa && product.tapaId !== currentTapa){ product.tapaId = currentTapa; changed = true; }
-    if ((!currentTapa || !catalogHasId(tapas, currentTapa)) && suggestion.tapaId){
-      product.tapaId = suggestion.tapaId;
-      changed = true;
-    } else if (!hasOwn(product, 'tapaId')){
-      product.tapaId = '';
-      changed = true;
-    }
+    if (!hasOwn(product, 'tapaId')){ product.tapaId = ''; changed = true; }
 
     return changed;
   }
@@ -626,75 +1906,108 @@
     return String((a && a.name) || '').localeCompare(String((b && b.name) || ''), 'es-NI', { sensitivity:'base' });
   }
 
+  function applyCatalogSchema(database, transaction){
+    const ensureIndex = (store, name, keyPath, options)=>{
+      try{ if (!store.indexNames.contains(name)) store.createIndex(name, keyPath, options || { unique:false }); }catch(_){ }
+    };
+    let store = null;
+    if (!database.objectStoreNames.contains('products')) store = database.createObjectStore('products', { keyPath:'id', autoIncrement:true });
+    else { try{ store = transaction.objectStore('products'); }catch(_){ store = null; } }
+    if (store) ensureIndex(store, 'by_name', 'name', { unique:false });
+
+    if (!database.objectStoreNames.contains('events')) store = database.createObjectStore('events', { keyPath:'id', autoIncrement:true });
+    else { try{ store = transaction.objectStore('events'); }catch(_){ store = null; } }
+    if (store) ensureIndex(store, 'by_name', 'name', { unique:true });
+
+    if (!database.objectStoreNames.contains('sales')) store = database.createObjectStore('sales', { keyPath:'id', autoIncrement:true });
+    else { try{ store = transaction.objectStore('sales'); }catch(_){ store = null; } }
+    if (store){
+      ensureIndex(store, 'by_date', 'date', { unique:false });
+      ensureIndex(store, 'by_event', 'eventId', { unique:false });
+      ensureIndex(store, 'by_uid', 'uid', { unique:true });
+    }
+
+    if (!database.objectStoreNames.contains('inventory')) store = database.createObjectStore('inventory', { keyPath:'id', autoIncrement:true });
+    else { try{ store = transaction.objectStore('inventory'); }catch(_){ store = null; } }
+    if (store) ensureIndex(store, 'by_event', 'eventId', { unique:false });
+
+    if (!database.objectStoreNames.contains('reempaques')) store = database.createObjectStore('reempaques', { keyPath:'id' });
+    else { try{ store = transaction.objectStore('reempaques'); }catch(_){ store = null; } }
+    if (store){
+      ensureIndex(store, 'by_event', 'eventId', { unique:false });
+      ensureIndex(store, 'by_createdAt', 'createdAt', { unique:false });
+      ensureIndex(store, 'by_event_createdAt', ['eventId','createdAt'], { unique:false });
+      ensureIndex(store, 'by_estado', 'estado', { unique:false });
+    }
+
+    if (!database.objectStoreNames.contains('rawMaterials')) store = database.createObjectStore('rawMaterials', { keyPath:'id', autoIncrement:true });
+    else { try{ store = transaction.objectStore('rawMaterials'); }catch(_){ store = null; } }
+    if (store){
+      ensureIndex(store, 'by_name_normalized', 'nameNormalized', { unique:false });
+      ensureIndex(store, 'by_active', 'active', { unique:false });
+      ensureIndex(store, 'by_updated_at', 'updatedAt', { unique:false });
+    }
+
+    if (!database.objectStoreNames.contains('extras')) store = database.createObjectStore('extras', { keyPath:'id', autoIncrement:true });
+    else { try{ store = transaction.objectStore('extras'); }catch(_){ store = null; } }
+    if (store){
+      ensureIndex(store, 'by_name', 'name', { unique:false });
+      ensureIndex(store, 'by_active', 'active', { unique:false });
+    }
+
+    if (!database.objectStoreNames.contains('banks')) store = database.createObjectStore('banks', { keyPath:'id', autoIncrement:true });
+    else { try{ store = transaction.objectStore('banks'); }catch(_){ store = null; } }
+    if (store){
+      ensureIndex(store, 'by_name', 'name', { unique:false });
+      ensureIndex(store, 'by_active', 'isActive', { unique:false });
+      ensureIndex(store, 'by_type', 'type', { unique:false });
+    }
+
+    if (!database.objectStoreNames.contains('meta')) database.createObjectStore('meta', { keyPath:'id' });
+  }
+
+  function catalogSchemaNeedsUpgrade(connection){
+    const required = ['products','events','sales','inventory','reempaques','rawMaterials','extras','banks','meta'];
+    if (required.some((name)=>!connection.objectStoreNames.contains(name))) return true;
+    try{
+      const tx = connection.transaction('rawMaterials', 'readonly');
+      const indexes = tx.objectStore('rawMaterials').indexNames;
+      return !indexes.contains('by_name_normalized') || !indexes.contains('by_active') || !indexes.contains('by_updated_at');
+    }catch(_){ return true; }
+  }
+
+  function adoptCatalogDb(connection, resolve){
+    db = connection;
+    try{ db.onversionchange = ()=>{ try{ db.close(); }catch(_){ } db = null; }; }catch(_){ }
+    resolve(db);
+  }
+
   function openDB(){
     if (db) return Promise.resolve(db);
     return new Promise((resolve, reject)=>{
-      const req = indexedDB.open(DB_NAME, DB_VER);
-      req.onupgradeneeded = (event)=>{
-        const d = event.target.result;
-        if (!d.objectStoreNames.contains('products')){
-          const os = d.createObjectStore('products', { keyPath:'id', autoIncrement:true });
-          try{ os.createIndex('by_name','name',{ unique:true }); }catch(_){ }
+      const fail = (error)=>reject(error || new Error('No se pudo abrir IndexedDB'));
+      const first = indexedDB.open(DB_NAME);
+      first.onupgradeneeded = (event)=>applyCatalogSchema(event.target.result, event.target.transaction);
+      first.onsuccess = ()=>{
+        const current = first.result;
+        if (!catalogSchemaNeedsUpgrade(current)){
+          adoptCatalogDb(current, resolve);
+          return;
         }
-        if (!d.objectStoreNames.contains('events')){
-          try{
-            const ev = d.createObjectStore('events', { keyPath:'id', autoIncrement:true });
-            ev.createIndex('by_name','name',{ unique:true });
-          }catch(_){ }
+        const nextVersion = Number(current.version || 1) + 1;
+        try{ current.close(); }catch(_){ }
+        if (nextVersion > DB_VER){
+          fail(new Error('El esquema de Catálogos requiere una actualización de Suite A33.'));
+          return;
         }
-        if (!d.objectStoreNames.contains('sales')){
-          try{
-            const sales = d.createObjectStore('sales', { keyPath:'id', autoIncrement:true });
-            sales.createIndex('by_date','date',{ unique:false });
-            sales.createIndex('by_event','eventId',{ unique:false });
-          }catch(_){ }
-        }
-        if (!d.objectStoreNames.contains('inventory')){
-          try{
-            const inv = d.createObjectStore('inventory', { keyPath:'id', autoIncrement:true });
-            inv.createIndex('by_event','eventId',{ unique:false });
-          }catch(_){ }
-        }
-        if (!d.objectStoreNames.contains('reempaques')){
-          try{
-            const rp = d.createObjectStore('reempaques', { keyPath:'id' });
-            rp.createIndex('by_event','eventId',{ unique:false });
-            rp.createIndex('by_createdAt','createdAt',{ unique:false });
-          }catch(_){ }
-        }
-        if (!d.objectStoreNames.contains('extras')){
-          try{
-            const ex = d.createObjectStore('extras', { keyPath:'id', autoIncrement:true });
-            ex.createIndex('by_name','name',{ unique:false });
-            ex.createIndex('by_active','active',{ unique:false });
-          }catch(_){ }
-        } else {
-          try{ event.target.transaction.objectStore('extras').createIndex('by_name','name',{ unique:false }); }catch(_){ }
-          try{ event.target.transaction.objectStore('extras').createIndex('by_active','active',{ unique:false }); }catch(_){ }
-        }
-        if (!d.objectStoreNames.contains('banks')){
-          try{
-            const b = d.createObjectStore('banks', { keyPath:'id', autoIncrement:true });
-            b.createIndex('by_name','name',{ unique:false });
-            b.createIndex('by_active','isActive',{ unique:false });
-            b.createIndex('by_type','type',{ unique:false });
-          }catch(_){ }
-        } else {
-          try{ event.target.transaction.objectStore('banks').createIndex('by_name','name',{ unique:false }); }catch(_){ }
-          try{ event.target.transaction.objectStore('banks').createIndex('by_active','isActive',{ unique:false }); }catch(_){ }
-          try{ event.target.transaction.objectStore('banks').createIndex('by_type','type',{ unique:false }); }catch(_){ }
-        }
-        if (!d.objectStoreNames.contains('meta')){
-          try{ d.createObjectStore('meta', { keyPath:'id' }); }catch(_){ }
-        }
+        const upgrade = indexedDB.open(DB_NAME, nextVersion);
+        upgrade.onupgradeneeded = (event)=>applyCatalogSchema(event.target.result, event.target.transaction);
+        upgrade.onsuccess = ()=>adoptCatalogDb(upgrade.result, resolve);
+        upgrade.onerror = ()=>fail(upgrade.error);
+        upgrade.onblocked = ()=>fail(new Error('IndexedDB bloqueado por otra pestaña. Cierra otras pestañas de Suite A33 e intenta de nuevo.'));
       };
-      req.onsuccess = ()=>{
-        db = req.result;
-        try{ db.onversionchange = ()=>{ try{ db.close(); }catch(_){ } db = null; }; }catch(_){ }
-        resolve(db);
-      };
-      req.onerror = ()=>reject(req.error || new Error('No se pudo abrir IndexedDB'));
-      req.onblocked = ()=>reject(new Error('IndexedDB bloqueado por otra pestaña. Cierra otras pestañas de Suite A33 e intenta de nuevo.'));
+      first.onerror = ()=>fail(first.error);
+      first.onblocked = ()=>fail(new Error('IndexedDB bloqueado por otra pestaña. Cierra otras pestañas de Suite A33 e intenta de nuevo.'));
     });
   }
 
@@ -759,6 +2072,9 @@
   }
 
   function rememberCatalogDeleted(kind, row){
+    if (kind === 'products'){
+      try{ window.A33Products?.rememberDeleted?.(row); }catch(_){ }
+    }
     const keys = readCatalogDeletedKeys(kind);
     const main = catalogDeletedKey(kind, row);
     if (main) keys.add(main);
@@ -805,88 +2121,64 @@
     el.className = 'cat-muted cat-edit-msg' + (kind ? (' ' + kind) : '');
   }
 
-  async function seedMissingDefaults(force){
-    if (force) clearCatalogDeleted('products');
-    const deletedSeedKeys = readCatalogDeletedKeys('products');
-    const list = await getAll('products');
-    const keys = new Set((list || []).map(p => normKey(p && p.name)));
-    if (keys.has(normKey('Galón 3800ml')) || keys.has(normKey('Galón 3800 ml'))) keys.add(normKey(CANON_GALON_LABEL));
-
-    for (const seed of SEED){
-      const k = normKey(seed.name);
-      let existing = (list || []).find(p => normKey(p && p.name) === k);
-      if (!existing && k === normKey(CANON_GALON_LABEL)){
-        existing = (list || []).find(p => p && mapProductNameToFinishedId(p.name || '') === 'galon');
-      }
-      if (existing){
-        let changed = false;
-        if (force && existing.active !== true){ existing.active = true; changed = true; }
-        if (typeof existing.active === 'undefined'){ existing.active = true; changed = true; }
-        if (typeof existing.manageStock === 'undefined'){ existing.manageStock = seed.manageStock; changed = true; }
-        if (!hasOwn(existing, 'receta')){ existing.receta = !!seed.receta; changed = true; }
-        if (!hasOwn(existing, 'pos')){ existing.pos = !!seed.pos; changed = true; }
-        if (!productEnvaseId(existing) && seed.envaseId){ existing.envaseId = seed.envaseId; changed = true; }
-        if (!productTapaId(existing) && seed.tapaId){ existing.tapaId = seed.tapaId; changed = true; }
-        if (!productLetter(existing) && seed.letra){ existing.letra = seed.letra; changed = true; }
-        else {
-          const normalizedLetter = productLetter(existing);
-          if (existing.letra !== normalizedLetter){ existing.letra = normalizedLetter; changed = true; }
-        }
-        // Cierre Parte 1: no cambiar automáticamente nombres ni precios existentes.
-        if (!isValidPrice(existing.price)){ existing.price = seed.price; changed = true; }
-        if (!existing.updatedAt && changed) existing.updatedAt = new Date().toISOString();
-        if (changed) await put('products', existing);
-      } else {
-        if (!force && deletedSeedKeys.has(k)) continue;
-        const now = new Date().toISOString();
-        await put('products', { ...seed, createdAt:now, updatedAt:now, updatedFrom:'catalogos_productos_seed' });
-      }
-    }
-  }
 
   async function normalizeLegacyGallon(){
     const products = await getAll('products');
-    const galons = (products || []).filter(p => p && mapProductNameToFinishedId(p.name || '') === 'galon');
+    const galons = (products || []).filter((p) => p && mapProductNameToFinishedId(p.name || '') === 'galon');
     if (!galons.length) return;
-    let canon = canonicalProductsForSale(galons)[0] || galons[0];
-    if (!canon) return;
-    // Cierre Parte 1: conservar nombre y precio existentes si son válidos.
-    let preservedPrice = isValidPrice(canon.price) ? Number(canon.price) : DEFAULT_GALON_PRICE;
+    const explicitCanonical = galons.find((p) => normKey(p.name || '') === normKey(CANON_GALON_LABEL)) || null;
+    // Con varios registros legacy no se elige por nombre/familia: evitar fusionar o renombrar productos distintos.
+    const canonicalOwner = explicitCanonical || (galons.length === 1 ? galons[0] : null);
+    const legacyNames = new Set([
+      normKey('Galón 3750 ml'), normKey('Galón 3750ml'),
+      normKey('Galón 3800 ml'), normKey('Galón 3800ml')
+    ]);
 
-    let changedCanon = false;
-    if (!isValidPrice(canon.price)){ canon.price = preservedPrice; changedCanon = true; }
-    if (typeof canon.active === 'undefined'){ canon.active = true; changedCanon = true; }
-    if (typeof canon.manageStock === 'undefined'){ canon.manageStock = true; changedCanon = true; }
-    if (changedCanon){ canon.updatedAt = new Date().toISOString(); await put('products', canon); }
-
-    for (const p of galons){
-      if (!p || p.id === canon.id) continue;
-      let ch = false;
-      if (!isValidPrice(p.price)){ p.price = preservedPrice; ch = true; }
-      if (p.active !== false){ p.active = false; ch = true; }
-      if (typeof p.manageStock === 'undefined'){ p.manageStock = true; ch = true; }
-      if (ch){ p.updatedAt = new Date().toISOString(); await put('products', p); }
+    for (const product of galons){
+      const patch = {};
+      const currentNameKey = normKey(product.name || '');
+      const canClaimCanonicalName = !canonicalOwner || productStableId(canonicalOwner) === productStableId(product);
+      if (legacyNames.has(currentNameKey) && canClaimCanonicalName) patch.name = CANON_GALON_LABEL;
+      const currentCapacity = getCapacity(product);
+      if ((currentCapacity === 3750 || currentCapacity === 3800) && canClaimCanonicalName){
+        patch.capacityMl = 3720;
+        patch.capacidadMl = 3720;
+        patch.volumeMl = 3720;
+        patch.volumenMl = 3720;
+      }
+      if (!isValidPrice(product.price)) patch.price = DEFAULT_GALON_PRICE;
+      if (typeof product.active === 'undefined') patch.active = true;
+      if (typeof product.manageStock === 'undefined') patch.manageStock = true;
+      if (!Object.keys(patch).length) continue;
+      patch.updatedAt = new Date().toISOString();
+      patch.updatedFrom = 'catalogos_galon_3720_compat';
+      await put('products', prepareExistingCatalogProduct(product, patch));
     }
   }
 
   async function productHasMovements(product){
     if (!product) return false;
-    const id = String(product.id ?? '').trim();
+    const productId = productStableId(product);
+    const legacyId = String(product.id ?? '').trim();
+    const matchesProductReference = (value) => {
+      const key = String(value ?? '').trim();
+      return !!key && ((productId && key === productId) || (legacyId && key === legacyId));
+    };
     const nk = normKey(product.name || '');
     try{
       const sales = await getAll('sales');
-      if ((sales || []).some(s => s && ((id && String(s.productId ?? '').trim() === id) || (nk && normKey(s.productName || s.name || '') === nk)))) return true;
+      if ((sales || []).some(s => s && ((matchesProductReference(s.productId ?? s.productoId)) || (nk && normKey(s.productName || s.name || '') === nk)))) return true;
     }catch(_){ }
     try{
       const inv = await getAll('inventory');
-      if ((inv || []).some(i => i && id && String(i.productId ?? '').trim() === id)) return true;
+      if ((inv || []).some(i => i && matchesProductReference(i.productId ?? i.productoId))) return true;
     }catch(_){ }
     try{
       const reps = await getAll('reempaques');
       if ((reps || []).some(r => {
         if (!r) return false;
         const vals = [r.sourceProductId, r.productoOrigenId, r.targetProductId, r.productoDestinoId, r.productId, r.productoId];
-        if (id && vals.some(v => String(v ?? '').trim() === id)) return true;
+        if (vals.some(matchesProductReference)) return true;
         const names = [r.sourceProductName, r.productoOrigenNombre, r.productoOrigen, r.targetProductName, r.productoDestinoNombre, r.productoDestino];
         return nk && names.some(v => normKey(v) === nk);
       })) return true;
@@ -901,7 +2193,7 @@
         if (arr.some(l => {
           if (!l) return false;
           const vals = [l.productId, l.productoId, l.skuProductId, l.sourceProductId];
-          if (id && vals.some(v => String(v ?? '').trim() === id)) return true;
+          if (vals.some(matchesProductReference)) return true;
           const names = [l.productName, l.productoNombre, l.producto, l.name, l.nombre];
           return nk && names.some(v => normKey(v) === nk);
         })) return true;
@@ -912,17 +2204,22 @@
 
   async function renderProducts(){
     try{
-      const all = await getAll('products');
-      const list = (all || []).slice().sort(sortProducts);
-      const activePosProducts = (all || []).filter(p => p && p.active !== false && productPosEnabled(p));
+      const allRaw = await getAll('products');
+      const all = (allRaw || []).filter((p) => {
+        const productId = productStableId(p);
+        try{ return !(window.A33ProductIntegrity && productId && window.A33ProductIntegrity.isTombstoned(productId)); }catch(_){ return true; }
+      });
+      const list = all.slice().sort(sortProducts);
+      const activePosProducts = all.filter(p => p && p.active !== false && productPosEnabled(p));
       const envases = ensureEnvasesDefaults(false);
       const tapas = ensureTapasDefaults(false);
+      const inventoryVarios = inventoryVariosRowsForProducts();
       const duplicateLetters = getDuplicateRecipeLetters(all || []);
       const wrap = byId('cat-products-list');
       if (!wrap) return;
       wrap.innerHTML = '';
       if (!list.length){
-        setStatus('No hay productos. Usa “Restaurar base A33” para crear los productos iniciales.', 'warn');
+        setStatus('No hay productos. Crea el primer producto desde Catálogos → Productos.', 'warn');
         return;
       }
       const incompleteCount = (list || []).filter(p => productProductionIssues(p, envases, tapas, duplicateLetters).length > 0).length;
@@ -938,6 +2235,9 @@
         const cost = getUnitCost(p);
         const envaseName = catalogNameById(envases, productEnvaseId(p));
         const tapaName = catalogNameById(tapas, productTapaId(p));
+        const vasoFisicoId = productVasoFisicoId(p);
+        const vasoFisicoName = inventoryVariosNameById(inventoryVarios, vasoFisicoId);
+        const vasoFisicoLabel = vasoFisicoId ? (vasoFisicoName || `No encontrado · ${vasoFisicoId}`) : '—';
         const issues = productProductionIssues(p, envases, tapas, duplicateLetters);
         const contract = productDataContractSnapshot(p);
         const card = document.createElement('div');
@@ -960,19 +2260,21 @@
               <div><small>POS</small><b>${pos ? 'Sí' : 'No'}</b></div>
               <div><small>Envase</small><b>${escapeHtml(envaseName || '—')}</b></div>
               <div><small>Tapa</small><b>${escapeHtml(tapaName || '—')}</b></div>
+              <div><small>Vaso físico</small><b>${escapeHtml(vasoFisicoLabel)}</b></div>
               <div><small>ml/unidad</small><b>${escapeHtml(displayMl(cap))}</b></div>
               <div><small>Costo ref.</small><b>${escapeHtml(displayMoney(cost))}</b></div>
               <div><small>Inventario</small><b>${p.manageStock === false ? 'No' : 'Sí'}</b></div>
             </div>
           </div>
           <div class="cat-product-actions">
-            <button class="cat-btn cat-btn-ok cat-edit-product" data-id="${escapeHtml(String(p.id))}" type="button">Editar</button>
-            <button class="cat-btn ${active ? 'cat-btn-warn' : 'cat-btn-secondary'} cat-toggle-product" data-id="${escapeHtml(String(p.id))}" type="button">${active ? 'Inactivar' : 'Activar'}</button>
-            <button class="cat-btn cat-btn-danger cat-delete-product" data-id="${escapeHtml(String(p.id))}" type="button">Borrar</button>
+            <button class="cat-btn cat-btn-ok cat-edit-product" data-product-id="${escapeHtml(productStableId(p))}" type="button">Editar</button>
+            <button class="cat-btn ${active ? 'cat-btn-warn' : 'cat-btn-secondary'} cat-toggle-product" data-product-id="${escapeHtml(productStableId(p))}" type="button">${active ? 'Inactivar' : 'Activar'}</button>
+            <button class="cat-btn cat-btn-danger cat-delete-product" data-product-id="${escapeHtml(productStableId(p))}" type="button">Borrar</button>
           </div>
         `;
         wrap.appendChild(card);
       }
+      await renderCostsProductColumns();
     }catch(err){
       console.error(err);
       setStatus('No se pudieron cargar los productos. Revisa que no haya otra pestaña bloqueando la base local.', 'warn');
@@ -991,6 +2293,7 @@
     const pos = !!byId(prefix + '-pos')?.checked;
     const envaseId = String(byId(prefix + '-envase')?.value || '').trim();
     const tapaId = String(byId(prefix + '-tapa')?.value || '').trim();
+    const vasoFisicoId = String(byId(prefix + '-vaso-fisico')?.value || '').trim();
     const letterEl = byId(prefix + '-letra');
     if (letterEl && letterEl.value !== letra) letterEl.value = letra;
     if (!name) return { ok:false, msg:'Nombre obligatorio.' };
@@ -1016,32 +2319,12 @@
       /* asociación histórica eliminada: permitida */
     }
     const incompleteProduction = !!(receta && (!letra || !envaseId || !tapaId));
-    return { ok:true, name, price:round2(price), capacity: capRaw ? qty(capacity) : 0, unitCost:round2(unitCost), active, manage, receta, letra, pos, envaseId, tapaId, incompleteProduction };
-  }
-
-  async function ensureNoDuplicateName(name, currentId){
-    const all = await getAll('products');
-    const newKey = normKey(name);
-    const newGroup = mapProductNameToFinishedId(name);
-    const isNew = !currentId;
-    const dup = (all || []).find(p => {
-      if (!p) return false;
-      if (currentId && Number(p.id) === Number(currentId)) return false;
-      if (normKey(p.name || '') === newKey) return true;
-      const g = mapProductNameToFinishedId(p.name || '');
-      // Producto nuevo: no crear otro Pulso/Media/Djeba/Litro/Galón aunque el viejo esté inactivo.
-      // Edición: permitir convivir con duplicados legacy inactivos; bloquear si el duplicado equivalente está activo.
-      if (newGroup && g && newGroup === g) return isNew ? true : (p.active !== false);
-      return false;
-    });
-    return dup || null;
+    return { ok:true, name, price:round2(price), capacity: capRaw ? qty(capacity) : 0, unitCost:round2(unitCost), active, manage, receta, letra, pos, envaseId, tapaId, vasoFisicoId, incompleteProduction };
   }
 
   async function addProduct(){
     const data = readProductForm('cat-new');
     if (!data.ok){ alert(data.msg); return; }
-    const dup = await ensureNoDuplicateName(data.name, null);
-    if (dup){ alert('Ya existe un producto equivalente. Edita o activa el existente para evitar duplicados.'); return; }
     const all = await getAll('products');
     const dupLetter = data.receta ? findDuplicateRecipeLetter(all || [], data.letra, null) : null;
     if (dupLetter){ alert(`La Letra ${data.letra} ya está asignada a ${dupLetter.name || 'otro producto'} con Receta. Corrige antes de guardar.`); return; }
@@ -1050,7 +2333,7 @@
       if (!ok) return;
     }
     const now = new Date().toISOString();
-    const product = {
+    const product = prepareNewCatalogProduct({
       name:data.name,
       price:data.price,
       active:data.active,
@@ -1067,24 +2350,27 @@
       pos:data.pos,
       envaseId:data.envaseId,
       tapaId:data.tapaId,
+      vasoFisicoId:data.vasoFisicoId,
       productionIncomplete: data.incompleteProduction,
       createdAt:now,
       updatedAt:now,
       updatedFrom:'catalogos_productos'
-    };
+    }, 'usuario');
     try{
-      await put('products', product);
+      const legacyId = await put('products', product);
+      if (product.id == null) product.id = legacyId;
       ['name','price','capacity','unit-cost','letra'].forEach(k => { const el = byId('cat-new-' + k); if (el) el.value = ''; });
       const active = byId('cat-new-active'); if (active) active.checked = true;
       const manage = byId('cat-new-manage'); if (manage) manage.checked = true;
       const receta = byId('cat-new-receta'); if (receta) receta.checked = false;
       const pos = byId('cat-new-pos'); if (pos) pos.checked = true;
       populateProductPackagingSelects('cat-new', '', '');
+      populateProductPhysicalCupSelect('cat-new', '');
       await renderProducts();
       toast('Producto agregado');
     }catch(err){
       console.error(err);
-      alert('No se pudo agregar el producto. Revisa si el nombre ya existe.');
+      alert('No se pudo agregar el producto. Revisa los datos e intenta nuevamente.');
     }
   }
 
@@ -1097,11 +2383,11 @@
     setEditMsg('');
   }
 
-  async function openProductModal(id){
+  async function openProductModal(productId){
     const all = await getAll('products');
-    const product = (all || []).find(p => Number(p && p.id) === Number(id));
+    const product = findProductByProductId(all || [], productId);
     if (!product){ toast('Producto no encontrado'); return; }
-    currentEditId = Number(product.id);
+    currentEditId = productStableId(product);
     const current = byId('cat-product-current');
     if (current) current.textContent = 'Producto actual: ' + (product.name || '—');
     const fields = {
@@ -1113,6 +2399,7 @@
     };
     Object.keys(fields).forEach(id => { const el = byId(id); if (el) el.value = fields[id]; });
     populateProductPackagingSelects('cat-edit', productEnvaseId(product), productTapaId(product));
+    populateProductPhysicalCupSelect('cat-edit', productVasoFisicoId(product));
     const active = byId('cat-edit-active'); if (active) active.checked = product.active !== false;
     const manage = byId('cat-edit-manage'); if (manage) manage.checked = product.manageStock !== false;
     const receta = byId('cat-edit-receta'); if (receta) receta.checked = productHasRecipe(product);
@@ -1137,12 +2424,10 @@
   async function saveProduct(){
     if (!currentEditId){ setEditMsg('Producto inválido.', 'warn'); return; }
     const all = await getAll('products');
-    const product = (all || []).find(p => Number(p && p.id) === Number(currentEditId));
+    const product = findProductByProductId(all || [], currentEditId);
     if (!product){ setEditMsg('El producto ya no existe.', 'warn'); return; }
     const data = readProductForm('cat-edit');
     if (!data.ok){ setEditMsg(data.msg, 'warn'); return; }
-    const dup = await ensureNoDuplicateName(data.name, currentEditId);
-    if (dup){ setEditMsg('Ya existe un producto equivalente. No se duplicó nada.', 'warn'); return; }
     const dupLetter = data.receta ? findDuplicateRecipeLetter(all || [], data.letra, currentEditId) : null;
     if (dupLetter){ setEditMsg(`La Letra ${data.letra} ya está asignada a ${dupLetter.name || 'otro producto'} con Receta. Corrige antes de guardar.`, 'warn'); return; }
     const oldLetter = productLetter(product);
@@ -1163,60 +2448,65 @@
       const ok = confirm('Este producto tiene Receta, pero todavía no tiene Envase y/o Tapa. Quedará marcado como incompleto para producción futura. ¿Continuar?');
       if (!ok) return;
     }
-    product.name = data.name;
-    product.price = data.price;
-    product.active = data.active;
-    product.manageStock = data.manage;
-    product.capacityMl = data.capacity;
-    product.capacidadMl = data.capacity;
-    product.volumeMl = data.capacity;
-    product.volumenMl = data.capacity;
-    product.unitCost = data.unitCost;
-    product.costoUnitario = data.unitCost;
-    product.costPerUnit = data.unitCost;
-    product.receta = data.receta;
-    product.letra = data.letra;
-    product.pos = data.pos;
-    product.envaseId = data.envaseId;
-    product.tapaId = data.tapaId;
-    product.productionIncomplete = data.incompleteProduction;
-    product.updatedAt = new Date().toISOString();
-    product.updatedFrom = 'catalogos_productos';
+    const updatedProduct = prepareExistingCatalogProduct(product, {
+      name:data.name,
+      price:data.price,
+      active:data.active,
+      manageStock:data.manage,
+      capacityMl:data.capacity,
+      capacidadMl:data.capacity,
+      volumeMl:data.capacity,
+      volumenMl:data.capacity,
+      unitCost:data.unitCost,
+      costoUnitario:data.unitCost,
+      costPerUnit:data.unitCost,
+      receta:data.receta,
+      letra:data.letra,
+      pos:data.pos,
+      envaseId:data.envaseId,
+      tapaId:data.tapaId,
+      vasoFisicoId:data.vasoFisicoId,
+      productionIncomplete:data.incompleteProduction,
+      updatedAt:new Date().toISOString(),
+      updatedFrom:'catalogos_productos'
+    });
     try{
-      await put('products', product);
+      await put('products', updatedProduct);
       closeProductModal();
       await normalizeLegacyGallon();
       await renderProducts();
       toast('Producto guardado');
     }catch(err){
       console.error(err);
-      setEditMsg('No se pudo guardar. Revisa si el nombre ya existe.', 'warn');
+      setEditMsg('No se pudo guardar el producto. Revisa los datos e intenta nuevamente.', 'warn');
     }
   }
 
-  async function toggleProduct(id){
+  async function toggleProduct(productId){
     const all = await getAll('products');
-    const product = findCatalogById(all || [], id);
+    const product = findProductByProductId(all || [], productId);
     if (!product) return;
-    product.active = product.active === false;
-    product.updatedAt = new Date().toISOString();
-    product.updatedFrom = 'catalogos_productos_toggle';
-    await put('products', product);
+    const updatedProduct = prepareExistingCatalogProduct(product, {
+      active:product.active === false,
+      updatedAt:new Date().toISOString(),
+      updatedFrom:'catalogos_productos_toggle'
+    });
+    await put('products', updatedProduct);
     await renderProducts();
-    toast(product.active === false ? 'Producto inactivado' : 'Producto activado');
+    toast(updatedProduct.active === false ? 'Producto inactivado' : 'Producto activado');
   }
 
-  async function deleteProductMaster(id){
+  async function deleteProductMaster(productId){
     try{
       const all = await getAll('products');
-      const product = findCatalogById(all || [], id);
+      const product = findProductByProductId(all || [], productId);
       if (!product){ toast('Producto no encontrado'); return; }
       const name = product.name || 'Producto sin nombre';
       const ok = confirm(`¿Borrar el producto "${name}"?\n\nSolo se borrará del catálogo maestro. No se borrarán ventas, inventario, lotes ni snapshots históricos.`);
       if (!ok) return;
       rememberCatalogDeleted('products', product);
       await deleteRecord('products', product.id);
-      if (currentEditId != null && String(currentEditId) === String(product.id)) closeProductModal();
+      if (currentEditId != null && String(currentEditId) === productStableId(product)) closeProductModal();
       await renderProducts();
       toast('Producto borrado');
     }catch(err){
@@ -1788,6 +3078,12 @@
     return 0;
   }
 
+  function catalogStorageKeyExists(key){
+    try{
+      return !!window.localStorage && window.localStorage.getItem(String(key || '')) !== null;
+    }catch(_){ return false; }
+  }
+
   function readEnvasesRaw(){
     try{
       if (window.A33Storage && typeof window.A33Storage.getJSON === 'function'){
@@ -1861,9 +3157,16 @@
   }
 
   function ensureEnvasesDefaults(force){
-    if (force) clearCatalogDeleted('envases');
-    const deleted = readCatalogDeletedKeys('envases');
+    const explicitRestore = force === true;
+    const existedBefore = catalogStorageKeyExists(ENVASES_CATALOG_KEY);
     const list = readEnvaseCatalog();
+
+    // Compatibilidad controlada: semilla automática solo en la primera existencia real de la clave.
+    // Una lista vacía guardada por el usuario se respeta y nunca se repuebla sola.
+    if (!explicitRestore && existedBefore) return list;
+
+    if (explicitRestore) clearCatalogDeleted('envases');
+    const deleted = readCatalogDeletedKeys('envases');
     const byName = new Map(list.map(x => [normalizeEnvaseKey(x.name), x]));
     const byId = new Set(list.map(x => String(x.id || '')));
     const now = new Date().toISOString();
@@ -1871,20 +3174,18 @@
 
     for (const seed of ENVASES_SEED){
       const key = normalizeEnvaseKey(seed.name);
-      if (!force && deleted.has(key)) continue;
+      if (!explicitRestore && deleted.has(key)) continue;
       const existing = byName.get(key);
       if (existing){
         let ch = false;
         if (!existing.id){ existing.id = seed.id; ch = true; }
         if (!existing.nombre){ existing.nombre = existing.name; ch = true; }
-        const seedCap = Number(seed.capacityMl);
-        if (Number.isFinite(seedCap) && seedCap > 0 && !envaseCapacity(existing)){
-          existing.capacityMl = seedCap;
-          existing.capacidadMl = seedCap;
-          ch = true;
+        if (explicitRestore && existing.active !== true){ existing.active = true; ch = true; }
+        if (ch){
+          existing.updatedAt = now;
+          existing.updatedFrom = 'catalogos_envases_restauracion_explicita';
+          changed = true;
         }
-        if (force && existing.active !== true){ existing.active = true; ch = true; }
-        if (ch){ existing.updatedAt = now; existing.updatedFrom = 'catalogos_envases_seed'; changed = true; }
         continue;
       }
       let id = seed.id;
@@ -1898,15 +3199,18 @@
         capacidadMl:Number.isFinite(Number(seed.capacityMl)) && Number(seed.capacityMl) > 0 ? Number(seed.capacityMl) : null,
         note:'',
         active:seed.active !== false,
+        origin: explicitRestore ? 'restauracion_explicita' : 'semilla_inicial',
+        autoCreated:true,
         schemaVersion:ENVASES_SCHEMA_VERSION,
         createdAt:now,
         updatedAt:now,
-        updatedFrom:'catalogos_envases_seed'
+        updatedFrom: explicitRestore ? 'catalogos_envases_restauracion_explicita' : 'catalogos_envases_semilla_inicial'
       });
       changed = true;
     }
 
-    if (changed || force || !Array.isArray(readEnvasesRaw())) saveEnvaseCatalog(list);
+    // También escribe [] en el primer inicio si la semilla estuviera vacía: la clave queda marcada como inicializada.
+    if (changed || explicitRestore || !existedBefore) saveEnvaseCatalog(list);
     return list.sort(sortMasterByActiveName);
   }
 
@@ -2166,6 +3470,7 @@ Solo se quitará del catálogo maestro. No se borrarán productos asociados, pro
     }
     byId('cat-save-envase')?.addEventListener('click', ()=>saveEnvaseMaster().catch(err=>{ console.error(err); setEnvaseMsg('No se pudo guardar el envase.', 'warn'); }));
     byId('cat-edit-envase-save')?.addEventListener('click', ()=>saveEnvaseEditMaster().catch(err=>{ console.error(err); setEnvaseEditMsg('No se pudo guardar el envase.', 'warn'); }));
+    bindDismissibleModalCAT('cat-envase-modal', ['cat-envase-close','cat-edit-envase-cancel'], closeEnvaseModalCAT);
     byId('cat-cancel-envase')?.addEventListener('click', resetEnvaseForm);
     byId('cat-refresh-envases')?.addEventListener('click', async ()=>{ await renderEnvases(); toast('Envases actualizados'); });
     byId('cat-restore-envases')?.addEventListener('click', async ()=>{ ensureEnvasesDefaults(true); resetEnvaseForm(); await normalizeProductPackagingFields(); refreshProductPackagingSelects(); await renderEnvases(); await renderProducts(); toast('Envases base revisados'); });
@@ -2260,9 +3565,15 @@ Solo se quitará del catálogo maestro. No se borrarán productos asociados, pro
   }
 
   function ensureTapasDefaults(force){
-    if (force) clearCatalogDeleted('tapas');
-    const deleted = readCatalogDeletedKeys('tapas');
+    const explicitRestore = force === true;
+    const existedBefore = catalogStorageKeyExists(TAPAS_CATALOG_KEY);
     const list = readTapaCatalog();
+
+    // Igual que Envases: una clave existente, incluso con [], expresa decisión del usuario.
+    if (!explicitRestore && existedBefore) return list;
+
+    if (explicitRestore) clearCatalogDeleted('tapas');
+    const deleted = readCatalogDeletedKeys('tapas');
     const byName = new Map(list.map(x => [normalizeTapaKey(x.name), x]));
     const byId = new Set(list.map(x => String(x.id || '')));
     const now = new Date().toISOString();
@@ -2270,14 +3581,18 @@ Solo se quitará del catálogo maestro. No se borrarán productos asociados, pro
 
     for (const seed of TAPAS_SEED){
       const key = normalizeTapaKey(seed.name);
-      if (!force && deleted.has(key)) continue;
+      if (!explicitRestore && deleted.has(key)) continue;
       const existing = byName.get(key);
       if (existing){
         let ch = false;
         if (!existing.id){ existing.id = seed.id; ch = true; }
         if (!existing.nombre){ existing.nombre = existing.name; ch = true; }
-        if (force && existing.active !== true){ existing.active = true; ch = true; }
-        if (ch){ existing.updatedAt = now; existing.updatedFrom = 'catalogos_tapas_seed'; changed = true; }
+        if (explicitRestore && existing.active !== true){ existing.active = true; ch = true; }
+        if (ch){
+          existing.updatedAt = now;
+          existing.updatedFrom = 'catalogos_tapas_restauracion_explicita';
+          changed = true;
+        }
         continue;
       }
       let id = seed.id;
@@ -2290,15 +3605,17 @@ Solo se quitará del catálogo maestro. No se borrarán productos asociados, pro
         note:'',
         nota:'',
         active:seed.active !== false,
+        origin: explicitRestore ? 'restauracion_explicita' : 'semilla_inicial',
+        autoCreated:true,
         schemaVersion:TAPAS_SCHEMA_VERSION,
         createdAt:now,
         updatedAt:now,
-        updatedFrom:'catalogos_tapas_seed'
+        updatedFrom: explicitRestore ? 'catalogos_tapas_restauracion_explicita' : 'catalogos_tapas_semilla_inicial'
       });
       changed = true;
     }
 
-    if (changed || force || !Array.isArray(readTapasRaw())) saveTapaCatalog(list);
+    if (changed || explicitRestore || !existedBefore) saveTapaCatalog(list);
     return list.sort(sortMasterByActiveName);
   }
 
@@ -2538,6 +3855,7 @@ Solo se quitará del catálogo maestro. No se borrarán productos asociados, pro
     }
     byId('cat-save-tapa')?.addEventListener('click', ()=>saveTapaMaster().catch(err=>{ console.error(err); setTapaMsg('No se pudo guardar la tapa.', 'warn'); }));
     byId('cat-edit-tapa-save')?.addEventListener('click', ()=>saveTapaEditMaster().catch(err=>{ console.error(err); setTapaEditMsg('No se pudo guardar la tapa.', 'warn'); }));
+    bindDismissibleModalCAT('cat-tapa-modal', ['cat-tapa-close','cat-edit-tapa-cancel'], closeTapaModalCAT);
     byId('cat-cancel-tapa')?.addEventListener('click', resetTapaForm);
     byId('cat-refresh-tapas')?.addEventListener('click', async ()=>{ await renderTapas(); toast('Tapas actualizadas'); });
     byId('cat-restore-tapas')?.addEventListener('click', async ()=>{ ensureTapasDefaults(true); resetTapaForm(); await normalizeProductPackagingFields(); refreshProductPackagingSelects(); await renderTapas(); await renderProducts(); toast('Tapas base revisadas'); });
@@ -2886,15 +4204,282 @@ Solo se quitará del catálogo maestro. No se borrarán productos asociados, pro
     }) || null;
   }
 
-  async function renderCustomers(){
+  function customerGroupLetterCAT(value){
+    let s = sanitizeCustomerName(value || '');
+    try{ if (s.normalize) s = s.normalize('NFD'); }catch(_){ }
+    s = s.replace(/[\u0300-\u036f]/g, '').trim();
+    const first = s ? s.charAt(0).toUpperCase() : '#';
+    return /^[A-Z0-9]$/.test(first) ? first : '#';
+  }
+
+  function sortCustomerGroupLettersCAT(a, b){
+    if (a === '#') return 1;
+    if (b === '#') return -1;
+    const ad = /^\d$/.test(a);
+    const bd = /^\d$/.test(b);
+    if (ad !== bd) return ad ? 1 : -1;
+    return String(a).localeCompare(String(b), 'es-NI', { sensitivity:'base', numeric:true });
+  }
+
+  function saleDateKeyCAT(sale){
+    if (!sale || typeof sale !== 'object') return '';
+    const direct = String(sale.date || sale.fecha || sale.saleDate || sale.fechaVenta || '').trim();
+    const match = direct.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) return `${match[1]}-${match[2]}-${match[3]}`;
+    const candidates = [sale.createdAt, sale.timestamp, sale.ts, sale.created_at, sale.updatedAt];
+    for (const raw of candidates){
+      if (raw == null || raw === '') continue;
+      let d = null;
+      if (typeof raw === 'number' && Number.isFinite(raw)) d = new Date(raw);
+      else {
+        const parsed = Date.parse(String(raw));
+        if (Number.isFinite(parsed)) d = new Date(parsed);
+      }
+      if (!d || Number.isNaN(d.getTime())) continue;
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+    return '';
+  }
+
+  function formatDateKeyCAT(dateKey){
+    const match = String(dateKey || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return match ? `${match[3]}/${match[2]}/${match[1]}` : 'Sin compras';
+  }
+
+  function saleCustomerNameCAT(sale){
+    if (!sale || typeof sale !== 'object') return '';
+    return sanitizeCustomerName(sale.customerName || sale.customer || sale.clienteNombre || sale.nombreCliente || sale.cliente || sale.clientName || '');
+  }
+
+  function saleCustomerIdCAT(sale){
+    if (!sale || typeof sale !== 'object') return '';
+    const raw = sale.customerId ?? sale.clienteId ?? sale.clientId ?? null;
+    return raw == null ? '' : String(raw).trim();
+  }
+
+  function isPurchaseSaleCAT(sale){
+    if (!sale || typeof sale !== 'object') return false;
+    if (sale.deletedAt || sale.isDeleted || sale.cancelled || sale.canceled || sale.anulado || sale.voided) return false;
+    if (sale.isReturn || sale.devolucion || sale.courtesy || sale.isCourtesy) return false;
+    const qty = Number(sale.qty ?? sale.quantity ?? sale.cantidad ?? 1);
+    if (Number.isFinite(qty) && qty <= 0) return false;
+    const total = Number(sale.total ?? sale.netTotal ?? sale.totalVenta ?? 0);
+    if (Number.isFinite(total) && total <= 0) return false;
+    return !!saleDateKeyCAT(sale);
+  }
+
+  function addResolverTargetCAT(map, key, id){
+    const cleanKey = String(key || '').trim();
+    const cleanId = String(id || '').trim();
+    if (!cleanKey || !cleanId) return;
+    if (!map.has(cleanKey)) map.set(cleanKey, new Set());
+    map.get(cleanKey).add(cleanId);
+  }
+
+  function buildCustomerPurchaseResolverCAT(customers){
+    const idTargets = new Map();
+    const nameTargets = new Map();
+    const byId = new Map();
+    for (const c of (Array.isArray(customers) ? customers : [])){
+      if (!c || c.id == null) continue;
+      byId.set(String(c.id), c);
+    }
+    for (const c of (Array.isArray(customers) ? customers : [])){
+      if (!c || c.id == null) continue;
+      const ownId = String(c.id);
+      const finalId = c.mergedIntoId && byId.has(String(c.mergedIntoId)) ? String(c.mergedIntoId) : ownId;
+      addResolverTargetCAT(idTargets, ownId, ownId);
+      if (finalId !== ownId) addResolverTargetCAT(idTargets, ownId, finalId);
+      const names = [c.name, c.nombre];
+      if (Array.isArray(c.aliases)) names.push(...c.aliases);
+      if (Array.isArray(c.nameHistory)){
+        c.nameHistory.forEach(h => {
+          if (!h) return;
+          names.push(h.from, h.to);
+        });
+      }
+      for (const name of names){
+        const key = normalizeCustomerKeyCAT(name);
+        if (!key) continue;
+        // Sin customerId, un nombre solo se resuelve si es inequívoco.
+        // En clientes fusionados, el nombre histórico apunta al destino final.
+        addResolverTargetCAT(nameTargets, key, finalId);
+      }
+    }
+    return { idTargets, nameTargets };
+  }
+
+  function archivedSalesFromSnapshotCAT(archive){
+    const rows = [];
+    if (!archive || typeof archive !== 'object') return rows;
+    const snap = archive.snapshot && typeof archive.snapshot === 'object' ? archive.snapshot : archive;
+    const directArrays = [snap.sales, snap.ventas, snap.salesDetail, snap.ventasDetalle, archive.sales, archive.ventas];
+    for (const arr of directArrays){
+      if (Array.isArray(arr)) rows.push(...arr.filter(Boolean));
+    }
+    const sheets = Array.isArray(snap.sheets) ? snap.sheets : [];
+    for (const sheet of sheets){
+      const name = normalizeCustomerKeyCAT(sheet && sheet.name || '').replace(/\s+/g, '');
+      if (!/(ventasdetalle|ventadetalle|salesdetail|ventas|sales)/.test(name)) continue;
+      const data = sheet && Array.isArray(sheet.rows) ? sheet.rows : [];
+      if (data.length < 2 || !Array.isArray(data[0])) continue;
+      const header = data[0].map(v => normalizeCustomerKeyCAT(v).replace(/[^a-z0-9]/g, ''));
+      const findIndex = (aliases) => header.findIndex(h => aliases.includes(h));
+      const dateIdx = findIndex(['fecha','date','fechaventa','saledate']);
+      const customerIdx = findIndex(['cliente','customer','customername','nombrecliente','clientename']);
+      const customerIdIdx = findIndex(['customerid','clienteid','clientid']);
+      const returnIdx = findIndex(['devolucion','isreturn','return']);
+      const qtyIdx = findIndex(['cantidad','qty','quantity']);
+      if (dateIdx < 0 || (customerIdx < 0 && customerIdIdx < 0)) continue;
+      for (const row of data.slice(1)){
+        if (!Array.isArray(row)) continue;
+        rows.push({
+          date: row[dateIdx] || '',
+          customerName: customerIdx >= 0 ? row[customerIdx] : '',
+          customerId: customerIdIdx >= 0 ? row[customerIdIdx] : null,
+          isReturn: returnIdx >= 0 ? !!Number(row[returnIdx]) : false,
+          qty: qtyIdx >= 0 ? row[qtyIdx] : 1,
+          archivedSnapshot: true
+        });
+      }
+    }
+    return rows;
+  }
+
+  function updateLastPurchaseForTargetCAT(byId, targetId, dateKey){
+    const id = String(targetId || '').trim();
+    if (!id || !dateKey) return;
+    const current = String(byId.get(id) || '');
+    if (!current || dateKey > current) byId.set(id, dateKey);
+  }
+
+  async function loadCustomerLastPurchaseIndexCAT(customers, options){
+    const opts = options || {};
+    if (!opts.force && customerLastPurchaseCacheCAT.loaded) return customerLastPurchaseCacheCAT;
+    if (!opts.force && customerLastPurchaseLoadPromiseCAT) return customerLastPurchaseLoadPromiseCAT;
+
+    const task = (async()=>{
+      await openDB();
+      const [sales, archives] = await Promise.all([
+        getAll('sales').catch(()=>[]),
+        getAll('summaryArchives').catch(()=>[])
+      ]);
+      const resolver = buildCustomerPurchaseResolverCAT(customers);
+      const byId = new Map();
+      const allSales = Array.isArray(sales) ? sales.slice() : [];
+      for (const archive of (Array.isArray(archives) ? archives : [])){
+        allSales.push(...archivedSalesFromSnapshotCAT(archive));
+      }
+      for (const sale of allSales){
+        if (!isPurchaseSaleCAT(sale)) continue;
+        const dateKey = saleDateKeyCAT(sale);
+        const sid = saleCustomerIdCAT(sale);
+        let targets = sid ? resolver.idTargets.get(sid) : null;
+        if (!targets || !targets.size){
+          const nameKey = normalizeCustomerKeyCAT(saleCustomerNameCAT(sale));
+          targets = nameKey ? resolver.nameTargets.get(nameKey) : null;
+          if (targets && targets.size !== 1) targets = null;
+        }
+        if (!targets || !targets.size) continue;
+        targets.forEach(id => updateLastPurchaseForTargetCAT(byId, id, dateKey));
+      }
+      customerLastPurchaseCacheCAT = {
+        loaded:true,
+        loadedAt:Date.now(),
+        byId,
+        sourceSales:Array.isArray(sales) ? sales.length : 0,
+        sourceArchives:Array.isArray(archives) ? archives.length : 0
+      };
+      return customerLastPurchaseCacheCAT;
+    })();
+
+    customerLastPurchaseLoadPromiseCAT = task;
+    try{ return await task; }
+    finally{ if (customerLastPurchaseLoadPromiseCAT === task) customerLastPurchaseLoadPromiseCAT = null; }
+  }
+
+  function invalidateCustomerLastPurchaseCAT(){
+    customerLastPurchaseCacheCAT = { loaded:false, loadedAt:0, byId:new Map(), sourceSales:0, sourceArchives:0 };
+  }
+
+  function lastPurchaseForCustomerCAT(customer){
+    const id = customer && customer.id != null ? String(customer.id) : '';
+    const key = id && customerLastPurchaseCacheCAT.byId ? customerLastPurchaseCacheCAT.byId.get(id) : '';
+    return formatDateKeyCAT(key || '');
+  }
+
+  function setCustomerViewValueCAT(id, value){
+    const el = byId(id);
+    if (el) el.textContent = value == null || value === '' ? '—' : String(value);
+  }
+
+  function openCustomerViewCAT(id){
+    const cid = id != null ? String(id).trim() : '';
+    const row = readCustomerCatalogCAT().find(c => c && String(c.id) === cid);
+    if (!row){ toast('Cliente no encontrado'); return; }
+    currentCustomerViewId = cid;
+    setCustomerViewValueCAT('cat-view-customer-name', row.name || row.nombre || 'Cliente sin nombre');
+    setCustomerViewValueCAT('cat-view-customer-status', customerActiveCAT(row) ? 'Activo' : 'Inactivo');
+    setCustomerViewValueCAT('cat-view-customer-cell', getCustomerCellularCAT(row) || '—');
+    setCustomerViewValueCAT('cat-view-customer-email', row.correo || row.email || '—');
+    setCustomerViewValueCAT('cat-view-customer-address', row.direccion || row.address || '—');
+    setCustomerViewValueCAT('cat-view-customer-last-purchase', lastPurchaseForCustomerCAT(row));
+    setCustomerViewValueCAT('cat-view-customer-notes', row.notas || row.notes || '—');
+    const merged = byId('cat-view-customer-merged');
+    if (merged){
+      merged.hidden = !row.mergedIntoId;
+      merged.textContent = row.mergedIntoId ? `Cliente fusionado con ID ${String(row.mergedIntoId)}.` : '';
+    }
+    const modal = byId('cat-customer-view-modal');
+    if (!modal) return;
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+    try{ document.body.classList.add('cat-modal-open'); }catch(_){ }
+  }
+
+  function closeCustomerViewCAT(){
+    const modal = byId('cat-customer-view-modal');
+    if (!modal) return;
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+    currentCustomerViewId = null;
     try{
-      let list = readCustomerCatalogCAT();
+      if (!byId('cat-customer-modal')?.classList.contains('show')) document.body.classList.remove('cat-modal-open');
+    }catch(_){ }
+  }
+
+  function customerPanelVisibleCAT(){
+    const panel = byId('panel-clientes');
+    return !!(panel && !panel.hidden && panel.classList.contains('is-active'));
+  }
+
+  function scheduleCustomerLiveRefreshCAT(options){
+    if (!customerInitializedCAT) return;
+    const opts = options || {};
+    const delay = Number.isFinite(Number(opts.delay)) ? Math.max(0, Number(opts.delay)) : 70;
+    clearTimeout(customerLiveRefreshTimerCAT);
+    customerLiveRefreshTimerCAT = setTimeout(()=>{
+      customerLiveRefreshTimerCAT = null;
+      if (!customerPanelVisibleCAT()) return;
+      renderCustomers({ forceLastPurchase:!!opts.forceLastPurchase }).catch(err=>console.error(err));
+    }, delay);
+  }
+
+  async function renderCustomers(options){
+    const opts = options || {};
+    const renderToken = ++customerRenderTokenCAT;
+    try{
+      const all = readCustomerCatalogCAT();
+      await loadCustomerLastPurchaseIndexCAT(all, { force:!!opts.forceLastPurchase });
+      if (renderToken !== customerRenderTokenCAT) return;
       const q = normalizeCustomerKeyCAT(byId('cat-customer-search')?.value || '');
-      if (q) list = list.filter(c => customerSearchTextCAT(c).includes(q));
+      const list = q ? all.filter(c => customerSearchTextCAT(c).includes(q)) : all;
       const wrap = byId('cat-customers-list');
       if (!wrap) return;
       wrap.innerHTML = '';
-      const all = readCustomerCatalogCAT();
       const counts = getCustomerCountsCAT(all);
       const shown = list.length;
       const status = counts.total
@@ -2908,35 +4493,80 @@ Solo se quitará del catálogo maestro. No se borrarán productos asociados, pro
         wrap.appendChild(empty);
         return;
       }
-      for (const c of list){
-        const active = customerActiveCAT(c);
-        const isMerged = !!(c && c.mergedIntoId);
-        const card = document.createElement('div');
-        card.className = 'cat-product-card' + (active ? '' : ' is-inactive');
-        const celular = getCustomerCellularCAT(c) || '—';
-        const email = c.correo || c.email || '—';
-        const address = c.direccion || c.address || '—';
-        card.innerHTML = `
-          <div class="cat-product-main">
-            <div class="cat-product-title-row">
-              <strong>${escapeHtml(c.name || 'Cliente sin nombre')}</strong>
-              <span class="cat-pill ${active ? 'ok' : 'muted'}">${active ? 'Activo' : 'Inactivo'}</span>
-              <span class="cat-pill gold">Maestro</span>
-              ${isMerged ? '<span class="cat-pill muted">Fusionado</span>' : ''}
-            </div>
-            <div class="cat-product-meta">
-              <div><small>Celular</small><b>${escapeHtml(celular)}</b></div>
-              <div><small>Correo</small><b>${escapeHtml(email)}</b></div>
-              <div><small>Dirección</small><b>${escapeHtml(address)}</b></div>
-            </div>
-          </div>
-          <div class="cat-product-actions">
-            <button class="cat-btn cat-btn-ok cat-edit-customer" data-id="${escapeHtml(String(c.id))}" type="button" ${isMerged ? 'disabled' : ''}>Editar</button>
-            <button class="cat-btn ${active ? 'cat-btn-warn' : 'cat-btn-secondary'} cat-toggle-customer" data-id="${escapeHtml(String(c.id))}" type="button" ${isMerged ? 'disabled' : ''}>${active ? 'Inactivar' : 'Activar'}</button>
-            <button class="cat-btn cat-btn-danger cat-delete-customer" data-id="${escapeHtml(String(c.id))}" type="button">Borrar</button>
-          </div>
+
+      const groups = new Map();
+      for (const customer of list){
+        const letter = customerGroupLetterCAT(customer && customer.name);
+        if (!groups.has(letter)) groups.set(letter, []);
+        groups.get(letter).push(customer);
+      }
+      const letters = Array.from(groups.keys()).sort(sortCustomerGroupLettersCAT);
+      for (const letter of letters){
+        const customers = groups.get(letter).slice().sort((a,b)=>
+          normalizeCustomerKeyCAT(a && a.name).localeCompare(normalizeCustomerKeyCAT(b && b.name), 'es-NI', { sensitivity:'base', numeric:true })
+        );
+        const details = document.createElement('details');
+        details.className = 'cat-customer-group';
+        details.dataset.customerGroup = letter;
+        details.open = q ? true : customerExpandedGroupsCAT.has(letter);
+        details.addEventListener('toggle', ()=>{
+          if (normalizeCustomerKeyCAT(byId('cat-customer-search')?.value || '')) return;
+          if (details.open) customerExpandedGroupsCAT.add(letter);
+          else customerExpandedGroupsCAT.delete(letter);
+        });
+
+        const summary = document.createElement('summary');
+        summary.className = 'cat-customer-group-summary';
+        summary.innerHTML = `
+          <span class="cat-customer-group-letter">${escapeHtml(letter)}</span>
+          <strong>${customers.length} cliente${customers.length === 1 ? '' : 's'}</strong>
+          <span class="cat-customer-group-chevron" aria-hidden="true">⌄</span>
         `;
-        wrap.appendChild(card);
+        details.appendChild(summary);
+
+        const scroll = document.createElement('div');
+        scroll.className = 'cat-customer-table-scroll';
+        scroll.setAttribute('tabindex', '0');
+        scroll.setAttribute('aria-label', `Clientes con letra ${letter}`);
+        const table = document.createElement('table');
+        table.className = 'cat-customer-table';
+        table.innerHTML = `
+          <thead><tr>
+            <th scope="col">Nombre</th>
+            <th scope="col">Estado</th>
+            <th scope="col">Celular</th>
+            <th scope="col">Última compra</th>
+            <th scope="col" class="cat-customer-actions-head">Acciones</th>
+          </tr></thead>
+          <tbody></tbody>
+        `;
+        const tbody = table.querySelector('tbody');
+        for (const c of customers){
+          const active = customerActiveCAT(c);
+          const isMerged = !!(c && c.mergedIntoId);
+          const tr = document.createElement('tr');
+          tr.className = active ? '' : 'is-inactive';
+          tr.dataset.customerId = String(c.id || '');
+          const nameBadges = isMerged ? '<span class="cat-mini-badge">Fusionado</span>' : '';
+          tr.innerHTML = `
+            <td class="cat-customer-name-cell"><span>${escapeHtml(c.name || 'Cliente sin nombre')}</span>${nameBadges}</td>
+            <td><span class="cat-pill ${active ? 'ok' : 'muted'}">${active ? 'Activo' : 'Inactivo'}</span></td>
+            <td>${escapeHtml(getCustomerCellularCAT(c) || '')}</td>
+            <td class="cat-customer-date-cell">${escapeHtml(lastPurchaseForCustomerCAT(c))}</td>
+            <td class="cat-customer-actions-cell">
+              <div class="cat-icon-actions">
+                <button class="cat-icon-btn cat-view-customer" data-id="${escapeHtml(String(c.id))}" type="button" title="Ver" aria-label="Ver ${escapeHtml(c.name || 'cliente')}">◉</button>
+                <button class="cat-icon-btn cat-icon-edit cat-edit-customer" data-id="${escapeHtml(String(c.id))}" type="button" title="Editar" aria-label="Editar ${escapeHtml(c.name || 'cliente')}" ${isMerged ? 'disabled' : ''}>✎</button>
+                <button class="cat-icon-btn ${active ? 'cat-icon-warn' : 'cat-icon-ok'} cat-toggle-customer" data-id="${escapeHtml(String(c.id))}" type="button" title="${active ? 'Inactivar' : 'Activar'}" aria-label="${active ? 'Inactivar' : 'Activar'} ${escapeHtml(c.name || 'cliente')}" ${isMerged ? 'disabled' : ''}>⏻</button>
+                <button class="cat-icon-btn cat-icon-danger cat-delete-customer" data-id="${escapeHtml(String(c.id))}" type="button" title="Borrar" aria-label="Borrar ${escapeHtml(c.name || 'cliente')}">⌫</button>
+              </div>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        }
+        scroll.appendChild(table);
+        details.appendChild(scroll);
+        wrap.appendChild(details);
       }
     }catch(err){
       console.error(err);
@@ -2953,12 +4583,14 @@ Solo se quitará del catálogo maestro. No se borrarán productos asociados, pro
 
     const now = Date.now();
     let row = null;
+    let previousName = '';
     const isEdit = !!currentCustomerEditId;
     if (isEdit){
       row = list.find(c => c && String(c.id) === String(currentCustomerEditId));
       if (!row){ setCurrentCustomerMsgCAT('El cliente ya no existe. Actualiza e intenta de nuevo.', 'warn'); resetCustomerFormCAT(); await renderCustomers(); return; }
       if (row.mergedIntoId){ setCurrentCustomerMsgCAT('Este cliente está fusionado. Administra el destino final.', 'warn'); return; }
       const oldName = sanitizeCustomerName(row.name || '');
+      previousName = oldName;
       if (oldName && normalizeCustomerKeyCAT(oldName) !== data.normalizedName){
         if (!Array.isArray(row.nameHistory)) row.nameHistory = [];
         row.nameHistory.push({ from:oldName, to:data.name, at:now, reason:'catalogos_clientes' });
@@ -2998,9 +4630,12 @@ Solo se quitará del catálogo maestro. No se borrarán productos asociados, pro
 
     const ok = saveCustomerCatalogCAT(list);
     if (!ok){ setCurrentCustomerMsgCAT('No se pudo guardar. Revisa almacenamiento local.', 'warn'); return; }
+    customerExpandedGroupsCAT.add(customerGroupLetterCAT(data.name));
+    const nameChanged = !isEdit || normalizeCustomerKeyCAT(previousName) !== data.normalizedName;
+    if (nameChanged) invalidateCustomerLastPurchaseCAT();
     resetCustomerFormCAT();
     if (isEdit) closeCustomerModalCAT();
-    await renderCustomers();
+    await renderCustomers({ forceLastPurchase:nameChanged });
     toast(isEdit ? 'Cliente guardado' : 'Cliente agregado');
   }
 
@@ -3085,9 +4720,11 @@ Solo se quitará del catálogo maestro/lista seleccionable. No se borrarán vent
     const list = byId('cat-customers-list');
     if (list){
       list.addEventListener('click', async (e)=>{
+        const view = e.target.closest('.cat-view-customer');
         const edit = e.target.closest('.cat-edit-customer');
         const toggle = e.target.closest('.cat-toggle-customer');
         const del = e.target.closest('.cat-delete-customer');
+        if (view){ openCustomerViewCAT(view.dataset.id); return; }
         if (edit && !edit.disabled){ editCustomerMaster(edit.dataset.id); return; }
         if (toggle && !toggle.disabled){ await toggleCustomerMaster(toggle.dataset.id); return; }
         if (del){ await deleteCustomerMaster(del.dataset.id); return; }
@@ -3104,18 +4741,309 @@ Solo se quitará del catálogo maestro/lista seleccionable. No se borrarán vent
     document.addEventListener('keydown', (e)=>{
       if (e && e.key === 'Escape'){
         const modal = byId('cat-customer-modal');
-        if (modal && modal.classList.contains('show')) closeCustomerModalCAT();
+        const viewModal = byId('cat-customer-view-modal');
+        if (viewModal && viewModal.classList.contains('show')) closeCustomerViewCAT();
+        else if (modal && modal.classList.contains('show')) closeCustomerModalCAT();
       }
     });
-    byId('cat-refresh-customers')?.addEventListener('click', async ()=>{ resetCustomerFormCAT(); await renderCustomers(); toast('Clientes actualizados'); });
-    byId('cat-customer-search')?.addEventListener('input', ()=>renderCustomers().catch(err=>console.error(err)));
+    byId('cat-customer-view-close')?.addEventListener('click', closeCustomerViewCAT);
+    byId('cat-customer-view-ok')?.addEventListener('click', closeCustomerViewCAT);
+    const customerViewModal = byId('cat-customer-view-modal');
+    if (customerViewModal){
+      customerViewModal.addEventListener('click', (e)=>{ if (e.target === customerViewModal) closeCustomerViewCAT(); });
+    }
+    byId('cat-refresh-customers')?.addEventListener('click', async ()=>{
+      resetCustomerFormCAT();
+      invalidateCustomerLastPurchaseCAT();
+      await renderCustomers({ forceLastPurchase:true });
+      toast('Clientes actualizados');
+    });
+    byId('cat-customer-search')?.addEventListener('input', ()=>{
+      clearTimeout(customerSearchTimerCAT);
+      customerSearchTimerCAT = setTimeout(()=>renderCustomers().catch(err=>console.error(err)), 80);
+    });
   }
 
   async function initCustomers(){
     const list = readCustomerCatalogCAT();
     // Migración local suave: si venía como strings u objetos incompletos, queda objeto estable para POS.
     saveCustomerCatalogCAT(list);
+    await loadCustomerLastPurchaseIndexCAT(list, { force:true });
     await renderCustomers();
+    customerInitializedCAT = true;
+  }
+
+
+  const RAW_MATERIAL_STORE = 'rawMaterials';
+  const RAW_MATERIAL_UNITS = new Set(['Unidad', 'Cajas', 'Litros', 'Galones']);
+
+  function rawMaterialId(){
+    const stamp = Date.now().toString(36);
+    let random = '';
+    try{
+      if (window.crypto && typeof window.crypto.getRandomValues === 'function'){
+        const values = new Uint32Array(2);
+        window.crypto.getRandomValues(values);
+        random = Array.from(values).map((n)=>n.toString(36)).join('');
+      }
+    }catch(_){ }
+    if (!random) random = Math.random().toString(36).slice(2, 12);
+    return ('mp_' + stamp + '_' + random).slice(0, 120);
+  }
+
+  function rawMaterialNameNormalized(value){
+    return normName(value).replace(/\s+/g, ' ').trim();
+  }
+
+  function rawMaterialHasMeaningfulName(value){
+    const text = String(value || '').trim();
+    if (!text) return false;
+    try{ return /[\p{L}\p{N}]/u.test(text); }catch(_){ return /[A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ]/.test(text); }
+  }
+
+  function rawMaterialPrice(value){
+    const raw = String(value == null ? '' : value).trim();
+    if (raw === '') return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return null;
+    return Math.round((n + Number.EPSILON) * 100) / 100;
+  }
+
+  function rawMaterialDateTime(value){
+    const date = value ? new Date(value) : null;
+    if (!date || Number.isNaN(date.getTime())) return '—';
+    const pad = (n)=>String(n).padStart(2, '0');
+    return `${pad(date.getDate())}/${pad(date.getMonth()+1)}/${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  }
+
+  function rawMaterialSort(a, b){
+    const aa = a && a.active === false ? 1 : 0;
+    const bb = b && b.active === false ? 1 : 0;
+    if (aa !== bb) return aa - bb;
+    return String((a && a.name) || '').localeCompare(String((b && b.name) || ''), 'es-NI', { sensitivity:'base' });
+  }
+
+  function setRawMaterialMsg(message, kind, edit){
+    const el = byId(edit ? 'cat-edit-raw-material-msg' : 'cat-raw-material-msg');
+    if (!el) return;
+    el.textContent = message || '';
+    el.className = 'cat-muted cat-edit-msg' + (kind ? (' ' + kind) : '');
+  }
+
+  function readRawMaterialForm(edit){
+    const prefix = edit ? 'cat-edit-raw-material-' : 'cat-raw-material-';
+    const name = String(byId(prefix + 'name')?.value || '').trim().replace(/\s+/g, ' ');
+    const category = String(byId(prefix + 'category')?.value || '').trim().replace(/\s+/g, ' ');
+    const unit = String(byId(prefix + 'unit')?.value || '').trim();
+    const price = rawMaterialPrice(byId(prefix + 'price')?.value);
+    const note = String(byId(prefix + 'note')?.value || '').trim().slice(0, 300);
+    const active = !!byId(prefix + 'active')?.checked;
+    if (!rawMaterialHasMeaningfulName(name)) return { ok:false, message:'Escribe un nombre válido con letras o números.' };
+    if (!category || !rawMaterialHasMeaningfulName(category)) return { ok:false, message:'Escribe una categoría válida.' };
+    if (!RAW_MATERIAL_UNITS.has(unit)) return { ok:false, message:'Selecciona una unidad válida: Unidad, Cajas, Litros o Galones.' };
+    if (price == null) return { ok:false, message:'Escribe un precio válido mayor o igual a cero.' };
+    return { ok:true, data:{ name, nameNormalized:rawMaterialNameNormalized(name), category, unit, price, note, active } };
+  }
+
+  function setRawMaterialButtonBusy(button, busy, busyText, normalText){
+    if (!button) return;
+    button.disabled = !!busy;
+    button.setAttribute('aria-busy', busy ? 'true' : 'false');
+    button.textContent = busy ? busyText : normalText;
+  }
+
+  async function rawMaterialDuplicate(nameNormalized, excludeId){
+    const rows = await getAll(RAW_MATERIAL_STORE);
+    return (rows || []).find((row)=>{
+      if (!row) return false;
+      if (excludeId != null && String(row.id) === String(excludeId)) return false;
+      return rawMaterialNameNormalized(row.nameNormalized || row.name) === nameNormalized;
+    }) || null;
+  }
+
+  function resetRawMaterialForm(){
+    ['name','category','unit','price','note'].forEach((key)=>{
+      const el = byId('cat-raw-material-' + key);
+      if (el) el.value = '';
+    });
+    const active = byId('cat-raw-material-active');
+    if (active) active.checked = true;
+    setRawMaterialMsg('');
+  }
+
+  async function renderRawMaterials(){
+    const body = byId('cat-raw-materials-body');
+    const empty = byId('cat-raw-materials-empty');
+    if (!body) return;
+    const rows = (await getAll(RAW_MATERIAL_STORE)).slice().sort(rawMaterialSort);
+    body.innerHTML = '';
+    if (empty) empty.hidden = rows.length > 0;
+    if (!rows.length){
+      setStatusById('cat-raw-materials-status', 'Materia Prima inicia vacía. Agrega los artículos manualmente.', 'warn');
+      return;
+    }
+    const activeCount = rows.filter((row)=>row && row.active !== false).length;
+    setStatusById('cat-raw-materials-status', `${rows.length} artículo(s) · ${activeCount} activo(s) disponibles para nuevas Compras.`, 'ok');
+    rows.forEach((row)=>{
+      const tr = document.createElement('tr');
+      if (row.active === false) tr.classList.add('is-inactive');
+      const state = row.active === false ? 'Inactivo' : 'Activo';
+      const toggleTitle = row.active === false ? 'Activar artículo' : 'Inactivar artículo';
+      tr.innerHTML = `
+        <td class="cat-raw-material-name" title="${escapeHtml(row.name || '')}">${escapeHtml(row.name || '—')}</td>
+        <td>${escapeHtml(row.category || '—')}</td>
+        <td>${escapeHtml(row.unit || '—')}</td>
+        <td class="cat-raw-material-price">${displayMoney(row.price)}</td>
+        <td><span class="cat-raw-material-state${row.active === false ? ' is-inactive' : ''}">${state}</span></td>
+        <td class="cat-raw-material-date">${escapeHtml(rawMaterialDateTime(row.updatedAt))}</td>
+        <td class="cat-raw-material-actions">
+          <span class="cat-icon-actions">
+            <button class="cat-icon-btn cat-icon-edit cat-edit-raw-material" type="button" data-id="${escapeHtml(String(row.id))}" title="Editar" aria-label="Editar ${escapeHtml(row.name || 'artículo')}">✎</button>
+            <button class="cat-icon-btn ${row.active === false ? 'cat-icon-ok' : 'cat-icon-warn'} cat-toggle-raw-material" type="button" data-id="${escapeHtml(String(row.id))}" title="${toggleTitle}" aria-label="${toggleTitle}: ${escapeHtml(row.name || 'artículo')}">${row.active === false ? '✓' : '⏸'}</button>
+          </span>
+        </td>`;
+      body.appendChild(tr);
+    });
+  }
+
+  async function createRawMaterial(){
+    if (rawMaterialCreateBusy) return;
+    rawMaterialCreateBusy = true;
+    const button = byId('cat-save-raw-material');
+    setRawMaterialButtonBusy(button, true, 'Guardando…', '+ Agregar artículo');
+    try{
+      const parsed = readRawMaterialForm(false);
+      if (!parsed.ok){ setRawMaterialMsg(parsed.message, 'warn'); return; }
+      const duplicate = await rawMaterialDuplicate(parsed.data.nameNormalized, null);
+      if (duplicate){ setRawMaterialMsg(`Ya existe un artículo llamado “${duplicate.name}”. Edita el registro existente.`, 'warn'); return; }
+      const now = new Date().toISOString();
+      await put(RAW_MATERIAL_STORE, {
+        materialId: rawMaterialId(),
+        ...parsed.data,
+        createdAt: now,
+        updatedAt: now,
+        schemaVersion: 1,
+        updatedFrom: 'catalogos_materia_prima'
+      });
+      resetRawMaterialForm();
+      await renderRawMaterials();
+      toast('Artículo agregado');
+    }catch(err){
+      console.error(err);
+      setRawMaterialMsg('No se pudo guardar el artículo. Revisa los datos e intenta nuevamente.', 'warn');
+    }finally{
+      rawMaterialCreateBusy = false;
+      setRawMaterialButtonBusy(button, false, 'Guardando…', '+ Agregar artículo');
+    }
+  }
+
+  function closeRawMaterialModal(){
+    const modal = byId('cat-raw-material-modal');
+    if (modal){
+      modal.classList.remove('show');
+      modal.setAttribute('aria-hidden', 'true');
+    }
+    document.body.classList.remove('cat-modal-open');
+    currentRawMaterialEditId = null;
+    setRawMaterialMsg('', '', true);
+  }
+
+  async function openRawMaterialModal(id){
+    const rows = await getAll(RAW_MATERIAL_STORE);
+    const row = (rows || []).find((item)=>item && String(item.id) === String(id));
+    if (!row){ toast('Artículo no encontrado'); return; }
+    currentRawMaterialEditId = row.id;
+    const current = byId('cat-raw-material-current');
+    if (current) current.textContent = 'Artículo actual: ' + (row.name || '—');
+    const values = {
+      'cat-edit-raw-material-name': row.name || '',
+      'cat-edit-raw-material-category': row.category || '',
+      'cat-edit-raw-material-unit': row.unit || '',
+      'cat-edit-raw-material-price': Number.isFinite(Number(row.price)) ? String(row.price) : '',
+      'cat-edit-raw-material-note': row.note || ''
+    };
+    Object.entries(values).forEach(([key, value])=>{ const el = byId(key); if (el) el.value = value; });
+    const active = byId('cat-edit-raw-material-active');
+    if (active) active.checked = row.active !== false;
+    setRawMaterialMsg('', '', true);
+    const modal = byId('cat-raw-material-modal');
+    if (modal){
+      modal.classList.add('show');
+      modal.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('cat-modal-open');
+    }
+    setTimeout(()=>{ try{ byId('cat-edit-raw-material-name')?.focus({ preventScroll:true }); byId('cat-edit-raw-material-name')?.select(); }catch(_){ } }, 50);
+  }
+
+  async function saveRawMaterialEdit(){
+    if (rawMaterialEditBusy || currentRawMaterialEditId == null) return;
+    rawMaterialEditBusy = true;
+    const button = byId('cat-edit-raw-material-save');
+    setRawMaterialButtonBusy(button, true, 'Guardando…', 'Guardar cambios');
+    try{
+      const parsed = readRawMaterialForm(true);
+      if (!parsed.ok){ setRawMaterialMsg(parsed.message, 'warn', true); return; }
+      const duplicate = await rawMaterialDuplicate(parsed.data.nameNormalized, currentRawMaterialEditId);
+      if (duplicate){ setRawMaterialMsg(`Ya existe un artículo llamado “${duplicate.name}”.`, 'warn', true); return; }
+      const rows = await getAll(RAW_MATERIAL_STORE);
+      const row = (rows || []).find((item)=>item && String(item.id) === String(currentRawMaterialEditId));
+      if (!row){ setRawMaterialMsg('El artículo ya no existe.', 'warn', true); return; }
+      await put(RAW_MATERIAL_STORE, {
+        ...row,
+        ...parsed.data,
+        updatedAt: new Date().toISOString(),
+        schemaVersion: 1,
+        updatedFrom: 'catalogos_materia_prima_edicion'
+      });
+      closeRawMaterialModal();
+      await renderRawMaterials();
+      toast('Artículo actualizado');
+    }catch(err){
+      console.error(err);
+      setRawMaterialMsg('No se pudieron guardar los cambios.', 'warn', true);
+    }finally{
+      rawMaterialEditBusy = false;
+      setRawMaterialButtonBusy(button, false, 'Guardando…', 'Guardar cambios');
+    }
+  }
+
+  async function toggleRawMaterial(id){
+    const rows = await getAll(RAW_MATERIAL_STORE);
+    const row = (rows || []).find((item)=>item && String(item.id) === String(id));
+    if (!row){ toast('Artículo no encontrado'); return; }
+    await put(RAW_MATERIAL_STORE, {
+      ...row,
+      active: row.active === false,
+      updatedAt: new Date().toISOString(),
+      schemaVersion: 1,
+      updatedFrom: 'catalogos_materia_prima_estado'
+    });
+    await renderRawMaterials();
+    toast(row.active === false ? 'Artículo activado' : 'Artículo inactivado');
+  }
+
+  function bindRawMaterialUi(){
+    byId('cat-save-raw-material')?.addEventListener('click', ()=>createRawMaterial().catch((err)=>{ console.error(err); setRawMaterialMsg('No se pudo guardar el artículo.', 'warn'); }));
+    byId('cat-refresh-raw-materials')?.addEventListener('click', ()=>renderRawMaterials().then(()=>toast('Materia Prima actualizada')).catch((err)=>{ console.error(err); setStatusById('cat-raw-materials-status', 'No se pudo actualizar Materia Prima.', 'warn'); }));
+    byId('cat-raw-materials-body')?.addEventListener('click', (event)=>{
+      const edit = event.target.closest('.cat-edit-raw-material');
+      const toggle = event.target.closest('.cat-toggle-raw-material');
+      if (edit){ openRawMaterialModal(edit.dataset.id).catch((err)=>console.error(err)); return; }
+      if (toggle){ toggle.disabled = true; toggleRawMaterial(toggle.dataset.id).catch((err)=>{ console.error(err); toast('No se pudo cambiar el estado'); }).finally(()=>{ toggle.disabled = false; }); }
+    });
+    byId('cat-edit-raw-material-save')?.addEventListener('click', ()=>saveRawMaterialEdit().catch((err)=>{ console.error(err); setRawMaterialMsg('No se pudieron guardar los cambios.', 'warn', true); }));
+    byId('cat-edit-raw-material-cancel')?.addEventListener('click', closeRawMaterialModal);
+    byId('cat-raw-material-close')?.addEventListener('click', closeRawMaterialModal);
+    const modal = byId('cat-raw-material-modal');
+    modal?.addEventListener('click', (event)=>{ if (event.target === modal) closeRawMaterialModal(); });
+    document.addEventListener('keydown', (event)=>{
+      if (event && event.key === 'Escape' && modal && modal.classList.contains('show')) closeRawMaterialModal();
+    });
+  }
+
+  async function initRawMaterials(){
+    await openDB();
+    await renderRawMaterials();
   }
 
 
@@ -3147,10 +5075,12 @@ Solo se quitará del catálogo maestro/lista seleccionable. No se borrarán vent
     }
     byId('cat-save-extra')?.addEventListener('click', ()=>saveExtraMaster().catch(err=>{ console.error(err); alert('No se pudo guardar el extra.'); }));
     byId('cat-edit-extra-save')?.addEventListener('click', ()=>saveExtraEditMaster().catch(err=>{ console.error(err); setExtraEditMsg('No se pudo guardar el extra.', 'warn'); }));
+    bindDismissibleModalCAT('cat-extra-modal', ['cat-extra-close','cat-edit-extra-cancel'], closeExtraModalCAT);
     byId('cat-cancel-extra')?.addEventListener('click', resetExtraForm);
     byId('cat-refresh-extras')?.addEventListener('click', async ()=>{ await seedExtrasFromEventSnapshots(); await renderExtras(); toast('Extras actualizados'); });
     byId('cat-save-bank')?.addEventListener('click', ()=>saveBankMaster().catch(err=>{ console.error(err); alert('No se pudo guardar el banco.'); }));
     byId('cat-edit-bank-save')?.addEventListener('click', ()=>saveBankEditMaster().catch(err=>{ console.error(err); setBankEditMsg('No se pudo guardar el banco.', 'warn'); }));
+    bindDismissibleModalCAT('cat-bank-modal', ['cat-bank-close','cat-edit-bank-cancel'], closeBankModalCAT);
     byId('cat-cancel-bank')?.addEventListener('click', resetBankForm);
     byId('cat-refresh-banks')?.addEventListener('click', async ()=>{ await renderBanks(); toast('Bancos actualizados'); });
     byId('cat-restore-banks')?.addEventListener('click', async ()=>{ await ensureBanksDefaultsCatalog(true); await renderBanks(); toast('Bancos base revisados'); });
@@ -3171,9 +5101,9 @@ Solo se quitará del catálogo maestro/lista seleccionable. No se borrarán vent
         const edit = e.target.closest('.cat-edit-product');
         const toggle = e.target.closest('.cat-toggle-product');
         const del = e.target.closest('.cat-delete-product');
-        if (edit){ await openProductModal(edit.dataset.id); return; }
-        if (toggle){ await toggleProduct(toggle.dataset.id); return; }
-        if (del){ await deleteProductMaster(del.dataset.id); return; }
+        if (edit){ await openProductModal(edit.dataset.productId); return; }
+        if (toggle){ await toggleProduct(toggle.dataset.productId); return; }
+        if (del){ await deleteProductMaster(del.dataset.productId); return; }
       });
     }
     ['cat-new-letra','cat-edit-letra'].forEach((id)=>{
@@ -3199,15 +5129,6 @@ Solo se quitará del catálogo maestro/lista seleccionable. No se borrarán vent
     });
     byId('cat-add-product')?.addEventListener('click', ()=>addProduct().catch(err=>{ console.error(err); alert('No se pudo agregar el producto.'); }));
     byId('cat-refresh-products')?.addEventListener('click', ()=>initProducts({ skipSeed:true }).catch(err=>{ console.error(err); setStatus('No se pudo actualizar.', 'warn'); }));
-    byId('cat-restore-seed')?.addEventListener('click', async ()=>{
-      await seedMissingDefaults(true);
-      await normalizeLegacyGallon();
-      await normalizeProductDynamicFields();
-      await normalizeProductPackagingFields();
-      refreshProductPackagingSelects();
-      await renderProducts();
-      toast('Productos base restaurados');
-    });
     byId('cat-product-close')?.addEventListener('click', closeProductModal);
     byId('cat-edit-cancel')?.addEventListener('click', closeProductModal);
     byId('cat-edit-save')?.addEventListener('click', ()=>saveProduct().catch(err=>{ console.error(err); setEditMsg('No se pudo guardar.', 'warn'); }));
@@ -3228,30 +5149,69 @@ Solo se quitará del catálogo maestro/lista seleccionable. No se borrarán vent
     const opts = options || {};
     setStatus('Cargando productos…');
     await openDB();
-    if (!opts.skipSeed) await seedMissingDefaults(false);
+    if (window.A33Products && typeof window.A33Products.ensureIdentities === 'function'){
+      await window.A33Products.ensureIdentities();
+    }
+    // Los productos dependen exclusivamente del catálogo real. La base A33 solo se restaura por acción explícita.
     ensureEnvasesDefaults(false);
     ensureTapasDefaults(false);
     await normalizeLegacyGallon();
     await normalizeProductDynamicFields();
     await normalizeProductPackagingFields();
     refreshProductPackagingSelects();
+    refreshProductPhysicalCupSelects();
     await renderProducts();
   }
 
   document.addEventListener('DOMContentLoaded', () => {
-    bindTabs();
+    bindCatalogNavigation();
+    bindCatalogModalHardening();
     bindProductUi();
+    bindCostsUi();
     bindEnvaseUi();
     bindTapaUi();
+    bindRawMaterialUi();
     bindExtraBankUi();
-    bindMasterEditModalChromeCAT();
     bindCustomerUi();
-    activateTabFromUrl();
-    if (!qs('.cat-panel.is-active')) activateTab('productos');
+    initCosts();
     try{ if (window.A33_applyReleaseLabel) window.A33_applyReleaseLabel(); }catch(_){ }
     initProducts().catch(err=>{
       console.error(err);
       setStatus('No se pudo abrir Catálogos → Productos. Cierra otras pestañas de Suite A33 y vuelve a intentar.', 'warn');
+      scheduleCostsProductsRefresh();
+    });
+    window.addEventListener('pageshow', () => { if (db) scheduleCostsProductsRefresh(); });
+    window.addEventListener('storage', (event) => {
+      const key = event && event.key ? String(event.key) : '';
+      if ([COSTS_RECIPES_STORAGE_KEY, COSTS_STORAGE_KEY, ENVASES_CATALOG_KEY].includes(key)){
+        if (key === COSTS_STORAGE_KEY) renderCostsState(readCostsState());
+        scheduleCostsProductsRefresh();
+      }
+      if (key === INVENTORY_STORAGE_KEY){
+        refreshProductPhysicalCupSelects();
+        renderProducts().catch(()=>{});
+      }
+      if (key === CUSTOMER_CATALOG_KEY || key === CUSTOMER_DISABLED_KEY){
+        scheduleCustomerLiveRefreshCAT({ forceLastPurchase:false });
+      }
+      if (key === 'a33_pos_consol_sales_rev_map_v1'){
+        invalidateCustomerLastPurchaseCAT();
+        scheduleCustomerLiveRefreshCAT({ forceLastPurchase:true });
+      }
+    });
+    window.addEventListener('pageshow', () => {
+      scheduleCustomerLiveRefreshCAT({ forceLastPurchase:false });
+    });
+    window.addEventListener('focus', () => {
+      const panel = byId('panel-costos');
+      if (panel && !panel.hidden) scheduleCostsProductsRefresh();
+      refreshProductPhysicalCupSelects();
+      scheduleCustomerLiveRefreshCAT({ forceLastPurchase:false });
+    });
+    document.addEventListener('visibilitychange', () => {
+      const panel = byId('panel-costos');
+      if (!document.hidden && panel && !panel.hidden) scheduleCostsProductsRefresh();
+      if (!document.hidden) scheduleCustomerLiveRefreshCAT({ forceLastPurchase:false });
     });
     initEnvases().catch(err=>{
       console.error(err);
@@ -3260,6 +5220,10 @@ Solo se quitará del catálogo maestro/lista seleccionable. No se borrarán vent
     initTapas().catch(err=>{
       console.error(err);
       setStatusById('cat-tapas-status', 'No se pudo abrir Catálogos → Tapas.', 'warn');
+    });
+    initRawMaterials().catch(err=>{
+      console.error(err);
+      setStatusById('cat-raw-materials-status', 'No se pudo abrir Catálogos → Materia Prima.', 'warn');
     });
     initMasterCatalogs().catch(err=>{
       console.error(err);
@@ -3270,7 +5234,6 @@ Solo se quitará del catálogo maestro/lista seleccionable. No se borrarán vent
       console.error(err);
       setStatusById('cat-customers-status', 'No se pudo abrir Catálogos → Clientes.', 'warn');
     });
-    window.addEventListener('hashchange', activateTabFromUrl);
     registerServiceWorker();
   });
 })();
