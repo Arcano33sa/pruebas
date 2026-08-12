@@ -1,5 +1,22 @@
 # AGENTS
 
+## Reglas permanentes de trabajo
+- Puedes analizar, modificar y probar archivos locales del proyecto.
+- Nunca ejecutes `git push` sin autorización explícita del usuario.
+- Nunca despliegues, publiques ni envíes cambios a producción sin autorización explícita del usuario.
+- No borres `localStorage`, IndexedDB ni datos existentes salvo instrucción expresa del usuario.
+- No agregues dependencias nuevas sin autorización explícita del usuario.
+- No reconstruyas innecesariamente la aplicación.
+- Trabaja por etapas pequeñas, cerrables y verificables.
+- Antes de cerrar una etapa, ejecuta las pruebas disponibles y reporta el resultado.
+- Mantén compatibilidad histórica con los datos existentes.
+- Protege la lógica de PWA, Service Worker, Firebase y caché; modifica estos elementos solo cuando corresponda al objetivo de la etapa.
+- No hagas cambios fuera del alcance solicitado.
+- Si una acción puede ser destructiva, irreversible o afectar datos, detente y pide autorización antes de ejecutarla.
+- Puedes preparar cambios y commits locales, pero no hagas `git push` sin autorización explícita del usuario.
+- Mantén siempre la aplicación funcional al cierre de cada etapa.
+- No borres ni sobrescribas archivos históricos o de respaldo salvo instrucción expresa del usuario.
+
 ## Repo shape (no build system)
 - This is a static multi-module web app: root `index.html` links to module folders (`pos/`, `inventario/`, `lotes/`, `pedidos/`, `agenda/`, `finanzas/`, `catalogos/`, `analitica/`, `configuracion/`, `centro-mando/`, etc.).
 - Shared runtime utilities live in `assets/js/` (notably `a33-storage.js`, `a33-theme.js`, `a33-release.js`). Most modules are plain HTML/CSS/JS, no bundler.
